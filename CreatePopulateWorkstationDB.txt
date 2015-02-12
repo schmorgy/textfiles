@@ -1,0 +1,189 @@
+IncludeClass(BaseClass);
+
+Include: ~FormattingRoutines.txt~;
+
+Class( CPWorkstationDB,Extends,BaseClass,
+		Member,fDb,Object,ADO );
+
+VOID CPWorkstationDB::CPWorkstationDB()
+{
+	BaseHtml::LoadTranslationFile( Startup,AppStartupStrings,AppStartup );
+}
+
+NUMERIC CPWorkstationDB::CreateWorkstationDBTables()
+{
+	if ( !ConnectToDatabase() )
+	{
+		return FALSE;
+	}
+
+	Go();	
+
+	return TRUE;
+}
+
+NUMERIC CPWorkstationDB::ConnectToDatabase()
+{
+	UpdateStatus( ~<$TR.AppStartupStrings(ConnectingWorkstationDatabase)>~ );
+
+	if ( !ado( fDb,ConnectLocal ) )
+	{
+		fDb( GetErrorDescription,theErr );
+		Log( Session,~Unable to connect to the workstation database.  <theErr>~ );
+
+		UpdateStatus( ~<$TR.AppStartupStrings(UnableToConnectWorkstation)>~ );
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+
+VOID CPWorkstationDB::Go()
+{
+	/*
+	if ( MessageBox( ~Are you really sure you want to recreate the workstation database?~,YESNO ) != YES )
+	{ 
+		dlg( SetString,~No changes were made~ ,Status,0,Update );
+		return;
+	}
+
+	if ( MessageBox( ~I wouldn't ask twice if it wasn't important.\n\nAre you really sure you want to recreate the workstation database?~,YESNO ) != YES )
+	{ 
+		dlg( SetString,~No changes were made~ ,Status,0,Update );
+		return;
+	}
+	*/
+
+	ForgetPermanent( BackgroundOrderProcessor );
+
+	DropTables(LocalTableDefinitions);
+
+	if ( !CreateTables(LocalTableDefinitions) )
+	{
+		//Warning( Translate( ~Can't continue.  Aborting!~ ) );
+		//Abort();
+		
+		UpdateStatus( ~<$TR.AppStartupStrings(CreateWorkstationDBTablesFailed)>~ );
+		return;		
+	}
+
+	AddLocalDatabaseVersion();
+
+	UpdateStatus( ~<$TR.AppStartupStrings(DatabaseTablesCreated)>~ );
+}
+
+VOID CPWorkstationDB::AddLocalDatabaseVersion()
+{
+	cmd = ~Insert Into LocalDatabaseInfo(Version) Values(<$[Symbols].LocalDatabaseVersion[Long]>)~;
+
+	if ( !fDb( Cmd,~<cmd>~ ) )
+	{
+		//if ( Defined( dlg ) ) { dlg( END ); }
+		//Error( ~Database update failed: <cmd>~ );
+		return;
+	}
+}
+
+NUMERIC CPWorkstationDB::ExecSQL( theSQL )
+{
+	Log( Session,~<theSQL>~ );
+
+	if ( !fDb( CMD,~<theSQL>~ ) )
+	{
+		fDb( GetErrorDescription,theErr );
+		//if ( Defined( dlg ) ) { dlg( END ); }
+		//return Warning( ~Error: <theErr>\n\nFrom: [<theSQL>]~ );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC CPWorkstationDB::CreateTables( TableDefinitions )
+{
+	if ( !GenCon( TableDefinitions,GetFrom,~<TableDefinitions>~,~[Database]~ ) )
+	{ 
+		//if ( Defined( dlg ) ) { dlg( END ); }
+		//return Warning( ~There are no tables defined for the database.~ );
+		return FALSE;
+	}
+
+	while ( TableDefinitions( GetNext,TableDefinition ) )
+	{
+		if ( !CreateTable( TableDefinition ) )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC CPWorkstationDB::CreateTable( &TableDefinition )
+{
+	TableDefinition( CreateTableDefinition,Definition,fDb );
+	TableDefinition( Get,TableName,Tablename );
+
+	msg = TR( AppStartupStrings, CreatingTable, ~<TableName>~ );
+	UpdateStatus( ~<msg>~ );
+
+	if ( !ExecSQL( ~CREATE TABLE <Tablename> (<Definition>)~ ) )
+	{
+		return FALSE;
+	}
+
+	if ( GenCon( TableIndexes,Is,TableDefinition(GetNumeric,Indexes) ) )
+	{
+		while ( TableIndexes( GetNext,IndexDefinition ) )
+		{	
+			if ( !ExecSQL( ~<$Con.IndexDefinition[Text]>~ ) )
+			{
+				return FALSE;
+			}	
+		}
+	}
+
+	return TRUE;
+}
+
+VOID CPWorkstationDB::DropTables( TableDefinitions )
+{
+	if ( !GenCon( TableDefinitions,GetFrom,~<TableDefinitions>~,~[Database]~ ) )
+	{ 
+		//if ( Defined( dlg ) ) { dlg( END ); }
+		//Error( ~There are no tables defined for the database~ ); 
+		return;
+	}
+
+	while ( TableDefinitions( GetPrev,TableDefinition ) )
+	{
+		DropTable( TableDefinition );
+	}
+}
+
+VOID CPWorkstationDB::DropTable( &TableDefinition )
+{
+	TableDefinition( CreateTableDefinition,Definition,fDb );
+	TableDefinition( Get,TableName,Tablename );
+
+	msg = TR( AppStartupStrings, DroppingTable, ~<TableName>~ );
+	UpdateStatus( ~<msg>~ );
+
+	if ( !fDb( CMD,~DROP TABLE <TableName>~ ) )
+	{
+		fDb( GetErrorDescription,theErr );
+		Log( Session,~Could not drop the TABLE <TableName> [<theErr>]~ );
+	}
+}
+
+VOID CPWorkstationDB::UpdateStatus( msg )
+{
+	StatusBarText( ~<msg>~ );
+	Log( Session, ~<msg>~ );
+	
+	if ( Defined( dlg ) )
+	{
+		dlg( SetString,~<msg>~ ,Status,0,Update );
+	}
+}
+

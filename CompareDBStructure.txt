@@ -1,0 +1,978 @@
+	
+NUMERIC WriteLine( theLine,&DataFile )
+{
+	DataFile( ~<theLine>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC WriteSection( theLine,&DataFile )
+{
+	DataFile( ~ ~ );
+
+	DataFile( ~<theLine>~ );
+
+	return TRUE;
+}
+	
+	
+
+
+STR GetPrimaryKey( &connection,table )
+{
+	if ( !connection( MakePrimaryKeyFrom,~<Table>~,Dummy,Key ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( Translate( DBMessages,ConnectionFailed,~<Table>~,~<theErr>~ ) );
+	}
+	else
+	{
+		connection( MakePrimaryKeyFrom,~<Table>~,NULL,PrimaryKey );
+
+		if ( IsNull( ~<PrimaryKey>~ ) )
+		{
+			PrimaryKey = ~Your database will not respond to a request for the primary key of <Table>~;
+		}
+	}
+
+	return ~<PrimaryKey>~;
+}
+
+
+NUMERIC TableExists( &SchemaList,TableName )
+{
+	SchemaList( Filter,~Table_Name='<TableName>'~ );
+
+	exists = SchemaList( NumEntries ) != 0;
+
+	SchemaList( ClearFilter );
+
+	return <exists>;
+}
+
+
+NUMERIC ShowFields( &dBase,Table,&DataFile )
+{
+	Query = ~Select * From <Table>~;
+
+	if ( PGenConList( List,Connection,dBase,Cursor,Keyset,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+	{
+		Index = -1;
+
+		Tab = Chr(9);
+
+		while ( List( FieldInfo,<++Index>,Name,FieldName,Length,FieldLength,Type,FieldType ) )
+		{
+			FieldName = FormatString( ~<FieldName>~,~%-31s~ );
+			FieldType = FormatString( ~<FieldType>~,~%-15s~ );
+
+			WriteLine( ~  Field <FieldName> Type <FieldType> Length <FieldLength>~,DataFile );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ShowIndexes( &dBase1,TableName,&DataFile )
+{
+	if ( !PGenConList( List1,Connection,dBase1,Cursor,Keyset,Schema,~Indexes~ ) )
+	{ 
+		return Warning( ~Failed to get the indexes for the shared database~ );
+	}
+
+	List1( Filter,~Table_Name='<TableName>'~ );
+
+	while ( List1( GetNext,Index1 ) )
+	{
+		Unique = MakeNumber(~<$pcon.Index1[Unique]>~) ? ~Unique~ : ~Not Unique~;
+
+		WriteLine( ~  Added <$pcon.Index1[Index_Name]> index on field <$pcon.Index1[Column_Name]>  <Unique>~,DataFile );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ShowForeignKeys( &dBase1,TableName,&DataFile )
+{
+	if ( !PGenConList( List1,Connection,dBase1,Cursor,Keyset,Schema,~ForeignKeys~ ) )
+	{ 
+		return Warning( ~Failed to get the ForeignKeys for the shared database~ );
+	}
+
+
+	List1( Filter,~FK_TABLE_NAME='<TableName>'~ );
+
+	while ( List1( GetNext,Index1 ) )
+	{
+
+		WriteLine( ~  Added Foreign Key on field <$pcon.Index1[FK_COLUMN_NAME]> of Table <TableName> to Field <$pcon.Index1[PK_COLUMN_NAME]> of Table <$pcon.Index1[PK_TABLE_NAME]>~,DataFile );
+	}
+
+	return TRUE;
+}
+
+ 
+
+NUMERIC ShowNewTable( &dBase,TableName,&DataFile )
+{
+	Key = GetPrimaryKey( dBase,~<TableName>~ );
+
+	WriteSection( ~Table: <TableName> was added with a primary key of <Key>~,DataFile );
+
+	ShowFields( dBase,~<TableName>~,DataFile );
+
+	ShowIndexes( dBase,~<TableName>~,DataFile );
+
+	ShowForeignKeys( dBase,~<TableName>~,DataFile );
+
+	return TRUE;
+}
+
+
+NUMERIC ShowDeletedTable( &dBase,TableName,&DataFile )
+{
+	return WriteSection( ~Table: <TableName> was removed~,DataFile );
+
+	ShowFields( dBase,~<TableName>~,DataFile );
+
+	return TRUE;
+}
+
+
+
+NUMERIC GetFieldInfo( &list,Name,&FieldType,&FieldLength )
+{
+	anIndex = -1;
+
+	while ( list( FieldInfo,<++anIndex>,Name,FieldName1,Length,FieldLength,Type,FieldType ) )
+	{
+		if ( SimilarStr( ~<Name>~,~<FieldName1>~ ) )
+		{
+			return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
+
+
+NUMERIC ShowFieldChanges( &dBase1,&dBase2,TableName,&DataFile )
+{
+	ChangeCount = 0;
+
+	TitleWritten = FALSE;
+
+	Key1 = GetPrimaryKey( dBase1,~<TableName>~ );
+	Key2 = GetPrimaryKey( dBase2,~<TableName>~ );
+
+	if ( !SimilarStr( ~<Key1>~,~<Key2>~ ) )
+	{
+		if ( !<TitleWritten> )
+		{
+			WriteSection( ~Changes Table <TableName>~,DataFile );
+			TitleWritten = TRUE;
+		}
+
+		WriteLine( ~  Primary Key changed from <Key2> to <Key1>~,DataFile );
+		++ChangeCount;
+	}
+
+	ShowIndexChanges( dBase1,dBase2,~<TableName>~,TitleWritten,DataFile );
+
+	ShowForeignKeyChanges( dBase1,dBase2,~<TableName>~,TitleWritten,DataFile );
+
+	Query = ~Select * From <TableName>~;	// WILL BE A QUERY THAT RETURNS NO RECORDS
+
+	if ( !PGenConList( List1,Connection,dBase1,Cursor,Keyset,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+	{
+		return Warning( ~Failed to query <TableName> of the shared database~ );
+	}
+
+	if ( !PGenConList( List2,Connection,dBase2,Cursor,Keyset,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+	{
+		return Warning( ~Failed to query <TableName> of the other database~ );
+	}
+
+
+	Index = -1;
+
+	Tab = Chr(9);
+
+	while ( List1( FieldInfo,<++Index>,Name,FieldName1,Length,FieldLength1,Type,FieldType1 ) )
+	{
+		FieldLength2 = ~~;  FieldType2 = ~~;
+
+		Exists = GetFieldInfo( List2,~<FieldName1>~,FieldType2,FieldLength2 );
+
+		if ( !<Exists> )
+		{
+			if ( !<TitleWritten> )
+			{
+				WriteSection( ~Table: <TableName> was changed~,DataFile );
+				TitleWritten = TRUE;
+			}
+
+			WriteLine( ~  Added Field <FieldName1> Type <FieldType1>  Length <FieldLength1>~,DataFile );
+			++ChangeCount;
+		}
+		else
+		{
+			Log( Session,~<TableName>/<FieldName1>:  <FieldType1>,<FieldLength1>  <FieldType2>,<FieldLength2>~ );
+
+			if ( !SimilarStr( ~<FieldType1>~,~<FieldType2>~ ) )
+			{
+				if ( !<TitleWritten> )
+				{
+					WriteSection( ~Changes to fields in table <TableName>~,DataFile );
+					TitleWritten = TRUE;
+				}
+
+				WriteLine( ~  Field type for <FieldName1> changed from <FieldType2> to  <FieldType1>~,DataFile );
+				++ChangeCount;
+			}
+
+			if ( !SimilarStr( ~<FieldLength1>~,~<FieldLength2>~ ) )
+			{
+				if ( !<TitleWritten> )
+				{
+					WriteSection( ~Table: <TableName> was changed~,DataFile );
+					TitleWritten = TRUE;
+				}
+
+				WriteLine( ~  Field Length for <FieldName1> changed from <FieldLength2> to  <FieldLength1>~,DataFile );
+				++ChangeCount;
+			}
+		}
+	}
+
+	Index = -1;
+
+	while ( List2( FieldInfo,<++Index>,Name,FieldName2,Length,FieldLength2,Type,FieldType2 ) )
+	{
+		Exists = List1( FieldInfo,<Index>,Name,FieldName1,Length,FieldLength1,Type,FieldType1 );
+
+		if ( !<Exists> )
+		{
+			if ( !<TitleWritten> )
+			{
+				WriteSection( ~Table: <TableName> was changed~,DataFile );
+				TitleWritten = TRUE;
+			}
+
+			WriteLine( ~  <FieldName2> was removed~,DataFile );
+		}
+	}
+
+	return <ChangeCount>;
+}
+
+
+NUMERIC ForeignKeyExistsOn( &List,ColumnName )
+{
+	more = List( GetFirst,Index );
+
+	while ( <More> )
+	{
+		if ( SimilarStr( ~<$pcon.Index[FK_COLUMN_NAME]>~,~<ColumnName>~ ) )
+		{
+			return TRUE;
+		}
+
+		more = List( GetNext,Index );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC ShowForeignKeyChanges( &dBase1,&dBase2,TableName,&TitleWritten,&DataFile )
+{
+	if ( !PGenConList( List1,Connection,dBase1,Cursor,Keyset,Schema,~ForeignKeys~ ) )
+	{ 
+		return Warning( ~Failed to get the ForeignKeys for the shared database~ );
+	}
+
+	if ( !PGenConList( List2,Connection,dBase2,Cursor,Keyset,Schema,~ForeignKeys~ ) )
+	{ 
+		return Warning( ~Failed to get the ForeignKey for the other database~ );
+	}
+
+	List1( Filter,~FK_TABLE_NAME='<TableName>'~ );
+	List2( Filter,~FK_TABLE_NAME='<TableName>'~ );
+
+	// FIND INDEXES THAT HAVE BEEN ADDED OR CHANGED
+
+	while ( List1( GetNext,Index1 ) )
+	{
+		if ( !ForeignKeyExistsOn( List2,~<$pcon.Index1[FK_COLUMN_NAME]>~ ) )
+		{
+			if ( !<TitleWritten> )
+			{
+				WriteSection( ~Table: <TableName> was changed~,DataFile );
+				TitleWritten = TRUE;
+			}
+
+			WriteLine( ~  Added Foreign Key on field <$pcon.Index1[FK_COLUMN_NAME]> of Table <TableName> to Field <$pcon.Index1[PK_COLUMN_NAME]> of Table <$pcon.Index1[PK_TABLE_NAME]>~,DataFile );
+		}
+	}
+
+	// FIND FOREIGN KEYS THAT HAVE BEEN REMOVED
+
+	more = List2( GetFirst,Index2 );
+
+	while ( <More> )
+	{
+		if ( !ForeignKeyExistsOn( List1,~<$pcon.Index2[FK_COLUMN_NAME]>~ ) )
+		{
+			if ( !<TitleWritten> )
+			{
+				WriteSection( ~Table: <TableName> was changed~,DataFile );
+				TitleWritten = TRUE;
+			}
+
+			WriteLine( ~  Removed Foreign Key on field <$pcon.Index2[FK_COLUMN_NAME]> of Table <TableName> to Field <$pcon.Index2[PK_COLUMN_NAME]> of Table <$pcon.Index2[PK_TABLE_NAME]>~,DataFile );
+		}
+
+		more = List2( GetNext,Index2 );
+	}
+
+	List1( ClearFilter );
+	List2( ClearFilter );
+
+	return TRUE;
+}
+
+
+/// ---------------
+
+
+NUMERIC IndexExistsOn( &List,ColumnName,&IsUnique )
+{
+	more = List( GetFirst,Index );
+
+	while ( <More> )
+	{
+		if ( SimilarStr( ~<$pcon.Index[Column_Name]>~,~<ColumnName>~ ) )
+		{
+			IsUnique = MakeNumber(~<$pcon.Index[Unique].boolean>~);
+
+			return TRUE;
+		}
+
+		more = List( GetNext,Index );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC ShowIndexChanges( &dBase1,&dBase2,TableName,&TitleWritten,&DataFile )
+{
+	if ( !PGenConList( List1,Connection,dBase1,Cursor,Keyset,Schema,~Indexes~ ) )
+	{ 
+		return Warning( ~Failed to get the indexes for the shared database~ );
+	}
+
+	if ( !PGenConList( List2,Connection,dBase2,Cursor,Keyset,Schema,~Indexes~ ) )
+	{ 
+		return Warning( ~Failed to get the indexes for the other database~ );
+	}
+
+	List1( Filter,~Table_Name='<TableName>'~ );
+	List2( Filter,~Table_Name='<TableName>'~ );
+
+	// FIND INDEXES THAT HAVE BEEN ADDED OR CHANGED
+
+	while ( List1( GetNext,Index1 ) )
+	{
+		IsUnique = FALSE;
+
+		if ( !IndexExistsOn( List2,~<$pcon.Index1[Column_Name]>~,IsUnique ) )
+		{
+			if ( !<TitleWritten> )
+			{
+				WriteSection( ~Table: <TableName> was changed~,DataFile );
+				TitleWritten = TRUE;
+			}
+
+			WriteLine( ~  Added index on field <$pcon.Index1[Column_Name]>~,DataFile );
+		}
+		else
+		{
+			if ( MakeNumber(~<$pcon.Index1[Unique].boolean>~) != <IsUnique> )
+			{
+				Unique = MakeNumber(~<$pcon.Index1[Unique]>~) ? ~Unique~ : ~Not Unique~;
+				WriteLine( ~  Changed index on field '<$pcon.Index1[Column_Name]>' to <Unique>~,DataFile );
+			}
+
+		}
+	}
+
+	// FIND INDEXES THAT HAVE BEEN REMOVED
+
+	more = List2( GetFirst,Index2 );
+
+	while ( <More> )
+	{
+		IsUnique = FALSE;
+
+		if ( !IndexExistsOn( List1,~<$pcon.Index2[Column_Name]>~,IsUnique ) )
+		{
+			if ( !<TitleWritten> )
+			{
+				WriteSection( ~Table: <TableName> was changed~,DataFile );
+				TitleWritten = TRUE;
+			}
+
+			WriteLine( ~  Removed Index on field <$pcon.Index2[Column_Name]>~,DataFile );
+		}
+
+		more = List2( GetNext,Index2 );
+	}
+
+	List1( ClearFilter );
+	List2( ClearFilter );
+
+	return TRUE;
+}
+
+	
+	
+NUMERIC IterateTables( &db1,&db2,&DataFile )
+{	
+	if ( !PGenConList( List1,Connection,db1,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		List1( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query Schema of type Tables.  <theErr>~ ) );
+	}
+
+	if ( !PGenConList( List2,Connection,db2,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		List2( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query Schema of type Tables.  <theErr>~ ) );
+	}
+
+	NumTables = TablesDeleted = TablesChanged = TablesAdded = 0;
+
+	// Show new tables
+
+	while ( List1( GetNext,Table ) )
+	{
+		TableName = ~<$pcon.Table[Table_Name]>~;
+		
+		if ( SimilarStr( ~<TableName>~,~sysdiagrams~ ) )	// Temp workaround till we figure out why this crashes
+			continue;										// Have to make a db diagram in SQL Server 2005 to get the table
+															// Causes a memory exception when query the single record in the table
+		++NumTables;
+
+		dlg( SetStatus,0, ~Checking <TableName> for existence and changes~ );
+
+		if ( !TableExists( List2,~<TableName>~ ) )
+		{
+			ShowNewTable( db1,~<TableName>~,DataFile );
+			++TablesAdded;
+		}
+		else
+		{
+			if ( ShowFieldChanges( db1,db2,~<TableName>~,DataFile ) )
+			{
+				++TablesChanged;
+			}
+		}
+	}
+
+	// Show  deleted tables
+
+	more = List2( GetFirst,Table );
+
+	while ( <more> )
+	{
+		TableName = ~<$pcon.Table[Table_Name]>~;
+
+		dlg( SetStatus,0, ~Checking <TableName> for removal~ );
+
+		if ( !TableExists( List1,~<TableName>~ ) )
+		{
+			ShowDeletedTable( List1,~<TableName>~,DataFile );
+
+			++TablesDeleted;
+		}
+
+		more = List2( GetNext,Table ) ;
+	}
+
+	WriteSection( ~<TablesAdded> of <NumTables> Tables were added~,DataFile );
+
+	WriteSection( ~<TablesChanged> of <NumTables> Tables were changed~,DataFile );
+
+	WriteSection( ~<TablesDeleted> of <NumTables> Tables were deleted~,DataFile );
+
+	return TRUE;
+}
+
+NUMERIC OpenUDL()
+{
+	FileFilter = ~UDL Files|*.udl~;
+
+	if ( !FileDialog( Title,Translate(~Find the UDL that points to the other database?~),FILTER,~<FileFilter>~,DefaultExt,~UDL~,Path,UDLPath,Open ) )
+	{
+		return FALSE;
+	}
+
+	if ( !Files( FileExists,~<UDLPath>~ ) )
+	{
+		if ( !File( UDLFile,Open,~<UDLPath>~,Create,Write,Close ) )	
+		{
+			return Warning( Translate( ~Failed to create <UDLPath>~ ) );
+		}
+	}
+
+	return TRUE;
+
+	
+	dlg( SetStatus,0, Translate( ~Opening Microsoft Data Link File: <UDLPath>~) );
+
+	Action = STR ( ActivateUDL( ~<UDLPath>~ ) );
+
+	LastUDLPath = ~<UDLPath>~;
+
+	QueueContentsAfter( Action,60 );
+
+	return FALSE;
+}
+
+
+
+NUMERIC ActivateUDL( UDLPath )
+{
+	return ShellExecute( Open,~<UDLPath>~ );
+}
+
+
+NUMERIC CompareDatabases( &Connection1,&Connection2,&DataFile )
+{
+	FixupConnection( Connection1 );
+
+	if ( !Ado( dbase1,Provider,~~,User,~~,Password,~~,Source,~<Connection1>~,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Failed to connect to database specified by <Connection1>. <theErr>~ ) );
+	}
+
+	FixupConnection( Connection2 );
+
+	if ( !Ado( dbase2,Provider,~~,User,~~,Password,~~,Source,~<Connection2>~,Connect ) )
+	{
+		dBase2( GetErrorDescription,theErr );
+		return Warning( Translate( ~Failed to connect to database specified by <Connection2>. <theErr>~ ) );
+	}
+
+	IterateTables( dbase1,dbase2,DataFile );
+
+	dlg( SetStatus,0, Translate( ~Done comparing database structures~ ) );
+
+	return TRUE;
+}
+
+
+
+NUMERIC DefineDialog()
+{
+	if ( !DictionaryExists( DDCompareDBStructDialog ) )
+	{
+        Dictionary: DDCompareDBStructDialog 
+            Fields: Name	UDLPath1	type text
+            Fields: Name	UDLPath2	type text
+			Fields: Name	OutputPath	type text
+			Fields: Name	UseSharedDB type text
+
+ 	}
+
+	Define: DlgData Using DDCompareDBStructDialog;
+		//Fields: UDLPath1  ~c:\test1.udl~
+		//		UDLPath2  ~c:\PreviousDatabase.udl~
+		//		OutputPath  ~c:\test.txt~;
+
+	Left = 100;	Top = 100;	DialogWidth = 300; DialogHeight = 300;
+
+	StaticTextWidth = 150; StaticTextHeight = 20;
+	PathWidth = 500;
+
+	vGap = 5; hGap = 5; ButtonWidth = 90; ButtonHeight = 20;
+
+	Define: aDialog Using DDWinDef
+		Fields:	POSITION				100,100,$DialogWidth,$DialogHeight 
+				TITLE					~Compare Database Structures~
+				TYPENAME				~Dialog~ 
+				STATUSBAR				~1 100~
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "CompareDatabaseStructures.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: Path1Prompt Using DDWinCtrlDef AsSymbol Path1Prompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~UDL for Database 1~ )
+						Position		$hGap,$vGap,<StaticTextWidth>,<StaticTextHeight> ;
+
+			Define: Path1Field Using DDWinCtrlDef AsSymbol Path1Field         
+				Fields: TypeName		EditText
+						Position        Path1Prompt(GetRight,Position) + $hGap
+										Path1Prompt(GetTop,Position) 
+										$PathWidth $StaticTextHeight               
+						GenConName		THIS
+						GenConField		~UDLPath1~
+						IActionsText	~[Get]~
+						OActionsText    ~[Save]~
+						Tooltip			Translate( ~Enter the path of a UDL file that points to the current database~ ) ;
+
+			Define: Path1BrowseButton Using DDWinCtrlDef AsSymbol Path1BrowseButton 
+				Fields: TypeName		Button
+						Text			Translate( ~?~ )
+						Position		Path1Field(GetRight,Position) + $hGap,
+										Path1Field(GetTop,Position),20,20
+						DActionsText	ACTION EXEC  ( OnBrowsePath1Button() ) 
+						IsTabStop		1
+						Tooltip			Translate( ~Browse for the UDL file~ );
+
+			Define: Path1ViewButton Using DDWinCtrlDef AsSymbol Path1ViewButton 
+				Fields: TypeName		Button
+						Text			Translate( ~View~ )
+						Position		Path1BrowseButton(GetRight,Position) + $hGap,
+										Path1BrowseButton(GetTop,Position),60,20
+						DActionsText	ACTION EXEC  ( OnViewPath1Button() ) 
+						IsTabStop		1
+						Tooltip			Translate( ~View the UDL file~ );
+
+			Define: Path2Prompt Using DDWinCtrlDef AsSymbol Path2Prompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~UDL For Database 2~ )
+						Position		Path1Prompt(GetLeft,Position), Path1Field(GetBottom,Position) + $vGap
+										$StaticTextWidth $StaticTextHeight    
+
+			Define: Path2Field Using DDWinCtrlDef AsSymbol Path2Field         
+				Fields: TypeName		EditText
+						Position        Path2Prompt(GetRight,Position) + $hGap
+										Path2Prompt(GetTop,Position) 
+										$PathWidth $StaticTextHeight               
+						GenConName		THIS
+						GenConField		~UDLPath2~
+						IActionsText	~[Get]~
+						OActionsText    ~[Save]~
+						Tooltip			Translate( ~Enter the path of a UDL file that points to a previous version of the database~ ) ;
+
+			Define: Path2BrowseButton Using DDWinCtrlDef AsSymbol Path2BrowseButton 
+				Fields: TypeName		Button
+						Text			Translate( ~?~ )
+						Position		Path2Field(GetRight,Position) + $hGap,
+										Path2Field(GetTop,Position),20,20
+						DActionsText	ACTION EXEC  ( OnBrowsePath2Button() ) 
+						IsTabStop		1
+						Tooltip			Translate( ~Browse for the UDL file~ );
+
+			Define: Path2ViewButton Using DDWinCtrlDef AsSymbol Path2ViewButton 
+				Fields: TypeName		Button
+						Text			Translate( ~View~ )
+						Position		Path2BrowseButton(GetRight,Position) + $hGap,
+										Path2BrowseButton(GetTop,Position),60,20
+						DActionsText	ACTION EXEC  ( OnViewPath2Button() ) 
+						IsTabStop		1
+						Tooltip			Translate( ~View the UDL file~ );
+
+			Define: OuputPathPrompt Using DDWinCtrlDef AsSymbol OuputPathPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Comparison Results File~ )
+						Position		Path2Prompt(GetLeft,Position), Path2Prompt(GetBottom,Position) + $vGap * 4
+										$StaticTextWidth $StaticTextHeight    
+
+			Define: OuputPathField Using DDWinCtrlDef AsSymbol OuputPathField         
+				Fields: TypeName		EditText
+						Position        OuputPathPrompt(GetRight,Position) + $hGap
+										OuputPathPrompt(GetTop,Position) 
+										$PathWidth $StaticTextHeight               
+						GenConName		THIS
+						GenConField		~OutputPath~
+						IActionsText	~[Get]~
+						OActionsText    ~[Save]~
+						Tooltip			Translate( ~Enter the path of a file to write the results to~ ) ;
+
+			Define: OutputPathBrowseButton Using DDWinCtrlDef AsSymbol OutputPathBrowseButton 
+				Fields: TypeName		Button
+						Text			Translate( ~?~ )
+						Position		OuputPathField(GetRight,Position) + $hGap,
+										OuputPathField(GetTop,Position),20,20
+						DActionsText	ACTION EXEC  ( OnBrowseOutputPathButton() ) 
+						IsTabStop		1
+						Tooltip			Translate( ~Browse for the file to write the comparison results to~ );
+
+			Define: OutputPathViewButton Using DDWinCtrlDef AsSymbol OutputPathViewButton 
+				Fields: TypeName		Button
+						Text			Translate( ~View~ )
+						Position		OutputPathBrowseButton(GetRight,Position) + $hGap,
+										OutputPathBrowseButton(GetTop,Position),60,20
+						DActionsText	ACTION EXEC  ( OnViewOutpuPathButton() ) 
+						IsTabStop		1
+						Tooltip			Translate( ~View the file with the comparison results~ );
+
+
+			DialogWidth = aDialog( GetMaxRight,Position) + $hGap * 3;
+
+			Define: CreateUDLButton Using DDWinCtrlDef AsSymbol CreateUDLButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( NewUDL() )
+						POSITION		($DialogWidth/2) - ($ButtonWidth * 1.5) - $hGap,OuputPathPrompt(GetBottom,Position)+30, $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Create UDL~ )
+						TOOLTIP			Translate( ~Create a Microsoft Data Link File (UDL)~ )
+						TYPENAME		BUTTON
+
+			Define: GoButton Using DDWinCtrlDef AsSymbol GoButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( GoButton() )
+						POSITION		CreateUDLButton(GetRight,Position) + $hGap,CreateUDLButton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Compare~ )
+						TOOLTIP			Translate( ~Compare the structures of the two databases specified above~ )
+						TYPENAME		BUTTON
+
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( DoCancelButton() )
+						POSITION		GoButton(GetRight,Position) + $hGap,CreateUDLButton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Cancel~ )
+						TOOLTIP			Translate( ~Exit without performing the operation~ )
+						TYPENAME		BUTTON
+		}
+
+
+	DialogHeight = aDialog(GetMaxBottom,Position) + $vGap + 30;
+
+	DialogWidth = aDialog( GetMaxRight,Position) + $hGap * 3;
+
+	aDialog( Set,Position,~<Left> <Top> <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,aDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DlgData );
+
+	return TRUE;
+}
+
+
+VOID OnBrowsePath1Button()
+{
+	Title = Translate( ~Find the UDL that points to the first database~ );
+
+	FileFilter = ~UDL Files|*.udl~;
+
+	if ( !FileDialog( Title,~<Title>~,PATH,theFile,Filter,~<FileFilter>~,Open ) )	// ASK THE USER TO FIND THE FILE
+		{ return; }
+		
+	dlg( SetString,~<theFile>~ ,UDLPath1,0 );										
+}
+
+NUMERIC OnViewPath1Button()
+{
+	dlg( GetInput );
+
+	if ( IsNULL( ~<$con.dlgdata[UDLPath1]>~ ) )
+	{
+		return Warning( ~You must specify a path to the UDL file first~ );
+	}
+
+
+	dlg( SetStatus,0,Translate( ~Opening Microsoft Data Link File for <$con.dlgdata[UDLPath1]>~) );
+
+	Action = STR ( ActivateUDL( ~<$con.dlgdata[UDLPath1]>~ ) );
+
+	return QueueContentsAfter( Action,60 );								
+}
+
+
+
+VOID OnBrowsePath2Button()
+{
+	Title = Translate( ~Find the UDL that points to the second database~ );
+
+	FileFilter = ~UDL Files|*.udl~;
+
+	if ( !FileDialog( Title,~<Title>~,PATH,theFile,Filter,~<FileFilter>~,Open ) )	// ASK THE USER TO FIND THE FILE
+		{ return; }
+		
+	dlg( SetString,~<theFile>~ ,UDLPath2,0 );										
+}
+
+
+NUMERIC OnViewPath2Button()
+{
+	dlg( GetInput );
+
+	if ( IsNULL( ~<$con.dlgdata[UDLPath2]>~ ) )
+	{
+		return Warning( ~You must specify a path to the UDL file first~ );
+	}
+
+
+	dlg( SetStatus,0,Translate( ~Opening Microsoft Data Link File for <$con.dlgdata[UDLPath2]>~) );
+
+	Action = STR ( ActivateUDL( ~<$con.dlgdata[UDLPath2]>~ ) );
+
+	return QueueContentsAfter( Action,60 );								
+}
+
+
+VOID OnBrowseOutputPathButton()
+{
+	Title = Translate( ~Find the file to write the results to~ );
+
+	FileFilter = ~Text Files|*.txt~;
+
+	if ( !FileDialog( Title,~<Title>~,PATH,theFile,Filter,~<FileFilter>~,Save ) )	// ASK THE USER TO FIND THE FILE
+		{ return; }
+		
+	dlg( SetString,~<theFile>~ ,OutputPath,0 );										
+}
+
+
+NUMERIC OnViewOutpuPathButton()
+{	
+	dlg( GetInput );
+
+	if ( IsNULL( ~<$con.dlgdata[OutputPath]>~ ) )
+	{
+		return Warning( ~You must specify a path to the file first~ );
+	}
+
+		
+	return ViewFileInEditor( ~<$con.dlgdata[OutputPath]>~ );							
+}
+
+
+NUMERIC ViewFileInEditor( FilePath )
+{
+	ProgramName = ~Notepad.exe~;
+
+	Program = ~<$Sys.Directory>\<ProgramName>~;
+
+	if ( !Files( FileExists,~<Program>~ ) )
+	{
+		return Warning( Translate(~Could not find NotePad.exe at <Program>~) );
+	}
+
+	if ( !ShellExecute( Open,~<Program>~,~<FilePath>~ ) )
+	{
+		GetLastError( ErrorString,theErr );
+		return Warning( Translate(~Could not open <FilePath>. <theErr>~) );
+	}
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC NewUDL()
+{
+	FileFilter = ~UDL Files|*.udl~;
+
+	if ( !FileDialog( Title,Translate(~Save the UDL file to?~),FILTER,~<FileFilter>~,DefaultExt,~UDL~,Path,UDLPath,Save ) )
+	{
+		return FALSE;
+	}
+
+	if ( !Files( FileExists,~<UDLPath>~ ) )
+	{
+		if ( !File( UDLFile,Open,~<UDLPath>~,Create,Write,Close ) )	
+		{
+			return Warning( Translate( ~Failed to create <UDLPath>~ ) );
+		}
+	}
+
+	dlg( SetStatus,0,Translate( ~Opening Microsoft Data Link File for <UDLPath>~) );
+
+	Action = STR ( ActivateUDL( ~<UDLPath>~ ) );
+
+	return QueueContentsAfter( Action,60 );
+}
+
+
+
+NUMERIC ActivateUDL( UDLPath )
+{
+	return ShellExecute( Open,~<UDLPath>~ );
+}
+
+
+VOID FixupConnection( &Connection )
+{
+	CR = chr( 0x0D );
+	LF = chr( 0x0A );
+
+	GetTokens( ~<Connection>~,~<LF>~,Line1,Line2,Line3 );
+
+	Connection = ~<Line3>~;
+}
+
+
+NUMERIC GoButton()
+{
+	dlg( GetInput );
+
+	if ( IsNULL( ~<$con.dlgdata[UDLPath1]>~ ) )
+	{
+		return Warning( ~You must select the UDL for database 1 first~ );
+	}
+
+	if ( IsNULL( ~<$con.dlgdata[UDLPath2]>~ ) )
+	{
+		return Warning( ~You must select the UDL for database 1 first~ );
+	}
+
+	if ( !File( DataFile, OPEN,~<$con.dlgdata[UDLPath1]>~,READ ) )			// TRY TO OPEN IT
+	{ 
+		return Warning( ~Could not open <$con.dlgdata[UDLPath1]>.\n\n<$func.GetLastErrorMsg()>~ );
+	}
+
+	DataFile( ReadTextFile,Connection1 );
+	DataFile( Close );
+
+	if ( !File( DataFile, OPEN,~<$con.dlgdata[UDLPath2]>~,READ ) )			// TRY TO OPEN IT
+	{ 
+		return Warning( ~Could not open <$con.dlgdata[UDLPath2]>.\n\n<$func.GetLastErrorMsg()>~ );
+	}
+
+	DataFile( ReadTextFile,Connection2 );
+	DataFile( Close );
+
+	if ( IsNULL( ~<$con.dlgdata[OutputPath]>~ ) )
+	{
+		return Warning( ~You must select the path for the file that will contain the comparison results first~ );
+	}
+
+	if ( !File( DataFile, OPEN,~<$con.dlgdata[OutputPath]>~,CREATE,WRITE ) )	// TRY TO CREATE IT
+	{ 
+		return Warning( ~Could not open <$con.dlgdata[OutputPath]>.\n\n<$func.GetLastErrorMsg()>~ );
+	}
+
+	WaitCursor( Begin );
+
+	retval = CompareDatabases( Connection1,Connection2,DataFile );
+
+	WaitCursor( End );
+
+	return <retval>;
+}
+
+
+
+NUMERIC DoCancelButton()
+{
+	dlg( End );
+	Exit();
+}
+
+DefineDialog();
+

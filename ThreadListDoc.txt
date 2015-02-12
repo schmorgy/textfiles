@@ -1,0 +1,306 @@
+
+Include: ~UtilityRoutines~;
+
+VOID ReOpen()
+{
+}
+
+VOID DefineDialog()
+{
+	if ( !DictionaryExists(DDThreadListDocData) )
+	{
+		Dictionary: DDThreadListDocData
+			Fields: Name Msg		Type Text
+			Fields: Name Option		Type Text
+			Fields: Name Totals		Type Text
+			Fields: Name Interval	Type long
+
+		StringList:	Name ~SpyOptionsList~
+			Fields: String	~Documents~
+			Fields: String	~Threads~
+			Fields: String	~Global Memory~
+			Fields: String	~URegistry~
+			Fields: String	~Heaps~
+		//	Fields: String	~Connections~	NO LONGER MAINTAINING INTERNAL CONNECTIONS
+		Hang:	SpyOptionsList	~[STRINGS]~
+	}
+
+	Define: DlgData Using DDThreadListDocData
+		Fields: Option		~Threads~
+				Interval	50;
+
+
+	hGap = 5; vGap = 3;
+	PromptHeight = 20;		PromptWidth = 110;		ValueWidth = 550;
+	ButtonWidth = 90;		ButtonHeight = 20;	
+	LeftX = $hGap;			CurrentY = $vGap;		CurrentRight = 0;
+	ComboBoxWidth = 130;		ComboBoxHeight = 150;
+
+	Define: TheDialog Using DDWinDef
+		Fields:	POSITION				100, 100, 150,100
+				TITLE					~Application Spy~
+				TYPENAME				Dialog 
+				WANTSMINIMIZEBOX		TRUE
+				OACTIONSTEXT			ACTION EXEC ( CloseDialog() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( AdminHelpFile "ActiveThreads.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: TotalsMsg Using DDWinCtrlDef AsSymbol TotalsMsg
+				Fields:	TypeName		StaticText
+						GenConName		THIS
+                        GenConField		~Totals~
+						Position		$LeftX $vGap 500, 20									
+
+			Define: OptionComboBox Using DDWinCtrlDef AsSymbol OptionComboBox 
+				Fields: TypeName		SComboBox  
+						Position		$LeftX,TotalsMsg(GetBottom,Position)+$vGap,<ComboBoxWidth>,<ComboBoxHeight> 
+						IActionsText    ~[GetList(SpyOptionsList) Get]~
+						DActionsText	~[Save Exec("OnOptionsChange()")]~
+						OActionsText    ~[Save]~
+						GenConName       THIS
+						GenConField      ~Option~
+						Tooltip          ~Select something to view~
+
+			Define: IntervalPrompt Using DDWinCtrlDef AsSymbol IntervalPrompt
+				Fields:	TypeName		StaticText
+						Text			~Interval~
+						RightJustified	TRUE
+						GenConName		THIS
+						Position		OptionComboBox(GetRight,Position) + $hGap OptionComboBox(GetTop,Position) 60, $ButtonHeight									
+
+			Define: IntervalField Using DDWinCtrlDef AsSymbol IntervalField
+				Fields:	TypeName		EditText
+						GenConName		THIS
+                        GenConField		~Interval~
+						IActionsText	~[Get]~
+						DActionsText	~[Save]~
+						Position		IntervalPrompt(GetRight,Position) + $hGap IntervalPrompt(GetTop,Position) 50, $ButtonHeight									
+
+			Define: IntervalSetPrompt Using DDWinCtrlDef AsSymbol IntervalSetPrompt
+				Fields:	TypeName		Button
+						Text			~Set~
+						RightJustified	TRUE
+						GenConName		THIS
+						DActionsText	ACTION EXEC ( OnOptionsChange() )
+						Position		IntervalField(GetRight,Position) + $hGap IntervalField(GetTop,Position) 80, $ButtonHeight									
+
+			Define: RefreshButton Using DDWinCtrlDef AsSymbol RefreshButton
+				Fields:	TypeName		Button
+						Text			~Refresh~
+						DActionsText	ACTION EXEC ( RefreshList( FALSE ) )
+						Position		IntervalSetPrompt(GetRight,Position) + $hGap IntervalSetPrompt(GetTop,Position) 80, $ButtonHeight									
+
+			Define: DumpHeapButton Using DDWinCtrlDef AsSymbol DumpHeapButton
+				Fields:	TypeName		Button
+						Text			~Heap Dump~
+						ToolTip			~Dump the heap of the line that contains the cursor~
+						IsHidden		T
+						DActionsText	ACTION EXEC ( DumpSelectedHeap(TRUE) )
+						Position		RefreshButton(GetRight,Position) + $hGap RefreshButton(GetTop,Position) 80, $ButtonHeight									
+
+			Define: DifHeapButton Using DDWinCtrlDef AsSymbol DifHeapButton
+				Fields:	TypeName		Button
+						Text			~Heap Diff~
+						ToolTip			~Use WinMerge to show the difference between this heap dump and the last. Runs C:\Program Files\Thingamahoochie Software\WinMerge\WinMerge.exe (Get it from the www.Download.com)~
+						IsHidden		T
+						DActionsText	ACTION EXEC ( HeapDifference() )
+						Position		DumpHeapButton(GetRight,Position) + $hGap DumpHeapButton(GetTop,Position) 80, $ButtonHeight									
+
+			Define: StatusMsg Using DDWinCtrlDef AsSymbol StatusMsg
+				Fields:	GenConName		THIS
+                        GenConField		~Msg~
+						READONLY		T
+						Font			~courier new~
+						fontSize		14
+						fontweight		400
+						NOHORIZONTALSCROLL T
+						TYPENAME		MLEDITTEXT
+						Position		$LeftX IntervalPrompt(GetBottom,Position)+5 670, 700 // <- change the 700 to 1000 to keep the bottom from scrolling									
+		}
+
+	DialogHeight = StatusMsg(GetBottom,Position) + $vGap + 20;
+	DialogWidth = StatusMsg(GetRight,Position) + $hGap;
+
+	TheDialog( Set,Position,~100 100 <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,TheDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+	
+	dlg( SetBackGroundServer,TRUE );
+
+	Global( dlg,TheDialog,DlgData );
+}
+
+VOID OnOptionsChange()
+{
+	dlg( GetStrings,Option,Option,Interval,Interval );
+
+	Interval = Pin( <Interval>,1,60 );
+
+	dlg( SetString,~<Interval>~,Interval,0 );
+
+	EmptyActionsQueue();
+
+	dlg( ShowControls,SimilarStr(~<Option>~,~Heaps~),DumpHeapButton,DifHeapButton );
+
+	RefreshList( TRUE );
+}
+
+
+LastDumpPath = ~~;
+ThisDumpPath = ~~;
+
+
+NUMERIC DumpSelectedHeap( OpenIt )
+{
+	line = dlg( EditText,StatusMsg,GetLineFromPos,-1);
+
+	if ( <line> < 1 )
+	{
+		line = 1;
+	}
+
+	dlg( EditText,StatusMsg,GetLineText,<line>,LineText );
+
+	if ( IsNull(~<LineText>~) )
+	{
+		return Warning( ~No data on line <line>~ );
+	}
+
+
+	GetTokens( ~<LineText>~,~ ~,HeapName,HeapAddress );
+
+	if ( IsNull( ~<HeapName>~ ) )
+	{
+		return Warning( ~No heap selected [<LineText>]~ );
+	}
+
+	if ( IsNumeric(~<HeapName>~) )
+	{
+		HeapAddress = ~<HeapName>~;
+	}
+
+	HeapAddress = ~0x<HeapAddress>~;
+
+	if ( !IsNumeric(~<HeapAddress>~) )
+	{
+		return Warning( ~Invalid Heap Address [<HeapAddress>] from line <line> containing "<LineText>"~ );
+	}
+
+	LastDumpPath = ~<ThisDumpPath>~;
+
+	ThisDumpPath = ~<$App.Dir>\Heap\<HeapAddress>.txt~;
+
+	index = 1;
+
+	while ( Files( FileExists,~<ThisDumpPath>~ ) )
+	{
+		ThisDumpPath = ~<$App.Dir>\Heap\<HeapAddress>_<++index>.txt~;
+	}
+
+	if ( Debug( DumpMyHeap,<HeapAddress>,~<ThisDumpPath>~,~<HeapName>~ ) )
+	{
+		if ( <OpenIt> )
+		{
+			ViewFileInNotepad( ~<ThisDumpPath>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC HeapDifference()
+{
+	if ( !DumpSelectedHeap( FALSE ) )
+	{
+		return FALSE;
+	}
+
+	if ( !IsNull( ~<LastDumpPath>~ ) && !IsNull( ~<ThisDumpPath>~ ) )
+	{
+		return ShellExecute( Open,~"C:\Program Files\WinMerge\WinMergeU.exe"~,~"<LastDumpPath>" "<ThisDumpPath>"~ );
+	}
+
+	return Warning( ~You need two dumps to see the difference~ );
+}
+
+
+VOID RefreshList( Repeat )
+{
+	if ( !Defined( dlg ) )
+	{
+		return;
+	}
+
+	dlg( GetStrings,Option,Option,Interval,Interval );
+
+	UMallocCount = Debug( UMallocCount );
+	UobjectCount = Debug( UObjectCount );
+	MemoryUsuage = Debug( MemoryUsuage );
+	PageBytes	 = Debug( PageBytes );
+	Corrections	 = ImageCorrections( Count );
+	DocCount	 = Debug( DocumentCount );
+
+	if ( SimilarStr( ~<Option>~,~Documents~ ) )
+	{
+		Debug( DumpDocList,TheList );
+	}
+	else if ( SimilarStr( ~<Option>~,~Connections~ ) )
+	{
+		Debug( DumpConnectionList,TheList );
+	}
+	else if ( SimilarStr( ~<Option>~,~URegistry~ ) )
+	{
+		Debug( DumpRegistryList,TheList );
+	}
+	else if ( SimilarStr( ~<Option>~,~Global Memory~ ) )
+	{
+		Debug( DumpMemoryUsage,TheList );
+	}
+	else if ( SimilarStr( ~<Option>~,~Heaps~ ) )
+	{
+		Debug( DumpHeaps,TheList );
+	}
+	else
+	{
+		Debug( ThreadList,TheList );
+	}
+
+
+	CR = chr(0x0D);
+
+	Now = Ticks();
+
+	dlg( SetString,~Time=<Now>,Memory=<MemoryUsuage>,Page=<PageBytes> MMC=<UMallocCount>,UOC=<UobjectCount>,IC=<Corrections>,Doc=<DocCount>~,Totals,0 );
+	dlg( SetString,~<TheList>~,Msg,0 );
+
+	ForgetLocal( TheList );
+
+	if ( <Repeat> )
+	{
+		Action = ~RefreshList( TRUE );~;
+		QueueContentsAfter( Action,Pin( <Interval>,1,60 ) * 1000 );
+	}
+}
+
+
+
+
+VOID CloseDialog()
+{
+	EmptyActionsQueue();
+
+	Sleep( 1000 );
+
+	dlg( End );
+
+	Exit();
+}
+
+DefineDialog();
+
+RefreshList( TRUE );
+
+Debug( SetDontDebugThis,TRUE );
+

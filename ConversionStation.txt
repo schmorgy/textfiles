@@ -1,0 +1,3216 @@
+//
+// Conversion Station Dialog
+//
+// This panel provides conversion to sRGB and import into DP2 of orders Queued via the JobImport panel.
+//
+// $Id: ConversionStation.txt,v 1.6 2009/04/20 15:00:35 davef Exp $
+Include: ~../Scripts/conversion~;
+Include: ~../Scripts/Cmds~;
+Include: ~../Scripts/scaling~;
+
+Include: ~../Scripts/ConversionUtilities~;
+
+Include: ~MakeImageWritable~;
+Include: ~DeleteOrder~;
+Include: ~Utilities2~;
+Include: ~MergeUtilities~;
+
+// Version 25th Jul 06  Added Services Support.
+// Version 8th  Aug 06  Modified Batch details to list services.
+// Version 9th  Aug 06  removed Batch details to list services.
+// Version 28th Aug 06  fixed NextOrderToConvert() to avoid selecting orders where the processing workstation is NULL.
+//                      This was a missing bracket problem.
+//                      Also added removal of .jpe extension images.
+// Version 7th  Sep 06  Added support for toggling the conversion tool from Conversion.exe to ImageConvertor.exe
+// Version 26th Oct 06  Added support Student ID.
+// Version 7th  Nov 06  Modified for order update, and to trigger emails on conversion limit.
+// Version 8th  Nov 06  Split utility functions off into ConversionUtilites.txt and fix bravo index/batch cards
+// Version 29th Nov 06  Add Support for DupeNScale selected by ROES command.
+// Version 6th  Jul 07  Modified the transaction processing when claiming orders.
+// Version 24th Sep 07  Added Order Merge Support.
+// Version 16th Sep 07  Added Pearl Support.
+// Version 26th Sep 07  Corrected ROES Merge problem.
+// Version 27th Jul 08  Removed prompts for missing images. Changed to auto fail the order.
+// Version 25th Aug 08  Added dynamic scaling of album covers.
+// Version 3rd  Sep 08  Modified all PgenCon lists to be unique to avoid potential overwriting.
+// Version 5th  Sep 08  Modified CheckMergeOrder to correct customer issue.
+// Version 11th Nov 08  Changed image import for LDP orders to support custom LUT.
+// Version 21th Jan 09  Changed Order Status for Phase 2 Conversion to Print.
+// Version 14th Apr 09  Changed Order Status for Phase 2 Conversion to Pending Approval and create a proof
+//                      release script.
+// Version 17th Apr 09  Modified to only render proofs for marked orders.
+// Version 2nd  Jul 09  Modified to avoid sending LDP Phase 2 orders back to adjust.
+
+ConversionStationVersion = ~Version 2nd July 2009~;
+
+// Some defines for the status of an conversion / import these must match those in ExportCmds.txt
+ConversionPending = 1;
+ConversionClaiming  = 2;
+ConversionRunning = 3;
+ConversionExportPending       = 4;
+ConversionExportInited        = 5;
+ConversionExportSetupComplete = 6;
+ConversionExportImagesAdded   = 7;
+ConversionExportRunComplete   = 8;
+ConversionExportFinaliseDone  = 9;
+ConversionCompleted  = 10;
+ConversionFailed  = 99;
+
+Running = FALSE;
+Quitting = FALSE;
+AlreadyOpen = FALSE;
+
+Thread( convertThread );
+
+ClearRotation = TRUE;
+
+// The point at which the last email was sent indicating our limit reached
+// for outstanding orders.
+LastOutstandingWarningSent = 0;
+
+VOID ReOpen()
+{
+}
+
+// FUNCTION: DefineDialog()
+//
+//  This function configures the dialog panel.
+//
+VOID DefineDialog()
+{
+    if ( !DictionaryExists(DDConversionStationDialogData) )
+    {
+        Dictionary: DDConversionStationDialogData
+        Fields: Name    CountPrompt       type text
+        Fields: Name    CountPromptField  type text
+        Fields: Name    ProcessedPrompt       type text
+        Fields: Name    ProcessedPromptField  type text
+        Fields: Name    Status            type text
+        Fields: Name    ExecutableData    type text
+        Fields: Name    AutoStart         type long
+    }
+
+    Left = 5; Top = 5;        hGap = 5; vGap = 5;
+    TextHeight = 20;        TextWidth = 110;  
+    ButtonHeight = 30;        ButtonWidth = 100;
+    SquareButton = 52;
+    StaticTextWidth = 60;    StaticTextHeight = 20;
+    EditTextWidth = 200;    EditTextHeight = 20;
+    ComboBoxWidth = 200;    ComboBoxHeight = 120;
+    x = $Left;                y = $Top;
+    PathWidth = 400;        DialogWidth = (($SquareButton + $hGap) * 5) + $hGap * 2;
+    HeadingTextWidth = $DialogWidth;
+
+    Define: DlgData Using DDConversionStationDialogData
+        Fields: ExecutableData TRUE;
+
+    Define: ConversionStationDlgDefinition Using DDWinDef
+            Fields: Position        180 50 $DialogWidth 600
+                    Title            ~PhotoShop sRGB Conversion/Import Station~
+                    TypeName        ~Dialog~
+                    WantsMinimizeBox TRUE
+                    HACTIONSTEXT    ACTION SHOWHELPPAGE ( KPISHelpFile "CreationStation.htm" )
+                    OACTIONSTEXT    ACTION EXEC ( CloseDialog() )
+
+    Contains: InListOrder
+    {
+        Define: ConversionPrompt Using DDWinCtrlDef AsSymbol ConversionPrompt 
+            Fields: TypeName        StaticText
+                    FontSize        16
+                    Text            Translate( ~Start or Stop using this WorkStation as a Client~ )
+
+                    ~TextColorRed~   0 
+                    ~TextColorGreen~ 0 
+                    ~TextColorBlue~  255 
+                    Position        $x,$y,<HeadingTextWidth>,<StaticTextHeight> ;
+
+        DialogWidth = 400;
+
+        Define: ProgressBox Using DDWinCtrlDef AsSymbol ProgressBox
+            Fields:    TYPENAME        Progress
+                    POSITION        <hgap> ConversionPrompt(GetBottom,Position) + <vGap> $DialogWidth-15 7
+                    ISSMOOTH        1;
+
+
+        Define: GoButton Using DDWinCtrlDef AsSymbol GoButton 
+            Fields: TypeName        Button
+                    Text            Translate( ~Start~ )
+                    Position        $DialogWidth/2-$SquareButton-$hGap,ProgressBox(GetBottom,Position) + $vGap,$SquareButton, $SquareButton 
+                    DActionsText    ACTION EXEC  ( OnGoButton() ) 
+                    IsTabStop       1
+                    IsEnabled       F
+                    ImageFile       ~<$App.Directory>\go.bmp~
+                    Tooltip         Translate( ~Process Work Orders From the List~ )  ;
+
+        Define: StopButton Using DDWinCtrlDef AsSymbol StopButton 
+            Fields: TypeName        Button
+                    Text            Translate( ~Stop~ )
+                    Position        GoButton(GetRight,Position)+($hGap*2),GoButton(GetTop,Position),$SquareButton, $SquareButton 
+                    DActionsText    ACTION EXEC  ( OnStopButton() ) 
+                    IsTabStop       1
+                    IsEnabled       F
+                    ImageFile       ~<$App.Directory>\stop.bmp~
+                    Tooltip         Translate( ~Stop Converting Incoming Orders Using this WorkStation~ )  ;
+
+        Define: AutoStartButton Using DDWinCtrlDef AsSymbol AutoStartButton 
+            Fields: TypeName        CheckBox
+                    GenConName        THIS
+                    GenConField        ~AutoStart~
+                    Text            Translate( ~Auto Start~ )
+                    Position        StopButton(GetRight,Position)+$hGap*3,GoButton(GetTop,Position),$ButtonWidth, $SquareButton
+                    DActionsText    ACTION EXEC  ( OnAutoStartBox() ) 
+                    Tooltip            Translate( ~Specify whether to automatically start Processing Images when the application starts up~ )  ;
+
+        Define: CountPrompt Using DDWinCtrlDef AsSymbol CountPrompt
+            Fields: TypeName        StaticText
+                    Text            Translate( ~Pending Orders for Conversion~ )
+                    Position        GoButton(GetLeft,Position),GoButton(GetBottom,Position)+$vGap,160, <StaticTextHeight>
+
+        Define: CountPromptField Using DDWinCtrlDef AsSymbol CountPromptField
+                Fields:    TypeName        StaticText
+                        POSITION        CountPrompt(GetRight,Position) + $hGap,CountPrompt(GetTop,Position),30,<StaticTextHeight>
+                        Tooltip         ~The number of outstanding orders to convert.~
+                        GENCONNAME      THIS
+                        GENCONFIELD     ~CountPromptField~
+
+        Define: ProcessedPrompt Using DDWinCtrlDef AsSymbol ProcessedPrompt
+            Fields: TypeName        StaticText
+                    Text            Translate( ~Orders Processed This Session~ )
+                    Position        GoButton(GetLeft,Position),GoButton(GetBottom,Position)+$vGap*4,160, <StaticTextHeight>
+
+        Define: ProcessedPromptField Using DDWinCtrlDef AsSymbol ProcessedPromptField
+                Fields:    TypeName        StaticText
+                        POSITION        ProcessedPrompt(GetRight,Position) + $hGap,ProcessedPrompt(GetTop,Position),30,<StaticTextHeight>
+                        Tooltip         ~The number of orders converted.~
+                        GENCONNAME      THIS
+                        GENCONFIELD     ~ProcessedPromptField~
+ 
+        Define: PhotoShopButton Using DDWinCtrlDef AsSymbol PhotoShopButton 
+            Fields: TypeName        Button
+                    Text            Translate( ~Stop~ )
+                    Position        $hGap*3,ProgressBox(GetBottom,Position)+$vGap, 70, 86 
+                    DActionsText    ACTION EXEC  ( OnPhotoshopButton() ) 
+                    IsTabStop       1
+                    IsEnabled       T
+                    ImageFile       ~<$App.Directory>\PhotoShop.bmp~
+                    Tooltip         Translate( ~Open PhotoShop~ );
+
+       Define: Status Using DDWinCtrlDef AsSymbol Status 
+            Fields: TypeName        StaticText
+                    Position        $x,PhotoShopButton(GetBottom,Position) + ($hGap * 2),$DialogWidth - ($hGap * 2),<StaticTextHeight>*3 
+                    GenConName        THIS
+                    GenConField        ~Status~
+
+    };
+
+    DialogHeight = Status(GetBottom,Position) + $vGap + 20;
+
+    LeftPosition = App( thisApp,MainWindow,GetClientWidth ) - $DialogWidth - 3;
+    TopPosition = App( thisApp,MainWindow,GetClientHeight ) - $DialogHeight - 30;
+
+
+    ConversionStationDlgDefinition( Set,Position,~<LeftPosition> <TopPosition> <DialogWidth> <DialogHeight>~ );
+
+    GenDlg( dlg,Definition,ConversionStationDlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    Global( dlg,ConversionStationDlgDefinition,DlgData );
+}
+
+DefineDialog();
+
+// FUNCTION: OnAutoStartBox()
+//
+//  This function handles setting of the AutoStart checkbox. Note its startup.txt that
+//  actions this.
+//
+NUMERIC OnAutoStartBox()
+{
+    dlg( GetInput );
+
+    SetWorkStationSettings( ~<$Job.Name>~,AutoStart,~<$con.dlgData[AutoStart]>~,TRUE );
+
+    return TRUE;
+}
+
+
+// HANDLE MESSAGES POSTED FROM THE CMDS SCRIPT
+
+NUMERIC UserWarning( msg )        { return Warning( ~<msg>~ ); }
+NUMERIC UserMessage( msg )        { return dlg( SetStrings,Status,~<$Date.Time>  <msg>~ ); }
+NUMERIC DisplayCount( msg )       { return dlg( SetStrings,CountPromptField,~<msg>~ ); }
+NUMERIC DisplayTotal( msg )       { return dlg( SetStrings,ProcessedPromptField,~<msg>~ ); }
+VOID    StartProgress(MaxValue)   { dlg( ProgressBar,ProgressBox,SetRange,0,<MaxValue>,SetStep,1 ); }
+VOID    StepProgress()            { dlg( ProgressBar,ProgressBox,Stepit ); }
+
+// FUNCTION: EnableButtons()
+//
+//  This function handles Enabling the buttons.
+//
+NUMERIC EnableButtons()
+{
+    dlg( GetInput );
+
+    CanGo = !<Running>;
+
+    dlg( EnableControls,<Running>,StopButton );
+    dlg( EnableControls,<CanGo>,GoButton );
+
+    return TRUE;
+}
+
+VOID CloseDialog()
+{
+    dlg( GetInput );
+
+    Quitting = TRUE;
+
+    if ( <Running> )
+    {
+        OnStopButton();
+    }
+    else
+    {
+        dlg( END );
+        Exit();
+    }
+}
+
+// FUNCTION: OnGoButton()
+//
+//  This function handles the go buttons.
+//
+NUMERIC OnGoButton()
+{
+    dlg( GetInput );
+
+    convertThread( New,ConversionThread,~~ );
+
+    return TRUE;
+}
+
+// FUNCTION: OnPhotoshopButton()
+//
+//  This function handles the Photoshop button.
+//
+NUMERIC OnPhotoshopButton()
+{
+    GetWorkStationSettings( ~<$Job.Name>~,~PhotoshopLocation~,Program,Enabled );
+   
+    if ( !Files( FileExists,~<Program>~ ) )
+    {
+        return Warning( Translate( ~Could not find <Program>~ ) );
+    }
+
+    return ShellExecute( Open,~<Program>~ );
+}
+
+// FUNCTION: OnStopButton()
+//
+//  This function handles the Stop button.
+//
+NUMERIC OnStopButton()
+{
+    Running = FALSE;
+
+    if ( convertThread( IsActive ) )
+    {
+        convertThread( TerminateSleep );
+    }
+
+    return UserMessage( Translate( ~Stopping~ ) );
+}
+
+// FUNCTION: ConversionThread()
+//
+//  This function runs the conversion thread.
+//
+NUMERIC ConversionThread( )
+{
+    Running = TRUE;
+
+    Invoke( UserMessage,Translate( ~Started Searching for Orders....~ ) );
+    Log( Session, ~ConversionStation:************* Started~ );
+
+    Invoke( EnableButtons );
+
+    while ( <Running> )
+    {
+        if ( !ConvertImages() )
+            break;
+    }
+
+    OnStopButton();
+
+    Invoke( EnableButtons );
+
+    Invoke( UserMessage,Translate( ~Stopped. Awaiting "GO" Button to restart~ ) );
+    Log( Session, ~ConversionStation:************* Stopped~ );
+    if ( <Quitting> )
+    {
+        Invoke( CloseDialog );
+    }
+
+    return TRUE;
+}
+
+// FUNCTION: RemoveConversionJob()
+//
+//  This function removes the specified order from the conversion Queue.
+//
+NUMERIC RemoveConversionJob (OrderID)
+{
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect to Remove Job for <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* Could not connect to database to RemoveConversionJob !!!!!~ );
+        return FALSE;
+    }
+
+    // Query outstanding orders to convert Oldest first 
+    Cmd = ~DELETE from Conversion WHERE(OrderID='<OrderID>')~;
+
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to Remove Job for <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* FAILED to Delete OrderID <OrderID> from the conversion list !!!!!~ );
+        return FAILED;
+    }
+    return TRUE;
+}
+
+// FUNCTION: MarkOrderFailed()
+//
+//  This function marks the status of the order as failed along with a reason and date.
+//
+NUMERIC MarkOrderFailed(OrderID, Reason )
+{
+    Log( Session, ~ConversionStation:********* MarkOrderFailed <OrderID>, <Reason>~ );
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect to MarkOrderFailed for <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* Could not connect to database !!!!!~ );
+        return FALSE;
+    }
+
+    // Check this order has been claimed as ours.
+    if (!OurOrder(~<OrderID>~))
+    {
+        Log( Session, ~ConversionStation:********* Dont update Status as OrderID <OrderID> is not Ours !!!!!~ );
+        return FALSE;
+    }
+
+    // Free up the order if we are going back to pending.
+    ProcessingWorkStation = ~<$App.ComputerName>~;
+
+    Cmd = ~UPDATE Conversion SET ConversionStatus = <ConversionFailed>, ProcessingWorkStation = '<ProcessingWorkStation>', ErrorReason='<Reason>', ErrorDate=getdate() WHERE (OrderID='<OrderID>')~;
+
+    database( BeginTransaction );
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to MarkOrderFailed for <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* FAILED to Change Conversion Status for OrderID <OrderID> !!!!!~ );
+        database( RollBackTransaction );
+        return FALSE;
+    }
+    database( CommitTransaction );
+    return TRUE;
+}
+
+// FUNCTION: UpdateConversionStatus()
+//
+//  This function Updates the status in the conversion queue of the specified order.
+//
+NUMERIC UpdateConversionStatus(OrderID, status )
+{
+    Log( Session, ~ConversionStation:********* UpdateConversionStatus <OrderID>, <status>~ );
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect to UpdateConversionStatus for <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* Could not connect to database !!!!!~ );
+        return FALSE;
+    }
+
+    // Check this order has been claimed as ours.
+    if (!OurOrder(~<OrderID>~))
+    {
+        Log( Session, ~ConversionStation:********* Dont update Status as OrderID <OrderID> is not Ours !!!!!~ );
+        return FALSE;
+    }
+
+    // Free up the order if we are going back to pending.
+    if (~<status>~ == ~<ConversionPending>~)
+    {
+       ProcessingWorkStation = ~~;
+    }
+    else
+    {
+       ProcessingWorkStation = ~<$App.ComputerName>~;
+    }
+
+    // Query outstanding orders to convert Oldest first 
+    Cmd = ~UPDATE Conversion SET ConversionStatus = <status>, ProcessingWorkStation = '<ProcessingWorkStation>' WHERE (OrderID='<OrderID>')~;
+
+    Log( Session, ~ConversionStation:********* Updating Status for <OrderID> to <status> for "<$App.ComputerName>"~ );
+    database( BeginTransaction );
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to UpdateConversionStatus for <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* FAILED to Change Conversion Status for OrderID <OrderID> !!!!!~ );
+        database( RollBackTransaction );
+        return FALSE;
+    }
+    database( CommitTransaction );
+    return TRUE;
+}
+
+// FUNCTION: PendingOrderCount()
+//
+//  This function counts the number of pending orders.
+//
+NUMERIC PendingOrderCount()
+{
+    // Query outstanding orders to convert Oldest first 
+    Query = ~SELECT * FROM Conversion where ConversionStatus='<ConversionPending>' ORDER BY Date ASC~;
+
+    if ( !PGenConList( OrderList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect in PendingOrderCount~ ) );
+        Log( Session, ~ConversionStation:********* Failed to retrieve the Conversion list !!!!!~ );
+        return 0;
+    }
+
+    Count = OrderList( NumEntries );
+
+    if ( <Count> > 0 ) 
+    {
+        return <Count>;
+    }
+    else
+    {
+        return 0;
+    }
+}
+// FUNCTION: ClaimOrder()
+//
+//  This function marks the specified order as ours.
+//
+NUMERIC ClaimOrder(OrderID)
+{
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect to ClaimOrderfor <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* Could not connect to database !!!!!~ );
+        return FALSE;
+    }
+    
+    // Query outstanding orders to convert Oldest first 
+    Cmd = ~UPDATE Conversion SET ProcessingWorkStation = '<$App.ComputerName>', ConversionStatus = '<ConversionClaiming>' WHERE (OrderID='<OrderID>')~;
+
+    Log( Session, ~ConversionStation:*********  Claiming <OrderID> for "<$App.ComputerName>"~ );
+
+    database( BeginTransaction );
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to ClaimOrder <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* FAILED to Change ProcessingWorkStation for OrderID <OrderID> !!!!!~ );
+        database( RollBackTransaction );
+        return FALSE;
+    }
+    database( CommitTransaction );
+    return TRUE;
+}
+
+// FUNCTION: OurOrder()
+//
+//  This function checks that the order is assigned to THIS work Station
+//
+NUMERIC OurOrder(OrderID)
+{
+    Log( Session, ~ConversionStation:********* Checking <OrderID> is for "<$App.ComputerName>"~ );
+
+    connected = ADO( database,Connect, BeginTransaction );
+    if ( !<connected> ) 
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect to OurOrder <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* Could not connect to database in OurOrder !!!!!~ );
+        database( RollBackTransaction );
+        return FALSE;
+    }
+    
+    // Query the processing workstation
+    Query = ~Select ProcessingWorkstation from conversion WHERE (OrderID='<OrderID>')~;
+
+    if ( !PGenConList( WorkList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect in OurOrder~ ) );
+        Log( Session, ~ConversionStation:********* Failed to retrieve the Conversion list !!!!!~ );
+        database( RollBackTransaction );
+        return FALSE;
+    }
+
+    Count = WorkList( NumEntries );
+
+    if ( <Count> > 0 ) 
+    {
+        WorkList( GetFirst, Order );
+        if (~<$pcon.Order[ProcessingWorkstation]>~ == ~<$App.ComputerName>~)
+        {
+            Log( Session, ~ConversionStation:********* <OrderID> IS Our Order *********~ );
+            database( CommitTransaction );
+            return TRUE;
+        }
+    }
+    database( CommitTransaction );
+    return FALSE;
+}
+
+// FUNCTION: NextOrderToConvert()
+//
+//  This function gets details of the next order to convert and import.
+//  It addition it claims the order as belonging to this machine.
+//
+NUMERIC NextOrderToConvert( &Path, &Date, &OrderID, &ColourCorrect, &IndexCards, &BravoCDProfile, &ROESProxies, &Priority )
+{
+    connected = ADO( database,Connect,BeginTransaction );
+    if ( !<connected> ) 
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect to NextOrderToConvert~ ) );
+        database( GetErrorDescription,theErr,RollBackTransaction );
+
+        Log( Session, ~ConversionStation:********* Could not connect to database <theErr> !!!!!~ );
+        return FALSE;
+    }
+
+    // Query outstanding orders to convert Oldest first with ROES priority orders at the start 
+    Query = ~SELECT OrderID, Date, Path, ColourCorrect, IndexCards, Priority, BravoCDProfile, ROESProxies FROM Conversion where ConversionStatus='<ConversionPending>' and (ProcessingWorkstation is NULL OR ProcessingWorkstation='') ORDER BY Priority DESC, Date ASC~;
+
+    if ( !PGenConList( OrderList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect in NextOrderToConvert ~ ) );
+        
+        database( GetErrorDescription,theErr, RollBackTransaction );
+        Log( Session, ~ConversionStation:********* Failed to retrieve the Conversion list <theErr> !!!!!~ );
+        return 0;
+    }
+
+    Count = OrderList( NumEntries );
+
+    if ( <Count> > 0 ) 
+    {
+        OrderList( GetFirst, Order );
+
+        Path = ~<$pcon.Order[Path]>~;
+        Date = ~<$pcon.Order[Date]>~;
+        OrderID = ~<$pcon.Order[OrderID]>~;
+        ColourCorrect = ~<$pcon.Order[ColourCorrect]>~;
+        IndexCards = ~<$pcon.Order[IndexCards]>~;
+        BravoCDProfile = ~<$pcon.Order[BravoCDProfile]>~;
+        ROESProxies = ~<$pcon.Order[ROESProxies]>~;
+        Priority = ~<$pcon.Order[Priority]>~;
+
+        // Mark the order as ours. 
+        Cmd = ~UPDATE Conversion SET ProcessingWorkStation = '<$App.ComputerName>', ConversionStatus = '<ConversionClaiming>' WHERE (OrderID='<OrderID>')~;
+
+        database( BeginTransaction );
+        if ( !database( CMD, ~<cmd>~ ) )
+        {
+            Invoke( UserMessage,Translate( ~Failed to Claim Order in NextOrderToConvert() <OrderID>~ ) );
+            Log( Session, ~ConversionStation:********* FAILED to Change ProcessingWorkStation for OrderID <OrderID> !!!!!~ );
+            database( RollBackTransaction );
+        }
+        else
+        {
+            database( CommitTransaction );
+        }
+        return <Count>;
+    }
+    else
+    {
+        database( CommitTransaction );
+        return 0;
+    }
+}
+
+// FUNCTION: NumberOfIndexCards()
+//
+//  This function returns the number of Index cards for a given productID
+//
+NUMERIC NumberOfIndexCards( OrderID, ProductID, QueueName )
+{
+    if (!GetIndexCardForProduct(~<ProductID>~, ~<QueueName>~, Indexcard, ImagesPerCard))
+    {
+        // Unable to deduce an index card.
+        Log( Session, ~ConversionStation:********* Unable to deduce an index card for Product <ProductID> !!!!!~ );
+        return 0;
+    }
+
+    return database( RecordCountFor,~Select ProductID from OrderItems where OrderID = '<OrderID>' and ProductID='<Indexcard>' ~ );
+}
+
+// FUNCTION: SendUncolouredEmail()
+//
+//  This function Sends email to a confirgured email address to highlight the order
+//  is being set to uncolooured to verify that this is Ok. 
+//
+NUMERIC SendUncolouredEmail( OrderID )
+{
+    Log( Session, ~SendUncolouredEmail****** <OrderID> requires email sent...~ );
+
+    // First Check that the .bat file and .exe exists.
+    Program   = ~<$App.Directory>\blat.exe~;
+    BatchFile = ~<$App.Directory>\emailwarning.bat~;
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~UncolouredWarnEmailto~,EmailToWarn,Enabled ))
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~UncolouredWarnEmailto~, ~Ross.McPhaden@loxleycolour.com~, TRUE );
+        GetWorkStationSettings( ~<$Job.Name>~,~UncolouredWarnEmailto~, EmailToWarn,Enabled );
+    }
+
+    // deduce the address to use for links
+    if (!GetWorkStationSettings( ~LoxleyWebInterface~,OrderViewWebAddress,OrderViewWebAddress,Enabled ) )
+    {
+        SetWorkStationSettings( ~LoxleyWebInterface~, OrderViewWebAddress, ~loxdp2srv01:90~, TRUE );
+        GetWorkStationSettings( ~LoxleyWebInterface~, OrderViewWebAddress, OrderViewWebAddress,Enabled );
+    }
+
+    if (!DefinedAndNotNULL( EmailToWarn ))
+    {
+        Log(Session,  ~SendUncolouredEmail Failed to find email address!!~ );
+        return FALSE;
+    }
+
+    if ( !Files( FileExists,~<Program>~ ) )
+    {
+        Log( Session, ~SendUncolouredEmail****** Could not find <Program> !!!!!!~ );
+        return FALSE;
+    }
+
+    if ( !Files( FileExists,~<BatchFile>~ ) )
+    {
+        Log( Session, ~SendUncolouredEmail****** Could not find <BatchFile> !!!!!!~ );
+        return FALSE;
+    }
+
+    theFile = ~C:\temp\<OrderID>_warn.txt~;
+
+    if ( !File( TextFile, AsciiOutput, OPEN, ~<theFile>~, WRITE, CREATE ) )
+    {
+        Log( Session, ~SendUncolouredEmail: ****** failed to open <theFile>~ );
+        return FALSE;
+    }
+    TextFile(~Warning OrderID <OrderID> has been set to no colour corrections.~);
+    TextFile(~Click the link below to review the order and set it to Adjust or Ready.~);
+    TextFile(~http://<OrderViewWebAddress>/Reports/Order/Release.kpl?OrderID=<OrderID>~);
+    TextFile( close );
+
+    if ( !ShellExecute( Open, ~<BatchFile>~, ~"<theFile>" <EmailToWarn>~) )
+    {
+        Log( Session, ~****** ShellExecute of <BatchFile> FAILED !!!!!!~ );
+        Log( Session, ~****** BatchFile <BatchFile>~);
+        Log( Session, ~****** theFile <theFile>~);
+        return FALSE;
+    }
+    Log(Session,  ~SendUncolouredEmail Send Email (<theFile>) to <EmailToWarn>~ );
+    return TRUE;
+}
+
+// FUNCTION: SendBadStudentEmail()
+//
+//  This function Sends email to a confirgured email address to highlight the order
+//  is from an invalid Student
+//
+NUMERIC SendBadStudentEmail( OrderID )
+{
+    Log( Session, ~SendBadStudentEmail****** <OrderID> is from an unauthorised student...~ );
+
+    // First Check that the .bat file and .exe exists.
+    Program   = ~<$App.Directory>\blat.exe~;
+    BatchFile = ~<$App.Directory>\emailwarning.bat~;
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~BadStudentEmailto~,EmailToWarn,Enabled ))
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~BadStudentEmailto~, ~Ross.McPhaden@loxleycolour.com~, TRUE );
+        GetWorkStationSettings( ~<$Job.Name>~,~BadStudentEmailto~, EmailToWarn,Enabled );
+    }
+
+    // deduce the address to use for links
+    if (!GetWorkStationSettings( ~LoxleyWebInterface~,OrderViewWebAddress,OrderViewWebAddress,Enabled ) )
+    {
+        SetWorkStationSettings( ~LoxleyWebInterface~, OrderViewWebAddress, ~loxdp2srv01:90~, TRUE );
+        GetWorkStationSettings( ~LoxleyWebInterface~, OrderViewWebAddress, OrderViewWebAddress,Enabled );
+    }
+
+    if (!DefinedAndNotNULL( EmailToWarn ))
+    {
+        Log(Session,  ~SendBadStudentEmail Failed to find email address!!~ );
+        return FALSE;
+    }
+
+    if ( !Files( FileExists,~<Program>~ ) )
+    {
+        Log( Session, ~SendBadStudentEmail****** Could not find <Program> !!!!!!~ );
+        return FALSE;
+    }
+
+    if ( !Files( FileExists,~<BatchFile>~ ) )
+    {
+        Log( Session, ~SendBadStudentEmail****** Could not find <BatchFile> !!!!!!~ );
+        return FALSE;
+    }
+
+    theFile = ~C:\temp\<OrderID>_warn.txt~;
+
+    if ( !File( TextFile, AsciiOutput, OPEN, ~<theFile>~, WRITE, CREATE ) )
+    {
+        Log( Session, ~SendBadStudentEmail: ****** failed to open <theFile>~ );
+        return FALSE;
+    }
+    TextFile(~Warning OrderID <OrderID> has been made by an unauthorised Student.~);
+    TextFile(~Click the link below to review the order and set it to Adjust or Ready.~);
+    TextFile(~http://<OrderViewWebAddress>/Reports/Order/Release.kpl?OrderID=<OrderID>~);
+    TextFile( close );
+
+    if ( !ShellExecute( Open, ~<BatchFile>~, ~"<theFile>" <EmailToWarn>~) )
+    {
+        Log( Session, ~****** ShellExecute of <BatchFile> FAILED !!!!!!~ );
+        Log( Session, ~****** BatchFile <BatchFile>~);
+        Log( Session, ~****** theFile <theFile>~);
+        return FALSE;
+    }
+    Log(Session,  ~SendBadStudentEmail Send Email (<theFile>) to <EmailToWarn>~ );
+    return TRUE;
+}
+
+// FUNCTION: SendMergeEmail()
+//
+//  This function Sends email to a confirgured email address to highlight the order
+//  is being merged
+//
+NUMERIC SendMergeEmail( MergeOrderID, IntoOrderID )
+{
+    Log( Session, ~SendMergeEmail****** <MergeOrderID> is Merging into <IntoOrderID>...~ );
+
+    // First Check that the .bat file and .exe exists.
+    Program   = ~<$App.Directory>\blat.exe~;
+    BatchFile = ~<$App.Directory>\emailwarning.bat~;
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~MergeEmailto~,EmailToWarn,Enabled ))
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~MergeEmailto~, ~Ross.McPhaden@loxleycolour.com~, TRUE );
+        GetWorkStationSettings( ~<$Job.Name>~,~MergeEmailto~, EmailToWarn,Enabled );
+    }
+
+    // deduce the address to use for links
+    if (!GetWorkStationSettings( ~LoxleyWebInterface~,OrderViewWebAddress,OrderViewWebAddress,Enabled ) )
+    {
+        SetWorkStationSettings( ~LoxleyWebInterface~, OrderViewWebAddress, ~loxdp2srv01:90~, TRUE );
+        GetWorkStationSettings( ~LoxleyWebInterface~, OrderViewWebAddress, OrderViewWebAddress,Enabled );
+    }
+
+    if (!DefinedAndNotNULL( EmailToWarn ))
+    {
+        Log(Session,  ~SendMergeEmail Failed to find email address!!~ );
+        return FALSE;
+    }
+
+    if ( !Files( FileExists,~<Program>~ ) )
+    {
+        Log( Session, ~SendMergeEmail****** Could not find <Program> !!!!!!~ );
+        return FALSE;
+    }
+
+    if ( !Files( FileExists,~<BatchFile>~ ) )
+    {
+        Log( Session, ~SendMergeEmail****** Could not find <BatchFile> !!!!!!~ );
+        return FALSE;
+    }
+
+    theFile = ~C:\temp\<MergeOrderID>_warn.txt~;
+
+    if ( !File( TextFile, AsciiOutput, OPEN, ~<theFile>~, WRITE, CREATE ) )
+    {
+        Log( Session, ~SendMergeEmail: ****** failed to open <theFile>~ );
+        return FALSE;
+    }
+    TextFile(~Warning OrderID <MergeOrderID> is being merged into <IntoOrderID>.~);
+    TextFile(~Click the links below to review the orders .~);
+
+    TextFile(~http://<OrderViewWebAddress>/Reports/Order/Release.kpl?OrderID=<MergeOrderID>~);
+    TextFile(~http://<OrderViewWebAddress>/Reports/Order/Release.kpl?OrderID=<IntoOrderID>~);
+    TextFile( close );
+
+    if ( !ShellExecute( Open, ~<BatchFile>~, ~"<theFile>" <EmailToWarn>~) )
+    {
+        Log( Session, ~****** ShellExecute of <BatchFile> FAILED !!!!!!~ );
+        Log( Session, ~****** BatchFile <BatchFile>~);
+        Log( Session, ~****** theFile <theFile>~);
+        return FALSE;
+    }
+    Log(Session,  ~SendMergeEmail Send Email (<theFile>) to <EmailToWarn>~ );
+    return TRUE;
+}
+
+// FUNCTION: CheckEmailRequired()
+//
+//  This function checks for an email address to send confirmation to 
+//  and send the email if required. Once sent to email.txt file is removed 
+//
+NUMERIC CheckEmailRequired( OrderID, Path )
+{
+    if ( !Files( FileExists,~<Path>\Email.txt~ ) )
+    {
+        Log( Session, ~CheckEmailRequired****** <OrderID> Does not require email sent~ );
+        return TRUE;
+    }
+    Log( Session, ~CheckEmailRequired****** <OrderID> requires ROES email forwarded...~ );
+
+    // First Check that the .bat file and .exe exists.
+    Program   = ~<$App.Directory>\blat.exe~;
+    BatchFile = ~<$App.Directory>\forwardemail.bat~;
+    GetWorkStationSettings( ~ROESServer.txt~,~PaperOrderDir~,ROESPaperDir,Enabled );
+
+    theFile   = ~<ROESPaperDir>\<OrderID>\<OrderID>_EmailConfirmation.txt~;
+
+    // Extract the email address
+    if ( !file( EmailFile,Open,~<Path>\Email.txt~,Read ) )
+    {
+        Log(Session,  ~CheckEmailRequired Failed to open <Path>\Email.txt~ );
+        return FALSE;
+    }
+
+    EmailFile( ReadString,EmailAddress );
+ 
+    if (!DefinedAndNotNULL( EmailAddress ))
+    {
+        Log(Session,  ~CheckEmailRequired Failed to find email address!!~ );
+        return FALSE;
+    }
+
+    if ( !Files( FileExists,~<Program>~ ) )
+    {
+        Log( Session, ~CheckEmailRequired****** Could not find <Program> !!!!!!~ );
+        return FALSE;
+    }
+
+    if ( !Files( FileExists,~<BatchFile>~ ) )
+    {
+        Log( Session, ~CheckEmailRequired****** Could not find <BatchFile> !!!!!!~ );
+        return FALSE;
+    }
+
+    if ( !ShellExecute( Open, ~<BatchFile>~, ~"<theFile>" <EmailAddress>~) )
+    {
+        Log( Session, ~****** ShellExecute of <BatchFile> FAILED !!!!!!~ );
+        Log( Session, ~****** BatchFile <BatchFile>~);
+        Log( Session, ~****** theFile <theFile>~);
+        return FALSE;
+    }
+    Log(Session,  ~CheckEmailRequired Send Email (<theFile>) to <EmailAddress>~ );
+    return TRUE;
+}
+
+// FUNCTION: GetIndexCardForProduct()
+//
+//  This function retrieves the correct index card product and images contained for the 
+//  specified product.
+//
+NUMERIC GetIndexCardForProduct( ProductID, QueueName, &Indexcard, &ImagesPerCard )
+{
+    Log( Session, ~ConversionStation:************* QueueName = <QueueName>~ );
+    if ( ~<QueueName>~ == ~~ )
+    {
+        return Failure( Translate( ~There was no QueueName specified !!~ ) );
+    }
+
+    // OK Queue names look like 05_Inch_G, so extract the second digit or first 2
+    substr(~<QueueName>~, 0, 1, FirstChar);
+    if (~<FirstChar>~ == ~0~)
+    {
+        substr(~<QueueName>~, 1, 1, Size);
+    }
+    else
+    {
+        substr(~<QueueName>~, 0, 2, Size);
+    }
+    Log( Session, ~ConversionStation:************* Size = <Size>~ );
+
+    // Skip entirely for Theta or canvas or anything that doesnt have a
+    // numeric prepended Queue Name.
+    if (!IsNumeric(~<Size>~))
+    {
+        return FALSE;
+    }
+
+    // We have the Queue so make up the name of the index card
+    IndexCard =  ~~;
+    ImagesPerCard =  ~~;
+
+    GetWorkStationSettings( ~<$Job.Name>~,~<Size>InchIndexCard~,IndexCard,Enabled );
+
+    GetWorkStationSettings( ~<$Job.Name>~,~<Size>InchIndexCardNumImages~,ImagesPerCard,Enabled ); 
+
+    return TRUE;
+}
+
+NUMERIC CountOrderItems( OrderID )
+{
+    Query = ~SELECT Path FROM ImportOrderItemsTemp where OrderID='<OrderID>'~;
+
+    if ( !PGenConList( CountList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        OrderItems = 0;
+    }
+    OrderItems = CountList( NumEntries );
+    Log( Session, ~ConversionStation:********* CountOrderItems found <OrderItems> OrderItems still to import~ );
+    return <OrderItems>;
+}
+
+// FUNCTION: CreateIndexCards()
+//
+//  This function generates an index card or cards for the given order and product.
+//
+NUMERIC CreateIndexCards ( OrderID, ProductID, Roll, QueueName )
+{
+     Log( Session, ~ConversionStation:********* CreateIndexCards OrderID <OrderID> ProductID <ProductID> Roll <Roll> QueueName <QueueName>~ );
+
+    // Deduce how many (if any) Index cards are required.
+    Query = ~SELECT IndexCards, BravoCDProfile, ROESProxies FROM Conversion where OrderID='<OrderID>'~;
+
+    if ( !PGenConList( IndexList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect in CreateIndexCards~ ) );
+        Log( Session, ~ConversionStation:********* Failed to retrieve the Conversion list in CreateIndexCards !!!!!~ );
+        return FALSE;
+    }
+
+    Count = IndexList( NumEntries );
+    if ( <Count> > 0 ) 
+    {
+        IndexList( GetFirst, Order );
+        Quantity = ~<$pcon.Order[IndexCards]>~;
+        BravoCDProfile = ~<$pcon.Order[BravoCDProfile]>~;
+        ROESProxies    = ~<$pcon.Order[ROESProxies]>~;
+
+        if (~<Quantity>~ == ~0~) 
+        {
+            Invoke( UserMessage,Translate( ~Skipping Index Cards as requested~ ) );
+            return FALSE;
+        }
+    }
+    else
+    {
+        Invoke( UserMessage,Translate( ~Failed to find IndexCards in CreateIndexCards~ ) );
+        Log( Session, ~ConversionStation:********* Failed to find IndexCards in CreateIndexCards !!!!!~ );
+        return FALSE;
+    }
+
+    if ( ~<QueueName>~ == ~~ )
+    {
+        Log( Session, ~ConversionStation:************* Unable to get QueueName for <ProductID>~ );
+        return FALSE;
+    }
+
+    // OK Queue names look like 05_Inch_G, so extract the second digit or first 2
+    substr(~<QueueName>~, 0, 1, FirstChar);
+    if (~<FirstChar>~ == ~0~)
+    {
+        substr(~<QueueName>~, 1, 1, Size);
+    }
+    else
+    {
+        substr(~<QueueName>~, 0, 2, Size);
+    }
+
+    // Skip entirely for Theta or canvas or anything that doesnt have a
+    // numeric prepended Queue Name.
+    if (!IsNumeric(~<Size>~))
+    {
+        Log( Session, ~ConversionStation:************* Size <Size> is not Numeric, therefore have to abort index cards for Product <ProductID> ~ );
+        return FALSE;
+    }
+
+    Log( Session, ~ConversionStation:************* Size of Index card for <ProductID> = <Size>~ );
+
+    // Cap the max size of a batch card at 12 inch
+    if (<size> > 12)
+    {
+        Log( Session, ~ROES:************* Index cards are capped at 12 inch therefore dont print a <Size> Inch Index Card~ );
+        return FALSE;
+    }
+
+    // Now deduce the index card to use and the number of images to display on it.
+    IndexCard = ~~;
+    ImagesPerCard = 0;
+    if (!GetIndexCardForProduct(~<ProductID>~, ~<QueueName>~, Indexcard, ImagesPerCard))
+    {
+        // Unable to deduce an index card.
+        Log( Session, ~ConversionStation:********* Unable to deduce an index card for Product <ProductID> !!!!!~ );
+        return FALSE;
+    }
+
+    // Are there order Items?
+    OrderItems = CountOrderItems(~<OrderID>~);
+
+    // if there are no Order items we use the images direct
+    if (!<OrderItems>)
+    {
+        Query = ~Select Path, Roll From ImportImagesTemp Where OrderID = '<OrderID>' and Roll='<Roll>' Order by Roll, Frame~;
+        Log( Session, ~ConversionStation:********* No Order Items CreateIndexCards~ );
+    } 
+    else
+    {
+        Query = ~Select Path, Keyword, Value From ImportOrderItemsTemp Where OrderID = '<OrderID>' and ProductID='<ProductID>' and Roll='<Roll>' Order by path~;
+    }
+
+    if ( !PGenConList( ItemList,Connect,Cursor,Forward, Query,~<Query>~ ) )
+    {
+        return Warning( Translate(~Order <OrderID> does not exist~) );
+    }
+
+    ItemID = 1;
+    Path1 = ~~; Path2 = ~~; Path3 = ~~; Path4 = ~~;  Path5 = ~~;  Path6 = ~~;
+    Path7 = ~~; Path8 = ~~; Path9 = ~~; Path10 = ~~;  Path11 = ~~;  Path12 = ~~;
+    Path13 = ~~; Path14 = ~~; Path15 = ~~; Path16 = ~~;
+
+    Keyword1 = ~~; Keyword2 = ~~; Keyword3 = ~~; Keyword4 = ~~;  Keyword5 = ~~; Keyword6 = ~~;
+    Keyword7 = ~~; Keyword8 = ~~; Keyword9 = ~~; Keyword10 = ~~; Keyword11 = ~~; Keyword12 = ~~;
+    Keyword13 = ~~; Keyword14 = ~~; Keyword15 = ~~; Keyword16 = ~~;
+
+    Value1 = ~~; Value2 = ~~; Value3 = ~~; Value4 = ~~;  Value5 = ~~; Value6 = ~~;
+    Value7 = ~~; Value8 = ~~; Value9 = ~~; Value10 = ~~; Value11 = ~~; Value12 = ~~;
+    Value13 = ~~; Value14 = ~~; Value15 = ~~; Value16 = ~~;
+
+    Node=~10000~;
+
+    while ( ItemList( GetNext, Item ) )
+    {
+        Path      = ~<$pcon.Item[Path]>~;
+
+        Keyword   = ~Node.<Node>.<$pcon.Item[Keyword]>~;
+        ++Node;
+
+        Value     = ~<$pcon.Item[Value]>~;
+        ItemIDstr = ~<ItemID>~;
+        Path<ItemIDstr> = ~<Path>~;
+        Keyword<ItemIDstr> = ~<Keyword>~;
+        Value<ItemIDstr> = ~<Value>~;
+
+        if (~<ItemID>~ == ~<ImagesPerCard>~)
+        {
+            if (!CreateOrderItemAndJob( ~<OrderID>~, ~~, ~~, ~<IndexCard>~, ~<Quantity>~,
+                                        ~Keyword.Saveimage.Queuename~, ~<QueueName>~, 
+                                         Image, ~<Path1>~,  ~<Keyword1>~,~<Value1>~,
+                                         Image, ~<Path2>~,  ~<Keyword2>~,~<Value2>~,
+                                         Image, ~<Path3>~,  ~<Keyword3>~,~<Value3>~,
+                                         Image, ~<Path4>~,  ~<Keyword4>~,~<Value4>~,
+                                         Image, ~<Path5>~,  ~<Keyword5>~,~<Value5>~,
+                                         Image, ~<Path6>~,  ~<Keyword6>~,~<Value6>~,
+                                         Image, ~<Path7>~,  ~<Keyword7>~,~<Value7>~,
+                                         Image, ~<Path8>~,  ~<Keyword8>~,~<Value8>~,
+                                         Image, ~<Path9>~,  ~<Keyword9>~,~<Value9>~,
+                                         Image, ~<Path10>~, ~<Keyword10>~,~<Value10>~,
+                                         Image, ~<Path11>~, ~<Keyword11>~,~<Value11>~,
+                                         Image, ~<Path12>~, ~<Keyword12>~,~<Value12>~,
+                                         Image, ~<Path13>~, ~<Keyword13>~,~<Value13>~,
+                                         Image, ~<Path14>~, ~<Keyword14>~,~<Value14>~,
+                                         Image, ~<Path15>~, ~<Keyword15>~,~<Value15>~,
+                                         Image, ~<Path16>~, ~<Keyword16>~,~<Value16>~))
+            {
+                Log( Session, ~ConversionStation:************* CreateIndexCards failed calling CreateOrderItemAndJob()....~ );
+                Log( Session, ~ConversionStation:************* OrderID   - <OrderID>~);
+                return FALSE;
+            }
+            ItemID = 1; Node=~10000~;
+            Path1 = ~~; Path2 = ~~; Path3 = ~~; Path4 = ~~;  Path5 = ~~;  Path6 = ~~;
+            Path7 = ~~; Path8 = ~~; Path9 = ~~; Path10 = ~~;  Path11 = ~~;  Path12 = ~~;
+            Path13 = ~~; Path14 = ~~; Path15 = ~~; Path16 = ~~; 
+
+            Keyword1 = ~~; Keyword2 = ~~; Keyword3 = ~~; Keyword4 = ~~;  Keyword5 = ~~; Keyword6 = ~~;
+            Keyword7 = ~~; Keyword8 = ~~; Keyword9 = ~~; Keyword10 = ~~; Keyword11 = ~~; Keyword12 = ~~;
+            Keyword13 = ~~; Keyword14 = ~~; Keyword15 = ~~; Keyword16 = ~~;
+
+            Value1 = ~~; Value2 = ~~; Value3 = ~~; Value4 = ~~;  Value5 = ~~; Value6 = ~~;
+            Value7 = ~~; Value8 = ~~; Value9 = ~~; Value10 = ~~; Value11 = ~~; Value12 = ~~;
+            Value13 = ~~; Value14 = ~~; Value15 = ~~; Value16 = ~~;
+        }
+        else
+        {
+            // Move onto the next image
+            ++ItemID;
+        }
+    }
+
+    // Dump any remaining images
+    if (!IsNULL(~<Path1>~))
+    {
+        if (!CreateOrderItemAndJob( ~<OrderID>~, ~~, ~~, ~<IndexCard>~, ~<Quantity>~,
+                                   ~Keyword.Saveimage.Queuename~, ~<QueueName>~,
+                                    Image, ~<Path1>~, ~<Keyword1>~,~<Value1>~,
+                                    Image, ~<Path2>~, ~<Keyword2>~,~<Value2>~,
+                                    Image, ~<Path3>~, ~<Keyword3>~,~<Value3>~,
+                                    Image, ~<Path4>~, ~<Keyword4>~,~<Value4>~,
+                                    Image, ~<Path5>~, ~<Keyword5>~,~<Value5>~,
+                                    Image, ~<Path6>~, ~<Keyword6>~,~<Value6>~,
+                                    Image, ~<Path7>~, ~<Keyword7>~,~<Value7>~,
+                                    Image, ~<Path8>~, ~<Keyword8>~,~<Value8>~,
+                                    Image, ~<Path9>~, ~<Keyword9>~,~<Value9>~,
+                                    Image, ~<Path10>~, ~<Keyword10>~,~<Value10>~,
+                                    Image, ~<Path11>~, ~<Keyword11>~,~<Value11>~,
+                                    Image, ~<Path12>~, ~<Keyword12>~,~<Value12>~,
+                                    Image, ~<Path13>~, ~<Keyword13>~,~<Value13>~,
+                                    Image, ~<Path14>~, ~<Keyword14>~,~<Value14>~,
+                                    Image, ~<Path15>~, ~<Keyword15>~,~<Value15>~,
+                                    Image, ~<Path16>~, ~<Keyword16>~,~<Value16>~ ))
+         {
+             Log( Session, ~ConversionStation:************* CreateIndexCards failed calling CreateOrderItemAndJob()....~ );
+             Log( Session, ~ConversionStation:************* OrderID   - <OrderID>~);
+             return FALSE;
+         }
+    }
+    return TRUE;
+}
+
+// FUNCTION: WaitForStatus()
+//
+//  This function Waits for the specified status on the given order.
+//  It polls the status at the specified frequency.
+//
+NUMERIC WaitForStatus ( Status, OrderID, SecondsPollFrequency )
+{
+    Query = ~SELECT ConversionStatus FROM Conversion where OrderID='<OrderID>'~;
+
+    if ( !PGenConList( StatusList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Log( Session, ~ConversionStation:********* WaitForStatus Failed to find any status for <OrderID> !!!!!~ );
+        return FALSE;
+    }
+    Count = StatusList( NumEntries );
+
+    if ( <Count> > 0 ) 
+    {
+         StatusList( GetFirst, Order );
+    }
+
+    ConversionTimeout = 1800000;
+    CurrentStatus = Numeric(~<$pcon.Order[ConversionStatus]>~);
+
+    // Give up if the Status does appear after the timeout.
+    while ( (<ConversionTimeout> > 0) && (<CurrentStatus> < <Status>) )
+    {
+        Sleep( <SecondsPollFrequency> * 1000 );
+        if ( !PGenConList( StateList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+        {
+            Log( Session, ~ConversionStation:********* WaitForStatus Failed to find status for <OrderID> !!!!!~ );
+            return FALSE;
+        }
+        Count = StateList( NumEntries );
+
+        if ( <Count> > 0 ) 
+        {
+            StateList( GetFirst, Order );
+        }
+        CurrentStatus = Numeric(~<$pcon.Order[ConversionStatus]>~);
+        ConversionTimeout -= <SecondsPollFrequency> * 1000;
+    } 
+
+    if (<CurrentStatus> >= <Status>)
+    {
+        Log( Session, ~ConversionStation:********* WaitForStatus <OrderID> now in Status <$pcon.Order[ConversionStatus]>~ );
+        return TRUE;
+    }
+    else
+    {
+        Log( Session, ~ConversionStation:********* WaitForStatus Failed to find status for <OrderID> !!!!!~ );
+        if (<ConversionTimeout> == 0)
+        {
+            Log( Session, ~ConversionStation:********* WaitForStatus Timed out !!~ );
+        }
+    }
+    return FALSE;
+}
+
+// FUNCTION: RunBravoExport()
+//
+//  This function initiates the Bravo Export
+//
+NUMERIC RunBravoExport ( OrderID, BravoProfile )
+{
+    if (IsNull( BravoProfile ))
+    {
+        Log( Session, ~ConversionStation:********* ROES Proxies Requested for <OrderID>~ );
+        Invoke( UserMessage,Translate( ~ROES Proxies Initated for <OrderID>~ ) );
+        // Load The configured setup
+        GetWorkStationSettings( ~<$Job.Name>~,~ROESProxiesSetup~,SetupName,Enabled );
+    }
+    else
+    {
+        Log( Session, ~ConversionStation:********* Bravo CD Requested for <OrderID> using Profile = <BravoProfile>~ );
+        Invoke( UserMessage,Translate( ~Bravo CD Burn Initated for <OrderID>~ ) );
+        SetupName = ~<BravoProfile>~;
+    }
+
+    Actions = ACTION Doc ( ExportImagesDoc OpenOnce ExportImagesDoc "Init(~<OrderID>~); " );
+    PerformActions( Actions );
+    if (!WaitForStatus($ConversionExportInited, <OrderID>, 1))
+    {
+        // We timed out
+        Log( Session, ~ConversionStation:********* RunBravoExport Timed out on <OrderID> waiting for ConversionExportInited~ );
+        return FALSE;
+    }
+
+    Actions = ACTION Doc ( ExportImagesDoc "UseSetup(~<SetupName>~); " );
+    PerformActions( Actions );
+    if (!WaitForStatus($ConversionExportSetupComplete, <OrderID>, 1))
+    {
+        // We timed out
+        Log( Session, ~ConversionStation:********* RunBravoExport Timed out on <OrderID> waiting for ConversionExportSetupComplete~ );
+        return FALSE;
+    }
+
+    if (!WaitForStatus($ConversionExportImagesAdded, <OrderID>, 5))
+    {
+        // We timed out
+        Log( Session, ~ConversionStation:********* RunBravoExport Timed out on <OrderID> waiting for ConversionExportImagesAdded~ );
+        return FALSE;
+    }
+
+    // Export the images
+    Actions = ACTION Doc ( ExportImagesDoc "OnGoButton(FALSE); " );
+    PerformActions( Actions );
+    if (!WaitForStatus($ConversionExportRunComplete, <OrderID>, 5))
+    {
+        // We timed out
+        Log( Session, ~ConversionStation:********* RunBravoExport Timed out on <OrderID> waiting for ConversionExportImagesAdded~ );
+        return FALSE;
+    }
+
+    Actions = ACTION Doc ( ExportImagesDoc "OnBravoFinaliseCDButton(FALSE); " );
+    PerformActions( Actions );
+    if (!WaitForStatus($ConversionExportFinaliseDone, <OrderID>, 2))
+    {
+        // We timed out
+        Log( Session, ~ConversionStation:********* RunBravoExport Timed out on <OrderID> waiting for ConversionExportFinaliseDone~ );
+        return FALSE;
+    }
+
+    Actions = ACTION Doc ( ExportImagesDoc "CloseDialogNOWarn(); " );
+    PerformActions( Actions );
+    Log( Session, ~ConversionStation:********* RunBravoExport Completed for <OrderID> **********~ );
+    return TRUE;
+}
+
+// FUNCTION: RemoveProcessedOrderItems()
+//
+//  This function removed images and order items from the import tables.
+//
+NUMERIC RemoveProcessedOrderItems ( OrderID )
+{
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect to Remove Job for <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* Could not connect to database to RemoveProcessedOrderItems !!!!!~ );
+        return FALSE;
+    }
+
+    // Now remove the temporary records we just used to import from
+    Cmd = ~DELETE from ImportImagesTemp Where OrderID = '<OrderID>'~;
+    database( BeginTransaction );
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to Remove images from ImportImagesTemp for <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* FAILED to Remove images from ImportImagesTemp for <OrderID> !!!!!~ );
+        database( RollBackTransaction );
+        return FALSE;
+    }
+    database( CommitTransaction );
+
+    Cmd = ~DELETE from ImportOrderItemsTemp Where OrderID = '<OrderID>'~;
+    database( BeginTransaction );
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to Remove images from ImportImagesTemp for <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* FAILED to Remove images from ImportOrderItemsTemp for <OrderID> !!!!!~ );
+        database( RollBackTransaction );
+        return FALSE;
+    }
+    database( CommitTransaction );
+    return TRUE;
+}
+
+// FUNCTION: AddServicesForOrder()
+//
+//  This function adds the specified services to the given order item.
+//
+NUMERIC AddServicesForOrder( OrderID, Item, Mount, Finish, Wrap, Frame, FrameMount)
+{
+    if (~<Mount>~ != ~0~)
+    {
+        AddService(~<OrderID>~, ~<Item>~, ~<Mount>~);
+    }
+
+    if (~<Finish>~ != ~0~)
+    {
+        AddService(~<OrderID>~, ~<Item>~, ~<Finish>~);
+    }
+
+    if (~<Wrap>~ != ~0~)
+    {
+        AddService(~<OrderID>~, ~<Item>~, ~<Wrap>~);
+    }
+
+    if (~<Frame>~ != ~0~)
+    {
+        AddService(~<OrderID>~, ~<Item>~, ~<Frame>~);
+    }
+
+    if (~<FrameMount>~ != ~0~)
+    {
+        AddService(~<OrderID>~, ~<Item>~, ~<FrameMount>~);
+    }
+
+    return TRUE;
+}
+
+// FUNCTION: AddService()
+//
+//  This function adds the specified service to the given order item.
+//
+NUMERIC AddService( OrderID, OrderItemID, ServicesID )
+{
+    Log( Session, ~ConversionStation:************* AddService <ServicesID> to OrderID <OrderID> Item <OrderItemID>~ );
+
+    // Check this Service has not already been applied
+    QueuedAlready = database( RecordCountFor,~Select * from OrderItemsServices where OrderID='<OrderID>' and OrderItemID='<OrderItemID>' and ServicesID='<ServicesID>'~);
+
+    if ($QueuedAlready != 0)
+    {
+        Log( Session, ~ConversionStation:********* AddService OrderID <OrderID> already has this service applied to this order item~ );
+        return TRUE;
+    }
+
+    cmd = ~INSERT INTO OrderItemsServices (OrderID, OrderItemID, ServicesID ) VALUES ('<OrderID>', '<OrderItemID>', '<ServicesID>')~;
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Log( Session, ~ConversionStation:********* FAILED to AddService OrderID <OrderID> (cmd = <cmd>)~ );
+        return FALSE;
+    }
+    Log( Session, ~ConversionStation:************* AddService <ServicesID> to OrderID <OrderID> Item <OrderItemID> done~ );
+    return TRUE;
+}
+
+// FUNCTION: GetSharpnessForSurface()
+//
+//  This function returns the required sharpness for the specified surface
+//
+STR GetSharpnessForSurface( Surface )
+{
+    Sharpness = ~~;
+
+    if (~<Surface>~ == ~G~)
+    {
+       GetWorkStationSettings( ~<$Job.Name>~,~GlossSharpness~,Sharpness,Enabled );
+    }
+
+    if (~<Surface>~ == ~L~)
+    {
+       GetWorkStationSettings( ~<$Job.Name>~,~LustreSharpness~,Sharpness,Enabled );
+    }
+
+    if (~<Surface>~ == ~Y~)
+    {
+       GetWorkStationSettings( ~<$Job.Name>~,~MetallicSharpness~,Sharpness,Enabled );
+    }
+
+    if (~<Surface>~ == ~P~)
+    {
+       GetWorkStationSettings( ~<$Job.Name>~,~PearlSharpness~,Sharpness,Enabled );
+    }
+
+    if (~<Sharpness>~ == ~~)
+    {
+        Log(Session, ~******** ConversionStation GetSharpnessForSurface: Invalid Surface '<Surface>'~);
+    }
+
+    return ~<Sharpness>~;
+}
+
+// FUNCTION: GetSharpnessForQueue()
+//
+//  This function returns the required sharpness for the specified Queue
+//
+STR GetSharpnessForQueue( Queue )
+{
+    Sharpness = ~~;
+
+    if (!GetSystemSettings( ~QueueSharpness~,~<Queue>~,Sharpness,Enabled ))
+    {
+        Log( Session, ~GetSharpnessForQueue:********* Default sharpness of 320 set for <Queue>~ );
+	SetSystemSettings( ~QueueSharpness~,~Queue~,320,TRUE ); 
+        Sharpness = 320;
+    }
+
+    return ~<Sharpness>~;
+}
+
+VOID logToSpecialInstructions( OrderID, msg )
+{
+    Query = ~Select NotifyText from OrderNotifications where OrderID='<OrderID>'~;
+    Instructions = ~~;
+
+    if ( !ADO( database,Connect,GetValuesFor,~<Query>~,Instructions ))
+    {
+        // Add a time stamp 
+        Instructions = ~Added at <$Date.hour>:<$Date.minute>:<$Date.second> on <$Date.Day>/<$Date.Month>/<$Date.Year>
+<msg>
+~; 
+
+        cmd = ~insert into OrderNotifications (OrderID, NotifyText) values ('<OrderID>','<Instructions>')~;
+    }
+    else
+    {
+        // Add a time stamp 
+        Instructions = ~Added at <$Date.hour>:<$Date.minute>:<$Date.second> on <$Date.Day>/<$Date.Month>/<$Date.Year>
+<msg>
+<Instructions> ~;
+        cmd = ~update OrderNotifications set NotifyText='<Instructions>' where OrderID='<OrderID>' ~;
+    }
+
+    database( BeginTransaction );
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Log( Session, ~UpdateInstructions:********* FAILED to Change notify text to <Instructions> for OrderID <OrderID> !!!!!~ );
+        database( RollBackTransaction );
+        return;
+    }
+    database( CommitTransaction );
+}
+
+// FUNCTION: CheckScaleProduct()
+//
+//  This function Checks if the product supplied should be scalled dynamically.
+//  If its one that should be scalled the pages defined as being part of this product are 
+//  counted. This is then used to calculate how much to enlarge the size and how much any 
+//  nodes to the right of the centre should be moved.
+//
+VOID CheckScaleProduct( OrderID, ItemID, BaseProductID )
+{
+    ToScale = database( RecordCountFor,~Select * from Scaleableproducts where ProductID ='<BaseProductID>'~);
+
+    if ($ToScale == 0)
+    { 
+        Log( Session, ~ConversionStation:************* CheckScaleProduct <BaseProductID> does not require to be scaled~ );
+        return;
+    }
+
+    Query = ~Select * from Scaleableproducts where ProductID ='<BaseProductID>'~;
+
+    if ( !ADO( database,Connect,GetValuesFor,~<Query>~, ProductID, ComponentPages, ScaleFactor ))
+    {
+        Log( Session, ~ConversionStation:************* CheckScaleProduct Failed reading details for <BaseProductID>~ );
+    }
+
+    Log( Session, ~ConversionStation:************* CheckScaleProduct <BaseProductID> requires scaling~ );
+    Log( Session, ~ConversionStation:************* CheckScaleProduct where pages <ComponentPages> and scale = <ScaleFactor>~ );
+
+    Query = ~Select * from ImportOrderItemsTemp where OrderID='<OrderID>' and ProductID Like '<ComponentPages>%'~;
+
+    if ( !PGenConList( TempList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Log( Session, ~ConversionStation:********* Failed to retrieve the details to scale !!!!!~ );
+        return;
+    }
+
+    ScaleAmount = 0;
+
+    while ( TempList( GetNext, Item ) )
+    {
+       ScaleAmount  = <ScaleAmount> + (MakeNumber(~<$pcon.Item[Quantity]>~) * <ScaleFactor>);
+       Log( Session, ~ConversionStation:********* <$pcon.Item[Quantity]> Pages of <$pcon.Item[ProductID]> * <ScaleFactor>~ );
+    } 
+
+    Log( Session, ~ConversionStation:********* Total ScaleAmount = <ScaleAmount>~ );
+
+
+    // Now we have the amount to scale by we need to adjust the products longest edge
+    Path = ~~;
+    if ( !GetItemJobPath(~<OrderID>~, ~<ItemID>~, Path))
+    {
+        Log(Session, ~******** ConversionStation CheckScaleProduct: No path for item '<ItemID>'~);
+        return;
+    }
+
+    if ( !Document( Job,ParseFile,~<Path>~ ) )
+    {
+        Log(Session, ~******** ConversionStation CheckScaleProduct: An error occured while parsing the layout at <Path>~);
+        return;
+    }
+
+    if ( !Job( GetRenderList,0,aRenderList ) )
+    {
+        Log( Session, ~ConversionStation: There was no render list for <Path>~ );
+        return;
+    }
+
+    if ( !aRenderList( GetMainNode,MainNode ) )
+    {
+        Log( Session, ~ConversionStation; Failed to get main node <Path>.~ );
+        return;
+    }
+
+    if ( !MainNode( GetValues,~Ilocation:~,Ilocation ) )
+    {
+        Log( Session, ~ConversionStation;  OutputNode( GetValues,Ilocation:,Ilocation ) returned an error~ );
+        return;
+    }
+    else
+    {
+        Log( Session, ~ConversionStation;  OutputNode( GetValues,Ilocation:,Ilocation ) returned "<ILocation>"~ );
+    }
+
+    GetTokens( ~<Ilocation>~,~ ~,xpos, ypos, Width, Height );
+
+    Width  = MakeNumber(~<Width>~);
+    Height = MakeNumber(~<Height>~);
+
+    if ($Width < $Height)
+    {
+        LongSize = $Height;
+    }
+    else
+    {
+        LongSize = $Width;
+    }
+
+    MidPoint = $LongSize / 2; 
+
+    // Update the size
+    NewWidth = $Width + $ScaleAmount;
+    Ilocation = ~<xpos> <ypos> <NewWidth> <Height>~;
+    if ( !MainNode( SetValues,~Ilocation:~,~<Ilocation>~ ) )
+    {
+        Log( Session, ~ConversionStation;  OutputNode( SetValues,Ilocation:,Ilocation ) returned an error~ );
+        return;
+    }
+    else
+    {
+        Log( Session, ~ConversionStation;  OutputNode( SetValues,Ilocation:,Ilocation ) to "<ILocation>"~ );
+    }
+
+    Log( Session, ~****** Height = <Height> Width = <Width>  MidPoint = <MidPoint> ******~ );
+
+    // Now parse through each node and shift it left by the scale amount if its over the centre
+    aRenderList( GetFirstNode, theNode);
+    while ( aRenderList( GetNextNode, theNode))
+    {
+        if ( theNode( GetValue, ~Ilocation:~, location ) )
+        {
+            GetTokens( ~<location>~,~ ~,xposn, yposn, Widthn, Heightn );
+            xposn  = MakeNumber(~<xposn>~);
+
+            if ($xposn > $MidPoint)
+            {
+                Newxposn = $xposn + $ScaleAmount; 
+                location = ~<Newxposn> <yposn> <Widthn> <Heightn>~;
+                if ( !theNode( SetValue, ~Ilocation:~, ~<location>~ ) )
+                {
+                    Log( Session, ~ConversionStation;  theNode( SetValues,Ilocation:,location ) returned an error~ );
+                }
+                else
+                {
+                    Log( Session, ~ConversionStation;  theNode( SetValues,Ilocation:,location ) to <location>~ );
+                }
+            }
+        }
+    }
+
+ 
+    if ( !aRenderList( WriteJob,~<Path>~ ) )
+    {
+        Log( Session, ~ConversionStation; Failed to write <Path>.~ );
+    }
+}
+
+// FUNCTION: AddColourMode()
+//
+//  This function adds the provided colourmode to an image.
+//
+NUMERIC AddColourMode( OrderID,Roll,Frame,colourmode )
+{
+	Query = ~Select * From Images Where OrderID = '<OrderID>' And Roll = '<Roll>' And Frame = '<Frame>'~;
+
+	if ( !PGenConList( ColourList,Connection,database,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		ColourList( GetErrorDescription,0,theErr );
+		return Failure( Translate( DBMessages,QueryFailed,~<Query>~,~<theErr>~ ) );
+	}
+
+	if ( ColourList( GetFirst,Record ) )
+	{
+            Record( Set,SequenceID,~<colourmode>~ );
+	}
+	
+	if ( !ColourList( Update ) )
+	{
+            ColourList( GetErrorDescription,0,theErr );
+            return Failure( Translate( DBMessages,UpdateFailed,~<Query>~,~<theErr>~ ) );
+	}
+
+    return Success( Translate( ~Added Colour mode <OrderID>,<Roll>,<Frame>. <colourmode>~ ) );
+}
+STR GetPriority ( OrderID )
+{
+    Query = ~SELECT Priority FROM Conversion where OrderID='<OrderID>'~;
+
+    if ( !Ado( dBase,Connect,GetValuesFor,~<Query>~,Priority ) )
+    {
+        dBase( GetErrorDescription,theErr );
+        Log( Session, ~**************** GetBravoSetup: Error on query:<Query>.<theErr> ~);
+        return ~~;
+    }
+
+    Log( Session, ~**************** GetPriority: Priority = "<Priority>" for <OrderID>~);
+    return ~<Priority>~;
+}
+
+NUMERIC MarkedForProofing( OrderID )
+{
+    Query = ~SELECT Path FROM Conversion where OrderID='<OrderID>'~;
+    ADO( dBase,Connect,GetValuesFor,~<Query>~, Path );
+
+    if (Files( FileExists,~<Path>\Proof.txt~ ))
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+
+// FUNCTION: CreateProofReleaseScript()
+//
+// This function creates the script to release a batch of order items proofs. 
+VOID CreateProofReleaseScript ( OrderID, BatchID )
+{
+    Priority = GetPriority(~<OrderID>~);
+
+    if (!GetWorkStationSettings( ~JobImport~ ,TempPath,TempPath,Enabled ))
+    {
+        Log( Session, ~TempPath Setting Unconfigured!!!!!!~);
+        return;
+    }
+
+    if (!GetWorkStationSettings( ~LoxleyWebInterface~ ,ProofCmdDir,PrintDirectory, Enabled ))
+    {
+        SetWorkStationSettings( ~LoxleyWebInterface~,ProofCmdDir,~\\loxdp2srv01\hotdir~,TRUE ); 
+
+        GetWorkStationSettings( ~LoxleyWebInterface~,ProofCmdDir,PrintDirectory,Enabled );
+    }
+
+    if (!GetWorkStationSettings( ~LoxleyWebInterface~ ,ProofQueue,Queue, Enabled ))
+    {
+        SetWorkStationSettings( ~LoxleyWebInterface~,ProofQueue,~ProofQueue~,TRUE ); 
+
+        GetWorkStationSettings( ~LoxleyWebInterface~,ProofQueue,Queue,Enabled );
+    }
+
+    thePrintFile = ~<TempPath>\Proof_<BatchID>_<OrderID>.txt~;
+
+    thePrintTarget= ~<PrintDirectory>\Proof_<BatchID>_<OrderID>.txt~;
+
+    // Open up a temp file in the temp directory for prints
+    if ( !File( PrintJob, AsciiOutput, OPEN, ~<thePrintFile>~, WRITE, CREATE ) )
+    {
+        Log(Session, ~Could not open <thePrintFile> Contact the IT Department~);
+        Warning( Translate( ~Could not open <thePrintFile> Contact the IT Department!~ ) );
+        return;
+    }
+
+    PrintJob( ~// Proof release Script for Work Order <OrderID>~);
+    PrintJob( ~Log( Session, |********************** Running Proof Release for <OrderID>|);~);
+    PrintJob( ~Include: |../Scripts/ExportCmds|;~);
+
+    PrintJob( ~Actions = ACTION Doc ( FrameSelectorDoc Open FrameSelectorDoc );~);
+    PrintJob( ~PerformActions( Actions );~);
+    PrintJob( ~Sleep(1000);~);
+    PrintJob( ~Log( Session, |********************** |);~);
+    PrintJob( ~Actions = ACTION Doc ( FrameSelectorDoc "RunWholeProofOrderNoPrompt(|<BatchID>|,|<OrderID>|, |1|, |<Queue>| );" );~);
+    PrintJob( ~PerformActions( Actions );~);
+    PrintJob( ~Sleep(10000);~);
+    PrintJob( ~Log( Session, |********************** Closing Dialog for <OrderID> release|);~);
+    PrintJob( ~Actions = ACTION Doc ( FrameSelectorDoc "CloseDialog();" );~);
+    PrintJob( ~PerformActions( Actions );~);
+    PrintJob( ~Sleep( 3000 );~);
+    PrintJob( ~Log( Session, |********************** Doing Select for <OrderID> release|);~);
+    PrintJob( ~Query = |Select * From JobQueue Where OrderID = '<OrderID>'|;~);
+    PrintJob( ~Actions = ACTION Doc ( JobQueue OpenOnce JobQueueDoc "Init(||, |<Query>|);" );~);
+    PrintJob( ~PerformActions( Actions );~);
+    PrintJob( ~Sleep(5000);~);
+    PrintJob( ~Log( Session, |********************** Setting priority for <OrderID> release|);~);
+    PrintJob( ~Actions = ACTION Doc ( JobQueueDoc "SetPriorityRemoteNoQueue(|<OrderID>|, |<Priority>|);" );~);
+    PrintJob( ~PerformActions( Actions );~);
+    PrintJob( ~Sleep(10000);~);
+    PrintJob( ~Log( Session, |********************** Release done for <OrderID> BatchID <BatchID>|);~);
+    PrintJob( Close );
+
+
+    // Copy the files to the target directory.
+    if ( !Files( Copy, ~<thePrintFile>~, ~<thePrintTarget>~ ) )
+    {
+       // There was a problem copying the file
+       Log( Session, ~********************** Error Proof Release file for <OrderID> NOT copied To <thePrintTarget>~);
+       Warning( Translate( ~Print Release file for <OrderID> NOT copied To <thePrintTarget> 
+Contact the IT Department!~ ) );
+       return;
+    }
+}
+
+// FUNCTION: ProcessOrderItems()
+//
+//  This function adds the images and order items to the appropriate tables.
+//  Where LDPPhase2 orders are detected it sets the bool
+//
+NUMERIC ProcessOrderItems ( OrderID, &LDPPhase2 )
+{
+    OrderFailed = FALSE;
+
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Invoke( UserTempListMessage,Translate( ~Failed to connect to Remove Job for <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* Could not connect to database to ProcessOrderItems !!!!!~ );
+        return FALSE;
+    }
+    database( LogActivity, Msg, ~Started Processing Order items for <OrderID>~, Type, Info );
+
+    // add all the Images.
+    Query = ~Select Roll, Frame, Path, colourmode From ImportImagesTemp Where OrderID = '<OrderID>'~;
+
+    Invoke( UserMessage,Translate( ~Started Adding Images for Order <OrderID>....~ ) );
+
+    if ( !PGenConList( OrderItemList,Connect,Cursor,Forward, Query,~<Query>~ ) )
+    {
+        return Warning( Translate(~Order <OrderID> does not exist~) );
+    }
+
+    // Delay a couple of seconds just incase the images are not complete
+    Sleep( 2000 );
+
+    while ( OrderItemList( GetNext, Image ) )
+    {
+        Roll  = ~<$pcon.Image[Roll]>~;
+        Frame = ~<$pcon.Image[Frame]>~;
+        Path  = ~<$pcon.Image[Path]>~;
+        colourmode = ~<$pcon.Image[colourmode]>~;
+        Log( Session, ~ConversionStation: Adding Image <Path>~ );
+
+        if ( !Files( FileExists,~<Path>~ ) )
+        {
+            Log( Session, ~ConversionStation: AddImage <Path> FAILED missing image !!!!!!!!!!!!~ );
+
+            msg = ~<OrderID> image "<Frame>" is missing.~;
+
+            Log( Session, ~ConversionStation: Continuing import of images for Work Order <OrderID> after missing image logged~ );
+
+            logToSpecialInstructions( <OrderID>, ~<msg>~ );
+
+            if (!<OrderFailed>)
+            {
+                MarkOrderFailed(~<OrderID>~, ~Missing Images~);
+                OrderFailed = TRUE;
+            }
+        }
+        else
+        {
+            if (!AddImage( ~<OrderID>~, ~<Roll>~, ~<Frame>~, ~<Path>~ ))
+            {
+                 Log( Session, ~ConversionStation: AddImage FAILED !!!!!!!!!!!!~ );
+                 MarkOrderFailed(~<OrderID>~, ~Failed Adding Images~);
+                 return FALSE;
+            }
+
+            if (DefinedAndNotNULL( colourmode ))
+            {
+                AddColourMode(~<OrderID>~, ~<Roll>~, ~<Frame>~, ~<colourmode>~);
+            }
+			
+			
+			
+        }
+
+        Invoke( ~StepProgress~ );
+    }
+
+    if (<OrderFailed>)
+    {
+        Log( Session, ~ConversionStation: Order images missing, so exiting ProcessOrderItems~ );
+        return FALSE;
+    }
+
+    Invoke( UserMessage,Translate( ~Started Adding Items for Order <OrderID>....~ ) );   
+ 
+    // Now add all the order items takeing into account whether index/batch cards are required.
+    Query = ~Select ItemID, Roll, ProductID, Quantity, Path, Keyword, Value, Crop, Mount, Finish, Wrap, Frame, FrameMount From ImportOrderItemsTemp Where OrderID = '<OrderID>' Order by ProductID, ItemID~;
+
+    if ( !PGenConList( CheckList,Connect,Cursor,Forward, Query,~<Query>~ ) )
+    {
+        MarkOrderFailed(~<OrderID>~, ~Order does not exist~);
+        return Warning( Translate(~Order <OrderID> does not exist~) );
+    }
+
+    // There may not be any Order Items
+    if (!CheckList( NumEntries ))
+    {
+        Log( Session,
+            ~ConversionStation:********* Order <OrderID> contains no Order Items to be added.~ );
+        Log( Session,
+            ~ConversionStation:********* This is either a Bravo/Proxies/LDP order or its been converted for ROES.~ );
+        return TRUE;
+    }
+
+    // If its an LDP order and we add order items then set the flag to
+    // Change the status to print once all the new items are added
+    substr( ~<OrderID>~, 0, 3, startChars );
+    startChars = Upper( ~<startChars>~ );
+
+    if ( ~<startChars>~ == ~LDP~)
+    {
+        LDPPhase2 = TRUE;
+    }
+
+    LastProductID = ~~;
+    LastRoll      = ~~;
+    LastQueueName = ~~;
+    while ( CheckList( GetNext, Item ) )
+    {
+        ProductID = ~<$pcon.Item[ProductID]>~;
+
+        // Trim the G, L or Y for the Base Product
+        Length = strlen( ~<ProductID>~);
+        substr(~<ProductID>~, 0, <Length> - 1,  BaseProductID );
+
+        // Capture the G, L or Y for the Surface
+        substr(~<ProductID>~, <Length> - 1, <Length>,  Surface );
+
+        Roll      = ~<$pcon.Item[Roll]>~;
+        Quantity  = ~<$pcon.Item[Quantity]>~;
+        Path      = ~<$pcon.Item[Path]>~;
+        Keyword   = ~<$pcon.Item[Keyword]>~;
+        Value     = ~<$pcon.Item[Value]>~;
+        Mount     = ~<$pcon.Item[Mount]>~;
+        Finish    = ~<$pcon.Item[Finish]>~;
+        Wrap      = ~<$pcon.Item[Wrap]>~;
+        Frame     = ~<$pcon.Item[Frame]>~;
+        FrameMount= ~<$pcon.Item[FrameMount]>~;
+        
+        Sharpness  = GetSharpnessForSurface(~<Surface>~);
+        
+        BaseQueueName = GetQueueName(~<BaseProductID>~);
+
+        QueueName = GetQueueNameForSurface(~<BaseQueueName>~, ~<Surface>~);
+
+//      Sharpness  = GetSharpnessForQueue(~<QueueName>~);
+
+        if ( ~<QueueName>~ == ~~ )
+        {
+            Log( Session, ~ConversionStation:************* ProcessOrderItems Unable to get QueueName for <BaseProductID>. Missing Layout??~ );
+            MarkOrderFailed(~<OrderID>~, ~Missing layout?~);
+            return FALSE;
+        }
+
+        if (~<$pcon.Item[Crop]>~ == ~0~) 
+        {
+            AutoCrop = ~C~;
+        }
+        else
+        {
+            AutoCrop = ~F~;
+        }
+
+        if (!IsNULL(~<LastProductID>~))
+        {
+            // Index Card on product or Roll change.
+            if (~<LastProductID>~ != ~<ProductID>~)
+            {
+                // Add index card(s) if the product has changed
+                CreateIndexCards( ~<OrderID>~, ~<LastProductID>~, ~<LastRoll>~, ~<LastQueueName>~ );
+
+                // if the QueueName Has Changed Add Batch Card as well.
+                if (!IsNULL(~<LastQueueName>~))
+                {
+                    if (~<LastQueueName>~ != ~<QueueName>~)
+                    {
+                        Log(Session, ~CreateBatchCards for <LastProductID>~);
+                        CreateBatchCards( ~<OrderID>~, ~<LastProductID>~ );
+                    }
+                }
+            }
+            else
+            {
+                if (~<LastRoll>~ != ~<Roll>~)
+                {
+                    // Add index card(s) if the roll has changed
+                    CreateIndexCards( ~<OrderID>~, ~<LastProductID>~, ~<LastRoll>~, ~<LastQueueName>~ );
+                }
+            }
+        }
+
+        ItemID = CalcNextForOrderItem( database,~<OrderID>~,ID );
+
+        if (!CreateOrderItemAndJob( ~<OrderID>~, ~<ItemID>~, ~~, ~<BaseProductID>~, ~<Quantity>~, 
+                                    ~Node.10000.Autocropmode~, ~<AutoCrop>~,
+                                    Image, ~<Path>~, ~Node.10000.<Keyword>~,~<Value>~))
+        {
+            Log( Session, ~ConversionStation:************* ProcessOrderItems failed calling CreateOrderItemAndJob()....~ );
+            Log( Session, ~ConversionStation:************* OrderID   - <OrderID>~);
+            Log( Session, ~ConversionStation:************* ProductID - <BaseProductID>~);
+            Log( Session, ~ConversionStation:************* Surface   - <Surface>~);
+            Log( Session, ~ConversionStation:************* Path      - <Path>~);
+            MarkOrderFailed(~<OrderID>~, ~Failed Adding order items~);
+            return Warning( Translate(~Order <OrderID>  failed calling CreateOrderItemAndJob(). Check the logfile.~) );
+        }
+
+        Log( Session, ~ConversionStation:************* OrderID       - <OrderID>~);
+        Log( Session, ~ConversionStation:************* BaseProductID - <BaseProductID>~);
+        Log( Session, ~ConversionStation:************* ProductID     - <ProductID>~);
+        Log( Session, ~ConversionStation:************* Surface       - <Surface>~);
+        Log( Session, ~ConversionStation:************* QueueName     - <QueueName>~);
+
+        // Rename the product now the item has been created.
+        ChangeProductID(~<OrderID>~, ~<ItemID>~, ~<ProductID>~);        
+
+        // Now add any services
+        AddServicesForOrder(~<OrderID>~, ~<ItemID>~, ~<Mount>~, ~<Finish>~, ~<Wrap>~, ~<Frame>~, ~<FrameMount>~);
+
+        // Now check for a dynamically scalling product
+        CheckScaleProduct(~<OrderID>~, ~<ItemID>~, ~<BaseProductID>~);
+
+        Log( Session, ~ConversionStation: Adding <ProductID> for <Path> with AutoCrop = <AutoCrop>~ );
+ 
+        LastProductID = ~<ProductID>~;
+        LastRoll = ~<Roll>~;
+        LastQueueName = ~<QueueName>~;
+        Invoke( ~StepProgress~ );
+    }
+    // Add index card(s) for the last batch
+    CreateIndexCards( ~<OrderID>~, ~<LastProductID>~, ~<LastRoll>~, ~<LastQueueName>~);
+
+    // Add Batch Card as well.
+    Log(Session, ~CreateBatchCards for <ProductID>  (2)~);
+
+    CreateBatchCards( ~<OrderID>~, ~<LastProductID>~ );
+    MaintainOrderItems( ~<OrderID>~, TRUE );
+
+    // Set the order status to Pending Approval for Phase 2 of an LDP import if it has been coloured
+    if (<LDPPhase2>)
+    {	
+		Query = ~Select OrderID from AnalyzerTrack Where OrderID = '<OrderID>'~;
+
+        if ( !PGenConList( OrderItemList,Connect,Cursor,Forward, Query,~<Query>~ ) )
+    {
+        if ( !ADO( dBase,Connect,Cmd,~Update Orders Set Status='Pending Approval' Where ID = '<OrderID>'~ ) )
+        {
+            dBase( GetErrorDescription,theErr );
+            Log( Session,~ConversionStatus: **** ProcessOrderItems failed to set order <OrderID> to status of Pending Approval, <theErr>~ ) ;
+        } 
+        else
+        {
+            Log( Session,~ConversionStatus: **** ProcessOrderItems set order <OrderID> to status of Pending Approval~ ) ;
+        }
+    }
+	else
+	{
+		if ( !ADO( dBase,Connect,Cmd,~Update Orders Set Status='Print' Where ID = '<OrderID>'~ ) )
+        {
+            dBase( GetErrorDescription,theErr );
+            Log( Session,~ConversionStatus: **** ProcessOrderItems failed to set order <OrderID> to status of Print, <theErr>~ ) ;
+        } 
+        else
+        {
+            Log( Session,~ConversionStatus: **** ProcessOrderItems set order <OrderID> to status of Print~ ) ;
+        }
+     }
+
+        // Now fire off the proofing images if marked
+        if (MarkedForProofing(~<OrderID>~))
+        {
+            BatchID = ~00001~;
+            CreateProofReleaseScript(~<OrderID>~, ~<BatchID>~);
+
+            Log(Session, ~******ConversionStatus generated the proof release script.~);
+        }
+    }
+    database( LogActivity, Msg, ~Finished Processing Order items for <OrderID>~, Type, Info );
+    return TRUE;
+}
+
+// FUNCTION: CleanUpConvertedFiles()
+//
+//  This function deletes the original bmp,tif,jpeg, jpe and psd files.
+//
+NUMERIC CleanUpConvertedFiles( OrderID, Path )
+{
+    Query = ~SELECT DISTINCT Roll FROM ImportImagesTemp where OrderID = '<OrderID>'~;
+
+    if ( !PGenConList( DirList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Warning( ~Failed to retrieve the Product list~ );
+        Invoke( ~StartProgress~,0 );
+        return FALSE;
+    }
+
+    while ( DirList( GetNext, DirectoryPath ) )
+    {
+        DirName = ~<$pcon.DirectoryPath[Roll]>~;
+        DirName = String( RemoveCharFromString,~:~,~<DirName>~ );
+
+        Log( Session, ~ConversionStation:********* Removing converted files from <Path>\<DirName>~ );
+        Directory( DeleteRecursive,~<Path>\<DirName>\~, ~*.bmp~);
+        Directory( DeleteRecursive,~<Path>\<DirName>\~, ~*.tif~);
+        Directory( DeleteRecursive,~<Path>\<DirName>\~, ~*.tiff~);
+        Directory( DeleteRecursive,~<Path>\<DirName>\~, ~*.jpeg~);
+        Directory( DeleteRecursive,~<Path>\<DirName>\~, ~*.jpe~);
+        Directory( DeleteRecursive,~<Path>\<DirName>\~, ~*.psd~);
+    }
+    return TRUE;
+}
+
+// FUNCTION: GetBravoProduct()
+//
+//  This function returns the configured product to use for Bravo Index and Batch Cards.
+//
+STR GetBravoProduct()
+{
+    Product = ~~;
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~BravoIndexOrBatchProduct~,Product,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,BravoIndexOrBatchProduct,~6x6G~,TRUE ); 
+
+        GetWorkStationSettings( ~<$Job.Name>~,~BravoIndexOrBatchProduct~,Product,Enabled );
+    }
+
+    return ~<Product>~;
+}
+
+// FUNCTION: CloseAllImages()
+//
+//  This function closes all windows that may fail the conversion.
+//
+NUMERIC CloseAllImages()
+{
+    Log( Session, ~ConversionStation: ****** Closing All Image Windows.. ~ );
+    Count = Index = 0;
+    app( ThisApp,MessagePump,3 );
+
+    while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+    {
+        if ( Window( GETNEXT,aView ) )
+        {
+            aView( GET,ViewType,ViewType );
+
+            if ( ~<ViewType>~ == ~ImageView~ || ~<ViewType>~ == ~ImageEditView~ ||
+                 ~<ViewType>~ == ~ThumbnailView~ || ~<ViewType>~ == ~FormView~ || ~<ViewType>~ == ~JobView~)
+            {
+                Log( Session, ~ConversionStation: ****** Closing Window Type <ViewType>  ~ );
+                Window( CloseWindow );
+                ThisApp( MessagePump,3 );
+                ++Count;
+                Index = 0;
+            }
+        }
+    }
+
+    ThisApp( MessagePump,0 );
+    Log( Session, ~ConversionStation: ****** Closed All Image Windows. ~ );
+    return TRUE;
+}
+
+// FUNCTION: ClearEXIFRotation()
+//
+//  This function calls jhead to remove Exif Rotation.
+//
+NUMERIC ClearEXIFRotation( OrderID, Path)
+{
+    Log( Session, ~****** Start removing EXIF rotation for orderID <OrderID> at <$Date.hour>:<$Date.minute>:<$Date.second>~ );
+    Log( Session, ~****** Path = "<Path>"~ );
+
+    // First Check that the .bat file and .exe exists.
+    Program   = ~<$App.Directory>\jhead.exe~;
+    BatchFile = ~<$App.Directory>\runexif.bat~;
+
+    if ( !Files( FileExists,~<Program>~ ) )
+    {
+        Log( Session, ~****** Could not find jhead.exe at <Program> !!!!!!~ );
+        return FALSE;
+    }
+
+    if ( !Files( FileExists,~<BatchFile>~ ) )
+    {
+        Log( Session, ~****** Could not find runexif.bat at <BatchFile> !!!!!!~ );
+        return FALSE;
+    }
+
+    // Now check the path exists
+    if ( !Files( DirectoryExists,~<Path>~ ) )
+    {
+        Log( Session, ~****** Path "<Path>" Does not exist !!!!!!~ );
+        return FALSE;
+    }
+
+    if ( !ShellExecute( Open, ~<BatchFile>~, ~"<Path>"~ ) )
+    {
+        Log( Session, ~****** ShellExecute of <BatchFile> FAILED !!!!!!~ );
+        return FALSE;
+    }
+    
+    // Wait until we see the completion of the conversion or we timeout
+    if (!GetWorkStationSettings( ~ConversionStation~,ConversionTimeout,Timeout,Enabled ) )
+    {
+        // ConversionStation should have applied a default, but just incase..
+        SetWorkStationSettings( ~ConversionStation~, ConversionTimeout, 1800000, TRUE );
+        GetWorkStationSettings( ~ConversionStation~, ConversionTimeout, Timeout,Enabled );
+    }
+
+    // Read the polling period
+    if (!GetWorkStationSettings( ~ConversionStation~,SecondsToPoll,Poll,Enabled ) )
+    {
+        SetWorkStationSettings( ~ConversionStation~, SecondsToPoll, 10, TRUE );
+        GetWorkStationSettings( ~ConversionStation~, SecondsToPoll, Poll, Enabled );
+    }
+
+    ConversionTimeout = Numeric(<Timeout>);
+    Poll = Numeric(<Poll>) * 1000;
+
+    // Give up if the file is does appear after the timeout.
+    while ( (<ConversionTimeout> > 0) && (!Files( FileExists, ~<Path>\exif.txt~) ) )
+    {
+        Sleep( <Poll> );
+
+        ConversionTimeout -= <Poll>;
+    } 
+
+    if (!Files( FileExists, ~<Path>\exif.txt~))
+    {
+        Log( Session, ~****** !!!!!! ClearEXIFRotation  Timed Out for <OrderID> Exiting at <$Date.hour>:<$Date.minute>:<$Date.second> !!!!!!~ );
+        return FALSE;
+    }
+    Log( Session, ~****** ClearEXIFRotation Completed for <OrderID> at <$Date.hour>:<$Date.minute>:<$Date.second>~ );
+    return TRUE;
+}
+
+NUMERIC ChecksRGBImage( Path )
+{
+    // First Check that the .bat file and .exe exists.
+    Program   = ~<$App.Directory>\jhead.exe~;
+    Batch     = ~<$App.Directory>\checkexif.bat~;
+
+    // Just incase zap any outstanding logs.
+    Files( Delete, ~c:\temp\checklog.txt~);
+    Files( Delete, ~c:\temp\check.txt~);
+
+    if ( !Files( FileExists,~<Program>~ ) )
+    {
+        Log Session, ~****** Could not find jhead.exe at <Program> !!!!!!~ );
+        return FALSE; 
+    }
+
+    if ( !Files( FileExists,~<Batch>~ ) )
+    {
+        Log Session, ~****** Could not find checkexif.bat at <Batch> !!!!!!~ );
+        return FALSE; 
+    }
+
+    if ( !ShellExecute( Open, ~<Batch>~,~"<Path>"~) )
+    {
+        Log( Session, ~****** ShellExecute of <Program> FAILED !!!!!!~ );
+        return FALSE;
+    }
+
+    ConversionTimeout = 180000;
+
+    // Give up if the file is does appear after the timeout.
+    while ( (<ConversionTimeout> > 0) && (!Files( FileExists, ~c:\temp\check.txt~) ) )
+    {
+        Sleep( 1000 );
+
+        ConversionTimeout -= 1000;
+    } 
+
+    if (!Files( FileExists, ~c:\temp\check.txt~))
+    {
+        Log( Session, ~****** !!!!!! ChecksRGBImage Timed Out for Exiting at <$Date.hour>:<$Date.minute>:<$Date.second> !!!!!!~ );
+        return FALSE;
+    }
+
+    // Now look at the colour space
+    if ( !file( CheckFile,Open,~c:\temp\checklog.txt~,Read ) )
+    {.
+	
+        Log(Session,  ~Failed to open <Path>~ );
+        return FALSE;
+    }
+
+    while ( CheckFile( ReadString,aLine ) )
+    {
+        if ( !IsNull( String( StringInString,~ColorSpace~,~<aLine>~ ) ) )
+        {
+            GetTokens( ~<aLine>~,~=~,BeginOnLine,Setting );
+            Setting = String( TrimLeft,~<Setting>~ );
+            Setting = String( TrimRight,~<Setting>~ );
+
+            if (~<Setting>~ == ~1~)
+            {
+                CheckFile( Close );
+                return TRUE;
+            }
+            else
+            {
+                CheckFile( Close );
+                Log(Session, ~********* The Image at <Path> has ColorSpace = <Setting> which is NOT sRGB~);
+                return FALSE;
+            }
+        }
+    }
+    CheckFile( Close );
+    Log(Session, ~**** ColorSpace EXIF setting not found in <Path>~);
+    return FALSE;
+}
+
+
+//------------------------------------------------------------------------------
+// AllSRGB
+//
+// This function verifies that all images in the provided order are colorspace=1
+// which is sRGB
+//
+// This will return TRUE if they are, alternativly FALSE.
+//
+//------------------------------------------------------------------------------
+
+
+// FUNCTION: IncrementStats()
+//
+//  This function increments the specified Statistic.
+//
+VOID IncrementStats( Stat )
+{
+    if (!GetWorkStationSettings( ~LoxleyWebStats~,~<Stat>~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~LoxleyWebStats~,~<Stat>~, Numeric(~0~), TRUE );
+    }
+
+    newStat = Numeric(~<Temp>~) + 1;
+
+    SetWorkStationSettings( ~LoxleyWebStats~,~<Stat>~, Numeric(~<newStat>~), TRUE );
+}
+// FUNCTION: SetOrderStatus()
+//
+//  This function sets the appropriate order Status
+//
+NUMERIC SetOrderStatus( OrderID, ColourCorrect, StudentValid )
+{
+    if (~<ColourCorrect>~ == ~1~)
+    {
+        Status = ~Adjust~;
+    }
+    else
+    {
+        Status = ~Proof~;
+        SendUncolouredEmail(~<OrderID>~);
+    }
+
+    if (!<StudentValid>)
+    {
+        Status = ~Pending Approval~;
+        SendBadStudentEmail(~<OrderID>~);
+    }
+
+    if ( !ADO( dBase,Connect,Cmd,~Update Orders Set Status='<Status>' Where ID = '<OrderID>'~ ) )
+    {
+        dBase( GetErrorDescription,theErr );
+        Log( Session,~ConversionStatus: **** SetOrderStatus failed to set order <OrderID> to status of <Status>, <theErr>~ ) ;
+        return FALSE;
+    }
+    Log( Session,~ConversionStation: SetOrderStatus Order <OrderID> set to status of <Status>~ );
+    return TRUE;
+}
+// FUNCTION: ValidStudent()
+//
+//  This function checks if the specified StudentID is valid.
+//
+NUMERIC ValidStudent( StudentID )
+{
+    // Only check if enabled.
+    GetWorkStationSettings( ~<$Job.Name>~,~StudentCheckEnabled~,Check,Enabled );
+
+    if (~<Check>~ == ~0~)
+    {
+        return TRUE;
+    }
+    connected = ADO( Student,Provider,~Microsoft OLE DB Provider For ODBC Drivers~,Source,~Student~,Connect );
+
+    if ( !<connected> ) 
+    {
+        Log( Session, ~ConversionStation:********* Failed to connect to the Student Database !!!!!~ );
+        return FALSE;
+    }
+    Query = ~Select roes_active From Student_details where student_reference='<StudentID>'~;
+
+    if (!Ado(Student,Connect,GetValuesFor,~<Query>~,RoesActive ))
+    {
+        return FALSE;
+    }
+
+    if (~<RoesActive>~ == ~Y~)
+    {    
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+// FUNCTION: MatchingCustomerID()
+//
+//  This function checks that the two orders supplied have the same customer ID
+//
+NUMERIC MatchingCustomerID( OrderID1, OrderID2 )
+{
+    Query = ~Select CustomerID From Orders where ID='<OrderID1>'~;
+
+    if ( !PGenConList( MatchList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Log( Session, ~ConversionStation:********* Failed to retrieve the CustomerID for <OrderID1> when checking for merge !!!!!~ );
+        return FALSE;
+    }
+
+    MatchList( GetFirst, Customer);
+
+    CustomerA = ~<$pcon.Customer[CustomerID]>~;
+
+    Query = ~Select CustomerID From Orders where ID='<OrderID2>'~;
+
+    if ( !PGenConList( IdList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Log( Session, ~ConversionStation:********* Failed to retrieve the CustomerID for <OrderID2> when checking for merge !!!!!~ );
+        return FALSE;
+    }
+
+    IdList( GetFirst, Customer);
+
+    CustomerB = ~<$pcon.Customer[CustomerID]>~;
+
+
+    if (~<CustomerA>~ == ~<CustomerB>~)
+    {
+        return TRUE;
+    }
+    return FALSE;
+}
+
+// FUNCTION: CheckStudentID()
+//
+//  This function checks if the specified OrderID is a Student order.
+//  If so it verifies the order is allowed to continue.
+//
+NUMERIC CheckStudentID( OrderID )
+{
+    // Query the processing workstation
+    Query = ~Select StudentID from conversion WHERE (OrderID='<OrderID>')~;
+
+    if ( !PGenConList( StudentList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Log( Session, ~ConversionStation:********* Failed to retrieve the StudentID !!!!!~ );
+        return FALSE;
+    }
+
+    Count = StudentList( NumEntries );
+
+    if ( <Count> > 0 ) 
+    {
+        StudentList( GetFirst, Order );
+
+        if (!ValidStudent(~<$pcon.Order[StudentID]>~))
+        {
+            Log( Session, ~ConversionStation:********* Student ID <$pcon.Order[StudentID]> is NOT allowed to order *********~ );
+            return FALSE;
+        }
+        else
+        {
+            Log( Session, ~ConversionStation:********* Student ID <$pcon.Order[StudentID]> IS allowed to order *********~ );
+            return TRUE;
+        }
+    }
+
+    Log( Session, ~ConversionStation:********* StudentID for <OrderID> not found~ );
+    return FALSE;
+}
+
+// FUNCTION: CheckMergeOrder()
+//
+//  This function checks if the specified OrderID is marked to be merged.
+//  If so it verifies the orders customerID matches.
+//
+NUMERIC CheckMergeOrder( OrderID, &DestinationOrderID, &ToBeMerged )
+{
+    // Query the processing workstation
+    Query = ~Select MergeOrderID from conversion WHERE (OrderID='<OrderID>')~;
+
+    ToBeMerged = FALSE;
+
+    if ( !PGenConList( MergeList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Log( Session, ~ConversionStation:********* Failed to retrieve the MergeOrderID !!!!!~ );
+        return FALSE;
+    }
+
+    Count = MergeList( NumEntries );
+
+    MergeList( GetFirst, Order );
+
+    // This is to handle the case where there is an empty MergeOrderID 
+    Length = strlen( ~<$pcon.Order[MergeOrderID]>~);
+
+    if ($Length < 2)
+    {
+        Count = 0;
+    }
+
+    if ( <Count> > 0 ) 
+    {
+        if (!MatchingCustomerID(~<$pcon.Order[MergeOrderID]>~, ~<OrderID>~))
+        {
+            Log( Session, ~ConversionStation:********* Order ID <$pcon.Order[MergeOrderID]> does not match the one in <OrderID> *********~ );
+            return FALSE;
+        }
+        else
+        {
+            Log( Session, ~ConversionStation:********* Order ID <$pcon.Order[MergeOrderID]> does match the one in <OrderID> so OK to merge *********~ );
+            ToBeMerged = TRUE;
+            DestinationOrderID = ~<$pcon.Order[MergeOrderID]>~;
+            return TRUE;
+        }
+    }
+
+    Log( Session, ~ConversionStation:********* MergeOrderID for <OrderID> not found~ );
+    return TRUE;
+}
+
+// FUNCTION: CheckEmailTrigger()
+//
+//  This function will initiate an email if the number outstanding reaches the defined limit
+//
+VOID CheckEmailTrigger( Outstanding )
+{
+    GetWorkStationSettings( ~<$Job.Name>~,~ConversionBackupEmailTrigger~,EmailOn,Enabled );
+
+    // Only Check if enabled.
+    if (~<EmailOn>~ == ~0~)
+    {
+        return;
+    }
+
+    GetWorkStationSettings( ~<$Job.Name>~,~EmailTriggerLimit~,Limit,Enabled );
+    GetWorkStationSettings( ~<$Job.Name>~,~OutstandingEmailTo~,EmailToWarn,Enabled );
+
+    // First Check that the .bat file and .exe exists.
+    Program   = ~<$App.Directory>\blat.exe~;
+    BatchFile = ~<$App.Directory>\emailwarning.bat~;
+
+    if ((<Outstanding> >= <Limit>) &&
+       ((<Outstanding> - <LastOutstandingWarningSent>) >= <Limit>))
+    {
+        Log( Session, ~CheckEmailTrigger****** Limit of <Limit> orders outstanding reached now <OutStanding>, email sending to <EmailToWarn>~ );
+
+        if ( !Files( FileExists,~<Program>~ ) )
+        {
+            Log( Session, ~CheckEmailTrigger****** Could not find <Program> !!!!!!~ );
+            return;
+        }
+
+        if ( !Files( FileExists,~<BatchFile>~ ) )
+        {
+            Log( Session, ~CheckEmailTrigger****** Could not find <BatchFile> !!!!!!~ );
+            return;
+        }
+
+        theFile = ~C:\temp\Outstanding_warn.txt~;
+
+        if ( !File( TextFile, AsciiOutput, OPEN, ~<theFile>~, WRITE, CREATE ) )
+        {
+            Log( Session, ~CheckEmailTrigger: ****** failed to open <theFile>~ );
+            return;
+        }
+        TextFile(~Warning there are now <Outstanding> orders awaiting conversion.~);
+        TextFile( close );
+
+        if ( !ShellExecute( Open, ~<BatchFile>~, ~"<theFile>" <EmailToWarn>~) )
+        {
+            Log( Session, ~****** ShellExecute of <BatchFile> FAILED !!!!!!~ );
+            Log( Session, ~****** BatchFile <BatchFile>~);
+            Log( Session, ~****** theFile <theFile>~);
+            return;
+        }
+        LastOutstandingWarningSent = <Outstanding>;
+    }
+}
+
+// FUNCTION: ConvertImages()
+//
+//  This function sits and monitors Conversion table for orders to convert.
+//
+NUMERIC ConvertImages( )
+{
+    Total = 0;
+    LastOrderID = ~~;
+    while ( TRUE )
+    {
+        Path = ~~;
+        Date = ~~;
+        OrderID = ~~;
+        ColourCorrect = ~~;
+        IndexCards = ~~;
+        BravoCDProfile = ~~;
+        ROESProxies = ~~;
+        Priority = ~~;
+        ROESOrder = FALSE;
+        ExportOrder = FALSE;
+        ToBeMerged = FALSE;
+        LDPPhase2  = FALSE;
+
+        // Locate the next outsanding Work order for conversion.
+        Outstanding = NextOrderToConvert( Path, Date, OrderID, ColourCorrect, IndexCards, BravoCDProfile,
+                                          ROESProxies, Priority );
+
+        DisplayCount(<Outstanding>);
+
+        // Check if the number of outstanding orders has hit the email trigger limit.
+        CheckEmailTrigger(<Outstanding>);
+
+        SetWorkStationSettings( ~LoxleyWebStats~,PendingCount, ~<Outstanding>~,TRUE ); 
+
+        DisplayTotal(<Total>);
+        if (<Outstanding> && (~<OrderID>~ != ~~))
+        {
+            Invoke( UserMessage,Translate( ~Converting <OrderID>~ ) );
+            Invoke( ~StartProgress~, 10 );
+
+            Invoke( CloseAllImages );
+
+            if (!UpdateConversionStatus(~<OrderID>~, <ConversionRunning>))
+            {
+                continue;
+            }
+
+            // Set the order Status to Converting too.
+            if ( !ADO( dBase,Connect,Cmd,~Update Orders Set Status='Converting' Where ID = '<OrderID>'~ ) )
+            {
+                dBase( GetErrorDescription,theErr );
+                Log( Session,~ConversionStation failed to set order <OrderID> to status of Converting. <theErr>~ );
+                return FALSE;
+            }
+            Log( Session, ~ConversionStation ****** OrderID <OrderID> Order Status Set to Convert. ~ );
+
+            if (<ClearRotation>)
+            {
+                Invoke( UserMessage,Translate( ~Clearing EXIF Rotation for OrderID '<OrderID>'~ ) );
+                if (!ClearEXIFRotation( ~<OrderID>~, ~<Path>~))
+                {
+                    MarkOrderFailed(~<OrderID>~, ~Failed clearing EXIF rotation~);
+                    IncrementStats(~FailedConversion~);
+                }
+            }
+
+            Invoke( UserMessage,Translate( ~Processing sRGB conversion for OrderID '<OrderID>'~ ) );
+            database( LogActivity, Msg, ~Started Converting Order <OrderID>~, Type, Info );
+            ConversionState = RunConversion( ~<OrderID>~, ~<Path>~);
+            database( LogActivity, Msg, ~Finished Converting Order <OrderID>~, Type, Info );
+
+            // The batch or EXE files are missing??
+            if (<ConversionState> == <ConversionFailed>)
+            {
+                 Warning( ~Either the conversion.exe or batch file are missing. Please contact the IT Department.~ );
+
+                 // Free this order for someone else to convert.
+                 UpdateConversionStatus(~<OrderID>~, <ConversionPending>);
+                 return FALSE;
+            }
+
+            if (!<ConversionState>)
+            {
+                  // Conversion failed mark it as such
+                  MarkOrderFailed(~<OrderID>~, ~sRGB Conversion Failed~);
+                  IncrementStats(~FailedConversion~);
+
+                  Invoke( UserMessage,Translate( ~<OrderID> Conversion Failed~ ) );
+            }
+            else
+            {
+                // If this was a ROES order then set the order status as required after adding thumbs.
+                // This is currently deduced by starting LR.
+                aStr = String( StringInString, ~LR~, ~<OrderID>~);
+
+                if (~<aStr>~ != ~~)
+                {
+                    ROESOrder = TRUE;
+
+                    // Initiate forwarding of the order confirmation if required.
+                    CheckEmailRequired( ~<OrderID>~, ~<Path>~);
+
+                    // Initiate StudentID check
+                    StudentOrderValid = CheckStudentID(~<OrderID>~);
+
+                    // check if this is an order to merge
+                    DestinationOrderID = ~~;
+                    if (!CheckMergeOrder(~<OrderID>~, DestinationOrderID, ToBeMerged))
+                    {
+                        MarkOrderFailed(~<OrderID>~, ~Non matching Customer ID for Merge~);
+                        Invoke( UserMessage,Translate( ~<OrderID> Cannot be Merged~ ) );
+                        continue;
+                    }
+
+                    // If this is a merge order then run the merge process
+                    // we just continue after that as there is nothing else to do with this order.
+                    if (<ToBeMerged>)
+                    {
+                        // For now just send the email.
+//                      MergeOrder(~<OrderID>~, ~<DestinationOrderID>~, TRUE );
+                        SendMergeEmail(~<OrderID>~, ~<DestinationOrderID>~);
+                        continue;
+                    }
+
+                    
+                    // Get a list of the images which need thumbnails added
+                    cmd = ~SELECT OrderID, Path from Images Where OrderID = '<OrderID>'~;
+
+                    if ( !PGenConList( ImageList,Connect,Cursor,Forward,QUERY, ~<cmd>~ ) )
+                    {
+                        ImageList( GetErrorDescription,0,theErr );
+                        Log( Session, ~ConversionStation: ****** Error listing the images to ThumbNail <theErr> !!!!!!~ );
+                        return FALSE;
+                    }
+
+                    ImageCount = ImageList( NumEntries ); 
+
+                    if (!<ImageCount>)
+                    {
+                        Log( Session, ~ConversionStation: ****** SELECT Returned No Images, <OrderID> may be an order via Proxies.~ );
+                    }
+                    else
+                    {
+                        Log( Session, ~ConversionStation: ****** SELECT Returned <ImageCount> Images for <OrderID>~ );
+
+                        // Check the select has returned the correct images. Dont ask.
+                        if (!ImageList( GetFirst, Image))
+                        {
+                             Log( Session, ~ConversionStation: ****** SELECT Failed to get first image for <OrderID> Failing Order !!!!!~ );
+                             MarkOrderFailed(~<OrderID>~, ~SELECT Failed~);
+                             IncrementStats(~FailedOnSelectCount~);
+                             Invoke( UserMessage,Translate( ~<OrderID> Add Thumbs Failed~ ) );
+                             ForgetLocal( ImageList );
+                             continue;
+                        }
+            
+                        if (~<$pcon.Image[OrderID]>~ != ~<OrderID>~)
+                        {
+                            Log( Session, ~ConversionStation: ****** SELECT RETURNED IMAGES FOR THE WRONG ORDER FAILING ORDER !!!!!!~ );
+                            MarkOrderFailed(~<OrderID>~, ~SELECT Returned Wrong Images~);
+                            IncrementStats(~FailedOnSelectCount~);
+                            Invoke( UserMessage,Translate( ~<OrderID> Add Thumbs Failed~ ) );
+                            ForgetLocal( ImageList );
+                            continue;
+                        }
+                        Log( Session, ~ConversionStation: ****** <OrderID> Images look OK.~ );
+                        ImageList( MakeStringList, PathList, Path);
+                        more = PathList(GetNext, Path);
+
+                        Count = PathList( NumEntries ); 
+                        Invoke( ~StartProgress~, <Count> );
+                        Invoke( UserMessage,Translate( ~Adding Thumbnails for ROES Order <OrderID>....~ ) );
+
+                        // Delay a couple of second just incase the images are not complete
+                        Sleep( 2000 );
+                        while (<more>)
+                        {
+                            Log( Session, ~ConversionStation: ****** Adding ThumbNail to <Path> ~ );
+
+//                            BroadcastMessageToAllViews( ReleaseImageChain,~<Path>~ );
+//                            BroadcastMessageToAllViews( ReleaseImage,~<Path>~ );
+
+                            result = AddThumbNailToImage(~<Path>~,500,100,~JPEG~,Width,Length,PreviewWidth,PreviewLength);
+                            if ( !<result> )
+                            {
+                                Log( Session, ~ConversionStation: ****** <Path> is not an image or we could not add a thumbnail to it!!!  ~ );
+                            }
+
+                            if ( <result> < 0 )
+                            { 
+                                Log( Session, ~ConversionStation: ****** Error adding thumbnail image to <Path> !!!  ~ );
+                            } 
+                            more = PathList(GetNext, Path);
+                            Invoke( ~StepProgress~ );
+                        }
+                        ForgetLocal( PathList );
+                        ForgetLocal( ImageList );
+                    }
+                }
+
+                // Run DupeNScale if it was selected.
+                DupeQty = 0;
+                if (DupeNScaleSelected(~<OrderID>~, DupeQty))
+                {
+                    DuplicateAndScaleWholeOrder( ~<OrderID>~, <DupeQty> );
+                }
+
+                // Set the order Status for ROES orders only. Non ROES are set to adjust later.
+                if (<ROESOrder>)
+                {
+                    if (!SetOrderStatus(~<OrderID>~, ~<ColourCorrect>~, ~<StudentOrderValid>~))
+                    {
+                        return FALSE;
+                    }
+                }
+
+                // Go Ahead and process the order items.
+                if (!<ROESOrder>)
+                {
+                    if (!ProcessOrderItems( ~<OrderID>~, LDPPhase2 ))
+                    {
+                        IncrementStats(~FailedProcessingItems~);
+                        Invoke( UserMessage,Translate( ~<OrderID> ProcessOrderItems Failed~ ) );
+                        continue;
+                    }
+
+                    
+
+                    // We got this far so set the order status as required
+                    if (!<ROESOrder>)
+                    {
+                        // LDP Phase 2 orders have already been colour corrected,
+                        // so avoid sending these back to the analyser.
+                        if (!<LDPPhase2>)
+                        {
+                            // Student orders are always sent via ROES, so Pass in TRUE for the Valid Student.
+                            if (!SetOrderStatus(~<OrderID>~, ~<ColourCorrect>~, TRUE))
+                            {
+                                return FALSE;
+                            }
+                        }
+                    }
+                }
+
+                // Are there order Items? 
+                OrderItems = CountOrderItems(~<OrderID>~);
+
+                //Are ROES Proxies requested
+                if (~<ROESProxies>~ == ~1~)
+                {
+                    ExportOrder = TRUE;
+                }
+
+                //Initiate a Bravo CD if requested
+                if (!IsNULL( ~<BravoCDProfile>~ ))
+                {
+                    // This needs done at batch release and not conversion Station since image are not coloured yet!
+                    //RunBravoExport(<OrderID>, ~<BravoCDProfile>~);
+
+                    // We need a batch and index cards if there are no prints.
+                    if (!<OrderItems>)
+                    {
+                        BravoIndexOrBatchProduct = GetBravoProduct();
+
+                        // Trim the G, L or Y for the Base Product
+                        Length = strlen( ~<BravoIndexOrBatchProduct>~);
+                        substr(~<BravoIndexOrBatchProduct>~`, 0, <Length> - 1,  BaseProductID );
+
+                        // Capture the G, L or Y for the Surface
+                        substr(~<BravoIndexOrBatchProduct>~, <Length> - 1, <Length>,  Surface );
+
+                        // Work out the QueueName
+                        BaseQueueName = GetQueueName(~<BaseProductID>~);
+                        QueueName = GetQueueNameForSurface( ~<BaseQueueName>~, ~<Surface>~);
+
+                        Query = ~Select DISTINCT Roll from Images Where OrderID = '<OrderID>'~;
+                        if ( !PGenConList( RollList,Connect,Cursor,Forward, Query,~<Query>~ ) )
+                        {
+                            return Warning( Translate(~Failed to list Rolls~) );
+                        }
+
+                        // There may not be any Rolls!
+                        if (!RollList( NumEntries ))
+                        {
+                            Log( Session, ~ConversionStation:********* Order <OrderID> contains images to index.~ );
+                            return TRUE;
+                        }
+
+                        LastRoll      = ~~;
+                        while ( RollList( GetNext, Item ) )
+                        {
+                            Roll      = ~<$pcon.Item[Roll]>~;
+                            Log( Session, ~ConversionStation:********* Order <OrderID> Indexing Roll <Roll>~ );
+                            // Add index card(s) 
+                            CreateIndexCards( ~<OrderID>~, ~<BravoIndexOrBatchProduct>~, ~<Roll>~, ~<QueueName>~ );
+                        }
+
+                        // Add Batch Card as well.
+                        CreateBatchCards( ~<OrderID>~, ~<BravoIndexOrBatchProduct>~ );
+                    }
+
+                    ExportOrder = TRUE;
+                }
+
+                // Delete residual TIF, BMP etc files
+                if (!<ROESOrder>)
+                {
+                    CleanUpConvertedFiles(<OrderID>, ~<Path>~);
+
+                    // Remove the processed order items from the Import tables.
+                    // These now get left to allow orders to be modified at a later date.
+                    // RemoveProcessedOrderItems( <OrderID> );
+                }
+
+                // Conversion complete so remove it from the list
+                // Not for now.
+                // RemoveConversionJob(~<OrderID>~);
+ 
+                // Since ROES orders dont have order items added we need to maintain order items here.
+                // While we are at it we might as well render export orders batch and index cards.
+                if (<ROESOrder> || <ExportOrder>)
+                {
+                    // If there are order items then process order items will have done this.
+                    // otherwise do this now for any index/batch cards
+                    if (!<OrderItems>)
+                    {
+                        MaintainOrderItems( ~<OrderID>~, TRUE );
+                    }
+                }
+
+                // Conversion complete so mark it as such
+                if ( UpdateConversionStatus(<OrderID>, <ConversionCompleted>) )
+                {
+                    Log( Session, ~****** <OrderID> Set to the Completed State  @ <$Date.hour>:<$Date.minute>:<$Date.second>~ );
+                    Log( Session, ~******~ );
+                }
+                else
+                {
+                    Log( Session, ~****** <OrderID> FAILED to Set to the Completed State  @ <$Date.hour>:<$Date.minute>:<$Date.second> !!!!!!!!!!!!!!!!!1~ );
+                    Log( Session, ~******~ );
+                    return Warning( Translate(~Failed to Set to the Completed State~) );
+                }
+
+                Invoke( UserMessage,Translate( ~<OrderID> Complete~ ) );
+            }
+            LastOrderID = ~<OrderID>~; 
+            ++Total;
+            IncrementStats(~ProcessedCount~); 
+        }
+        else
+        {
+            if (!<Running>)
+            {
+                return FALSE;
+            } 
+            if (!IsNULL( ~<LastOrderID>~))
+            {
+                Invoke( UserMessage,Translate( ~No Orders Pending so Sleeping. (Last order was <LastOrderID>)~ ) );
+            }
+            else
+            {
+                Invoke( UserMessage,Translate( ~No Orders Pending so Sleeping.~ ) );
+            }
+            Invoke( ~StartProgress~, 0 );
+            Sleep( 5000 );
+        } 
+    }
+
+    return TRUE;
+}
+
+VOID ChildMessage( Msg )
+{
+    UserMessage( ~<Msg>~ );
+}
+
+VOID RunMinimized()
+{
+    Init();
+    MinimizeConversionDialog();
+}
+
+VOID MinimizeConversionDialog()
+{
+    ConversionStationDlgDefinition( Show,MINIMIZE );
+    LeftPosition = App( thisApp,MainWindow,GetClientWidth ) - 160;
+    TopPosition = App( thisApp,MainWindow,GetClientHeight ) - 5;
+
+    dlg( SetWindowPosition,<LeftPosition>,<TopPosition> );
+}
+
+
+// FUNCTION: DeleteSemaphoreFiles()
+//
+//  This function removes any semaphore files.
+//
+VOID DeleteSemaphoreFiles ( OrderID, Path )
+{
+    Log( Session, ~****** Deleting Semaphore files for <OrderID> at <$Date.hour>:<$Date.minute>:<$Date.second> !!!!!!~ );
+
+    Semaphore = ~<Path>\converting.txt~;
+    if (!Files( Delete, ~<Semaphore>~))
+    {
+        Log( Session, ~****** Problem deleting the <Semaphore> Semaphore for <OrderID> at <$Date.hour>:<$Date.minute>:<$Date.second> !!!!!!~ );
+    } 
+    Semaphore = ~<Path>\done.txt~;
+    if (!Files( Delete, ~<Semaphore>~))
+    {
+        Log( Session, ~****** Problem deleting the <Semaphore> Semaphore for <OrderID> at <$Date.hour>:<$Date.minute>:<$Date.second> !!!!!!~ );
+    }
+    Semaphore = ~<Path>\exif.txt~;
+    if (!Files( Delete, ~<Semaphore>~))
+    {
+        Log( Session, ~****** Problem deleting the <Semaphore> Semaphore for <OrderID> at <$Date.hour>:<$Date.minute>:<$Date.second> !!!!!!~ );
+    }
+
+    Semaphore = ~<Path>\Exiflog.txt~;
+    if (!Files( Delete, ~<Semaphore>~))
+    {
+       Log( Session, ~****** Problem deleting the <Semaphore> Semaphore for <OrderID> at <$Date.hour>:<$Date.minute>:<$Date.second> !!!!!!~ );
+    }
+}
+
+
+
+// FUNCTION: CheckAlreadyProcessing()
+//
+//  This function checks for any orders set to processing for this workstation.
+//  This is called when the panel is opened incase things broke.
+//
+VOID CheckAlreadyProcessing( )
+{
+    // Query for any orders that are marked processing for this workstation 
+    Query = ~SELECT OrderID, Path FROM Conversion where ConversionStatus>='<ConversionClaiming>' AND
+             ConversionStatus!='<ConversionCompleted>' AND ConversionStatus!='<ConversionFailed>' AND
+             ProcessingWorkStation='<$App.ComputerName>' ORDER BY Date ASC~;
+
+    if ( !PGenConList( ProcList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect to connect to CheckAlreadyProcessing ~ ) );
+        Log( Session, ~ConversionStation:********* Failed to retrieve the Processing list !!!!!~ );
+        return;
+    }
+
+    Count = ProcList( NumEntries );
+
+}
+
+// FUNCTION: CheckFailedProcessing()
+//
+//  This function checks for any orders set to fail for this workstation.
+//  This is called when the panel is opened in case things broke.
+//
+VOID CheckFailedProcessing( )
+{
+//    StringList( OrdersList, New );
+
+    // Query for any orders that are marked processing for this workstation 
+    Query = ~SELECT OrderID, Path FROM Conversion where ConversionStatus='<ConversionFailed>' AND ProcessingWorkStation='<$App.ComputerName>' ORDER BY Date ASC~;
+
+    if ( !PGenConList( FailList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect to CheckFailedProcessing~ ) );
+        Log( Session, ~ConversionStation:********* Failed to retrieve the Processing list !!!!!~ );
+        return;
+    }
+
+    Count = FailList( NumEntries );
+
+    
+}
+
+// FUNCTION: CreateDefaultIndexCardSettings()
+//
+//  This function setup the defaults for index card settings.
+//
+VOID CreateDefaultIndexCardSettings()
+{
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~5InchIndexCard~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~5InchIndexCard~, ~5x5 Index~, TRUE );
+    }
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~5InchIndexCardNumImages~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~5InchIndexCardNumImages~, Numeric(~16~), TRUE );
+    }
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~6InchIndexCard~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~6InchIndexCard~, ~6x6 Index~, TRUE );
+    }
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~6InchIndexCardNumImages~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~6InchIndexCardNumImages~, Numeric(~16~), TRUE );
+    }
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~8InchIndexCard~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~8InchIndexCard~, ~8x8 Index~, TRUE );
+    }
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~8InchIndexCardNumImages~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~8InchIndexCardNumImages~, Numeric(~16~), TRUE );
+    }
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~10InchIndexCard~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~10InchIndexCard~, ~10x10 Index~, TRUE );
+    }
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~10InchIndexCardNumImages~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~10InchIndexCardNumImages~, Numeric(~16~), TRUE );
+    }
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~12InchIndexCard~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~12InchIndexCard~, ~12x12 Index~, TRUE );
+    }
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~12InchIndexCardNumImages~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~12InchIndexCardNumImages~, Numeric(~16~), TRUE );
+    }
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~PhotoshopLocation~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~PhotoshopLocation~, ~C:\Program Files\Adobe\Adobe Photoshop CS2\Photoshop.exe~, TRUE );
+    }
+}
+
+// FUNCTION: Init()
+//
+//  This function is called to kick off the Conversion Station dialog.
+//
+VOID Init()
+{
+    if ( $AlreadyOpen )
+    {
+        Log( Session, ~ConversionStation: Init routine called more than once~ );
+        Warning( ~The Conversion Station panel is already open~ );
+        return;
+    }
+    Log(Session, ~***********************************************************************~);
+    Log(Session, ~     Conversion Station Dialog Opened (<ConversionStationVersion>)~);
+    Log(Session, ~***********************************************************************~);
+    EnableButtons();
+
+    AlreadyOpen = TRUE;
+
+    // Check for processing being stuck for this workstation
+    CheckAlreadyProcessing();
+
+    // Check for Failed conversions for this workstation
+    CheckFailedProcessing();
+
+    Invoke( UserMessage,Translate( ~Awaiting the "GO" button~ ) );
+
+    pending = PendingOrderCount();
+
+    DisplayCount(~<pending>~);
+
+    DisplayTotal(0);
+    
+    // Initialise the stats we will collect.
+    SetWorkStationSettings( ~LoxleyWebStats~,ProcessedCount, ~0~,TRUE ); 
+    SetWorkStationSettings( ~LoxleyWebStats~,PendingCount, ~<pending>~,TRUE ); 
+    SetWorkStationSettings( ~LoxleyWebStats~,FailedOnSelectCount, ~0~,TRUE ); 
+    SetWorkStationSettings( ~LoxleyWebStats~,FailedOnEXIFCheck, ~0~,TRUE ); 
+    SetWorkStationSettings( ~LoxleyWebStats~,FailedConversion, ~0~,TRUE ); 
+    SetWorkStationSettings( ~LoxleyWebStats~,FailedThumb, ~0~,TRUE ); 
+    SetWorkStationSettings( ~LoxleyWebStats~,FailedProcessingItems, ~0~,TRUE ); 
+
+    if ( GetWorkStationSettings( ~<$Job.Name>~,AutoStart,AutoStart,Enabled ) )
+    {
+        dlg( SetString,~<AutoStart>~ ,AutoStart,0 ); 
+    
+        if ( <AutoStart> && <Enabled> )
+        {
+            OnGoButton();
+        }
+    }
+
+    // Configure the Default TimeOut if not already there
+    if (!GetWorkStationSettings( ~<$Job.Name>~,ConversionTimeout,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,ConversionTimeout, Numeric(~1800000~), TRUE );
+    }
+
+    // Configure the Default index cards for our supported range of sizes and how many images 
+    // they contain.
+    CreateDefaultIndexCardSettings();
+
+    // Name of the ROEs Proxies Setup
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~ROESProxiesSetup~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,ROESProxiesSetup,~ROES Proxies~,TRUE ); 
+    }
+
+    // Create a default product to use for Index/Batch cards generated after a Bravo export
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~BravoIndexOrBatchProduct~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,BravoIndexOrBatchProduct,~6x6G~,TRUE ); 
+    }
+
+    // Default to the old conversion method
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~ConversionMethod~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,ConversionMethod,~conversion.exe~,TRUE ); 
+    }
+
+    // Default to off for the email trigger
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~ConversionBackupEmailTrigger~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,ConversionBackupEmailTrigger,0,TRUE ); 
+    }
+
+    // Default to 5 for the email trigger point
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~EmailTriggerLimit~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,EmailTriggerLimit,5,TRUE ); 
+    }
+
+    // Default to ross for the email if the number of outstanding orders hits the above trigger.
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~OutstandingEmailTo~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,OutstandingEmailTo,~Ross.McPhaden@loxleycolour.com~,TRUE ); 
+    }
+
+    // Setup defaults for G,L,Y Sharpness and Resolution
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~GlossSharpness~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,GlossSharpness,40,TRUE ); 
+    }
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~LustreSharpness~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,LustreSharpness,40,TRUE ); 
+    }
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~MetallicSharpness~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,MetallicSharpness,60,TRUE ); 
+    }
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~PearlSharpness~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,PearlSharpness,60,TRUE ); 
+    }
+
+    
+    // Default the student check off.
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~StudentCheckEnabled~,Check,Enabled ))
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~StudentCheckEnabled~, 0, TRUE );
+    }
+
+    Debug( SetDontDebugThis,TRUE );
+}

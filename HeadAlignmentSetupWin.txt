@@ -1,0 +1,655 @@
+IncludeClass(BaseHtml);
+
+Class( Setup,Extends,BaseHtml,
+		Member,fHeadAlignmentSetup,Str,~~,
+		Member,fShowHeadAlignment,Numeric,0,
+		Member,fOrderID,Str,~~,
+		Member,fRoll,Str,~~,
+		Member,fFrame,Str,~~,
+		Member,fPath,Str,~~,
+		Member,fCurrentSetupName,Str,~~,
+		Member,fCropX,Numeric,0.0,
+		Member,fCropY,Numeric,0.0,
+		Member,fCropWidth,Numeric,0.0,
+		Member,fCropLength,Numeric,0.0,
+		Member,fHeadX,Numeric,0.0,
+		Member,fHeadY,Numeric,0.0,
+		Member,fHeadWidth,Numeric,0.0,
+		Member,fHeadLength,Numeric,0.0,
+		Member,fScreenWidth,Numeric,0,
+		Member,fScreenHeight,Numeric,0 );
+
+VOID Setup::Setup()
+{
+	BaseHtml::LoadTranslationFile( HeadAlign,HeadAlign,HeadAlign );
+
+	Title = ~<$Tr.HeadAlign(CropHeadAlignSetupTitle)>~;
+	HelpPage = ~CropAlignSetup.html~;
+
+	fScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+	fScreenHeight = App( thisApp,MainWindow,GetClientHeight );
+}
+
+
+VOID Setup::WindowDefinition()
+{
+	SplitterCols = ~2 51 49~;
+	if (<fScreenHeight> < 900)
+	{
+		if (<fScreenWidth> < 1280)
+		{
+			SplitterCols = ~2 57 43~;
+		}
+		else
+		{
+			SplitterCols = ~2 54 46~;
+		}
+	}
+
+	Position = ~0 0 85 73~;
+	if (<fScreenHeight> < 900)
+	{
+		if (<fScreenWidth> < 1280)
+		{
+			Position = ~0 0 90 75~;
+		}
+		else
+		{
+			Position = ~0 0 80 85~;
+		}
+	}
+
+	Fields:	TypeName			SplitterWnd2
+			SplitterRows		~1~
+			SplitterColumns		~<SplitterCols>~	
+			HideSplitterBars	1
+			Position			~<Position>~
+}
+
+VOID Setup::DefineViews()
+{ 
+	DefineView();
+	DefineView(Images);
+}
+
+VOID Setup::ViewDefinitionImages()
+{
+	ImageFrameSize = ~500~;
+	if (<fScreenHeight> < 900)
+	{
+		if (<fScreenWidth> < 1280)
+		{
+			ImageFrameSize = ~375~;
+		}
+		else
+		{
+			ImageFrameSize = ~450~;
+		}
+	}
+
+	StdImageThumbnailView();
+
+	Fields:	BackgroundColor			~190,190,190~
+			FrameBackgroundColor	~190,190,190~
+			TextBackgroundColor		~190,190,190~
+			DelayLoad				1
+			ImageFrameSize			~<ImageFrameSize>~
+			HideSelectionRect		1
+			HideImageFrame			1
+			LClickUpActionsText		ACTION Exec ( <This>.UpdateCropSettings() )
+}
+
+VOID Setup::InitWindow()
+{
+	if ( !DefineWindow() )
+	{
+		return;
+	}
+	
+	Init();
+	Open( ~<$App.HTTPServer>/HeadAlign/HeadAlignmentSetup.kpl~ );
+}
+
+VOID Setup::SetValues(HeadAlignmentSetup,ShowHeadAlignment,OrderID,Roll,Frame,Path)
+{
+	fHeadAlignmentSetup = ~<HeadAlignmentSetup>~;
+	fShowHeadAlignment = ~<ShowHeadAlignment>~;
+	fOrderID = ~<OrderID>~;
+	fRoll = ~<Roll>~;
+	fFrame = ~<Frame>~;
+	fPath = ~<Path>~;
+}
+
+VOID Setup::OnLoadComplete()
+{
+	if ( GetActiveView() ) 				// gets the object called fHtmlView
+	{
+		LoadTheSetup();
+	}
+}
+
+VOID Setup::LoadTheSetup()
+{
+	Query = ~Select * From Images Where OrderID = '<fOrderID>' And Roll = '<fRoll>' And Frame = '<fFrame>'~;
+	RefreshWindowThumbNailView( DataWindow,ViewImages,~<Query>~ );
+
+	ViewImages( SetDelayLoad,FALSE );
+	ViewImages( SetCropSetupMode,2 );
+	
+	ViewImages(SetShowCropBox,TRUE);
+
+	if (<fShowHeadAlignment> == 0)
+	{
+		Enabled = FALSE;
+		HeadAlignmentValue = ~0~;
+		if ( GetWorkstationSettings( ~HeadAlignmentSetup~,~HeadAlignment~,HeadAlignmentValue,Enabled ) )
+		{
+			if ( ~<Enabled>~ == ~1~ )
+			{
+				fShowHeadAlignment = ~<HeadAlignmentValue>~;
+			}
+		}
+	}
+
+	if (<fShowHeadAlignment> == 3)
+	{
+		fHtmlView(Set,~ShowHeadAlignmentEllipse~,0,checked,~true~);
+	}
+	else if (<fShowHeadAlignment> == 2)
+	{
+		fHtmlView(Set,~ShowHeadAlignmentRect~,0,checked,~true~);
+	}
+	else if (<fShowHeadAlignment> == 1)
+	{
+		fHtmlView(Set,~ShowHeadAlignmentLine~,0,checked,~true~);
+	}
+	else
+	{
+		fHtmlView(Set,~ShowHeadAlignmentNone~,0,checked,~true~);
+	}
+
+	ViewImages(SetShowHeadAlignment,<fShowHeadAlignment>);
+
+	if ( !PGenConList( List,Connect,Query,~Select * From Crops Order By Name~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		Log(Session,~OnLoadComplete: Failed to query the Crops table. <theErr>.~);
+
+		Warning( TR(HeadAlign,UnableToLoadSetup) );
+	}
+
+	fHtmlView( SetSelectOptionsLength, ~SetupList~, 0, 0 );
+	fHtmlView( CreateOptionsFromGenConList,SetupList,0,List,Name );
+	
+	if ( !SimilarStr( ~<fHeadAlignmentSetup>~,~~ ) )
+	{
+		fHtmlView( Set,SetupList, 0,value,~<fHeadAlignmentSetup>~ );
+	}
+
+	ViewImages( SetAllowCropping,TRUE );
+
+	fHtmlView(Set,~ShowCropCheckBox~,0,checked,~true~);
+
+	OnLoadSetupButton(FALSE);
+}
+
+NUMERIC Setup::OnLoadSetupButton(saveChanges)
+{
+	if (<saveChanges>)
+	{
+		if (!SaveChanges())
+		{
+			fHtmlView( Execute,~SelectByValue(SetupList,'<fCurrentSetupName>')~ );
+			return FALSE;
+		}
+	}
+
+	ReturnOnFailure( fHtmlView( Get,SetupList,0,value,SetupName ) );
+
+	if (IsNull(~<SetupName>~))
+	{
+		fCropX = 50.0;
+		fCropY = 50.0;
+		fCropWidth = 100.0;
+		fCropLength = 100.0;
+		fHeadX = 50.0;
+		fHeadY = 50.0;
+		fHeadWidth = 75.0;
+		fHeadLength = 75.0;
+		CropMethod = 0;
+		AspectRatioWidth = 0;
+		AspectRatioLength = 0;
+	}
+	else
+	{	
+		Query = ~Select * From Crops Where Name = '<SetupName>'~;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			Log(Session,~OnLoadSetupButton: Failed to query the Crops table. <Query>. <theErr>.~);
+
+			Warning( TR(HeadAlign,UnableToLoadSetup) );
+			return FALSE;
+		}
+
+		if ( !List( GetFirst,Item ) )
+		{
+			Warning( TR(HeadAlign,UnableToLoadSetup) );
+			return FALSE;
+		}
+
+		fCropX = ~<$pcon.Item[CropX].numeric>~;
+		fCropY = ~<$pcon.Item[CropY].numeric>~;
+		fCropWidth = ~<$pcon.Item[CropWidth].numeric>~;
+		fCropLength = ~<$pcon.Item[CropLength].numeric>~;
+		fHeadX = ~<$pcon.Item[HeadX].numeric>~;
+		fHeadY = ~<$pcon.Item[HeadY].numeric>~;
+		fHeadWidth = ~<$pcon.Item[HeadWidth].numeric>~;
+		fHeadLength = ~<$pcon.Item[HeadLength].numeric>~;
+		AspectRatioWidth = ~<$pcon.Item[AspectRatioWidth].numeric>~;
+		AspectRatioLength = ~<$pcon.Item[AspectRatioLength].numeric>~;
+		CropMethod = ~<$pcon.Item[CropMethod].numeric>~;
+		fCurrentSetupName = ~<SetupName>~;
+	}
+
+	fHtmlView( Set,CropX,0,value,<fCropX> );
+	fHtmlView( Set,CropY,0,value,<fCropY> );
+	fHtmlView( Set,CropWidth,0,value,<fCropWidth> );
+	fHtmlView( Set,CropLength,0,value,<fCropLength> );
+	fHtmlView( Set,HeadAlignX,0,value,<fHeadX> );
+	fHtmlView( Set,HeadAlignY,0,value,<fHeadY> );
+	fHtmlView( Set,HeadAlignWidth,0,value,<fHeadWidth> );
+	fHtmlView( Set,HeadAlignLength,0,value,<fHeadLength> );
+
+	fHtmlView( Set,AspectRatioWidth,0,value,<AspectRatioWidth> );
+	fHtmlView( Set,AspectRatioLength,0,value,<AspectRatioLength> );
+	
+	if ( StringList( CropMethodList,New,Is,~<$[DATABASE FieldTypes].CropMethod[LangChoiceList]>~ ) )
+	{
+		fHtmlView( SetSelectOptionsLength,CropMethodList, 0, 0 );
+		fHtmlView( CreateOptionsFromStringList,CropMethodList,0,CropMethodList );
+		fHtmlView( SetSelectedOptionByIndex,CropMethodList,0,<CropMethod>);
+	}	
+
+	ViewImages(SetCropSetupValues,<fCropX>,<fCropY>,<fCropWidth>,<fCropLength>);
+	ViewImages(SetHeadAlignmentValues,<fHeadX>,<fHeadY>,<fHeadWidth>,<fHeadLength>);
+
+	return TRUE;
+}
+
+NUMERIC Setup::SaveChanges()
+{
+	cropSetupChanged = FALSE;
+	ViewImages(GetCropSetupChanged,cropSetupChanged);
+	if ( !<cropSetupChanged> )
+	{
+		return TRUE;
+	}
+
+	msg = TR(HeadAlign,SaveChanges,~<fCurrentSetupName>~);
+	Choice = MessageBox(~<msg>~,YESNOCANCEL);
+	if (~<Choice>~ == ~NO~)
+	{
+		return TRUE;
+	}
+	else if (~<Choice>~ == ~CANCEL~)
+	{
+		return FALSE;
+	}
+
+	return SaveSetup(~<fCurrentSetupName>~);
+}
+
+NUMERIC Setup::OnSaveSetupButton()
+{
+	ReturnOnFailure( fHtmlView( Get,SetupList,0,value,SetupName ) );
+
+	if (!IsNull(~<SetupName>~))
+	{
+		return SaveSetup(~<SetupName>~);
+	}
+
+	return OnSaveAsSetupButton();
+}
+
+NUMERIC Setup::SaveSetup(SetupName)
+{
+	ViewImages(GetCropSetupValues,CropX,CropY,CropWidth,CropLength);
+	ViewImages(GetHeadAlignmentValues,HeadX,HeadY,HeadWidth,HeadLength);
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log(Session,~OnSaveSetupButton: Failed to connect to the database. <theErr>.~);
+
+		Warning( TR(HeadAlign,CouldNotConnect) );
+		return FALSE;
+	}
+	fHtmlView(Get,~AspectRatioWidth~,0,value,aspectRatioWidth);
+	fHtmlView(Get,~AspectRatioLength~,0,value,aspectRatioLength);
+	fHtmlView(GetSelectedOptionIndex, ~CropMethodList~, 0, CropMethod);	
+
+	CropFields = ~CropX = <CropX>, CropY = <CropY>, CropWidth = <CropWidth>, CropLength = <CropLength> , AspectRatioWidth = <AspectRatioWidth>, AspectRatioLength = <AspectRatioLength>, CropMethod = <CropMethod>~;
+	HeadAlignmentFields = ~HeadX = <HeadX>, HeadY = <HeadY>, HeadWidth = <HeadWidth>, HeadLength = <HeadLength>~;
+	Cmd = ~Update Crops Set <CropFields>,<HeadAlignmentFields> Where Name = '<SetupName>'~;
+	if ( !dBase( Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log(Session,~OnSaveSetupButton: Failed to update the crops table: <Cmd>. <theErr>.~);
+
+		Warning( TR(HeadAlign,FailedToUpdate) );
+		return FALSE;
+	}
+
+	fHtmlView( SetInnerHTML, ~InfoSection~, 0, TR(HeadAlign,CropSaved) );
+	
+	
+	
+
+	ViewImages(SetCropSetupChanged,FALSE);
+
+	Action = ~<This>.RemoveInfo();~;	
+	QueueContentsAfter( Action,5000 );
+
+	return TRUE;
+}
+
+NUMERIC Setup::OnSaveAsSetupButton()
+{
+	ReturnOnFailure( fHtmlView( Get,SaveAsName,0,value,SetupName ) );
+
+	if (SimilarStr(~<SetupName>~,~~))
+	{
+		fHtmlView( SetInnerHTML, ~InfoSection~, 0, TR(HeadAlign,NoSetupName) );
+
+		Action = ~<This>.RemoveInfo();~;	
+		QueueContentsAfter( Action,5000 );
+
+		return FALSE;
+	}
+
+	if ( !PGenConList( List,Connect,Query,~Select * From Crops Where Name = '<SetupName>'~ ) )
+	{
+		List( GetErrorDescription,theErr );
+		Log(Session,~OnSaveAsSetupButton: Failed to query the crops table. <theErr>.~);
+
+		Warning( TR(HeadAlign,FailedToQuery) );
+		return FALSE;
+	}
+
+	Count = List( NumEntries );
+	if ( <Count> > 0 )
+	{
+		fHtmlView( SetInnerHTML, ~InfoSection~, 0, TR(HeadAlign,SetupExists) );
+
+		Action = ~<This>.RemoveInfo();~;	
+		QueueContentsAfter( Action,5000 );
+
+		return FALSE;
+	}
+
+	ViewImages(GetCropSetupValues,CropX,CropY,CropWidth,CropLength);
+	ViewImages(GetHeadAlignmentValues,HeadX,HeadY,HeadWidth,HeadLength);
+	fHtmlView(GetSelectedOptionIndex,~CropMethodList~,0,CropMethod);
+	fHtmlView(Get,~AspectRatioWidth~,0,value,AspectRatioWidth);
+	fHtmlView(Get,~AspectRatioLength~,0,value,AspectRatioLength);	
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log(Session,~OnSaveAsSetupButton: Failed to connect to the database. <theErr>.~);
+
+		Warning( TR(HeadAlign,CouldNotConnect) );
+		return FALSE;
+	}
+	
+	constrainCropSetup = GetCheckedButton( ~~,~ConstrainCropCheckBox~,constrainCropSetup );
+	
+	if ( !<constrainCropSetup> )
+	{
+		AspectRatioWidth = AspectRatioLength = 0;
+		fHtmlView(Set,~AspectRatioWidth~,0,value,0);
+		fHtmlView(Set,~AspectRatioLength~,0,value,0);
+	}
+	
+	Fields = ~Name,CropX,CropY,CropWidth,CropLength,HeadX,HeadY,HeadWidth,HeadLength,CropMethod,AspectRatioWidth,AspectRatioLength~;
+	Values = ~'<SetupName>',<CropX>,<CropY>,<CropWidth>,<CropLength>,<HeadX>,<HeadY>,<HeadWidth>,<HeadLength>,<CropMethod>,<$str.$AspectRatioWidth.numeric>,<$str.$AspectRatioLength.numeric>~;
+	
+	Cmd	= ~Insert Into Crops(<Fields>) Values(<Values>)~;
+	if ( !dBase( Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log(Session,~OnSaveAsSetupButton: Failed to update the crops table: <Cmd>. <theErr>.~);
+
+		Warning( TR(HeadAlign,FailedToUpdate) );
+		return FALSE;
+	}
+
+	fHtmlView( Execute,~AddListOption(GetElement('SetupList'),'<SetupName>','<SetupName>')~ );  
+	fHtmlView( Execute,~SelectByValue(SetupList,'<SetupName>')~ );
+
+	ViewImages(SetCropSetupChanged,FALSE);
+
+	fCurrentSetupName = ~<SetupName>~;
+
+	fHtmlView( SetInnerHTML, ~InfoSection~, 0, TR(HeadAlign,CropSaved) );
+
+	Action = ~<This>.RemoveInfo();~;	
+	QueueContentsAfter( Action,5000 );
+
+	return TRUE;
+}
+
+NUMERIC Setup::OnDeleteSetupButton()
+{
+	ReturnOnFailure( fHtmlView( Get,SetupList,0,value,SetupName ) );
+
+	if (MessageBox(TR(HeadAlign,DeleteCrop,~<SetupName>~),YESNO) != YES)
+	{
+		return FALSE;
+	}
+
+	Cmd = ~Delete From Crops Where Name = '<SetupName>'~;
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log(Session,~OnDeleteSetupButton: Failed to connect to the database. <theErr>.~);
+
+		Warning( TR(HeadAlign,CouldNotConnect) );
+		return FALSE;
+	}
+
+	if ( !dBase( Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log(Session,~OnDeleteSetupButton: Failed to update the crops table: <Cmd>. <theErr>.~);
+
+		Warning( TR(HeadAlign,FailedToUpdate) );
+		return FALSE;
+	}
+
+	fHtmlView( SetInnerHTML, ~InfoSection~, 0, TR(HeadAlign,CropDeleted) );
+
+	fHtmlView( Execute,~RemoveListOption( GetElement('SetupList'),'<SetupName>')~ );
+	
+	OnLoadSetupButton(FALSE);
+
+	Action = ~<This>.RemoveInfo();~;	
+	QueueContentsAfter( Action,5000 );
+
+	return TRUE;
+}
+
+VOID Setup::OnShowHeadAlignment(value)
+{
+	ViewImages(SetShowHeadAlignment,<value>);
+	fShowHeadAlignment = <value>;
+}
+
+NUMERIC Setup::OnSetCropButton()
+{
+	fHtmlView( Get,CropX,0,value,cropX );
+	fHtmlView( Get,CropY,0,value,cropY );
+	fHtmlView( Get,CropWidth,0,value,cropWidth );
+	fHtmlView( Get,CropLength,0,value,cropLength );
+
+	fCropX = ~<cropX>~;
+	fCropY = ~<cropY>~;
+	fCropWidth = ~<cropWidth>~;
+	fCropLength = ~<cropLength>~;
+
+	ViewImages(SetCropSetupValues,<fCropX>,<fCropY>,<fCropWidth>,<fCropLength>);
+
+	return TRUE;
+}
+
+NUMERIC Setup::OnSetHeadAlignButton()
+{
+	fHtmlView( Get,HeadAlignX,0,value,headX );
+	fHtmlView( Get,HeadAlignY,0,value,headY );
+	fHtmlView( Get,HeadAlignWidth,0,value,headWidth );
+	fHtmlView( Get,HeadAlignLength,0,value,headLength );
+
+	fHeadX = ~<headX>~;
+	fHeadY = ~<headY>~;
+	fHeadWidth = ~<headWidth>~;
+	fHeadLength = ~<headLength>~;
+
+	ViewImages(SetHeadAlignmentValues,<fHeadX>,<fHeadY>,<fHeadWidth>,<fHeadLength>);
+
+	return TRUE;
+}
+
+NUMERIC Setup::OnSetAspectRatioButton()
+{
+	fHtmlView( Get,AspectRatioWidth,0,value,aspectRatioWidth );
+	fHtmlView( Get,AspectRatioLength,0,value,aspectRatioLength );
+	
+	if (
+			Numeric(~<aspectRatioWidth>~) <= 0
+		||	Numeric(~<aspectRatioLength>~) <= 0
+		)
+		{
+			msg = ~<$Tr.HeadAlign(InvalidAspectRatio)>~;
+			return Warning(~<Msg>~);
+		}
+
+    ViewImages(SetCropSetupAspectRatio,<aspectRatioWidth>,<aspectRatioLength>);
+
+	UpdateCropSettings();
+	return TRUE;
+}
+
+NUMERIC Setup::OnConstrainCrop()		// Never called??
+{
+	fHtmlView(Get,~ConstrainCropCheckBox~,0,checked,constrainCropSetup);
+
+	ViewImages(SetCropSetupConstrain,<constrainCropSetup>);
+
+	return TRUE;
+}
+
+NUMERIC Setup::OnShowCrop()
+{
+	fHtmlView(Get,~ShowCropCheckBox~,0,checked,showCrop);
+
+	ViewImages(SetShowCropBox,<showCrop>);
+
+	return TRUE;
+}
+
+VOID Setup::RemoveInfo()
+{
+	fHtmlView( SetInnerHTML, ~InfoSection~, 0, ~~ );
+}
+
+
+VOID Setup::OnCloseDataWindow( Name )		
+{
+	SetWorkStationSettings( ~HeadAlignmentSetup~,~HeadAlignment~,~<fShowHeadAlignment>~,TRUE );
+	
+	BaseHtml::OnCloseDataWindow( ~<Name>~ );
+}
+
+
+NUMERIC Setup::CloseCheck()
+{
+	cropSetupChanged = FALSE;
+	ViewImages(GetCropSetupChanged,cropSetupChanged);
+	if ( !<cropSetupChanged> )
+	{
+		return TRUE;
+	}
+
+	if (SimilarStr(~<fCurrentSetupName>~,~~))
+	{
+		return TRUE;
+	}
+
+	msg = TR(HeadAlign,SaveChanges,~<fCurrentSetupName>~);
+	Choice = MessageBox(~<msg>~,YESNOCANCEL);
+	if (~<Choice>~ == ~NO~)
+	{
+		return TRUE;
+	}
+	else if (~<Choice>~ == ~CANCEL~)
+	{
+		return FALSE;
+	}
+
+	if (SaveSetup(~<fCurrentSetupName>~))
+	{
+		return TRUE;
+	}
+	else
+	{
+		return FALSE;
+	}
+}
+
+VOID Setup::UpdateCropSettings()
+{
+	ViewImages(GetCropSetupValues,CropX,CropY,CropWidth,CropLength);
+	ViewImages(GetHeadAlignmentValues,HeadX,HeadY,HeadWidth,HeadLength);
+
+	fCropX = Numeric(~<CropX>~);
+	fCropY = Numeric(~<CropY>~);
+	fCropWidth = Numeric(~<CropWidth>~);
+	fCropLength = Numeric(~<CropLength>~);
+	fHeadX = Numeric(~<HeadX>~);
+	fHeadY = Numeric(~<HeadY>~);
+	fHeadWidth = Numeric(~<HeadWidth>~);
+	fHeadLength = Numeric(~<HeadLength>~);
+
+	fHtmlView( Set,CropX,0,value,<fCropX> );
+	fHtmlView( Set,CropY,0,value,<fCropY> );
+	fHtmlView( Set,CropWidth,0,value,<fCropWidth> );
+	fHtmlView( Set,CropLength,0,value,<fCropLength> );
+	fHtmlView( Set,HeadAlignX,0,value,<fHeadX> );
+	fHtmlView( Set,HeadAlignY,0,value,<fHeadY> );
+	fHtmlView( Set,HeadAlignWidth,0,value,<fHeadWidth> );
+	fHtmlView( Set,HeadAlignLength,0,value,<fHeadLength> );
+}
+
+VOID InitDoc( WantStatic,HeadAlignmentSetup,ShowHeadAlignment,OrderID,Roll,Frame,Path )
+{
+	if ( !ObjectAlreadyExists( SetupObj ) )
+	{
+		Setup( New,SetupObj,~<WantStatic>~ );
+		SetupObj( Global );
+		SetupObj.InitWindow();
+		SetupObj.SetValues(~<HeadAlignmentSetup>~,~<ShowHeadAlignment>~,~<OrderID>~,~<Roll>~,~<Frame>~,~<Path>~);
+	}
+	else
+	{
+		SetupObj.SetValues(~<HeadAlignmentSetup>~,~<ShowHeadAlignment>~,~<OrderID>~,~<Roll>~,~<Frame>~,~<Path>~);
+		SetupObj.LoadTheSetup();
+	}
+}
+
+// Entry Points from other scripts
+
+VOID InitStatic(HeadAlignmentSetup,ShowHeadAlignment,OrderID,Roll,Frame,Path) { InitDoc(TRUE,~<HeadAlignmentSetup>~,~<ShowHeadAlignment>~,~<OrderID>~,~<Roll>~,~<Frame>~,~<Path>~); }
+
+VOID Init(HeadAlignmentSetup,ShowHeadAlignment,OrderID,Roll,Frame,Path) { InitDoc(FALSE,~<HeadAlignmentSetup>~,~<ShowHeadAlignment>~,~<OrderID>~,~<Roll>~,~<Frame>~,~<Path>~); }

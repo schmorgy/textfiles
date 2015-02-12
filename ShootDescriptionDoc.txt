@@ -1,0 +1,1637 @@
+// ShootDescriptionDoc.txt
+//		Globals:	DocumnetQuery	- query used to produce the view
+//					WhichShootDesc	- used for Title purposes only
+//					DescType		- the type of ShootDescription table accessing
+//					TableName		- Full table name - i.e. ShootDescription<DescType>
+
+TableName = ~ShootDescription~;
+
+Define:	ShootDescMessages Using DDSymbol
+	Fields:	Value	~These strings are ShootDescription related strings used by the user interface.~
+	Contains:
+	{
+		Define: Title				using DDText	Fields: Text ~ShootDescription Data~
+		Define: ReadingRecords		using DDText	Fields: Text ~Reading %1 ShootDescription~
+		Define: ReadRecords			using DDText	Fields: Text ~Read %1 ShootDescription in %2 seconds~
+		Define: BlankID				using DDText	Fields: Text ~Unable to save pending changes.  ShootDescription ID cannot be blank.~
+		Define: RemovingAllFor		using DDText	Fields: Text ~Are you sure you want to delete the %1 selected ShootDescription(s) including\nall orders, order items, image information, and image files and raw image files for the selected ShotDescription(s)?~
+		Define: RemovingAllFor2		using DDText	Fields: Text ~You will be deleting everything about the selected ShootDescription(s).  Are you really sure?~
+		Define: RemovingRecordFor	using DDText	Fields: Text ~Are you sure you want to delete the %1 selected ShootDescription record(s)?~
+		Define: RemovingRecordFor1	using DDText	Fields: Text ~Are you sure you want to delete the %1 selected ShootDescription record(s) and its SubjectInfo if not used by any orders?~
+		Define: RemovingRecordFor2	using DDText	Fields: Text ~You will be deleting the ShootDescription(s) and SubjectInfo records.  Are you really sure?~
+		Define: DeletingRecord		using DDText	Fields: Text ~Deleting ShootDescription record %1~
+		Define: DeletingSubjectInfo using DDText	Fields: Text ~Deleting SubjectInfo records for ShootDesc %1~
+		Define: CantDrop			using DDText	Fields:	Text ~You can't paste this type of data here~
+		Define: DropInvalidView		using DDText	Fields: Text ~The Destination View is invalid~ 
+		Define: NoDropData			using DDText	Fields: Text ~There is no ShootDescription data to paste~ 
+		Define: OrdersTxt			using DDText	Fields: Text ~Orders~
+		Define: DlvrblsGenerator	using DDText	Fields: Text ~Deliverables~
+		Define: ViewGroups			using DDText	Fields: Text ~Groups~
+		Define: Composites			using DDText	Fields: Text ~Composites~
+		Define: ViewSubjData		using DDText	Fields:	Text ~Subject Data~
+		Define: ToolViewOrder		using DDText	Fields: Text ~View Order Data for the selected records~
+		Define: ToolViewGroups		using DDText	Fields: Text ~View Groupings for this Items' SubjectInfo~
+		Define: ToolDlvrblsGen		using DDText	Fields: Text ~View Order Deliverables for this Item~
+		Define: ToolComposites		using DDText	Fields: Text ~View Composite Orders for this Item~
+		Define: ToolViewSubjData	using DDText	Fields: Text ~View SubjectInfo Data for this Item~
+		Define: MenuGenOrderItems	using DDText	Fields: Text ~Create Order Items For~
+		Define: MenuDeleteAll		using DDText	Fields: Text ~Delete Record and Orders~
+		Define: MenuSeeOrderDlvrblsFor using DDText	Fields: Text ~View Orders Deliverables~
+		Define: MenuSeeCompDlvrblsFor using DDText	Fields: Text ~View Composites~
+		Define: MenuSeeGroupsFor	using DDText	Fields: Text ~View Groups~
+		Define: CantDeleteShootDescCont1	using DDText	Fields: Text ~Unable to delete ShootDescription %1.  Continue deleting other ShootDescription?~
+		Define: CantDeleteShootDesc1		using DDText	Fields: Text ~Unable to delete ShootDescription %1.~
+		Define: CantDeleteImageCont2	using DDText	Fields: Text ~Unable to delete ShootDescription %1.  One or more order images referenced by\nthe order(s) for the ShootDescription are open.  Close all windows that are referencing\nthese order images and then try deleting the ShootDescription again.  Continue\ndeleting other ShootDescription?~
+		Define: CantDeleteImage2		using DDText	Fields: Text ~Unable to delete ShootDescription %1.  One or more order images referenced by\nthe order(s) for the ShootDescription are open.  Close all windows that are referencing\nthese order images and then try deleting the ShootDescription again.~
+		Define: CantDeleteItemCont3		using DDText	Fields: Text ~Unable to delete ShootDescription %1.  One or more order items referenced by\nthe order(s) for the ShootDescription are open.  Close all windows that are referencing\nthese order items and then try deleting the ShootDescription again.  Continue\ndeleting other ShootDescription?~
+		Define: CantDeleteItem3			using DDText	Fields: Text ~Unable to delete ShootDescription %1.  One or more order items referenced by\nthe order(s) for the ShootDescription are open.  Close all windows that are referencing\nthese order items and then try deleting the ShootDescription again.~
+		Define: CantDeleteRawCont4		using DDText	Fields: Text ~Unable to delete ShootDescription %1.  One or more order raw images referenced by\nthe order(s) for the ShootDescription are open.  Close all windows that are referencing\nthese images and then try deleting the ShootDescription again.  Continue\ndeleting other ShootDescription?~
+		Define: CantDeleteRaw4			using DDText	Fields: Text ~Unable to delete ShootDescription %1.  One or more order raw images referenced by\nthe order(s) for the ShootDescription are open.  Close all windows that are referencing\nthese images and then try deleting the ShootDescription again.~
+		Define: NoOrderItems			using DDText	Fields: Text ~No OrderItems to find Jobs for~
+		Define: NoOrders				using DDText	Fields: Text ~No Orders defined for selected Items~
+		Define: FindFileTitle		using DDText	Fields: Text ~Find the desired file ...~
+		Define: SetOrdersShootDescID	using DDText	Fields: Text ~An Order exists with the same Id as the Shoot Description record being created.\nThe Order '%1' will be modified to use the Shoot Description ID '%1'.~
+		Define: IDAlreadyExists			using DDText	Fields: Text ~Id %1 already exists for table ShootDescription%2.\nUnable to add or change record.~
+		Define: NoSubjectInfo			using DDText	Fields: Text ~There is no SubjectInfo to defined for ID %1~
+	}
+
+
+Include: ~FormattingRoutines~;
+Include: ~Utilities2~;		// needed for doNewWay()
+
+//** [Refresh], "Refresh", and Refresh Action, F5
+NUMERIC RefreshListView()
+{
+	if ( ShootDescriptionDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	Start = Ticks();
+
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	Count = List( NumEntries );
+
+	if ( FALSE )
+	{
+		if ( MessageBox( Translate(DBMessages,LargeQuery,~<DocumentQuery>~,~<Count>~),YESNO ) != YES )
+		{
+			return TRUE;
+		}
+	}
+
+	ShootDescriptionDataWindow( StatusBar,Text,Translate( ShootDescMessages,ReadingRecords,<Count> ) );
+
+	SetDocumentData( List(GetObject) );	
+	ShootDescriptionDataWindow( RefreshWindow );
+
+	Duration = (Ticks() - <Start>) / 1000;
+
+	return ShootDescriptionDataWindow( StatusBar,Text,Translate(ShootDescMessages,ReadRecords,~<Count>~,~<Duration>~) );
+}
+
+
+//** [Options]
+NUMERIC AllOptions()
+{
+	return ShootDescriptionDataView( DisplayMenu,ShootDescriptionListViewMenu,0,0 );
+
+}
+
+
+//** [Open], "Open", DoubleClick Action
+NUMERIC OpenSelected()
+{
+	SeeOrdersFor();
+	return TRUE;
+}
+
+
+//** [New], "New"
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	theID = UniqueShootDescID();
+
+	NewRow( Set,ID,~<theID>~ );
+
+	RowBeingAdded = ShootDescriptionDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate(UIMessages,AddRowFailed) ); }
+
+	ShootDescriptionDataView( SetActiveCell,<RowBeingAdded>,~ID~ );
+
+	return TRUE;
+}
+
+
+//** [Find], "Find"
+NUMERIC Search()
+{
+	Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( ~<TableName>~ );" ) );
+	return PerformActions( Actions );
+}
+
+
+//** [Save], "Save Changes"
+NUMERIC SaveAllChanges()
+{
+	while ( ShootDescriptionDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+//** [Cancel], "Cancel Changes"
+NUMERIC RollBackAllChanges()
+{
+	if ( !ShootDescriptionDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( Translate(UIMessages,CancelChanges),YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( ShootDescriptionDataView( PendingChanges ) )
+	{
+		ShootDescriptionDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+Include: ~DeleteOrder.txt~;
+NUMERIC DeleteShootDescOrders(&dBase, ShootDescID)
+{
+	theQuery = ~Select ID From Orders Where ShootDescID = '<ShootDescID>'~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	result = TRUE;
+	while ( List( GetNext,Order ) )
+	{
+		OrderID = ~<$pcon.Order[ID]>~;
+
+		result = CanDeleteOrder(dBase,~<OrderID>~);  // returns: TRUE, -1, -2
+
+		if (<result> == TRUE)
+		{
+			result = DeleteOrdersItemsAndImages( dBase,~<OrderID>~,TRUE,TRUE,TRUE );
+		}
+	}
+
+	return <result>;
+}
+
+
+//** [Delete], "Delete", DeleteAction
+NUMERIC DeleteRecord()
+{
+	return DeleteShootDescRecord(FALSE);
+}
+
+//** "Delete w/ Orders", DeleteRecord()
+NUMERIC DeleteShootDescRecord(DeleteOrder)
+{
+
+	if ( !ShootDescriptionDataView( GetSelectedRows,RecordsToDelete ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	count = RecordsToDelete( ChildCount );
+
+	if (<DeleteOrder>)
+	{
+		if ( MessageBox( Translate(ShootDescMessages,RemovingAllFor,~<count>~),YESNO ) != YES )
+			{ return FALSE; }
+
+		if ( MessageBox( Translate(ShootDescMessages,RemovingAllFor2),YESNO ) != YES )
+			{ return FALSE; }
+
+		Log( Session,~Deleting ShootDescription and its Orders~);
+	}
+	else
+	{
+		if ( doNewWay() )
+		{
+			if ( MessageBox( Translate(ShootDescMessages,RemovingRecordFor1,~<count>~),YESNO ) != YES )
+				{ return FALSE; }
+
+			if ( MessageBox( Translate(ShootDescMessages,RemovingRecordFor2),YESNO ) != YES )
+				{ return FALSE; }
+		}
+		else
+		{
+			if ( MessageBox( Translate(ShootDescMessages,RemovingRecordFor,~<count>~),YESNO ) != YES )
+				{ return FALSE; }
+		}
+
+		Log( Session,~Deleting ShootDescription record~);
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<TableName>~,~<theErr>~) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	num = 1;
+	while ( RecordsToDelete( GetNext,theRecord ) )
+	{
+		result = TRUE;
+
+
+
+		if (<DeleteOrder>)
+		{
+			result = DeleteShootDescOrders(dBase, ~<$con.theRecord[ID]>~);
+		}
+		else
+		{
+			// Delete SubjectInfo if not used by Orders
+			if ( doNewWay() )
+			{
+				Query = ~Select ID from Orders Where ShootDescID = '<$con.theRecord[ID]>' And ImagesOrderID Is Null~;
+				if ( !PGenConList( List,Connection,dBase,Lock,ReadOnly,Cursor,Forward,QUERY,~<Query>~ ) )
+				{
+					List( GetErrorDescription,0,theErr );
+					return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+				}
+
+				count = List( NumEntries );
+				if (<count> < 1)
+				{
+					// no orders access this table entry - delete the SubjectInfo
+					ShootDescriptionDataWindow( StatusBar,Text,Translate(ShootDescMessages,DeletingSubjectInfo,~<$con.theRecord[ID]>~) );
+
+					StringList( InfoTypeList,New );
+					if ( GetInfoTypeListForSubjOrderID(~<$con.theRecord[ID]>~,InfoTypeList,FALSE) )
+					{
+						i = 0;
+						while ( InfoTypeList(GetStringAt,<i>,InfoType) )
+						{
+							Cmd = ~Delete From SubjectInfo<InfoType> Where OrderID = '<$con.theRecord[ID]>'~;
+							if ( !dBase( Cmd,~<Cmd>~ ) )
+							{
+								dBase( GetErrorDescription,theErr );
+								return Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~)  );
+							}
+							++i;
+						}
+					}
+				}
+			}  // doNewWay
+
+			else
+			{
+				if (~<DescType>~ == ~~)
+				{
+					cmd = ~Update Orders SET ShootDescID = NULL, ShootDescType = NULL Where ShootDescID = '<$con.theRecord[ID]>' And ShootDescType Is Null~;
+				}
+				else
+				{
+					cmd = ~Update Orders SET ShootDescID = NULL, ShootDescType = NULL Where ShootDescID = '<$con.theRecord[ID]>' And ShootDescType = '<DescType>'~;
+				}
+
+				if ( !dBase( Cmd,~<Cmd>~ ) )
+				{
+					dBase( GetErrorDescription,theErr );
+					return Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~)  );
+				}
+			}
+		}
+
+		if (<result> == TRUE)
+		{
+			ShootDescriptionDataWindow( StatusBar,Text,Translate(ShootDescMessages,DeletingRecord,~<$con.theRecord[ID]>~) );
+
+			Cmd = ~Delete From <TableName> Where ID = '<$con.theRecord[ID]>'~;
+
+			Log( Session, ~Deleting Record: <Cmd>~);
+
+			if ( !dBase( Cmd,~<Cmd>~ ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				return Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~)  );
+			}
+
+			RowsToDelete( AddString,RecordsToDelete(GetCurrentPosition) );
+//			dBase( LogActivity,Msg,~Deleted <TableName> <$con.theRecord[ID]>~,Type,Info );
+		}
+		else  // Deleting of order failed - Continue w/ next ShootDescription or Quit
+		{
+			if (<result> == -1)
+			{
+				if ( <num> == <count> )
+				{
+					MessageBox( Translate(ShootDescMessages,CantDeleteImage2,~<$con.theRecord[ID]>~),OK );
+				}
+				else
+				{
+					if ( MessageBox( Translate(ShootDescMessages,CantDeleteImageCont2,~<$con.theRecord[ID]>~),YESNO ) != YES)
+					{	break;	}
+				}
+			}
+			else if (<result> == -2)
+			{
+				if ( <num> == <count> )
+				{
+					MessageBox( Translate(ShootDescMessages,CantDeleteItem3,~<$con.theRecord[ID]>~),OK );
+				}
+				else
+				{
+					if ( MessageBox( Translate(ShootDescMessages,CantDeleteItemCont3,~<$con.theRecord[ID]>~),YESNO ) != YES)
+					{	break;	}
+				}
+			}
+			else if (<result> == -3)
+			{
+				if ( <num> == <count> )
+				{
+					MessageBox( Translate(ShootDescMessages,CantDeleteRaw4,~<$con.theRecord[ID]>~),OK );
+				}
+				else
+				{
+					if ( MessageBox( Translate(ShootDescMessages,CantDeleteRawCont4,~<$con.theRecord[ID]>~),YESNO ) != YES)
+					{	break;	}
+				}
+			}
+			else   // <result> == FALSE
+			{
+				if ( <num> == <count> )
+				{
+					MessageBox( Translate(ShootDescMessages,CantDeleteShootDesc1,~<$con.theRecord[ID]>~),OK );
+				}
+				else
+				{
+					if ( MessageBox( Translate(ShootDescMessages,CantDeleteShootDescCont1,~<$con.theRecord[ID]>~),YESNO ) != YES)
+					{  break;	}
+				}
+			}
+		}
+		++num;
+	}
+
+	ShootDescriptionDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	if (<DeleteOrder>)
+	{
+		RecordsToDelete( NotifyAffectedDocuments,OrderID );
+		RecordsToDelete( NotifyAffectedDocuments,ID );
+	}
+
+	return TRUE;
+}
+
+
+// Get ID of all selected records
+NUMERIC GetSelectedList(&IDList)
+{
+	if ( !ShootDescriptionDataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	IDList = ~~;
+
+	while ( SelectedRows( GetNext,theRow ) )
+	{
+		theID = ~<$con.theRow[ID]>~;
+		IDList = ~<IDList>~ == ~~ ? ~'<theID>'~ : ~<IDList>,'<theID>'~;
+	}
+
+	return TRUE;
+}
+
+
+// Get Order Ids for all ShootDesc records whose id is in IDList
+NUMERIC GetOrdersList( IDList, AllTypes, &OrdersList)
+{
+	if ( <AllTypes> )
+	{
+		theQuery = ~Select ID From Orders Where ShootDescID In (<IDList>) Order By ID~;
+	}
+	else
+	{
+		theQuery = ~Select ID From Orders Where ShootDescID In (<IDList>) AND ImagesOrderID Is Null Order By ID~;
+	}
+
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	count = List( NumEntries );
+
+	if ( !<count> )
+		{ return Warning( Translate(ShootDescMessages, NoOrders) );}
+
+	List(MakeSQLList,OrdersList,TRUE,ID);
+
+	return TRUE;
+}
+
+
+//** [Order], "See Orders"
+NUMERIC SeeOrdersFor()
+{
+	if (!GetSelectedList(InList))
+	{	return TRUE;	}  // problem reported in GetSelectedList()
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	if (~<DescType>~ != ~~)
+	{
+		theQuery = ~Select * From Orders Where ShootDescID In (<InList>) And ShootDescType = '<DescType>' Order By ID~;
+	}
+	else
+	{
+		theQuery = ~Select * From Orders Where ShootDescID In (<InList>) And ShootDescType Is Null Order By ID~;
+	}
+	Actions = ACTION Doc ( ~Orders~ <OpenMethod> OrdersDoc "Init( ~ For ShootDescription <InList>~,~<theQuery>~ );" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseShootDescriptionDataView()~ ); }
+
+	return TRUE;
+}
+
+NUMERIC BuildOrderList( IDList, &OrdersList )
+{
+	theQuery = ~Select ID From Orders Where ShootDescID In (<IDList>) Order By ID~;
+
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	count = List( NumEntries );
+
+	if ( !<count> )
+		{ return Warning( Translate(ShootDescMessages, NoOrders) );}
+
+	while ( List( GetNext,entry ) )
+	{
+		theID = ~<$pcon.entry[ID]>~;
+		OrdersList = ~<OrdersList>~ == ~~ ? ~<theID>~ : ~<OrdersList>,<theID>~;
+	}
+	
+	
+	return TRUE;
+}
+
+NUMERIC GenYearbook()
+{
+	//Get ID of selected rows
+	if (!GetSelectedList(InList))
+	{	return TRUE;	}  // problem reported in GetSelectedList()
+
+	//Get all orders associated with the list of IDs
+	OrderList = ~~;
+	retVal = BuildOrderList(~<InList>~, OrderList);
+	if ( !<retVal> )
+	{  return TRUE;  }  // problem reported in GetOrdersList
+
+	action = ACTION DOC ( YbOutputWin OpenOnce YbOutputWin "InitWithOrder(~<OrderList>~);" );
+	return PerformActions( action );
+}
+
+
+
+//** [Deliverables]
+NUMERIC SeeOrderDlvrbls()
+{
+
+	//Get ID of selected rows
+	if (!GetSelectedList(InList))
+	{	return TRUE;	}  // problem reported in GetSelectedList()
+
+	//Get all orders associated with the list of IDs
+	retVal = GetOrdersList(~<InList>~, TRUE, OrderList);
+	if ( !<retVal> )
+	{  return TRUE;  }  // problem reported in GetOrdersList
+
+	Query = ~Select * From OrderDlvrbl Where OrderID In (<OrderList>) Order By OrderID~;
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTION Doc ( ~OrderDlvrbl~ <OpenMethod> OrderDlvrblDoc "Init( ~<OrderList>~,~<Query>~ );" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseShootDescriptionDataView()~ ); }
+
+	return TRUE;
+}
+
+
+//** "Order Items"
+NUMERIC OrderOrderItemsGenerator()
+{
+	if ( !ShootDescriptionDataView( GetSelectedRows,SelectedRecords ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected)  ); }
+
+	if ( SelectedRecords( GetFirst,theRecord ) )
+	{
+		theID = ~<$con.theRecord[ID]>~;
+		Action = ACTION DOC( ItemsDiag OpenOnce CreateItemsDiags "OpenOrderItemsGen(~<theID>~);");
+		PerformActions( Action );
+
+		if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseShootDescriptionDataView()~ ); }
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnManageImages()
+{
+	if ( !ShootDescriptionDataView( GetSelectedRows,SelectedRecords ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected)  ); }
+
+	if ( !SelectedRecords( GetFirst,theRecord ) )
+		{ return Warning( Translate(UIMessages,NoRowsSelected)  ); }
+
+	action = ACTION DOC ( GreenScreenDoc Open "<$App.HTMLPages>\GreenScreen\GreenScreenDoc.txt" "InitWithShoot(~<$con.theRecord[ID]>~);" );
+	return PerformActions( action );
+}
+
+
+NUMERIC HeadAlignAndGroupBalance()
+{
+	if ( !ShootDescriptionDataView( GetSelectedRows,SelectedRecords ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected)  ); }
+
+	if ( !SelectedRecords( GetFirst,theRecord ) )
+		{ return Warning( Translate(UIMessages,NoRowsSelected)  ); }
+
+	action = ACTION DOC ( HeadAlign Open "<$App.HTMLPages>\HeadAlign\HeadAlign.kpl" "InitWithShoot(~<$con.theRecord[ID]>~);" );
+	return PerformActions( action );
+}
+
+//** [Groups]
+NUMERIC SeeGroups()
+{
+
+	if ( !ShootDescriptionDataView( GetSelectedRows,SelectedRecords ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected)  ); }
+
+	if ( SelectedRecords( GetFirst,theRecord ) )
+	{
+		theID = ~<$con.theRecord[ID]>~;
+		Action = ACTION DOC( ViewGroup OpenOnce GroupHndl "OpenGroupsDialog(~<theID>~);");
+		PerformActions( Action );
+	}
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseShootDescriptionDataView()~ ); }
+
+	return TRUE;
+}
+
+//** [Composites]
+NUMERIC SeeComposites()
+{
+
+	if ( !ShootDescriptionDataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	if ( !SelectedRows( GetFirst,theRow ) )
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+//	Get column name of column after ID to pass in as second parameter
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTION Doc ( ~CompGen~ <OpenMethod> CompJobGen2 "Init( ~<$con.theRow[ID]>~,~~);" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseShootDescriptionDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC SeeSubjData()
+{
+	MessageBox( ~Not implemented yet~,OK );
+
+	return TRUE;
+}
+
+NUMERIC OrderExists( theOrderID, &theOrderRecord )
+{
+	Query = ~Select * From Orders Where ID = '<theOrderID>'~;
+
+	Success = Ado( dBase,Connect,GetValuesFor,~<Query>~,theOrderRecord ) != FALSE;
+
+	return <Success>;
+}
+ 
+//** "View Images (Data)"
+NUMERIC SeeImagesFor(AsImages)
+{
+	//Get ID of selected rows
+	if (!GetSelectedList(InList))
+	{	return TRUE;	}  // problem reported in GetSelectedList()
+
+	//Get all orders associated with the list of IDs
+	retVal = GetOrdersList(~<InList>~, TRUE, OrderList);
+	if ( !<retVal> )
+	{  return TRUE;  }  // problem reported in GetOrdersList
+
+	WhichDoc = <AsImages> ? ~ImagesDoc~ : ~ImagesDataDoc~;
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Query = ~Select * From Images Where OrderID In (<OrderList>) Order By Roll,Frame~;
+	Actions = ACTION Doc ( ~Images~ <OpenMethod> <WhichDoc> "Init( ~<OrderList>~,<AsImages>,~<Query>~,0 );" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseShootDescriptionDataView()~ ); }
+
+	return TRUE;
+}
+
+
+//** "View Order Items (Data)"
+NUMERIC SeeOrderItemsFor(AsImages)
+{
+	//Get ID of selected rows
+	if (!GetSelectedList(InList))
+	{	return TRUE;	}  // problem reported in GetSelectedList()
+
+	//Get all orders associated with the list of IDs
+	retVal = GetOrdersList(~<InList>~, TRUE, OrderList);
+	if ( !<retVal> )
+	{  return TRUE;  }  // problem reported in GetOrdersList
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Query = ~Select * From OrderItems Where OrderID In (<OrderList>) Order By Sequence,Subsequence~;
+	Actions = ACTION Doc ( ~Items~ <OpenMethod> OrderItemsDoc "Init( ~<OrderList>~,~<Query>~,<AsImages>,TRUE,TRUE );" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseShootDescriptionDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC SeeJobQueueFor()
+{
+	//Get ID of selected rows
+	if (!GetSelectedList(InList))
+	{	return TRUE;	}  // problem reported in GetSelectedList()
+
+	//Get all orders associated with the list of IDs
+	retVal = GetOrdersList(~<InList>~, TRUE, OrderList);
+	if ( !<retVal> )
+	{  return TRUE;  }  // problem reported in GetOrdersList
+
+	Query = ~Select ID,OrderID From OrderItems Where OrderID In (<OrderList>)~;
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	count = List(NumEntries);
+	if ( <count> > 0 )
+	{
+		List(MakeSQLList, ItemIdList, FALSE, ID);
+
+		OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+		Query = ~Select * From JobQueue Where OrderID In (<OrderList>) AND OrderItemID in (<ItemIdList>)~;
+		Actions = ACTION Doc ( ~JobQueue~ <OpenMethod> JobQueueDoc "Init( ~<OrderList>~,~<Query>~ );" );
+		PerformActions( Actions );
+
+		if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseShootDescriptionDataView()~ ); }
+	}
+
+	else
+	{
+		return Warning( Translate(ShootDescMessages,NoOrderItems) );
+	}
+
+
+	return TRUE;
+}
+
+//** "View Rolls"
+NUMERIC SeeRollsFor()
+{
+	//Get ID of selected rows
+	if (!GetSelectedList(InList))
+	{	return TRUE;	}  // problem reported in GetSelectedList()
+
+	//Get all orders associated with the list of IDs
+	retVal = GetOrdersList(~<InList>~, TRUE, OrderList);
+	if ( !<retVal> )
+	{  return TRUE;  }  // problem reported in GetOrdersList
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Query = ~Select * From Rolls Where OrderID In (<OrderList>) Order By Roll~;
+	Actions = ACTION Doc ( ~Rolls~ <OpenMethod> RollsDoc "Init( ~<OrderList>~,~<Query>~ );" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseShootDescriptionDataView()~ ); }
+
+	return TRUE;
+}
+
+//** "View Subject Info"
+// Init() in SubjectInfoDoc determines InfoType - type of SubjectInfo
+NUMERIC SeeSubjectInfoFor()
+{
+
+if ( doNewWay() )
+{
+	if ( !ShootDescriptionDataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	While ( SelectedRows( GetNext,theRecord ) )
+	{
+		theOrderID = ~<$con.theRecord[ID]>~;
+
+		Query = ~Select Distinct InfoType from Orders where ShootDescID = '<theOrderID>' and ImagesOrderID Is Null~;
+		if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+		}
+		count = List( NumEntries );
+
+		if (<count> > 0)
+		{
+			while ( List(GetNext,Item) )
+			{
+				Query = ~Select * From SubjectInfo Where OrderID = '<theOrderID>' Order By SubjectID~;
+				Actions = ACTION Doc ( ~SubjectInfo~ <OpenMethod> SubjectInfoDoc "Init2( ~<theOrderID>~,~<$pcon.Item[InfoType]>~,~<Query>~ );" );
+				PerformActions( Actions );
+			}
+		}
+		else
+		{
+			StringList( InfoTypeList,New );
+			if ( GetInfoTypeListForSubjOrderID(~<theOrderID>~,InfoTypeList,FALSE) )
+			{
+				i = 0;
+				while ( InfoTypeList(GetStringAt,<i>,InfoType) )
+				{
+					Query = ~Select * From SubjectInfo Where OrderID = '<theOrderID>' Order By SubjectID~;
+					Actions = ACTION Doc ( ~SubjectInfo~ <OpenMethod> SubjectInfoDoc "Init2( ~<theOrderID>~,~<InfoType>~,~<Query>~ );" );
+					PerformActions( Actions );
+					++i;
+				}
+			}
+			else
+			{
+				Warning( Translate(ShootDescMessages,NoSubjectInfo,~<theOrderID>~) );
+			}
+		}
+	}
+
+}
+else
+{
+	//Get ID of selected rows
+	if (!GetSelectedList(InList))
+	{	return TRUE;	}  // problem reported in GetSelectedList()
+
+	theQuery = ~Select ID From Orders Where ShootDescID In (<InList>) AND ImagesOrderID IS NULL Order by ID~;
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+	count = List( NumEntries );
+
+	if ( !<count> )
+		{ return Warning( Translate(ShootDescMessages, NoOrders) );}
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	While ( List( GetNext,theRecord ) )
+	{
+		theOrderID = ~<$pcon.theRecord[ID]>~;
+		Query = ~Select * From SubjectInfo Where OrderID = '<theOrderID>' Order By SubjectID~;
+		Actions = ACTION Doc ( ~SubjectInfo~ <OpenMethod> SubjectInfoDoc "Init( ~<theOrderID>~,~<Query>~ );" );
+		PerformActions( Actions );
+	}
+}
+
+
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseShootDescriptionDataView()~ ); }
+
+	return TRUE;
+}
+
+
+//** "View Customer"
+NUMERIC SeeCustomerForRecords()
+{
+	//Get ID of selected rows
+	if (!GetSelectedList(IDList))
+	{	return TRUE;	}  // problem reported in GetSelectedList()
+
+	//Get all orders associated with the list of IDs
+	retVal = GetOrdersList(~<IDList>~, TRUE, OrderList);
+	if ( !<retVal> )
+	{  return TRUE;  }  // problem reported in GetOrdersList
+
+	//Get Customer list from Order List
+	theQuery = ~Select CustomerID From Orders Where ID In (<OrderList>)~;
+
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+	count = List( NumEntries );
+	if ( !<count> )
+		{ return Warning( Translate(ShootDescMessages, NoOrders) );}
+
+	count = 0;
+
+	CustList = ~~;
+	while ( List( GetNext,theRecord ) )
+	{
+		theCustomerID = ~<$pcon.theRecord[CustomerID]>~;
+		if (~<theCustomerID~ != ~~)
+		{
+			CustList = ~<CustList>~ == ~~ ? ~'<theCustomerID>'~ :
+			         ~<CustList>,'<theCustomerID>'~;
+		}
+	}
+
+	// Display the Customer View
+	Query = ~Select * From Customers Where ID In (<CustList>) Order By ID~;
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTION Doc ( ~Customers~ <OpenMethod> CustomersDoc "Init( ~~,~<Query>~ );" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseShootDescriptionDataView()~ ); }
+
+
+	return TRUE;
+}
+
+//** Keyboard Action
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,ShootDescriptionListViewMenu,~<KeyString>~ ) )
+	{
+		ShootDescriptionDataView( DisplayMenu,ShootDescriptionListViewMenu,0,0  );
+	}
+}
+
+//** ChangeRecord Action
+NUMERIC ChangeRecord()
+{
+	if ( !ShootDescriptionDataView( GetChangedRow,ChangedShootDesc,OrigShootDesc,ChangedRow,IsNewRow ) )
+		{ return Warning(  Translate(UIMessages,NoRowsSelected) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedShootDesc[ID]>~ == ~~ )
+		{ return Warning( Translate(ShootDescMessages,BlankID) ); }
+
+	Key = STR ( ID = '<$con.OrigShootDesc[ID]>' );
+	Query = ~Select * From <TableName> Where <Key>~;
+
+	if ( <IsNewRow> )
+	{
+		if (!AddNew( ChangedShootDesc,OrigShootDesc,Query,Key ))
+			{ return FALSE; }
+	}
+	else
+	{
+		if (!UpdateExisting( ChangedShootDesc,OrigShootDesc,Query,Key ))
+			{ return FALSE; }
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC HandleOrderExists( &dBase,Id )
+{
+	if ( doNewWay() )
+	{
+		Query = ~Select ShootDescID from Orders where ID = '<Id>'~;
+		if ( dBase(GetValuesfor,~<Query>~,ShootID) )  // Order exists with same Id as Shoot
+		{
+			if (~<ShootID>~ == ~~)
+			{
+				if (MessageBox( Translate(ShootDescMessages,SetOrdersShootDescID,~<Id>~),YESNO ) == YES )
+				{
+					cmd = ~Update Orders Set ShootDescId = '<Id>', ShootDescType = '<DescType>' where ID = '<Id>'~;
+					if ( !dBase(Cmd,~<cmd>~) )
+					{
+						dBase( GetErrorDescription,theErr);
+						return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+					}
+				}
+				else
+				{	return FALSE;	}
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC HandleIDExists(Id)
+{
+	StringList(TypeList,New);
+	if ( GetTypeListForShootDescID(~<ID>~,TypeList,FALSE) )  // ShootDescription exists with same Id as Order
+	{
+		TypeList(GetStringAt,0,IDsType);   // Use first Type found
+		if (TypeList(NumEntries) > 1)
+		{
+		}
+		if (~<IDsType>~ != ~<DescType>~)
+		{
+			return Warning( Translate(ShootDescMessages,IDAlreadyExists,~<Id>~,~<IDsType>~) );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddNew( &ChangedShootDesc,&OrigShootDesc,&Query,&Key )
+{
+	if ( !PGenConList( List,Connect,Cursor,Keyset,BeginTransaction,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	List( GetConnection,dBase );
+
+	if ( !HandleOrderExists(dBase,~<$con.ChangedShootDesc[Id]>~) )
+	{	return FALSE;	}  // canceled update
+
+	if ( !HandleIDExists(~<$con.ChangedShootDesc[Id]>~) )
+	{	return FALSE;	}  // canceled update
+
+	if ( !List( UpdateFrom,ChangedShootDesc,~<Key>~,TRUE ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate,RollBackTransaction );
+		return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+	}
+
+	if ( !dBase( CommitTransaction ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( DBMessages,CommitFailed ) );
+	}
+
+	ShootDescriptionDataView( CommitChanges );
+
+	return TRUE;
+}
+
+
+//** Update the changed record - called by ChangeRecord()
+	// If the ShootDescription ID hasn't changed, we only need to do an update of the fields
+	// that have changed in the ShootDescription table.
+	// 
+	// If the ShootDescriptionID has changed:  (DOES NOT CURRENTLY DO.SHOULD IT? SubjectInfo?)
+	// we will insert a new row into the ShootDescription
+	// table using the existing ShootDescription data along with the new ShootDescription id.  Then
+	// we can update all of the orders in the orders table that refer to this ShootDescription
+	// ID. Finally, we can remove the old ShootDescription record from the ShootDescription table.
+	// Since this is all done within a transaction, it will all be transparent to
+	// the user.  Things need to be handled this way incase there is a foreign key
+	// constraints placed on the ShootDescription ID.
+
+NUMERIC UpdateExisting( &ChangedShootDesc,&OrigShootDesc,&Query,&Key )
+{
+	if ( ~<$con.OrigShootDesc[ID]>~ == ~<$con.ChangedShootDesc[ID]>~ )
+	{
+		if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		}
+
+		if ( !List( UpdateFrom,ChangedShootDesc,~<Key>~,FALSE ) )
+		{
+			List( GetErrorDescription,0,theErr,CancelUpdate );
+			return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+		}
+	}
+
+	else
+	{
+		if ( !PGenConList( List,Connect,Cursor,Keyset,BeginTransaction,Query,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		}
+
+		List( GetConnection,dBase );
+
+		if ( !HandleOrderExists(dBase,~<$con.ChangedShootDesc[ID]>~) )
+		{	return FALSE;	}  // canceled update
+
+		if ( !HandleIDExists(~<$con.ChangedShootDesc[Id]>~) )
+		{	return FALSE;	}  // canceled update
+
+		origID = ~<$con.OrigShootDesc[ID]>~;
+		if (0)
+		{  // was only updating ID field
+		OrigShootDesc( SetValue,ID,~<$con.ChangedShootDesc[ID]>~);
+
+		if ( !List( UpdateFrom,OrigShootDesc,~<Key>~,TRUE ) )
+		{
+			List( GetErrorDescription,0,theErr,CancelUpdate,RollBackTransaction );
+			return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+		}
+		}
+
+		if ( !List( UpdateFrom,ChangedShootDesc,~<Key>~,TRUE ) )
+		{
+			List( GetErrorDescription,0,theErr,CancelUpdate,RollBackTransaction );
+			return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+		}
+
+		if ( doNewWay() )
+		{
+			// *Update SubjectInfo table
+			Query = ~Select Distinct InfoType from Orders where ShootDescID = '<origID>' and ImagesOrderID Is Null~;
+			if ( !PGenConList( List,Connection,dbase,Lock,ReadOnly,Cursor,Forward,QUERY,~<Query>~ ) )
+			{
+				List( GetErrorDescription,0,theErr );
+				return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+			}
+			count = List( NumEntries );
+
+			if (<count> > 0)
+			{
+				while ( List(GetNext,Item) )
+				{
+					InfoType = ~<$pcon.Item[InfoType]>~;
+					cmd = ~Update SubjectInfo<InfoType> SET OrderID = '<$con.ChangedShootDesc[ID]>' Where OrderID = '<origID>'~;
+					if ( !dBase( CMD,~<cmd>~ ) )
+					{
+						dBase( GetErrorDescription,theErr,RollBackTransaction );
+						return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+					}
+				}
+			}
+		}
+		
+		desc = ~'<$con.ChangedShootDesc[ID]>'~;
+		
+		validDesc = SimilarStr( ~<desc>~,~''~ ) ? ~NULL~ : ~<desc>~;
+
+		// *Update Orders table
+		cmd = ~Update Orders SET ShootDescID = <validDesc> Where ShootDescID = '<origID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+		}
+
+		cmd = ~Delete From <TableName> Where ID = '<origID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+		}
+
+		if ( !dBase( CommitTransaction ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate( DBMessages,CommitFailed ) );
+		}
+
+	}
+
+	// List( RefreshConnectionCache );
+
+	ShootDescriptionDataView( CommitChanges );
+
+	return TRUE;
+}
+
+// *** HandleDrop Action
+// Following 4 routines are used only for handling the dropping of text record into ShootDescription Window
+//     HandleDrop(), HandleTextDrop(), DelayedRefreshDoc(), RefreshDoc()
+NUMERIC HandleDrop()
+{
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+		{ return FALSE; }
+	
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );		//REMOVE THE DRAG INFO FROM THE TREE
+
+	if ( !GenCon( SrcView,Is,~<$CON.DragDropInfo[SrcView]>~ ) )	//IS IT A DROP FROM OUTSIDE THE APP 
+		{ return ExternalDrop(DragDropInfo); }			
+
+	if ( !GenCon( DstView,Is,~<$CON.DragDropInfo[DstView]>~ ) ) 
+		{ return Warning( ShootDescMessage,DropInvalidView ); }	
+		
+	if ( ~<$con.SrcView[ViewDataType]>~ == ~Text~ )		//IS IT A LIST OF GENCONS CONTAINING TEXT?
+		{ return HandleTextDrop( SrcView,DstView,~<$CON.DragDropInfo[DropLocation]>~ ); }
+
+	return Warning( Translate(ShootDescMessages,CantDrop ) );
+
+}
+
+NUMERIC HandleTextDrop( &SrcView,&DstView,DropLocation )
+{
+	if ( !SrcView( GETSELECTED,SelectedData ) )
+	{ 
+		GenCon( SelectedData,Is,SrcView(GetCopyOf) );
+	}
+
+	Count = SelectedData( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( ShootDescMessages,NoDropData ) ); }
+
+	WaitCursor( Begin );
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<TableName>~,~<theErr>~) );
+	}
+
+	while ( SelectedData( GetNext,Item ) )
+	{
+		Key = ~ID = '<$con.Item[ID]>'~;
+
+		Query = ~Select * From ShootDescription Where <Key>~;
+
+		if ( !PGenConList( List,Connection,dBase,Cursor,Keyset,Query,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+		}
+
+		IsNewRow = List( NumEntries ) == 0;
+
+		if ( !List( UpdateFrom,Item,~<Key>~,<IsNewRow> ) )
+		{
+			List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+			return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~ ) );
+		}
+	}
+
+	DelayedRefreshDoc();
+
+	return TRUE;
+}
+
+VOID RefreshDoc()
+{
+	KillTimer( 1 );
+	RefreshListView();
+}
+
+VOID DelayedRefreshDoc()
+{
+	SetTimer( 1,2000,~RefreshDoc()~ );
+}
+
+
+//** Close Action
+NUMERIC OnCloseShootDescriptionDataView()
+{
+	if ( ShootDescriptionDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	ShootDescriptionDataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+//** RightClick Action
+NUMERIC RightClickInListView()
+{
+	return ShootDescriptionDataView( DisplayMenu,ShootDescriptionListViewMenu );
+}
+
+
+VOID OnShootButtonClick()
+{
+	ShootDescriptionDataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	ShootDescriptionDataView( GetColumnName,<col>,ColumnName );
+
+	DefaultDlg = ~~;
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+	ColumnDefinition( GetValue,~DefaultDlg~,DefaultDlg );
+	if ( ~<DefaultDlg>~ == ~Color~ )
+	{
+		ShootDescriptionDataView( GetCellValue,CurrentColor,<row>,<col> );
+
+		GetTokens( ~<CurrentColor>~,~ ~,Red,Green,Blue );
+		if ( ~<Red>~ == ~~ )
+		{
+			Red = 0;
+		}
+		if ( ~<Green>~ == ~~ )
+		{
+			Green = 0;
+		}
+		if ( ~<Blue>~ == ~~ )
+		{
+			Blue = 0;
+		}
+
+		if ( ColorDialog( ~<Red>~, ~<Green>~, ~<Blue>~, newRed, newGreen, newBlue ) )
+		{
+			NewColor = ~<newRed>~ + ~ ~ + ~<newGreen>~ + ~ ~ + ~<newBlue>~;
+			ShootDescriptionDataView( SetCellValue,<Row>,<Col>,~<NewColor>~ );
+		}
+	}
+	else
+	{
+		OnButtonClick(ShootDescriptionDataView,Translate(ShootDescMessages,FindFileTitle ),~<$App.ShareDirectory>~);
+	}
+}
+
+
+
+FirstTime = TRUE;
+// WhichShootDesc - Used in title only
+// DocumentQuery - query to get the records with - Specify only ShootDescription
+// anDescType		 - Which ShootDescription table to use - routine will modify query
+NUMERIC Init( WhichShootDesc,DocumentQuery,anDescType )
+{
+
+	if ( ~<anDescType>~ != ~<DescType>~ && !<FirstTime> ) // if last one opened was not this type, open another
+	{
+		Action = ACTION DOC ( ShootDescription Open ShootDescriptionDoc "Init(~<WhichShootDesc>~,~<DocumentQuery>~,~<anDescType>~);" );
+		return QueueContentsAfter( Action,50 );
+	}
+
+	if (~<anDescType>~ != ~~ )
+	{
+		TableName = Upper(~ShootDescription<anDescType>~);
+		DocumentQuery = String(Replace, Upper(~<DocumentQuery>~),~ SHOOTDESCRIPTION ~, ~ <TableName> ~);
+	}
+	else
+	{
+		TableName = ~ShootDescription~;
+	}
+
+	theTitle = ~<WhichShootDesc>~ == ~~ ? ~<TableName> Data~ : ~<TableName> Data - <WhichShootDesc>~;
+
+	DescType = ~<anDescType>~;
+	Global( WhichShootDesc,DocumentQuery,DescType );
+
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{ 
+			List(GetErrorDescription,0,theErr);
+			Error( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+		}
+
+		Count = List( NumEntries );
+
+		DefineWindow();
+
+		ShootDescriptionDataWindow( Set,Title, ~<theTitle>~);
+
+		StatusBarText( Translate(ShootDescMessages,ReadingRecords,<Count>) );
+
+		Start = Ticks();
+
+		SetDocumentData( List(GetObject) );
+
+		WindowLocation = ~<$User.WindowLocation[List]>~;
+
+		if ( ~<WindowLocation>~ != ~~ )
+			{ ShootDescriptionDataWindow( Set,Position,~<WindowLocation>~ ); }
+
+		DefineMenu();
+
+		if ( !ShootDescriptionDataWindow( CreateWindow,~ShootDescription~ ) )
+			{ Error( Translate(UIMessages,CreateWindowFailed,~ShootDescription~) ); }
+
+		Duration = (Ticks() - <Start>) / 1000;
+
+		return ShootDescriptionDataWindow( StatusBar,Text,Translate(ShootDescMessages,ReadRecords,~<Count>~,~<Duration>~) );
+	}
+
+	Document( Doc,This,SetTitle,~<theTitle>~);
+
+	ShootDescriptionDataWindow( Set,Title, ~<theTitle>~);
+
+	return RefreshListView();
+}
+
+
+
+Include: ~ExportSelectedToFile~;
+Include: ~FileBrowseButtonsInGridView~;
+
+VOID DefineMenu()
+{
+	Define:	ShootDescriptionListViewMenu Using DDMenuDef AsSymbol ShootDescriptionListViewMenu
+		Fields:		Position	(-1)		
+		Contains:	INLISTORDER
+		{
+			Define:	OpenOrder	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuOpen )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( OpenSelected() )
+
+			Define:	AddRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuAdd )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( AddRecord() )
+						AcceleratorKey	~N~
+
+			Define:	Search	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuFind )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( Search() )
+
+			Define:	NULL1 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	SaveAllChanges	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuSaveChanges )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SaveAllChanges() )
+
+			Define:	ForgetAllChanges	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuCancelChanges )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+			Define:	DeleteRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuDelete )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DeleteRecord() )
+
+			Define:	DeleteAllRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( ShootDescMessages,MenuDeleteAll )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DeleteShootDescRecord(TRUE) )
+
+			Define:	Refresh	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuRefresh )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RefreshListView(TRUE) )
+
+			Define:	NULL2 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+//			Define:	GenOrderItems	using	DDMenuItemDef
+//				Fields:	Text		Translate( ShootDescMessages,MenuGenOrderItems )
+//						IDText		~ID~
+//						ActionsText  ACTION Exec ( OrderOrderItemsGenerator() )
+
+			Define:	SeeOrderDlvrbl	using	DDMenuItemDef
+				Fields:	Text		Translate( ShootDescMessages,MenuSeeOrderDlvrblsFor )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeOrderDlvrbls() )
+
+			Define:	SeeCompositeDlvrbl	using	DDMenuItemDef
+				Fields:	Text		Translate( ShootDescMessages,MenuSeeCompDlvrblsFor )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeComposites() )
+
+			Define:	SeeGroups	using	DDMenuItemDef
+				Fields:	Text		Translate( ShootDescMessages,MenuSeeGroupsFor )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeGroups() )
+
+			Define:	NULL3 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	SeeOrdersFor	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuOrderData )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeOrdersFor() )
+
+			Define:	SeeImagesFor	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuImages )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeImagesFor(TRUE) )
+
+			Define:	SeeImagesDataFor	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuImagesData )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeImagesFor(FALSE) )
+
+			Define:	SeeItemsFor	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuOrderItems )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeOrderItemsFor(TRUE) )
+
+			Define:	SeeItemsDataFor	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuOrderItemsData )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeOrderItemsFor(FALSE) )
+
+			Define:	SeeJobQueueFor	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuJobQueue )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeJobQueueFor(TRUE) )
+
+			Define:	SeeRollsFor	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuRollData )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeRollsFor() )
+
+			Define:	SeeSubjectInfoFor	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuSubjectInfo )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeSubjectInfoFor() )
+
+			Define:	SeeCustomerFor	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuCustomers )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeCustomerForRecords() )
+
+			Define:	NULL4 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	Export	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuExport )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( ExportSelectedToFile(ShootDescriptionDataView,ShootDescription) )
+						
+			Define:	GenYBOutput	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Create Yearbook Output~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( GenYearbook(); )
+
+			Define:	HeadAlignAndGroupBalance	using	DDMenuItemDef
+				Fields:	Text		~Head Align and Group Balance~
+						IDText		~ID~
+						ActionsText  ACTION Exec ( HeadAlignAndGroupBalance() )
+						
+			Define:	OpenChromaKey using DDMenuItemDef
+				Fields:	Text		Translate( ~Manage Images~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( OnManageImages(); )
+
+		}
+
+	Global( ShootDescriptionListViewMenu );
+}
+
+
+
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 65;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+VOID DefineWindow()
+{
+	ForgetGlobal( ShootDescriptionDataWindow,ShootDescriptionDataView,TableDefinition );
+
+	if ( !GenCon( TableDefinition,GetFrom,ShootDescription<DescType>,~[DATABASE TableDefinitions]~ ) )
+		{ Error( ~The ShootDescription<DescType> Table is not properly defined~ ); }
+
+	Define: ShootDescriptionDataWindow Using DDWinDef
+	Fields:		Title					Translate(ShootDescMessages,Title)
+				Position				0 0 90 35
+				IsPositionPercent		T
+				EnableStatusBar			F
+				TypeName				SplitterWnd
+				SplitterRows			~2 10 90~
+				SplitterColumns			1
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "ShootDescData.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons(ShootDescription) + 10;
+
+					Define: OrderButton Using DDWinCtrlDef AsSymbol OrderButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( SeeOrdersFor() )
+								POSITION		$position + $hGap, $vGap $ButtonWidth $ButtonHeight
+								TEXT			Translate( ShootDescMessages,OrdersTxt )
+								TOOLTIP			Translate( ShootDescMessages,ToolViewOrder )
+								TYPENAME		BUTTON
+
+					Define: OrderDlvrblButton Using DDWinCtrlDef AsSymbol OrderDlvrblButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( SeeOrderDlvrbls() )
+								POSITION		OrderButton(GetRight,Position) + $hGap,
+												OrderButton(GetTop,Position),
+												$ButtonWidth, $ButtonHeight
+								TEXT			Translate( ShootDescMessages, DlvrblsGenerator)
+								TOOLTIP			Translate( ShootDescMessages,ToolDlvrblsGen )
+								TYPENAME		BUTTON
+
+					Define: CompositesButton Using DDWinCtrlDef AsSymbol CompositesButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( SeeComposites() )
+								POSITION		OrderDlvrblButton(GetRight,Position) + $hGap,
+												OrderDlvrblButton(GetTop,Position),
+												$ButtonWidth, $ButtonHeight
+								TEXT			Translate( ShootDescMessages, Composites)
+								TOOLTIP			Translate( ShootDescMessages,ToolComposites )
+								TYPENAME		BUTTON
+
+					Define: ViewGroupsButton Using DDWinCtrlDef AsSymbol ViewGroupsButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( SeeGroups() )
+								POSITION		CompositesButton(GetRight,Position) + $hGap + 10,
+												CompositesButton(GetTop,Position),
+												50, $ButtonHeight
+								TEXT			Translate( ShootDescMessages, ViewGroups)
+								TOOLTIP			Translate( ShootDescMessages,ToolViewGroups )
+								TYPENAME		BUTTON
+
+
+					Define: ViewSubjDataButton Using DDWinCtrlDef AsSymbol ViewSubjDataButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( SeeSubjectInfoFor() )
+								POSITION		ViewGroupsButton(GetRight,Position) + $hGap,
+												ViewGroupsButton(GetTop,Position),
+												50, $ButtonHeight
+								TEXT			~Info~
+								TOOLTIP			Translate( ShootDescMessages,ToolViewSubjData )
+								TYPENAME		BUTTON
+
+				}
+			
+		Define: ShootDescriptionDataView Using DDViewDef AsSymbol ShootDescriptionDataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition( GetReferenceTo,Fields )
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					DoubleClickActionsText	ACTION Exec ( OpenSelected() )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					DropActionsText			ACTION Exec ( HandleDrop() )
+					CloseActionsText		ACTION Call ( OnCloseShootDescriptionDataView() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "ShootDescData.htm" )
+					ViewDataType			Text
+					ButtonClickActionsText	ACTION Exec ( OnShootButtonClick() )
+	}
+
+// ButtonClickActionsText indicates the action when the button for a path is clicked
+//      Used to specifiy LogActivity Path.
+
+	Global( ShootDescriptionDataWindow,ShootDescriptionDataView,TableDefinition );
+		
+}  // DefineWindow()

@@ -1,0 +1,395 @@
+Include: ~Classes\BaseGrid~;
+
+VOID KarsBatchSetup::KarsBatchSetup()					// CONSTRUCTOR
+{
+	TableName = ~RetouchBatchSetup~;
+	Fields = ~Name,TextureFine,TextureCoarse,TextureDepth,TextureGrain,SkinToneSmooth,SkinToneContrast,
+				EyeWhitening,TeethWhitening,LeftEyeShaping,RightEyeShaping,SingleFace,
+				SkinColorThreshold,DefectThreshold,BatchSetupType,DefaultSetting~;
+	DocumentQuery = ~Select <Fields> from <TableName> Order By Name~;
+	Title = ~Retouch Batch Setups~;
+	WindowTop = 0;
+	WindowWidth = 90;
+	WindowHeight = 25;
+	HelpPage = ~Retouch_BatchSetup.htm~;
+	InsertActiveCell = ~Name~;
+}
+
+STR KarsBatchSetup::GetKey( &Item )	{ return ~Name = '<$con.Item[Name]>'~; }	// PRIMARY KEY FOR THE TABLE
+
+
+NUMERIC KarsBatchSetup::ChangeRecordAudits( &Changed )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[Name]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  Name cannot be blank.~ ) ); }
+
+	if ( atof(~<$Con.Changed[TextureFine]>~) < 0 || atof(~<$Con.Changed[TextureFine]>~) > 8 )
+		{ return Warning( Translate( ~Unable to save pending changes.  Fine Texture must be in the range 0 to 8.~ ) ); }
+
+	if ( atof(~<$Con.Changed[TextureCoarse]>~) < 0 || atof(~<$Con.Changed[TextureCoarse]>~) > 8)
+		{ return Warning( Translate( ~Unable to save pending changes.  Coarse Texture must be in the range 0 to 8.~ ) ); }
+
+	if ( atof(~<$Con.Changed[TextureDepth]>~) < 0 || atof(~<$Con.Changed[TextureDepth]>~) > 8)
+		{ return Warning( Translate( ~Unable to save pending changes.  Depth must be in the range 0 to 8.~ ) ); }
+
+	if ( atof(~<$Con.Changed[TextureGrain]>~) < 0 || atof(~<$Con.Changed[TextureGrain]>~) > 8)
+		{ return Warning( Translate( ~Unable to save pending changes.  Texture must be in the range 0 to 8.~ ) ); }
+
+	if ( atof(~<$Con.Changed[SkinToneSmooth]>~) < 0 || atof(~<$Con.Changed[SkinToneSmooth]>~) > 6 )
+		{ return Warning( Translate( ~Unable to save pending changes.  Skin Tone Smooth must be in the range 0 to 6.~ ) ); }
+
+	if ( atof(~<$Con.Changed[SkinToneContrast]>~) < 0 || atof(~<$Con.Changed[SkinToneContrast]>~) > 6 )
+		{ return Warning( Translate( ~Unable to save pending changes.  Skin Tone Contrast must be in the range 0 to 6.~ ) ); }
+
+	if ( atof(~<$Con.Changed[EyeWhitening]>~) < 0 || atof(~<$Con.Changed[EyeWhitening]>~) > 6 )
+		{ return Warning( Translate( ~Unable to save pending changes.  Eye Whiten must be in the range 0 to 6.~ ) ); }
+
+	if ( atof(~<$Con.Changed[TeethWhitening]>~) < 0 || atof(~<$Con.Changed[TeethWhitening]>~) > 6 )
+		{ return Warning( Translate( ~Unable to save pending changes.  Teeth Whiten must be in the range 0 to 6.~ ) ); }
+
+	if ( atof(~<$Con.Changed[LeftEyeShaping]>~) < -4 || atof(~<$Con.Changed[LeftEyeShaping]>~) > 4 )
+		{ return Warning( Translate( ~Unable to save pending changes.  Left Eye Shape must be in the range -4 to 4.~ ) ); }
+
+	if ( atof(~<$Con.Changed[RightEyeShaping]>~) < -4 || atof(~<$Con.Changed[RightEyeShaping]>~) > 4 )
+		{ return Warning( Translate( ~Unable to save pending changes.  Right Eye Shape must be in the range -4 to 4.~ ) ); }
+
+	if ( atof(~<$Con.Changed[SkinColorThreshold]>~) < 0 || atof(~<$Con.Changed[SkinColorThreshold]>~) > 255 )
+		{ return Warning( Translate( ~Unable to save pending changes.  Skin Color Threshold must be in the range 0 to 255.~ ) ); }
+
+	if ( atof(~<$Con.Changed[DefectThreshold]>~) < 0 || atof(~<$Con.Changed[DefectThreshold]>~) > 100 )
+		{ return Warning( Translate( ~Unable to save pending changes.  Defect Threshold must be in the range 0.0 to 100.0~ ) ); }
+
+	if ( ~<$Con.Changed[BatchSetupType]>~ != ~~ && ~<$Con.Changed[BatchSetupType]>~ != ~None~ )
+	{
+		if ( !RestrictSetupType( ~<$Con.Changed[Name]>~,~<$Con.Changed[BatchSetupType]>~ ) )
+		{
+			return FALSE;
+		}
+	}
+
+	if ( atof(~<$Con.Changed[DefaultSetting]>~) == 1 )
+	{
+		if ( !RestrictDefault( ~<$Con.Changed[Name]>~ ) )
+		{
+			return FALSE;
+		}
+	}
+
+return TRUE;
+}
+
+
+NUMERIC KarsBatchSetup::RestrictSetupType( newName, type )					// make sure there's only one of this Setup Type
+{
+	retval = TRUE;
+	typeQuery = ~Select Name from RetouchBatchSetup Where BatchSetupType='<type>'~;
+
+	if ( !Ado( dBase,<ConnectionType> ) )
+	{
+		return FALSE;
+	}
+
+	if ( dBase(GetValuesFor,~<typeQuery>~, nameForType ) )
+	{
+		if ( ~<nameForType>~ != ~~ && ~<nameForType>~ != ~<newName>~ )
+		{
+			msg = Translate( ~The Setup Type <type> is already assigned to the Batch Setup <nameForType>.\nIf you want to change the Setup Type to the new setup, select Yes.~ );
+			if ( MessageBox( ~<msg>~,YESNO ) == YES )
+			{
+				cmd = ~Update RetouchBatchSetup Set BatchSetupType='' WHERE Name='<nameForType>'~;
+				if ( ! dBase( Cmd,~<cmd>~ ) )
+				{
+					retval = FALSE;
+				}
+			}
+			else
+			{
+				retval = FALSE;
+			}
+		}
+	}
+
+	return <retval>;
+}
+
+
+NUMERIC KarsBatchSetup::RestrictDefault( newName )					// make sure there's only one of this Setup Type
+{
+	retval = TRUE;
+	typeQuery = ~Select Name from RetouchBatchSetup Where DefaultSetting=1~;
+
+	if ( !Ado( dBase,<ConnectionType> ) )
+	{
+		return FALSE;
+	}
+
+	if ( dBase(GetValuesFor,~<typeQuery>~, defaultName ) )
+	{
+		if ( ~<defaultName>~ != ~~ && ~<defaultName>~ != ~<newName>~ )
+		{
+			msg = Translate( ~Batch Setup <defaultName> has already been set as the Default Setting.\nIf you want to change the Default Setting to the new setup, select Yes.~ );
+			if ( MessageBox( ~<msg>~,YESNO ) == YES )
+			{
+				cmd = ~Update RetouchBatchSetup Set DefaultSetting=0 WHERE Name='<defaultName>'~;
+				if ( ! dBase( Cmd,~<cmd>~ ) )
+				{
+					retval = FALSE;
+				}
+			}
+			else
+			{
+				retval = FALSE;
+			}
+		}
+	}
+
+	return <retval>;
+}
+
+NUMERIC KarsBatchSetup::KparsConnect( Mode )
+{
+	if ( Defined( Kpars ) )
+	{
+		ForgetPrivate( Kpars );
+	}
+
+	if (  !KPARS_Batch( Kpars ) )
+	{
+		Msg = ~Error starting the retouching software interface.~;
+		StatusBar( 0, Translate( ~<Msg>~ ));
+		return Warning( Translate( ~<Msg>~ ) );
+	}
+
+	Private( Kpars );
+
+	return TRUE;
+}
+
+NUMERIC KarsBatchSetup::LoadSettings()
+{
+	WaitCursor( Begin );
+	if (!Defined(Kpars) )
+	{
+		if ( !KparsConnect() )
+		{
+			return FALSE;
+		}
+	}
+
+	if ( !Kpars( LoadSettings ) )
+	{
+		Log( Session, ~Unable to load settings file.~ );
+		Warning( ~Unable to load settings file.~ );
+		return FALSE;
+	}
+
+	RefreshListView();
+
+	WaitCursor( End );
+	return TRUE;
+}
+
+
+NUMERIC KarsBatchSetup::OnChangeComplete(&Changed,&Original,ChangedRow,IsNewRow)
+{
+	retval = FALSE;
+
+	retval = SaveSettings( Changed );
+
+	return <retval>;
+}
+
+
+NUMERIC KarsBatchSetup::SaveSettingsToFile()
+{
+	success = FALSE;
+
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	Count = SelectedRows( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( ~There were no rows selected~ ) ); }
+
+	while ( SelectedRows( GetNext,Item ) )
+	{
+		success = SaveSettings( Item );
+		if ( !<success> )
+		{
+			Log( Session, ~Failed to update KPARS parameters file~ );		
+			break;
+		}
+	}
+	
+	return <success>;
+}
+
+
+NUMERIC KarsBatchSetup::SaveSettings( &rowToSave )
+{
+	WaitCursor( Begin );
+	if (!Defined(Kpars) )
+	{
+		if ( !KparsConnect() )
+		{
+			return FALSE;
+		}
+	}
+
+	if ( !Kpars( StoreSettings,rowToSave ) )
+	{
+		Log( Session, ~Unable to save settings to file.~ );
+		Warning( ~Unable to save settings to file.~ );
+		return FALSE;
+	}
+
+	WaitCursor( End );
+	return TRUE;
+}
+
+
+NUMERIC KarsBatchSetup::DeleteSettings( setupName )
+{
+	WaitCursor( Begin );
+	if (!Defined(Kpars) )
+	{
+		if ( !KparsConnect() )
+		{
+			return FALSE;
+		}
+	}
+
+	if ( !Kpars( RemoveSettings,~<setupName>~ ) )
+	{
+		Log( Session, ~Unable to remove the settings from KPARS.~ );
+		Warning( ~Unable to remove the settings from KPARS.~ );
+		return FALSE;
+	}
+
+	WaitCursor( End );
+	return TRUE;
+}
+
+
+NUMERIC KarsBatchSetup::DeleteRelatedRecords( &dBase, &Item )
+{
+	return DeleteSettings( ~<$Con.Item[Name]>~ );
+}
+
+
+VOID KarsBatchSetup::AddMenuItems()					// ADD ADDITIONAL RIGHT CLICK MENU ITEMS
+{
+	AddMenuSeparator();
+	AddMenuItem( TRUE,FALSE,Translate(~Load Settings from KPARS Presets~),ACTION EXEC ( <THIS>.LoadSettings() ) );
+	AddMenuItem( TRUE,FALSE,Translate(~Save Settings to KPARS Presets~),ACTION EXEC ( <THIS>.SaveSettingsToFile() ) );
+	AddMenuSeparator();
+	AddMenuItem( TRUE,FALSE,Translate(~Export Data~),ACTION EXEC ( <THIS>.ExportSelectedToFile() ) );
+	AddMenuSeparator();
+	AddMenuItem( TRUE,FALSE,Translate(~Run Batch~),ACTION EXEC ( <THIS>.OnRunBatchButton() ) );
+}
+
+
+NUMERIC KarsBatchSetup::AddControls( position )
+{
+	Define: ExportDataButton Using DDWinCtrlDef AsSymbol ExportDataButton
+		Fields:	GENCONNAME		This
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.ExportSelectedToFile() )
+				POSITION		$position + $hGap, $vGap 60 $ButtonHeight
+				TEXT			Translate( ~Export~ )
+				TOOLTIP			Translate( ~Export data to a text file~ )
+				TYPENAME		BUTTON
+
+	Define: StartButton Using DDWinCtrlDef AsSymbol StartButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnRunBatchButton() )
+				POSITION		ExportDataButton( GetRight,Position ) + $hGap, $vGap 70 $ButtonHeight
+				TEXT			Translate( ~Run Batch~ )
+				TOOLTIP			Translate( ~Run the retouching batch process~ );
+
+	return StartButton( GetRight,Position );
+}
+
+NUMERIC KarsBatchSetup::ProcessTextDrop( &Item )	{ return TRUE; }
+
+
+NUMERIC KarsBatchSetup::OnAddRecord( &NewRow )
+{
+	NewRow( SetValues,TextureFine,2,TextureCoarse,2,TextureDepth,2, TextureGrain,2 );
+	NewRow( SetValues,SkinToneSmooth,0,SkinToneContrast,2 );
+	NewRow( SetValues,EyeWhitening,1,TeethWhitening,1,LeftEyeShaping,0,RightEyeShaping,0 );
+	NewRow( SetValues,RedEyeRemoval,0 );
+	NewRow( SetValues,SingleFace,0 );
+	NewRow( SetValues,SkinColorThreshold,80, DefectThreshold,0.26 );
+	NewRow( SetValues,BatchSetupType,~~,DefaultSetting,0 );
+
+	return TRUE;
+}
+
+NUMERIC KarsBatchSetup::OnDuplicateRecord( &NewRow )	{ return NewRow( Set,Name,~~ ); }
+
+
+STR KarsBatchSetup::OnButtonClickTitle(Row,Col)
+{
+	if ( IsColumnName(<Col>,~TextureFine~ ) )			{ return Translate(~Limit of smallest defects to remove.~); }
+	if ( IsColumnName(<Col>,~TextureCoarse~ ) )			{ return Translate(~Limit of larger defects to remove~); }
+	if ( IsColumnName(<Col>,~TextureDepth~ ) )			{ return Translate(~Blending applied to all defects larger than Coarse setting~); }
+	if ( IsColumnName(<Col>,~TextureGrain~ ) )			{ return Translate(~Grain applied to skin~); }
+	if ( IsColumnName(<Col>,~SkinToneSmooth~ ) )		{ return Translate(~Skin smoothing level~); }
+	if ( IsColumnName(<Col>,~SkinToneContrast~ ) )		{ return Translate(~Skin contrast level (shadow enhancements)~); }
+	if ( IsColumnName(<Col>,~EyeWhitening~ ) )			{ return Translate(~Eye whitening level~); }
+	if ( IsColumnName(<Col>,~TeethWhitening~ ) )		{ return Translate(~Teeth whitening level~); }
+	if ( IsColumnName(<Col>,~LeftEyeShaping~ ) )		{ return Translate(~Left eye shaping level~); }
+	if ( IsColumnName(<Col>,~RightEyeShaping~ ) 		{ return Translate(~Right eye shaping level~); }
+	if ( IsColumnName(<Col>,~RedEyeRemoval~ ) )			{ return Translate(~Remove red eye~); }
+	if ( IsColumnName(<Col>,~SingleFace~ ) )			{ return Translate(~Is there only one face in the image?~); }
+	if ( IsColumnName(<Col>,~SkinColorThreshold~ ) )	{ return Translate(~If skin color determined for the image is darker than this setting, flag the image for review~); }
+	if ( IsColumnName(<Col>,~DefectThreshold~ ) )		{ return Translate(~If percent of defects in the image exceeds this percentage, flag the image for review~); }
+	if ( IsColumnName(<Col>,~BatchSetupType~ ) )		{ return Translate(~The Auto Setting type when using Auto Batch Settings (only one setup per type is allowed~); }
+	if ( IsColumnName(<Col>,~DefaultSetting~ ) )		{ return Translate(~If using Auto Batch Settings, this is the setting used for initial analysis of the image (only one is allowed)~); }
+
+	return BaseGrid::OnButtonClickTitle(<Row>,<Col>);
+}
+
+
+NUMERIC KarsBatchSetup::OnRunBatchButton()
+{
+	Actions = ACTION DOC ( RetouchBatchDoc OpenOnce RetouchBatchDoc "Init(FALSE,FALSE);" );
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+
+NUMERIC KarsBatchSetup::OnStopButton()
+{
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( Translate(~There were no selected items~) ); }
+
+	while ( SelectedItems( GetNext,Item ) )
+	{
+		// Do something( ~<$con.Item[<WhichPath>]>~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC Init(theTitle)
+{
+	if ( Defined(Grid) )
+	{
+		Grid.ReOpen();
+		return TRUE;
+	}
+
+	Class( KarsBatchSetup,Extends,BaseGrid );
+
+	KarsBatchSetup( New,Grid );
+	Title = ~<theTitle>~ == ~~ ? ~Retouch Batch Setups~  : ~<theTitle>~;
+
+	Grid.DefineWindow();
+	Grid.Init();
+
+	return Global( Grid );
+}
+
+

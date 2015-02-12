@@ -1,0 +1,81 @@
+
+
+NUMERIC ExecSQL( &db,theSQL )
+{
+	Log( Session,~<theSQL>~ );
+
+	if ( !db( CMD,~<theSQL>~ ) )
+	{
+		db( GetErrorDescription,theErr );
+		Error( ~Error: <theErr>~,~From: [<theSQL>]~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC DropTable( &db,theTable )
+{
+	if ( !db( CMD,~DROP TABLE <theTable>~ ) )
+	{
+		db( GetErrorNumber,theErrNo );
+		db( GetErrorDescription,theErr );
+		return Warning( ~Error <theErrNo>, Could not drop the TABLE <theTable> [<theErr>]~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CreateATable( &db,&TableDefinition )
+{
+	TableDefinition( CreateTableDefinition,Definition,db );
+	TableDefinition( Get,TableName,Tablename );
+
+	DropTable( db,~<Tablename>~ ) ;
+
+	if ( !ExecSQL( db,~CREATE TABLE <Tablename> (<Definition>)~ ) )
+	{
+		return FALSE;
+	}
+
+	if ( GenCon( TableIndexes,Is,TableDefinition(GetNumeric,Indexes) ) )
+	{
+		while ( TableIndexes( GetNext,IndexDefinition ) )
+		{	
+			if ( !ExecSQL( db,~<$Con.IndexDefinition[Text]>~ ) )
+			{
+				return FALSE;
+			}	
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CreateTable( TableName )
+{
+	if ( !ado( db,CONNECT ) )
+	{
+		Error( ~Could not open KPIS Database~ );
+	}
+
+	if ( !GenCon( TableDefinitions,GetFrom,TableDefinitions,~[Database]~ ) )
+		{ Error( ~There are no tables defined for the database~ ); }
+
+	while ( TableDefinitions( GetNext,TableDefinition ) )
+	{
+		TableDefinition( Get,TableName,ThisTablename );
+
+		if ( ~<TableName>~ == ~<ThisTablename>~ )
+		{
+			return CreateATable( db,TableDefinition );
+		}
+	}
+
+	return Warning( ~Could not find a Definition for Table <TableName>~ );
+}
+
+
+//	success = CreateTable( RenderEngine );	

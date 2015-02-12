@@ -1,0 +1,743 @@
+VOID ReOpen()
+{
+	// COMES HERE IF SOMEONE TRIES TO OPEN THIS SCRIPT TWICE
+
+	OrderSelected();
+}
+
+
+VOID OnSetOrderStatus(CustomerOrderID)
+{
+	TheDialog( GetWindowPosition,Left,Top);
+	Left -= 150;	
+	//Top -= 10;
+
+	if ( !OrderExists() )
+	{
+		return;
+	}
+
+	Actions = ACTIONS ( Doc( ~SetOrderStatusDoc~ Open SetOrderStatusDoc "Init( ~<$con.DlgData[CustomerOrderID]>~,~<Left>~,~<Top>~ );" ) );
+	PerformActions( Actions );
+}
+
+
+
+NUMERIC ViewOrders()
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select * From Orders Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>'~;
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	Actions = ACTIONS ( Doc( ~Orders~ <OpenMethod> OrdersDoc "Init( ~Orders for Customer Order: <$con.DlgData[CustomerOrderID]>~,~<Query>~);" ) );
+
+	PerformActions( Actions );
+
+	return CheckClose();
+}
+
+
+NUMERIC ViewCustomer()
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select * From Customers Where ID in (Select CustomerID From Orders Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>')~;
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	Actions = ACTION Doc ( ~Customers~ <OpenMethod> CustomersDoc "Init( ~Customer for Order<$con.DlgData[CustomerOrderID]>~,~<Query>~ );" );
+	
+	PerformActions( Actions );
+
+	return CheckClose();
+}
+
+
+NUMERIC ViewOrderItems( AsImages )
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	// tested 3/1/07
+
+//	Query = ~Select OrderItems.*, Products.LayoutName From OrderItems,Products  
+//		Where OrderID in (Select ID from Orders Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>') 
+//		And OrderItems.ProductID = Products.ID ORDER BY OrderID,OrderItems.Sequence,OrderItems.Subsequence~;
+
+	Query = ~Select OrderItems.*, Products.LayoutName From OrderItems  LEFT OUTER JOIN Products On OrderItems.ProductID = Products.ID Where OrderID in (Select ID from Orders Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>') Order By OrderID,OrderItems.Sequence,OrderItems.Subsequence~;
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	Actions = ACTION Doc ( ~OrderItems~ <OpenMethod> OrderItemsDoc "Init( ~~,~<Query>~,<AsImages>,TRUE,TRUE );" );
+	
+	PerformActions( Actions );
+
+	return CheckClose();
+}
+
+// not used
+NUMERIC ViewRemakes( AsImages )
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+//	Query = ~Select OrderItems.*,Products.LayoutName From OrderItems,Products  
+//		Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>' AND (NOT Remake = 0) 
+//		AND OrderItems.ProductID = Products.ID ORDER BY CustomerOrderID,OrderItems.Sequence,OrderItems.Subsequence~;
+	Query = ~Select OrderItems.*, Products.LayoutName From OrderItems  LEFT OUTER JOIN Products On OrderItems.ProductID = Products.ID Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>' AND (NOT Remake = 0) ORDER BY CustomerOrderID,OrderItems.Sequence,OrderItems.Subsequence~;
+ 	
+	action = ACTION DOC ( OrderItemsDoc Open OrderItemsDoc "Init2(~<$con.DlgData[CustomerOrderID]>~,~Remakes~,~<Query>~,TRUE);" );
+	
+	PerformActions( action );
+
+	return CheckClose();
+}
+
+
+NUMERIC ViewShootDescription( )
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Query = STR ( Select ShootDescID,ShootDescType from Orders where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>' );
+	ADO(dBase,Connect,GetValuesFor,~<Query>~,theShootDescID,theShootDescType);
+
+	Query = STR ( Select * From ShootDescription Where CustomerOrderID = '<theShootDescID>' );
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	Actions = ACTION Doc ( ~ShootDescription~ <OpenMethod> ShootDescriptionDoc "Init( ~~,~<Query>~,~<theShootDescType>~ );" );
+
+	PerformActions( Actions );
+
+	return CheckClose();
+}
+
+
+NUMERIC ViewOrderImages( AsImages )
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select * From Images Where OrderID In (Select ID From Orders Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>') Order By OrderID,Roll,Frame~;
+
+	WhichDoc = <AsImages> ? ImagesDoc : ImagesDataDoc;
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	Actions = ACTION Doc ( ~OrderImages~ <OpenMethod> <WhichDoc> "Init( ~~,<AsImages>,~<Query>~,0 );" );
+	
+	PerformActions( Actions );
+
+	return CheckClose();
+}
+
+
+NUMERIC ViewRolls( )
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select * From Rolls Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>' Order By CustomerOrderID,Roll~;
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	Actions = ACTION Doc ( ~Rolls~ <OpenMethod> RollsDoc "Init( ~<$con.DlgData[CustomerOrderID]>~,~<Query>~ );" );
+
+	PerformActions( Actions );
+
+	return CheckClose();
+}
+
+
+NUMERIC OnAnalyzer( )
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Actions = ACTION Doc ( ~Analyzer~ OpenOnce Analyzer "Initialize( ~Analyzer~,~<$con.DlgData[CustomerOrderID]>~ );" );
+
+	PerformActions( Actions );
+
+	return CheckClose();
+}
+
+
+
+Include: ~Utilities2~;
+
+NUMERIC ViewSubjectInfo( )
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	if ( !GetSubjectCustomerOrderIDInfoType( ~<$con.DlgData[CustomerOrderID]>~, InfoType, SubjectInfoCustomerOrderID) )
+	{	return FALSE;	}
+
+	Query = STR ( Select * From SubjectInfo Where CustomerOrderID = '<SubjectInfoCustomerOrderID>' Order By CustomerOrderID,SubjectID );
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	Actions = ACTION Doc ( ~SubjectInfo~ <OpenMethod> SubjectInfoDoc "Init2( ~<SubjectInfoCustomerOrderID>~,~<InfoType>~,~<Query>~ );" );
+
+	PerformActions( Actions );
+
+	return CheckClose();
+}
+
+
+NUMERIC ViewJobQueue()
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Query = STR ( Select * From JobQueue Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>' );
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	Actions = ACTION Doc ( ~JobQueue~ <OpenMethod> JobQueueDoc "Init( Translate( ~Jobs For Order <$con.DlgData[CustomerOrderID]>~ ),~<Query>~ );" );
+	
+	PerformActions( Actions );
+
+	return CheckClose();
+}
+
+
+NUMERIC AuditCustomerOrderID()
+{
+	OrderSelected();
+
+	if ( IsNULL(~<$con.DlgData[CustomerOrderID]>~) )
+	{
+		Warning( Translate( ~Enter an CustomerOrderID or enter one or more characters of the CustomerOrderID and press Enter~ ) );
+		//dlg( SetWindowSize,<DialogWidth>,$DialogSmallHeight );
+		OrderSelected();
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ExportImages()
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Actions = ACTION Doc ( ~ExportImagesDoc~ OpenOnce ExportImagesDoc "Init(~<$con.DlgData[CustomerOrderID]>~);" );
+	PerformActions( Actions );
+
+	return CheckClose();
+}
+
+NUMERIC OrderSummaryButton()
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	CustomerOrderID = ~<$con.DlgData[CustomerOrderID]>~;
+
+	Query = ~Select ID From Orders Where CustomerOrderID = '<CustomerOrderID>'~;
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+
+	}
+	
+	While ( List( GetNext, Setting ) )
+	{
+		OrderID = ~<$pcon.Setting[ID]>~;
+		Actions = ACTION Doc ( BrowserDoc Open BrowserDoc "Init(~<$App.HTTPServer>/Reports/OrderSummary.kpl?OrderID=<OrderID>~,~<OrderID> Summary Report~,25,0,50,90,0,0,0);" );
+
+		PerformActions( Actions );
+	}
+
+	return CheckClose();
+}
+
+
+NUMERIC MaintainOrderButton()
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Actions = ACTION DOC ( ~MaintainOrdersDoc~ Open MaintainOrdersDoc "Init(~<$con.DlgData[CustomerOrderID]>~,FALSE,TRUE,FALSE);" );
+	PerformActions( Actions );
+
+	return CheckClose();
+}
+
+NUMERIC OrderServicesButton()
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Actions = ACTION DOC ( ~OrderServicesDoc~ OpenOnce OrderServicesDoc "Init(~<$con.DlgData[CustomerOrderID]>~,~Select OrderServices.*,JobServices.Label,JobServices.Code From OrderServices Left Outer Join JobServices On (JobServices.ID = OrderServices.ServicesID) Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>'  Order By OrderServices.ServicesID~ );" );
+	PerformActions( Actions );
+
+	return CheckClose();
+}
+
+
+
+NUMERIC MaintainImagesButton()
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Actions = ACTION DOC ( ~MaintainImagesDoc~ Open MaintainImagesDoc "Init(~<$con.DlgData[CustomerOrderID]>~,FALSE,FALSE,FALSE);" );
+	PerformActions( Actions );
+
+	return CheckClose();
+}
+
+
+
+NUMERIC NavigateOrder()
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Action = ACTION DOC ( Navigator OpenOnce FrameSelectorDoc "HandleCustomerOrderIDReturnKey(~<$con.DlgData[CustomerOrderID]>~);" );
+	
+	PerformActions( Action );
+
+	return CheckClose();
+}
+
+
+NUMERIC ScanOrder()
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Action = ACTION DOC ( ~StartScanningDoc~ OpenOnce StartScanningDoc "Init(~<$con.DlgData[CustomerOrderID]>~);" );
+	
+	PerformActions( Action );
+
+	return CheckClose();
+}
+
+NUMERIC SetScanFlag()
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	Action = ACTION DOC ( ~SetScanfromOrderItemsDoc~ OpenOnce SetScanfromOrderItemsDoc "Init(~<$con.DlgData[CustomerOrderID]>~);" );
+	
+	PerformActions( Action );
+
+	return CheckClose();
+}
+
+
+// not used
+NUMERIC RunOrder()
+{
+	if ( !OrderExists() )
+	{
+		return FALSE;
+	}
+
+	CustomerOrderID = ~<$con.DlgData[CustomerOrderID]>~;
+
+	Action = STR ( OrderItemsDoc OpenOnce OrderItemsDoc "Init( ~~,~Select * From OrderItems Where OrderID in (Select ID From Orders Where CustomerOrderID = '<CustomerOrderID>') Order By OrderID~,TRUE )" );
+	PerformDocActions( Action );
+
+//	Query = ~Select OrderItems.*, Products.LayoutName From OrderItems,Products
+//		Where OrderID in (Select ID from Orders Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>') 
+//		And OrderItems.ProductID = Products.ID ORDER BY OrderID,OrderItems.Sequence,OrderItems.Subsequence~;
+	Query = ~Select OrderItems.*, Products.LayoutName From OrderItems LEFT OUTER JOIN Products On OrderItems.ProductID = Products.ID Where OrderID in (Select ID from Orders Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>') Order By OrderID,OrderItems.Sequence,OrderItems.Subsequence~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+
+	}
+	
+	While ( List( GetNext, Setting ) )
+	{
+		OrderID = ~<$pcon.Setting[ID]>~;
+		Cmd = STR ( OpenTheOrderItems(~<OrderID>~) );
+	}
+
+	return QueueContentsAfter( Cmd,400 );
+}
+
+
+VOID OpenTheOrderItems( CustomerOrderID )
+{
+	GrabTheFocus();
+
+	Cmd = STR ( DoTheRun(~<CustomerOrderID>~) );
+
+	QueueContentsAfter( Cmd,100 );
+}
+
+
+VOID DoTheRun( CustomerOrderID )
+{
+	Action = STR ( OrderItemsDoc "InitRunPropertiesDialog( ~Print all Items for Order <CustomerOrderID>~,TRUE,~<CustomerOrderID>~ );" );
+	PerformDocActions( Action );
+}
+
+
+NUMERIC ViewProducts()
+{
+	Action = ACTION DOC ( ProductsDoc2 OpenOnce ProductsDoc2 "Init( ~~,TRUE,~Select * From Products Order By Category,Sequence~);" );
+	
+	PerformActions( Action );
+
+	return CheckClose();
+}
+
+
+BigWindowSize = FALSE;
+
+NUMERIC ToggleWindowSize()
+{
+	if ( <BigWindowSize> )
+	{
+		dlg( SetWindowSize,<DialogWidth>,$DialogSmallHeight );
+		BigWindowSize = FALSE;
+		dlg( SetControlTitle,ToggleButton,~v~ );
+	}
+	else
+	{
+		dlg( SetWindowSize,<DialogWidth>,$DialogHeight );
+		BigWindowSize = TRUE;
+		dlg( SetControlTitle,ToggleButton,~^~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CheckClose()
+{
+	if ( !KeyState( LSHIFT ) )
+	{
+		//CloseDialog();
+
+		//dlg( SetWindowSize,<DialogWidth>,$DialogSmallHeight );
+	}
+
+	OrderSelected();
+
+	return TRUE;
+}
+
+
+NUMERIC OrderExists()
+{
+	if ( !AuditCustomerOrderID() )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select CustomerOrderID From Orders Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>'~;
+
+	count = ADO( dBase,Connect,RecordCountFor,~<Query>~ );
+
+	if ( !<count> )
+	{
+		if ( !FindOrdersLike( FALSE ) )
+		{
+			return FALSE;
+		}
+
+		count = dBase( RecordCountFor,~<Query>~ );
+	}
+
+	return <count> != 0;
+}
+
+
+
+NUMERIC FindOrdersLike( FindSimilarOrders )
+{
+	if ( !AuditCustomerOrderID() )
+	{
+		return FALSE;
+	}
+
+	Query = ~~;
+	if ( <FindSimilarOrders> )
+	{
+		Query = ~Select Distinct CustomerOrderID From Orders Where CustomerOrderID Like '<$con.DlgData[CustomerOrderID]>%' Order By CustomerOrderID~;
+	}
+	else
+	{
+		Query = ~Select Distinct CustomerOrderID From Orders Where CustomerOrderID = '<$con.DlgData[CustomerOrderID]>' Order By CustomerOrderID~;
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		OrderSelected();
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	Count = List( NumEntries );
+
+	if ( !<Count> && !<FindSimilarOrders> )
+	{
+		MessageBox( Translate(~Customer Order <$con.DlgData[CustomerOrderID]> does not exist.  Please enter a new Customer Order.~ ) );
+		return FALSE;
+	}
+
+	if ( <count> )
+	{
+		List( MakeStringList,OrdersList,CustomerOrderID );
+
+		dlg( SetControlFromStringList,CustomerOrderIDField,OrdersList,Selection,SelectString,CustomerOrderIDField,~~  );
+	}
+
+	OrderSelected();
+
+	return StatusBarText( ~There are <Count> order(s) that begin with <$con.DlgData[CustomerOrderID]>~ );
+}
+
+NUMERIC OnHelpButton()
+{
+	action = ACTION SHOWHELPPAGE ( KPISHelpFile SelectCustomerOrder.htm );
+
+	return PerformActions( action );
+}
+
+
+
+VOID GrabTheFocus()
+{
+	dlg( EditText,CustomerOrderIDField,SetSel,0,999,TRUE );
+	dlg( SetWindowOrder,Top );
+}
+
+
+VOID OrderSelected()
+{
+	dlg( GetInput );
+	dlg( SetControlFocus,CustomerOrderIDField );
+	dlg( EditText,CustomerOrderIDField,SetSel,0,999,TRUE );
+	
+	if ( !IsNULL(~<$con.DlgData[CustomerOrderID]>~) )
+	{
+		Actions = ACTION DOC ( LabReferenceImage "ChangeReferenceImage(~<$con.DlgData[CustomerOrderID]>~);" );
+		PerformActions( Actions );
+	}
+}
+
+
+if ( !DictionaryExists( DDOpenCustomerOrderDialog ) )
+{
+	Dictionary: DDOpenCustomerOrderDialog
+		Fields:	Name	CustomerOrderID				Type text
+
+}
+
+
+CurrentY = hGap = vGap = 2;  StaticTextWidth = 25;	EditTextWidth =  150; 
+ButtonWidth = $EditTextWidth + ($hGap + 20); ButtonHeight = 20;	
+
+
+
+VOID DefineDialog()
+{
+	Define: DlgData Using DDOpenCustomerOrderDialog;
+
+	Define: TheDialog Using DDWinDef
+		Fields:	POSITION				0,0, 300,600 
+				TITLE					Translate( ~Select Customer Order~ )
+				TYPENAME				Dialog
+				OACTIONSTEXT			ACTION EXEC ( CloseDialog() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "SelectCustomerOrder.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: CustomerOrderIDField Using DDWinCtrlDef AsSymbol CustomerOrderIDField 
+				Fields: TypeName		ComboBox  
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OrderSelected() )
+						OActionsText	ACTIONS ( Save )
+						GenConName       THIS
+						GenConField		~CustomerOrderID~
+						Tooltip         ~Type one or more characters of an Customer Order and press the down arrow or F4 to see orders that begin with those characters.  Press Enter to add a new order. ~
+						Mask			~<$[DATABASE FieldTypes].OrderID[Mask]>~
+						PromptChar		~<$[DATABASE FieldTypes].OrderID[PromptChar]>~
+						AllowedChars	~<$[DATABASE FieldTypes].OrderID[AllowedChars]>~
+						DisallowedChars ~<$[DATABASE FieldTypes].OrderID[DisallowedChars]>~
+						WantReturnKey	~T~
+						DropDownActionsText ACTION CALL ( FindOrdersLike(TRUE)  )
+						ReturnKeyActionsText ACTION EXEC ( FindOrdersLike(FALSE) )
+						Position		$hGap,$vGap,$EditTextWidth,<ButtonHeight> * 10
+
+			Define: ToggleButton Using DDWinCtrlDef AsSymbol ToggleButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ToggleWindowSize() )
+						POSITION		CustomerOrderIDField(GetRight,Position)+$hGap+1 CustomerOrderIDField(GetTop,Position) 20, $ButtonHeight
+						TEXT			~v~
+						TOOLTIP			~Click (or type ALT-Z) to toggle on or off the displaying of the hot keys~
+						TYPENAME		BUTTON;
+
+			Define: OrderButton Using DDWinCtrlDef AsSymbol OrderButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ViewOrders() )
+						POSITION		$hGap CustomerOrderIDField(GetTop,Position)+$ButtonHeight+10 $ButtonWidth, $ButtonHeight
+						TEXT			~&Order Data~
+						TOOLTIP			~View the data for the selected Order~
+						TYPENAME		BUTTON;
+
+			Define: OrderItemsButton Using DDWinCtrlDef AsSymbol OrderItemsButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ViewOrderItems(TRUE) )
+						POSITION		$hGap OrderButton(GetBottom,Position) $ButtonWidth, $ButtonHeight
+						TEXT			~Order &Items~
+						TOOLTIP			~View the OrderItems for the selected Order~
+						TYPENAME		BUTTON;
+
+			Define: ViewImagesButton Using DDWinCtrlDef AsSymbol ViewImagesButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ViewOrderImages(TRUE) )
+						POSITION		$hGap OrderItemsButton(GetBottom,Position) $ButtonWidth, $ButtonHeight
+						TEXT			~I&mages~
+						TOOLTIP			~View the images for the selected order~
+						TYPENAME		BUTTON;
+
+			Define: ProductsButton Using DDWinCtrlDef AsSymbol ProductsButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ViewProducts() )
+						POSITION		$hGap ViewImagesButton(GetBottom,Position) $ButtonWidth, $ButtonHeight
+						TEXT			~&Products~
+						TOOLTIP			~Open the products window~
+						TYPENAME		BUTTON;
+
+			Define: SummaryButton Using DDWinCtrlDef AsSymbol SummaryButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OrderSummaryButton() )
+						POSITION		$hGap ProductsButton(GetBottom,Position) $ButtonWidth, $ButtonHeight
+						TEXT			~Summar&y~
+						TOOLTIP			~Create thumbnails and maintain cross reference to the images used by the order items~
+						TYPENAME		BUTTON;
+
+			Define: CloseAllButton Using DDWinCtrlDef AsSymbol CloseAllButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTIONS ( CloseAllWindows "Exec(CheckClose();)" )
+						POSITION		$hGap SummaryButton(GetBottom,Position) $ButtonWidth, $ButtonHeight
+						TEXT			~C&lose All Windows~
+						TOOLTIP			~Close the open windows~
+						TYPENAME		BUTTON;
+
+			Define: HelpButton Using DDWinCtrlDef AsSymbol HelpButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnHelpButton() )
+						POSITION		$hGap CloseAllButton(GetBottom,Position) $ButtonWidth, $ButtonHeight
+						TEXT			~&Help~
+						TOOLTIP			~Help me with this feature~
+						TYPENAME		BUTTON;
+
+			Define: HiddenButton Using DDWinCtrlDef AsSymbol HiddenButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ToggleWindowSize() )
+						TEXT			~&z~
+						TYPENAME		BUTTON;
+
+		}
+
+	DialogWidth = ToggleButton( GetRight,Position ) + $hGap * 3;
+	DialogHeight = HelpButton(GetBottom,Position) + $vGap*3 + 25;
+
+	DialogSmallHeight = CustomerOrderIDField(GetTop,Position) + $ButtonHeight + 29 + 6;
+
+	xPosition = App( thisApp,MainWindow,GetClientWidth ) * .68;
+
+	TheDialog( Set,Position,~<xPosition> -50  <DialogWidth>  <DialogSmallHeight>~ );
+
+	GenDlg( dlg,Definition,TheDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+	Global( dlg,TheDialog,DlgData,DialogHeight,DialogSmallHeight,DialogWidth );
+}
+
+
+
+VOID CloseDialog()
+{
+	dlg( End );
+	Exit();
+}
+
+VOID ChangeOrder(CustomerOrderID)
+{
+	if ( !Defined( dlg ) )
+	{
+		return;
+	}
+
+	if ( !IsNull(~<CustomerOrderID>~) )
+	{
+		dlg( SetString,~<CustomerOrderID>~,CustomerOrderID );
+
+		Actions = ACTION DOC ( LabReferenceImage "ChangeReferenceImage(~<CustomerOrderID>~);" );
+		PerformActions( Actions );
+	}
+}
+
+
+AlreadyOpen = FALSE;
+
+VOID Init()
+{
+
+	if ( !<AlreadyOpen> )
+	{
+		DefineDialog();
+		AlreadyOpen = TRUE;
+	}
+
+
+	OrderSelected();
+}
+
+Init();

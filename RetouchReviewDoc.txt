@@ -1,0 +1,275 @@
+
+IncludeClass( KarsDialog );
+
+VOID ReviewDlg::ReviewDlg()					// CONSTRUCTOR
+{
+	KarsType		= ~Review~;
+	NextProcess		= ~Merge~;
+	BeginState		= ~QueuedFor<KarsType>~;
+	InProcessState	= ~In<KarsType>~;
+	CompleteState	= ~QueuedFor<NextProcess>~;
+	Sort			= ~<KarsType>ID Desc,Priority Desc, SubmittedAt,OrderID,Roll,Frame~;
+	Key				= ~RetouchState = '<BeginState>'~;
+	BaseKey			= ~RetouchState = '<BeginState>'~;
+	Left			= 515;
+	GoButtonToolTip = Translate( ~Run the background Retouch <KarsType> process.~ );
+	Title			= Translate( ~Retouching <KarsType> operation~ );
+	Fields1			= ~*~;
+	Query			= ~SELECT <Fields1> FROM <MasterTable> WHERE <Key> ORDER BY <Sort>~;
+}
+
+/*
+NUMERIC ReviewDlg::DefineControls(y)
+{
+	Define: Select<KarsType>IDPrompt Using DDWinCtrlDef AsSymbol Select<KarsType>IDPrompt
+		Fields:	TYPENAME			StaticText
+				TEXT				~Order ID~
+				RIGHTJUSTIFIED		TRUE
+				POSITION			<hgap> <vGap> * 2 <ButtonWidth> <ButtonHeight>;
+
+	Define: <KarsType>IDComboBox Using DDWinCtrlDef AsSymbol <KarsType>IDComboBox Private
+		Fields:	TYPENAME			ComboBox
+				POSITION			Select<KarsType>IDPrompt(GetRight,Position) + <hGap> <vGap> <ButtonWidth> * 3 <ButtonHeight> * 3
+				LEFTJUSTIFIED		TRUE
+				GENCONNAME			THIS
+				GENCONFIELD			Selected<KarsType>ID
+				DropDownActionsText	ACTION EXEC ( <THIS>.OnRefreshID(<KarsType>ID) )
+				DActionsText		ACTIONS ( Save )
+				OActionsText		ACTIONS ( Save )
+				TOOLTIP				Translate( ~Select the ID for processing in the <KarsType> Queue.~ )
+				
+	return KarsDialog::DefineControls();
+}
+*/
+
+VOID ReviewDlg::EnableIDControl( value )
+{
+	dlg( EnableControls,<value>,<KarsType>IDComboBox );
+	
+}
+
+NUMERIC ReviewDlg::SetupOperation()
+{
+	result = KarsDialog::SetupOperation();
+
+	if ( <result> == <ERROR_ON_SETUP> )
+	{
+		return ExitOnError();
+	}
+
+	if ( <result> == <WAIT_ON_SETUP> )
+	{
+		return TRUE;
+	}
+	
+	ForgetLocal( dBase );
+
+	<KarsType>PreprocessData( SetValues,CompleteNotification,~<THIS>.OnComplete~,
+										ErrorNotification,~<THIS>.OnRetouchError~ );
+
+
+	if ( !RunOperation( ~<Order>~,~<Roll>~,~<Frame>~ ) )
+	{
+		Actions = STR ( <THIS>.SetupOperation(); );
+		QueueContentsAfter( Actions,2000 );
+	}
+
+	return TRUE;
+}
+
+NUMERIC ReviewDlg::RunOperation( Order,Roll,Frame )
+{
+	if ( !Defined( Kpars ) )
+	{
+		KparsConnect( ~Review~ );
+	}
+
+	StatusBar( 0,Translate( ~Processing image in <KarsType>.~ ) );
+	if ( !Kpars( Initialize,<KarsType>PreprocessData ) )
+	{
+		ErrMsg = Translate( ~Unable to initialize the retouching software interface.~ );
+		StatusBar( 0,~<ErrMsg>~ );
+		fExitOnComplete = TRUE;
+		return Warning( Translate( ~<ErrMsg>~ ) );
+	}
+
+	instrCount = instructions( ~<Order>~,~<Roll>~,~<Frame>~ );
+	if ( <instrCount> > 0 )
+	{
+		Actions = ACTION Doc ( RetouchInstrDialog OpenOnce RetouchInstDoc "Init();" );
+		PerformActions( Actions );
+
+		Actions = ACTION Doc ( RetouchInstrDialog "NewImage( ~<Order>~,~<Roll>~,~<Frame>~);" );
+		PerformActions( Actions );
+
+		bInstructionsOn = TRUE;
+	}
+	else if ( <bInstructionsOn> )
+	{
+		Actions = ACTION Doc ( RetouchInstrDialog OpenOnce RetouchInstDoc "DoCancelButton();" );
+		PerformActions( Actions );
+		bInstructionsOn = FALSE;
+	}
+
+	GenCon( Control,IsCopyOf,<KarsType>PreprocessData,PERMANENT );
+	if ( !Kpars( ~Run<KarsType>~,Control ) )
+	{
+		fReviewActive = FALSE;
+		ErrMsg = Translate( ~Unable to run the <KarsType> retouching software interface.~ );
+		StatusBar( 0,~<ErrMsg>~ );
+		fExitOnComplete = TRUE;
+		return Warning( Translate( ~<ErrMsg>~ ) );
+	}
+	fReviewActive = TRUE;
+	return TRUE;	
+}
+
+NUMERIC ReviewDlg::OnRetouchError( Order,Roll,Frame )
+{
+	fReviewActive = FALSE;
+	txtMsg = ~<KarsType> Retouch processing failed for <Order>,<Roll>,<Frame>.~;
+	dlg( SetControlValue,CurrentImageText,Translate( ~<txtMsg>~ ) );
+	Log( Session, ~<txtMsg>~ );
+	txtMsg = ~<txtMsg>\nDo you want to continue reviewing images?~;
+	if ( MessageBox( Translate( ~<txtMsg>~ ), YESNO ) == NO && !<fStopPending> && !<fStopped> )
+	{
+		DoStopButton( FALSE );
+	}
+
+	Actions = STR ( <THIS>.SetupOperation(); );
+	QueueContentsAfter( Actions,100 );
+
+	return TRUE;
+}
+
+NUMERIC ReviewDlg::OnComplete( Status,Order,Roll,Frame )
+{
+	credits = 0;
+	dongleError = 0;
+	fReviewActive = FALSE;
+	if ( Defined( Kpars ) )
+	{
+		credits = CheckKparsDongle(dongleError);
+		StatusBar( 1,~Credits: <credits>~ );
+	}
+
+	if ( !IsNULL( ~<sysLowCreditSetting>~ ) )
+	{
+		if ( <credits> < atof( ~<sysLowCreditSetting>~ )  && !<fWarnedLowCredits> && (<dongleError> == 0 || <dongleError> == <DONGLE_NO_CREDITS> || <dongleError> == <DONGLE_INIT_ERROR> ) )
+		{
+			Warning( Translate( ~<credits> Retouch Credits Remaining. Please order addtional retouch credits.~ ) );
+			fWarnedLowCredits = TRUE;
+		}	
+	}
+
+	if ( <Status> == <KARS_ACCEPTED> && <credits> > 0 )
+	{
+		txtMsg = ~Completed <KarsType> processing for <Order>,<Roll>,<Frame>.~;
+		txtMsg = ~<txtMsg> Merging original with retouched image for <Order>,<Roll>,<Frame>.~;
+		dlg( SetControlValue,CurrentImageText,Translate( ~<txtMsg>~ ) );
+
+		if ( <sysAutoMerge> )
+		{
+			Actions = ACTION Doc ( RetouchMergeDoc OpenOnce RetouchMergeDoc "Init(TRUE);" );
+			PerformActions( Actions );
+		}
+	}
+	else if ( <Status> == <KARS_ACCEPTED> )
+	{
+		txtMsg = ~Completed <KarsType> processing for <Order>,<Roll>,<Frame>.~;
+		txtMsg = ~<txtMsg> Unable to merge retouched image due to lack of retouch credits.~;
+	}
+	else if ( <Status> == <KARS_REJECTED> )
+	{
+		txtMsg = ~Kodak Auto Retouch result rejected for <Order>,<Roll>,<Frame>.~;
+	}
+	else
+	{
+		txtMsg = ~<KarsType> Retouch processing failed for <Order>,<Roll>,<Frame>.~;
+		Warning( Translate( ~<txtMsg>~ ) );
+	}
+
+	StatusBar( 0,Translate( ~<KarsType> Complete for <Order>,<Roll>,<Frame>~ ) );
+	StatusBar( 1,Translate( ~Credits: <credits>~) );
+	dlg( SetControlValue,CurrentImageText,Translate( ~<txtMsg>~ ) );
+	Log( Session, ~<txtMsg>~ );
+	dlg( SetControlValue,CurrentImageText,Translate( ~<txtMsg>~ ) );
+
+	Actions = STR ( <THIS>.SetupOperation(); );
+	QueueContentsAfter( Actions,200 );
+
+	return TRUE;
+}
+
+
+NUMERIC ReviewDlg::ExitOnError()
+{
+	if ( <bInstructionsOn> )
+	{
+		Actions = ACTION Doc ( RetouchInstrDialog OpenOnce RetouchInstDoc "DoCancelButton();" );
+		PerformActions( Actions );
+		bInstructionsOn = FALSE;
+	}
+
+	Actions = ACTION Doc ( RetouchMergeDoc OpenOnce RetouchMergeDoc "CancelAutoDialog();" );
+	QueueContentsAfter( Actions,100 );
+
+	return KarsDialog::ExitOnError();
+}
+
+
+VOID Init( Restricted )
+{
+	HereOnly = FALSE;
+	if ( DefinedAndNotNull( Restricted ) )
+	{
+		HereOnly = <Restricted>;
+	}
+
+	Key = ~RetouchState = 'QueuedForReview'~;
+	Fields1 = ~*~;
+
+	if ( !Defined( KarsReview ) )
+	{
+		Class( ReviewDlg,Extends,KarsDialog,
+						Member,Order,Str,~~,
+						Member,Roll,Str,~~,
+						Member,Frame,Str,~~ );
+
+		ReviewDlg( New,KarsReview );
+
+		KarsReview.DefineDictionary();
+		KarsReview.DefineDialog();
+		KarsReview.InitDictionaryData();
+
+		if ( <HereOnly> )
+		{
+			localKey = ~<BaseKey> And (ReviewID='<$App.ComputerName>.<$App.Instance>' OR ReviewID='<$App.ComputerName>')~;
+		}
+		else
+		{
+			localKey = ~<BaseKey> And (ReviewID='<$App.ComputerName>.<$App.Instance>' OR ReviewID='<$App.ComputerName>' OR ReviewID='' OR ReviewID IS NULL)~;
+		}
+		Query = ~SELECT <Fields1> FROM RetouchImages WHERE <localKey> ORDER BY <Sort>~;
+		KarsReview.Set( Key,~<localKey>~ );
+		KarsReview.Set( Query,~<Query>~ );
+
+		Global( KarsReview );
+		return;
+	}
+
+	KarsReview.ReOpen();
+
+	if ( <HereOnly> )
+	{
+		localKey = ~<BaseKey> And (ReviewID='<$App.ComputerName>.<$App.Instance>' OR ReviewID='<$App.ComputerName>')~;
+	}
+	else
+	{
+		localKey = ~<BaseKey> And (ReviewID='<$App.ComputerName>.<$App.Instance>' OR ReviewID='<$App.ComputerName>' OR ReviewID='' OR ReviewID IS NULL)~;
+	}
+	Query = ~SELECT <Fields1> FROM RetouchImages WHERE <localKey> ORDER BY <Sort>~;
+	KarsReview.Set( Key,~<localKey>~ );
+	KarsReview.Set( Query,~<Query>~ );
+
+}

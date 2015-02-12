@@ -1,0 +1,306 @@
+// Global:  
+//          DocumentQuery
+//          FilmtermAdjListViewMenu
+
+Include: ~FormattingRoutines~;
+
+TableName = ~FilmtermAdjustment~;
+
+VOID RefreshDoc()
+{
+	KillTimer( 1 );
+	RefreshListView();
+}
+
+
+NUMERIC RefreshListView()
+{
+	DataWindow( StatusBar,Text,Translate( ~Refreshing~ ) );
+
+	DocumentQuery = ~Select * From <TableName>~;
+
+	if ( !PGenConList( List,ConnectLocal,Cursor,Forward,Query,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(~Query Failed: <DocumentQuery>. <theErr>~) );
+	}
+
+	Count = List( NumEntries );
+	DataWindow( StatusBar,Text,Translate( ~Reading Filmterm Updates for <Count> Filmterms~ ) );
+
+	IF 0
+	{
+		if ( <Count> > 300 )
+		{
+			if ( MessageBox( Translate(~Your query:\n\n   <DocumentQuery>\n\nwill retrieve <Count> records\n\nAre you sure you want to continue?~),YESNO ) != YES )
+			{
+				if ( <FirstTime> ) { Exit(); }
+				return TRUE;
+			}
+		}
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	DataWindow( RefreshWindow );
+
+	return DataWindow( StatusBar,Text,~~ );
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,ChangedItem,OrigItem,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no selected row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedItem[Filmterm]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Filmterm name cannot be blank.~ ) ); }
+
+	Key = ~Filmterm = '<$con.OrigItem[Filmterm]>'~;
+
+	Query = ~Select * From FilmtermAdjustment Where <Key>~;
+
+	if ( !PGenConList( List,ConnectLocal,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+		return Warning( Translate( ~Could not update FilmtermAdjustment record where <Key>. <theErr>~ ) );
+	}
+
+	if ( !List( UpdateFrom,ChangedItem,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update record where <Key>. <theErr>~ );
+	}
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,ItemsToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	count = ItemsToDelete( ChildCount );
+
+	if ( MessageBox( ~Are you sure you want to delete the <count> selected items?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,ConnectLocal ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( ItemsToDelete( GetNext,Item ) )
+	{
+		Key = ~Filmterm = '<$con.Item[Filmterm]>'~;
+
+		Cmd = ~Delete From FilmtermAdjustment Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Could not delete item where <Key>. <theErr>~ );
+		}
+
+		RowsToDelete( AddString,ItemsToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if ( <key> == 0x74 )	// F5
+		{ return RefreshListView(); }
+
+	if (  !View( PerformMenuAction,FilmtermAdjListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,FilmtermAdjListViewMenu,0,0  );
+	}
+}
+
+
+VOID DelayedRefreshDoc()
+{
+	SetTimer( 1,2000,~RefreshDoc()~ );
+}
+
+
+NUMERIC AllOptions()
+{
+	return DataView( DisplayMenu,FilmtermAdjListViewMenu,0,0  );
+}
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( Translate(~There was no active view~) ); }
+
+	return DataView( DisplayMenu,FilmtermAdjListViewMenu );
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( Translate(UIMessages,NotImplemented,~<what>~) );
+	return TRUE;
+}
+
+
+VOID RememberWindowLocation( &theWindow,Item )
+{
+	theWindow( SaveWindowLocation,WindowLocation,~<Item>~ );
+}
+
+FirstTime = TRUE;
+
+NUMERIC Init()
+{
+	if ( !<FirstTime> )
+	{
+		RefreshDoc();
+	}
+	else
+	{
+		DocumentQuery = ~Select * From <TableName>~;
+
+		if ( !PGenConList( List,ConnectLocal,Cursor,Dynamic,Query,~<DocumentQuery>~ ) )
+			{ Error( ~Failed to query the <TableName> table~ ); }
+
+		SetDocumentData( List(GetObject) );
+
+		WindowLocation = ~<$UserSettings.WindowLocation[FilmtermAdjList]>~;
+
+		if ( ~<WindowLocation>~ != ~~ )
+			{ DataWindow( Set,Position,~<WindowLocation>~ ); }
+
+		if ( !DataWindow( CreateWindow,~<TableName>~ ) )
+			{ Error( Translate(~Failed to create the window~) ); }
+	}
+	FirstTime = FALSE;
+
+	Document( Doc,This,SetTitle,~Filmterm Adjustments~ );
+
+	return RefreshListView( TRUE );
+}
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	DataWindow( ForceCloseWindow );
+	Exit();
+	return TRUE;
+}
+
+Define:	FilmtermAdjListViewMenu Using DDMenuDef AsSymbol FilmtermAdjListViewMenu  // called once
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuSaveChanges )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuDelete )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord() )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuRefresh )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE) )
+
+		Define:	NULL1 using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+		Define:	Export	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuExport )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ExportSelectedToFile(DataView,FilmtermAdjustment) )
+
+		Define:	RememberWindowLoc	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,RememberWindowLoc )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RememberWindowLocation(DataWindow,FilmtermAdjList) )	
+	}
+
+
+Include: ~ExportSelectedToFile~;
+
+if ( !GenCon( TableDefinition,GetFrom,FilmtermAdjustment,~[DATABASE LocalTableDefinitions]~ ) )
+	{ Error( ~The Filmterm Adjustment Table is not properly defined~ ); }
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+Define: DataWindow Using DDWinDef
+	Fields:		Title					Translate(~Filmterm Adjustments~)
+				Position				0 0 90 35
+				IsPositionPercent		T
+				TypeName				SplitterWnd
+				SplitterRows			~2 10 90~
+				SplitterColumns			1
+				EnableStatusBar			T
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							//HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "FilmtermAdjustment.htm" )
+			Contains:
+			{
+				Define: ExportDataButton Using DDWinCtrlDef AsSymbol ExportDataButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( ExportSelectedToFile(DataView,FilmtermAdjustment) )
+							POSITION		$hGap, $vGap $ButtonWidth $ButtonHeight
+							TEXT			Translate( ~Export~ )
+							TOOLTIP			Translate( ~Export data to a text file~ )
+							TYPENAME		BUTTON
+							//HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "FilmtermAdjustment.htm" )
+			}
+
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition( GetReferenceTo,Fields )
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					ComboBoxActionsText		ACTION Call ( RefreshComboBox() )
+					CloseActionsText		ACTION Call ( OnCloseDataView() )
+					ViewDataType			Text
+					//HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "" )
+	}
+
+	

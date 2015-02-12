@@ -1,0 +1,133 @@
+
+
+NUMERIC DefineDialog()
+{
+	Define: DialogData Using DDText;
+		Fields: Text ~Data~;
+
+	hGap = vGap = 5;	ButtonWidth = 90;	StaticTextWidth = 90;	EditTextWidth = 250;
+
+	Define: AddMacrosDialog Using DDWinDef
+		Fields: Position		400 70 300 300
+				Title			~Add Data Fields To The Macro Assistant~
+				TypeName		~Dialog~
+				OActionsText	ACTION EXEC ( OnCancelButton() )
+				HActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "AddMacros.htm" ) ;
+
+		Contains: InListOrder
+		{
+			Define: CategoryPrompt Using DDWinCtrlDef AsSymbol CategoryPrompt
+				Fields:	TypeName		StaticText
+						Text			~Category~
+						Position		$hGap, $vGap,  <StaticTextWidth> ,  20
+
+			Define: CategoryField Using DDWinCtrlDef AsSymbol CategoryField
+				Fields:	TypeName		EditText
+						Position		CategoryPrompt(GetRight,Position) + $hGap,
+										CategoryPrompt(GetTop,Position),
+										$EditTextWidth, 20
+						GenConName		THIS
+						GenConField		~Text~
+						IActionsText	~[GET]~
+						OActionsText	~[SAVE]~ ;
+
+			DialogWidth = CategoryField(GetRight,Position) + ($hGap * 2);
+
+			Define: AddButton Using DDWinCtrlDef AsSymbol AddButton
+				Fields:	TypeName		Button
+						Text			~Add~
+						Position		(<DialogWidth> / 2) - ($ButtonWidth+$hGap) , CategoryPrompt(GetBottom,Position) + ($vGap*3),  <ButtonWidth> , 20
+						DActionsText	ACTION EXEC ( OnAddButton() )
+						Tooltip			Translate( ~Add the fields to macro assistant~ );
+
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				Fields:	TypeName		Button
+						Text			~Close~
+						Position		 AddButton(GetRight,Position) + $hGap, AddButton(GetTop,Position), <ButtonWidth> , 20
+						DActionsText	ACTION EXEC ( OnCancelButton() )
+						Tooltip			~Close the dialog~;
+
+			DialogHeight = AddButton(GetBottom,Position) + ($vGap * 2)  + 20;
+		}
+
+	
+	AddMacrosDialog( Set,Position,~100  100  <DialogWidth>  <DialogHeight>~ );
+	
+	GenDlg( dlg,Definition,AddMacrosDialog,Data,DialogData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DialogData,AddMacrosDialog );
+
+	return TRUE;
+}
+
+
+NUMERIC OnAddButton()
+{
+	dlg( GetInput );
+
+	Category = ~<$con.DialogData[Text]>~;
+
+	if ( ~<Category>~ == ~~ )
+	{
+		return Warning( Translate( ~The category cannot be NULL~ ) );
+	}
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	Query = ~Select Distinct Category From Macros Where Category = '<Category>'~;
+
+	if ( dBase( GetValuesFor,~<Query>~,UsedCategory ) )
+	{
+		if ( MessageBox( ~<Category> is already used. Would you like to delete it?~,YESNO ) != YES )
+		{
+			return FALSE;
+		}	
+	}
+
+	Cmd = ~Delete From Macros Where Category = '<Category>'~;
+
+	if ( !dBase( Cmd,~<Cmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database delete failed <Cmd>. <theErr>~ ) );
+	}
+
+	while ( NameList( GetNextString,Item ) )
+	{
+		Name = ~<Item>~;
+
+		Description = ~Field <Item> From Record N.  Set N in the Number field above.~;
+
+		Activate = ~<$@Data.<Item>[%NODENUMBER%]>~;
+
+		Cmd = ~Insert Into Macros(Category,Name,Description,Enabled,Activate) Values('<Category>','<Category>_<Name>','<Description>',1,'<Activate>')~;
+
+		if ( !dBase( RefreshCache,Cmd,~<Cmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			return Warning( Translate( ~Database update failed <Cmd>. <theErr>~ ) );
+		}
+	}
+
+	return OnCancelButton( End );
+}
+
+
+NUMERIC OnCancelButton()
+{
+	dlg( End );
+	Exit();
+}
+
+if ( !StringList( NameList,RemoveFromTree,DataFieldsForMacros ) )
+{
+	Warning( Translate( ~There are no fields names in the list~ ) );
+	Exit();
+}
+
+
+
+DefineDialog();

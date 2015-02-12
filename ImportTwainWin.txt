@@ -1,0 +1,1305 @@
+IncludeClass(BaseHTML);
+IncludeClass(BaseOrder);
+IncludeClass(BaseImage);
+IncludeClass(BaseMenu);
+
+Include: ~Utilities~;
+
+Class( ImportTwain,Extends,BaseHTML,
+		Member,fOrderID,Str,~~,
+		Member,fRoll,Str,~~,
+		Member,fFrame,Str,~~,
+		Member,fTwain,Object,Twain,
+		Member,fDoesIDExist,Numeric,0,
+		Member,fScreenHeight,Numeric,0 );
+
+
+VOID ImportTwain::ImportTwain(WantStatic,OrderID)
+{
+	Static(~<WantStatic>~);	
+	
+	// Create a database connection and make it Private
+	if ( !Ado( dBase,Connect ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		Log( Session,~Error connecting to the shared database: <theErr>~ );
+		return;
+	}
+	Private( dBase );
+	
+	if ( !Defined( OrderObj ) )
+	{
+		Class( OrderClass,Extends,BaseOrder);
+		OrderClass( New,OrderObj );
+		Private( OrderObj );
+	}
+	
+	if ( !Defined( ImageObj ) )
+	{
+		Class( ImageClass,Extends,BaseImage);
+		ImageClass( New,ImageObj );
+		Private( ImageObj );
+	}
+
+	ImageObj.SetConnection( dBase );
+}
+
+VOID ImportTwain::StaticPosition()
+{
+	if ( Authorized( KEXDSS ) )
+	{
+		WindowLeft = 0;
+		WindowTop = 0;
+		WindowWidth = 100;
+		WindowHeight = 100;
+	}
+	else
+	{
+		WindowLeft = 20;
+		WindowTop = 0;
+		WindowWidth = 80;
+		WindowHeight = 100;
+	}
+}
+
+VOID ImportTwain::ReOpen()
+{
+	CheckOrderID( ~~ );
+	LoadImages();
+	BaseHTML::ReOpen();
+}
+
+VOID ImportTwain::DefineMessages()
+{
+	BaseHtml::DefineMessages();
+	LoadTranslationFile( Import,ImportTwainTrans,ImportTwainTrans );
+	LoadTranslationFile( Import,BaseImportTrans,BaseImportTrans );
+	LoadTranslationFile( Import,ImportImages,ImportImages );
+
+}
+
+VOID ImportTwain::WindowDefinition()
+{
+	if ( Authorized( KEXDSS ) )
+	{
+		Fields:	TypeName			SplitterWnd2
+				SplitterRows		~3 9 62 29~
+				SplitterColumns		~1~	
+				ViewAsFilmStrip		T
+	}
+	else
+	{
+		Fields:	TypeName			SplitterWnd2
+				SplitterRows		~2 70 30~
+				SplitterColumns		~1~	
+				ViewAsFilmStrip		T	
+	}
+}
+
+
+VOID ImportTwain::DefineViews()
+{ 
+	if ( Authorized( KEXDSS ) )
+	{
+		DefineView(Logo);
+		DefineView();			// HTML stuff at the top
+		DefineView(Images);		// Row of Images at the bottom
+	}
+	else
+	{
+		DefineView();			// HTML stuff at the top
+		DefineView(Images);		// Row of Images at the bottom	
+	}
+}
+
+VOID ImportTwain::ViewDefinition()		
+{
+	if ( !Authorized( KEXDSS ) )
+	{
+		Fields:	HTMLCloseBox	<fStatic>;
+	}
+}
+
+VOID ImportTwain::ViewDefinitionImages()
+{
+	StdImageThumbnailView();
+
+	Fields:
+			//RefreshActionsText		ACTION Exec ( <THIS>.RefreshThumbNailView(ViewImages) )
+			RClickUpActionsText			ACTION Exec ( <THIS>.RightClickInImagesView() )
+			LClickUpActionsText			ACTION Exec ( <THIS>.LeftClickInImagesView() )
+			KeyboardActionsText			ACTION Exec ( <THIS>.OnKeyDown() )	
+			DoubleClickActionsText		ACTION Exec ( <THIS>.DoubleClickInImagesView() )	
+			if ( Authorized( KEXDSS ) )
+			{
+				Fields:
+					BackgroundColor				~25,25,25~
+					FrameBackgroundColor		~25,25,25~
+					TextBackgroundColor			~25,25,25~
+					TextColor					~255,255,255~
+					SelectionRectColor		~32 153 213~
+					FrameHighlightColor		~25 25 25~
+					FrameShadowColor		~25 25 25~
+			}
+}
+
+VOID ImportTwain::OnKeyDown()
+{
+	key = ViewImages( GetLastKeyStateless,KeyString );
+	if ( <key> == 0x74 )	// F5
+	{  
+		Now = Time();
+		if (MemberDefined(fLastF5Time))
+		{
+			if (<now> - <fLastF5Time> < 2000)
+			{
+				return;
+			}
+			fLastF5Time = <now>;
+		}
+		else
+		{
+			Private(fLastF5Time);
+			fLastF5Time = <now>;
+		}
+		fHtmlView( Get,~OrderIDText~,0, value, fOrderID );
+		LoadImages();
+	}
+
+}
+
+VOID ImportTwain::ImagesThumbNailOverride()
+{
+
+	if ( Authorized( ~KEXDSS~ ) )
+	{
+		MACROSOFF
+
+			Fields: 
+				Info2		~<$con.Field[Path].FileName>~
+				Info5		~<$con.Field[FolderName]>~
+
+		MACROSON
+	}
+	else
+	{
+		// Override the default tooltip with Click to Select.  Right-click for options.
+		MACROSOFF
+			Fields: Info5				TR( ImportTwainTrans, ImageToolTip );
+		MACROSON
+	}
+
+}
+
+VOID ImportTwain::OnLoadComplete()
+{
+	//Query = ~select * from images where orderid = '<fOrderID>' Order By Roll,Frame~;
+	//RefreshThumbNailView( ViewImages,~<Query>~ );
+	//LoadImages();
+	
+	GetActiveView();
+
+	if ( Defined( fHtmlView ) )
+	{
+		fHtmlView( GetViewDef,theView );
+		theView( GetName,name );
+		
+		if ( SimilarStr( ~<name>~,~View~ ) )
+		{
+			fHtmlView( Set, OrderIDText, 0, value, ~<fOrderID>~ );
+		}
+		
+		// Check privilege for order management
+		if ( Authorized( DP1 ) )
+		{
+			if ( !CheckPrivilege(~OrderManagement~)  )
+			{
+				fHtmlView( Execute,~Disable(GetElement('GenerateID'))~ );
+			}
+		}
+	}
+}
+
+VOID ImportTwain::RefreshImageView(OrderID)
+{
+	if ( Authorized( KEXDSS ) )
+	{
+		return;
+	}
+
+	if (!SimilarStr(~<OrderID>~, ~<fOrderID>~))
+	{
+		SetOrderID( ~<OrderID>~ );
+		ChangeOrder();
+	}
+}
+
+VOID ImportTwain::ChangeOrder()
+{
+	
+	if ( !IsNull(~<fOrderID>~) )
+	{
+		//Query = ~select * from images where orderid = '<fOrderID>' Order By Roll,Frame~;
+		//RefreshThumbNailView( ViewImages,~<Query>~ );
+		LoadImages();
+		
+		if ( GetViewByName( View ) )
+		{
+			fHtmlView( Set,~OrderIdText~,0,value,~<fOrderID>~ );
+		}
+	}
+
+	SetWindowTitle(TR( ImportTwainTrans, TitleH,~<fOrderID>~));
+	SetCurrentOrder( ~<fOrderID>~ );
+}
+
+VOID ImportTwain::SetOrderID( NewOrderID )
+{
+	if ( Authorized( KEXDSS ) )
+	{
+		return;
+	}
+	
+	fDoesIDExist = FALSE;
+	
+	if ( isNull( ~<NewOrderID>~ ) )
+	{
+		return;
+	}
+	
+	if ( !OrderObj.FindID( ~<NewOrderID>~ ) )
+	{
+		// Check privilege for order management
+		if ( CheckPrivilege(~OrderManagement~) || Authorized( DP2 ) )
+		{
+			result = MessageBox( TR( ImportTwainTrans, CreateID,~<NewOrderID>~), YESNO );
+			
+			if ( <result> == YES )
+			{
+				if ( !CreateNewID( ~<NewOrderID>~ ) )
+				{
+					return;
+				}
+			}
+			else
+			{
+				return;
+			}
+		}
+		else
+		{
+			Warning( TR( ImportTwainTrans, CreateIDNoPriv, ~<NewOrderID>~ ) );
+			return;
+		}
+	}
+
+	fDoesIDExist = TRUE;
+	fOrderID = ~<NewOrderID>~;	
+}
+
+VOID ImportTwain::InitWindow()
+{
+	ImagesThumbNailDefinition();
+	OpenHtmlPage();
+
+}
+
+VOID ImportTwain::OpenHtmlPage()
+{
+	if ( Authorized( KEXDSS ) )
+	{
+		fScreenHeight = App( thisApp,MainWindow,GetClientHeight );
+
+		CreateAndOpen( ~<$App.HTTPServer>/KEXDSS/Import/KEXImportTwain.kpl~ );
+		Open( ~<$App.HTTPServer>/KEXDSS/Import/CompTwain.kpl?ScreenHeight=<fScreenHeight>~,Logo );
+	}
+	else
+	{
+		CreateAndOpen( ~<$App.HTTPServer>/Importing/ImportTwain.kpl~ );
+	}
+}
+	
+VOID ImportTwain::InitTwain()
+{
+
+	// Initialize twain
+	fTwain( Init );
+
+}
+	
+VOID ImportTwain::LoadSources(ele)
+{
+	WaitCursor( Begin );
+
+	fTwain( DisableErrorMessages );
+
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Execute,~ResetList(GetElement('<ele>'))~ );
+
+	fTwain( UnloadSourceManager );
+	fTwain( GetSourceList );
+	count = 0;
+	while ( fTwain( GetNextSourceName, twainSourceName ) )
+	{
+		fHtmlView( Execute,~AddListOption( GetElement('<ele>'),'<twainSourceName>','<twainSourceName>')~ );
+		++count;
+	}
+
+	if ( <count> == 0)
+	{
+		EnableorDisableControl( 0 );
+	}
+	// Set the default twain from workstation settings
+	currentSourceValue = ~~;
+	Enabled = 0;
+
+	GetUserSettings( ~DWSImport~,~CurrentTwainDS~,currentSourceValue, Enabled );
+	if ( !SimilarStr( ~<currentSourceValue>~,~~) && <Enabled> )
+	{
+		fHtmlView( Execute,~SelectCurrentValue('<ele>','<currentSourceValue>')~ );
+	}
+	else
+	{
+		// No user setting, set first data source as current.
+		fHtmlView( Get,~<ele>~,0, value, currentSourceValue );
+	}
+
+	if (!GetUserSettings( ~DWSImport~,~CurrentTwainFileType~,currentFTValue, Enabled ))
+	{
+		// No user setting, set first data source as current.
+		fHtmlView( Execute,~SetRadioButton('fileTypeRadio','Jpeg')~ );
+	}
+
+	else if ( !SimilarStr( ~<currentFTValue>~,~~) && <Enabled> )
+	{
+		fHtmlView( Execute,~SetRadioButton('fileTypeRadio','<currentFTValue>')~ );
+	}
+	else
+	{
+		fHtmlView( Execute,~SetRadioButton('fileTypeRadio','Jpeg')~ );
+	}
+
+	
+	WaitCursor( End );
+}	
+
+
+VOID ImportTwain::SetDefaultFiletype(ele)
+{
+	ReturnOnFailure( GetActiveView() );
+	if (GetCheckedButton(~~,~fileTypeRadio~,currentFTValue))
+	{
+		// Assign default file type in workstation setting by user
+		SetUserSettings( ~DWSImport~,~CurrentTwainFileType~,~<currentFTValue>~,TRUE );
+	}
+}
+
+VOID ImportTwain::SetDefaultPath(ele)
+{
+	ReturnOnFailure( GetActiveView() );
+	if (fHtmlView( Get,~<ele>~,0,value,currentPath ))
+	{
+		// Assign default path in workstation setting by user
+		SetUserSettings( ~DWSImport~,~TwainDSPath~,~<currentPath>~,TRUE );
+	}
+}
+
+VOID ImportTwain::SetDefaultTwain( ele )
+{
+
+	ReturnOnFailure( GetActiveView() );
+	if ( fHtmlView( Get,~<ele>~,0, value, currentSourceValue ) )
+	{
+		// Assign default data source in workstation setting by user
+		SetUserSettings( ~DWSImport~,~CurrentTwainDS~,~<currentSourceValue>~,TRUE );
+
+		if ( 0 )
+		{	
+			// Open the twain data source as we are getting ready to use it.
+			if ( !fTwain( OpenSource, ~<currentSourceValue>~ ) )
+			{
+				errorCode = fTwain( LastErrorCode );
+				fTwain( GetLastErrorText, ErrMsg );
+				Log( Session, ~<errorCode>, <ErrMsg>~ );	
+			}
+		}
+	}
+
+}
+
+VOID ImportTwain::AcquireFromTwain( ele )
+{
+	if ( !<fDoesIDExist> )
+	{
+		return;
+	}
+
+	EnableorDisableControl( 0 );
+
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Get,~<ele>~,0, value, currentSourceValue );
+	if ( !IsContentsNull(~currentSourceValue~) )
+	{
+		// Open the twain data source as we are getting ready to use it.
+		if ( !fTwain( OpenSource, ~<currentSourceValue>~ ) )
+		{
+			errorCode = fTwain( LastErrorCode );
+			fTwain( GetLastErrorText, ErrMsg );
+			Log(Session, ~<errorCode>, <ErrMsg>~ );
+		
+		}
+
+		fTwain( DisableParent,FALSE );			// Don't won't to freeze our UI
+
+		Count = 0;
+
+		fTwain( SetMultiTransfer,TRUE );		// So we can optionally do multiple images while the UI is up
+ 
+		// Get the information about the Roll
+		if ( !GetDefaultRoll() )
+		{
+			fHtmlView( Execute,~ShowStatus(GetElement('RollNotCreated'),'TR( ImportTwainTrans, NoRoll)')~ );
+			return;
+		}
+ 
+		// Get the information about the frame
+		length = GetDefaultFrame();
+		if ( !<length> )
+		{
+			fHtmlView( Execute,~ShowStatus(GetElement('FrameNotCreated'),'TR( ImportTwainTrans, NoFrame)')~ );
+			return;
+		}
+		
+		if ( SimilarStr( ~<fFrame>~,~~ ) )
+		{
+			fFrame = ~0001~;
+		}
+
+		length = strlen( ~<fFrame>~ );			// Get the length of frame
+
+		while ( fTwain( Acquire ) )				// For each image
+		{
+			errorCode = fTwain( LastErrorCode );
+			
+			if ( <errorCode> )					// ErrorCode = 0, means no error
+			{
+				fTwain( GetLastErrorText, ErrMsg );
+				Log( Session,Translate( ~Acquire from Twain Failed: <errorCode>, <ErrMsg>~ );
+				break;
+			}
+
+			if ( fTwain( UserClosedSource ) )
+			{
+				Log( Session,~User closed the TWAIN driver~ );
+			}
+
+			Log( Session,~Received image <++Count> from twain driver~ );
+
+			fTwain( CreateImageMem,anImageMem );// Get the image data into an ImageMem Object	
+
+			AddImageMemToOrder( anImageMem, Format( ~<fFrame>~, ~%0<length>ld~ ) );	// Do everything to get it into the order
+
+			ForgetLocal( anImageMem );			// Forget the current image so we can do another
+
+			fFrame = MakeNumber( ~<fFrame>~ );
+			++fFrame;							// Increment frame
+		}
+
+		Log( Session,~Unloading TWAIN driver~ );
+
+		fTwain( UnloadSourceManager );			// Close the user interface and unload everything
+		EnableorDisableControl( 1 );
+	}
+	else
+	{
+		// Couldn't open data source
+		Log(Session,~Couldn't Open Data Source <currentSourceValue>~);	
+	}
+
+
+}
+
+NUMERIC ImportTwain::EnableorDisableControl( Enable )
+{
+	ReturnOnFailure( GetActiveView() );
+	
+	if ( <Enable> )
+	{
+		fHtmlView( Execute,~Enable(GetElement('OrderIDText'))~ );
+		fHtmlView( Execute,~Enable(GetElement('RollText'))~ );
+//		fHtmlView( Execute,~Enable(GetElement('FrameText'))~ );
+		fHtmlView( Execute,~Enable(GetElement('PathText'))~ );
+		fHtmlView( Execute,~Enable(GetElement('fileTypeRadio'))~ );
+		fHtmlView( Execute,~Enable(GetElement('importButton'))~ );
+		fHtmlView( Execute,~Enable(GetElement('GenerateID'))~ );
+		fHtmlView( Execute,~Enable(GetElement('FindDir'))~ );
+		fHtmlView( Execute,~Enable(GetElement('twainsources'))~ );
+		
+	}
+	else
+	{
+		fHtmlView( Execute,~Disable(GetElement('OrderIDText'))~ );
+		fHtmlView( Execute,~Disable(GetElement('RollText'))~ );
+//		fHtmlView( Execute,~Disable(GetElement('FrameText'))~ );
+		fHtmlView( Execute,~Disable(GetElement('PathText'))~ );
+		fHtmlView( Execute,~Disable(GetElement('fileTypeRadio'))~ );
+		fHtmlView( Execute,~Disable(GetElement('importButton'))~ );	
+		fHtmlView( Execute,~Disable(GetElement('GenerateID'))~ );	
+		fHtmlView( Execute,~Disable(GetElement('FindDir'))~ );
+		fHtmlView( Execute,~Disable(GetElement('twainsources'))~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC ImportTwain::AddImageMemToOrder( &anImageMem, Frame )
+{
+
+	ReturnOnFailure( GetActiveView() );
+	
+	if ( !GetCheckedButton(~~,~fileTypeRadio~,fileType) )
+	{
+		Log( Session,~No File Extension chosen~ );
+		return FALSE;
+	}
+
+	if ( SimilarStr( ~<fileType>~, ~Exif~ ) || SimilarStr( ~<fileType>~, ~Jpeg~ ) )
+	{
+		fileExt = ~jpg~;
+	}
+	else
+	{
+		fileExt = ~tif~;
+	}
+
+	if ( Authorized( ~KEXDSS~ ) )
+	{
+		Path = CheckImageDestination();
+	}
+	else
+	{
+		fHtmlView( Get, PathText, 0, value, Path );
+	}
+
+	Path = ~<Path>\~ + ~<fOrderID>\~ + ~<fRoll>~;
+
+	//Check for existence of directory structure and create if necessary
+	if ( !Directory( Create, ~<Path>~ ) )
+	{
+		Log( Session,~Path does not exist and cannot be created: <Path>~ );
+		return FALSE;
+	}
+
+	Log( Session,~Writing Image from twain driver: <Path>\<Frame>.<fileExt>, FileType: <fileType>~ );
+	anImageMem(  Write,~<Path>\<Frame>.<fileExt>~,<fileType>,100,500,100 );
+
+	// Add image to order, now that it had been written to disc
+	ImageObj.AddImage( ~<fOrderID>~,~<fRoll>~,~<Frame>~,~<Path>\<Frame>.<fileExt>~,~~,50,50,100,100,0,0 );	
+	
+	// Only add individual image to View.  If that fails refresh the entire view.
+	if ( !AddImageToView( ~<fOrderID>~,~<fRoll>~,~<Frame>~, ~<Path>\<Frame>.<fileExt>~ ) )
+	{
+		ChangeOrder();
+	}
+
+	return TRUE;
+}
+
+// The userDefinedRoll is numeric (it is masked through javascript)
+NUMERIC ImportTwain::GetDefaultRoll()
+{
+	ReturnOnFailure( GetActiveView() );
+	rollLength = 0;
+	
+	if ( Authorized( ~KEXDSS~ ) )
+	{
+		userDefinedRoll = ~~;
+	}
+	else
+	{
+		fHtmlView( Get,RollText,0, value, userDefinedRoll );
+	}
+	
+	if ( SimilarStr( ~<userDefinedRoll>~,~~) )
+	{		
+		Query = ~Select Distinct Roll From Images where OrderID = '<fOrderID>'  Order By Roll DESC~;
+		maxRoll = ~0001~;
+		if ( PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			while ( List( GetNext, Record ) )
+			{
+				Roll = ~<$pcon.Record[Roll]>~;
+				rollLength = strlen( ~<Roll>~ );
+				if (IsNumeric(~<Roll>~))
+				{
+					maxRoll = Numeric(~<Roll>~) + 1;
+					maxRoll = Format( ~<maxRoll>~, ~%0<rollLength>ld~ );
+					break;
+				}
+			}
+		}
+		fRoll = ~<maxRoll>~;
+	}
+	else
+	{
+		numRoll = MakeNumber( ~<userDefinedRoll>~ );
+		rollLength = strlen( ~<userDefinedRoll>~ );
+		fRoll = Format( ~<numRoll>~, ~%0<rollLength>ld~ );
+	}
+	
+	if ( <rollLength> == 0 )		// This means a new Roll is being used and it needs to be at least 1.
+	{
+		rollLength = 1;
+	}
+	
+	return <rollLength>;
+}
+
+NUMERIC ImportTwain::GetDefaultFrame()
+{
+	ReturnOnFailure( GetActiveView() );
+	frameLength = 0;
+
+	Query = ~Select * From Images where OrderID = '<fOrderID>' AND Roll = '<fRoll>' Order By Frame DESC~;
+
+	maxFrame = ~0001~;
+	if ( PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		while ( List( GetNext, Record ) )
+		{
+			Frame = ~<$pcon.Record[Frame]>~;
+			frameLength = strlen( ~<Frame>~ );
+			if (IsNumeric(~<Frame>~))
+			{
+				maxFrame = Numeric(~<Frame>~) + 1;
+				maxFrame = Format( ~<maxFrame>~, ~%0<frameLength>ld~ );
+				break;
+			}
+		}
+	}
+
+	fFrame = ~<maxFrame>~;
+
+	if ( <frameLength> == 0 )	// This means a new Frame is being used and it needs to be at least 1.
+	{
+		frameLength = 1;
+	}
+	
+	return <frameLength>;
+
+}
+
+VOID ImportTwain::FindOrderID(ele,partialOrderID)
+{	
+	ReturnOnFailure( GetActiveView() );
+
+	numOrdersFound = 0;
+	StringList( StrListofOrders, New );
+	
+	numOrdersFound = OrderObj.GetCountOfOrderID( dBase, ~<partialOrderID>~ );
+	if ( <numOrdersFound> > 75 )
+	{
+		if ( MessageBox( TR( ImportTwainTrans, MoreThan30Warning, 75), YESNO ) == NO )
+		{
+			return;
+		}
+	}
+		
+	if ( !OrderObj.FindPartialOrderID( dBase, ~<partialOrderID>~, StrListofOrders) )
+	{
+		Log( Session,~Failed getting list of orders~ );
+		return;
+	}
+
+	// Clear the OrdersTextBox before populating again
+	fHtmlView( Execute,~ResetList( GetElement('<ele>') )~ );
+
+	ordersFound = StrListofOrders( GetFirstString,OrderID );
+	while ( <ordersFound> )
+	{
+		
+		fHtmlView( Execute,~AddListOption( GetElement('<ele>'),'<OrderID>','<OrderID>')~ );
+		ordersFound = StrListofOrders( GetNextString, OrderID );
+	}
+
+}
+
+VOID ImportTwain::OnCloseDataWindow( Name )
+{
+	SaveSettings();
+	BaseHtml::OnCloseDataWindow(~<Name>~);
+}
+VOID ImportTwain::GetDefaults(PathText,OrderIDText)
+{
+	if ( Authorized( KEXDSS ) )
+	{
+		return;
+	}
+
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+
+	defaultPath = ~<$App.ShareDirectory>\OrderImages~;
+
+	// Defaults for User Settings
+	SavedPath = ~~;
+	Enabled = 0;
+	
+	GetUserSettings( ~DWSImport~,~TwainDSPath~,SavedPath, Enabled );
+	if ( !SimilarStr( ~<SavedPath>~,~~) && <Enabled> )
+	{
+		fHtmlView( Set,~PathText~,0,value,~<SavedPath>~ );
+	}
+	else
+	{
+		// No user setting, set to default path.
+		fHtmlView( Execute,~SetElement( '<PathText>','<$App.ShareDirectory.CPath>\\OrderImages' )~ ); 
+	}
+
+	fHtmlView( Execute,~SetElement( '<OrderIDText>','<fOrderID>' )~ ); 
+
+}
+
+VOID ImportTwain::FindDirectory( FieldName )						// Use a File Dialog to find a directory
+{
+	ReturnOnFailure( GetActiveView() );
+
+	Title = TR( ImportTwainTrans,FindDir_<FieldName> );
+	SubTitle = TR( ImportTwainTrans,FindDirSub_<FieldName>, TR( ImportTwainTrans, Path) );
+
+	if ( GetFolder( ~<Title>~,~<SubTitle>~,Path,TRUE,~\\~ ) )
+	{
+		fHtmlView( Set,~<FieldName>~,0,value,~<Path>~ );
+//		fHtmlView( Execute,~EnableSave()~ );
+	}
+}
+
+VOID ImportTwain::SaveSettings()
+{
+	ReturnOnFailure( GetActiveView() );
+	 
+	// Save the path settings before exiting 
+	 
+	SavedPath = ~~; 
+	fHtmlView( Get,~PathText~,0,value,SavedPath );
+	
+	SetUserSettings( ~DWSImport~,~TwainDSPath~,~<SavedPath>~,TRUE );
+	
+
+	// Save the file type settings before exiting
+	// 0: jpg, 1: tiff, 2: exif
+	fileType = ~Exif~;
+	if (GetCheckedButton(~~,~fileTypeRadio~,fileType) )
+	{
+		if ( SimilarStr( ~<fileType>~, ~Exif~ ) || SimilarStr( ~<fileType>~, ~Jpeg~ ) )
+		{
+			fileExt = ~jpg~;
+		}
+		else
+		{
+			fileExt = ~tif~;
+		}
+	}
+	
+	SetUserSettings( ~DWSImport~,~FileType~,~<fileType>~,TRUE );
+
+}
+
+VOID ImportTwain::Validate()
+{
+	returnOnFailure( GetActiveView() );
+
+	if ( !Authorized( KEXDSS ) )
+	{
+		fHtmlView( Get,~OrderIDText~,0, value, currentOrderID );
+		if ( isNull( ~<currentOrderID>~ ) )
+		{
+			fHtmlView( Execute,~ShowStatus(GetElement('IDRequired'),'<$TR.ImportTwainTrans(IDRequired)>')~ );
+			fDoesIDExist = FALSE;
+		}
+		
+		fHtmlView( Get,~PathText~,0, value, currentPath );
+		if ( isNull( ~<currentPath>~ ) )
+		{
+			fHtmlView( Execute,~ShowStatus(GetElement('PathRequired'),'<$TR.ImportTwainTrans(PathRequired)>')~ );
+			fDoesIDExist = FALSE;				// Using fDoesIDExist to stop twain from starting
+		}
+	}
+	
+	if ( !GetCheckedButton(~~,~fileTypeRadio~,fileType) )
+	{
+		fHtmlView( Execute,~ShowStatus(GetElement('TypeRequired'),'<$TR.ImportTwainTrans(TypeRequired)>')~ );
+		fDoesIDExist = FALSE;				// Using fDoesIDExist to stop twain from starting
+	}
+
+}
+
+NUMERIC ImportTwain::CreateNewID( OrderID )
+{
+	
+	fDoesIDExist = FALSE;
+	
+	ImagesOrderID = ~~;
+	BatchID = ~~;
+	BatchSeq = ~~;
+	Status = ~Adjust~;
+	Type = ~~;
+	OrderDate = ~~;
+	ShipDate = ~~;
+	Priority = ~~;
+	Description = ~~;
+	Owner = ~~;
+	CustomerID = ~~;
+	
+	ReturnOnFailure( GetActiveView() );
+	if ( !OrderObj.AddOrder1( dBase, ~<OrderID>~,~<CustomerID>~,~<ImagesOrderID>~,~<BatchID>~,~<BatchSeq>~,~<Status>~,~<Type>~,~<OrderDate>~,~<ShipDate>~,~<Priority>~,~<Description>~,~<Owner>~ ) )
+	{
+		fHtmlView( Execute,~ShowStatus(GetElement('IDNotCreated'),'The ID: <OrderID> could not be created.')~ );
+		return FALSE;
+	}
+
+	fDoesIDExist = TRUE;
+	fOrderID = ~<OrderID>~;
+//	fCustomerID = ~<CustomerID>~;
+
+	return TRUE;
+}
+
+VOID ImportTwain::GenerateID()
+{
+	ReturnOnFailure( GetActiveView() );
+	
+	fOrderID = OrderObj.GenerateUniqueID();	
+	fHtmlView( Set,~OrderIDText~,0,value,~<fOrderID>~ );
+	ChangeOrder();
+}
+
+VOID ImportTwain::DismissImageInfo()
+{
+	if ( !ViewImages( GetSelected, SelectedImages))
+	{
+		return;
+	}
+	
+	if ( SelectedImages( ChildCount ) < 1 )
+	{
+		DocAction(~ImageInformationWin "CloseWindow()"~);
+	}
+}
+
+NUMERIC ImportTwain::ShowImageInfo()
+{	
+
+	if ( !ViewImages( GetSelected, SelectedImages))
+	{
+		return TRUE;
+	}
+
+	if ( SelectedImages( ChildCount ) < 1 )
+	{
+		DocAction(~ImageInformationWin "CloseWindow()"~);
+	}
+	
+	if ( !SelectedImages( GetFirst, Image ) )
+	{
+		return TRUE;
+	}
+
+	OrderID = ~<$con.Image[OrderID]>~;
+	Roll = ~<$con.Image[Roll]>~;
+	Frame = ~<$con.Image[Frame]>~;
+	
+	// Get the SelectedImages object
+	//TheObject = SelectedImages(GetCopyOf,GetObject);
+	//DocAction(~ImageInformationWin OpenOnce ImageInformationWin "Init( `<theObject>`)"~);
+
+	if ( Authorized( DP2 ) )
+	{
+		ViewImageData( ~TRUE~, ~TRUE~ );	
+	}
+	else
+	{
+		DocAction(~ImageInformationWin OpenOnce ImageInformationWin "Init( `<OrderID>`,`<Roll>`,`<Frame>`)"~);
+	}
+
+	return TRUE;
+
+}
+
+VOID ImportTwain::OpenImageInExtApp()
+{
+
+	if ( !ViewImages( GetSelected, SelectedImages))
+	{
+		return TRUE;
+	}
+	
+	if ( SelectedImages( ChildCount ) == 0 )
+	{
+		return;
+	}
+	
+	while ( SelectedImages( GetNext, SelectedOptionValue ) )
+	{
+		imagePath = ~<$con.SelectedOptionValue[Path]>~;
+		 
+		if ( Files( FileExists, ~<imagePath>~ ) )
+		{
+			BroadcastMessageToAllViews( ReleaseImageChain,~<imagePath>~ );
+			if ( !FindExecutable( ~<imagePath>~,Program ) )
+			{
+				GetLastError( ErrorString,theErr );
+				Log( Session, ~You must go to View/Options/FileTypes of the Windows Explorer to define the program that can open\n\n  <imagePath>.\n\n<theErr>~ );
+				Warning( TR( ImportImages,NoProgramAvailable, ~<imagePath>~ ) );
+				return;
+			}
+			
+			if ( !ShellExecuteFromSymbol( Open,imagePath ) )
+			{
+				GetLastError( ErrorString,theErr );
+				Log( Session,~Could not open <imagePath>. <theErr>~ );
+				Warning( TR( ImportImages, UnableToOpenImage, ~<theErr>~ ) );
+				WaitCursor( End );
+				return;
+			}
+		}
+	}
+
+}
+
+/************* Click Handlers ******************/
+
+VOID ImportTwain::DoubleClickInImagesView()
+{
+	if ( Authorized( ~KEXDSS~ ) )
+	{
+		return;
+	}
+
+	if ( !ViewImages( GetSelected, SelectedImages ) )
+	{
+		return;
+	}
+	
+	if ( SelectedImages( ChildCount ) == 0 )
+	{
+		return;
+	}
+	
+	SelectedImages( GetFirst, Image );
+	Image( Get, OrderID, imageOrderID );
+	Image( Get, Roll, imageRoll );
+	Image( Get, Frame, imageFrame );
+	Image( Get, Path, imagePath );
+
+	if ( Authorized( DP2 ) )
+	{
+		OpenAnImage(~<imagePath>~,~<imageOrderID>~,~<imageRoll>~,~<imageFrame>~);
+	}
+	else
+	{
+		Action = ACTION DOC ( AdjustImagesWin OpenOnce AdjustImagesWin "InitStatic(~<fOrderID>~, ~<imageOrderID>~, ~<imageRoll>~, ~<imageFrame>~)" );
+		PerformActions( Action );
+	}
+}
+
+VOID ImportTwain::LeftClickInImagesView()
+{
+	//ShowImageInfo();
+	DismissImageInfo();
+}
+
+VOID ImportTwain::RightClickInImagesView()
+{
+	BaseMenu( New,menuObj );
+	menuObj.DisplayInView( ViewImages );
+}
+
+NUMERIC ImportTwain::RemoveImages( DeleteSelectedImages )
+{
+	WaitCursor( Begin );
+	if (!ViewImages( GetSelected,SelectedImages))
+	{
+		return TRUE;
+	}
+
+	Count = SelectedImages( ChildCount );
+
+	if ( <Count> == 0 )
+	{
+		WaitCursor( End );
+		return TRUE;
+	}
+
+	BaseImage( New,imageObj );
+	TheObject = SelectedImages(Permanent,GetObject);
+	if ( imageObj.RemoveSelectedImages( <DeleteSelectedImages>, ~<TheObject>~ ) )
+	{
+		//Query = ~select * from images where orderid = '<fOrderID>' Order By Roll,Frame~;
+		//RefreshThumbNailView( ViewImages,~<Query>~ );
+		LoadImages();
+	}
+
+	ForgetLocal( TheObject );
+	StatusBarText(~Completed Removing Images~);
+	WaitCursor( End );
+	
+	return TRUE;
+
+}
+
+VOID ImportTwain::CheckOrderID( OrderID )
+{
+	// Check if OrderID is blank.  It it is, then check for currentOrder
+	if ( IsNull( ~<OrderID>~ ) )
+	{
+		fOrderID = GetCurrentOrder();
+	}
+	else
+	{
+		SetCurrentOrder( ~<OrderID>~ );
+		fOrderID = ~<OrderID>~;
+	}
+	
+	if ( !IsNull( ~<fOrderID>~ ) )
+	{
+		SetWindowTitle( ~TWAIN Import - <fOrderID>~ );
+	}
+	else
+	{
+		SetWindowTitle( ~TWAIN Import~ );
+	}
+	
+	if ( GetViewByName( View ) )
+	{
+		fHtmlView( Set,~OrderIdText~,0,value,~<fOrderID>~ );
+	}
+		
+	fDoesIDExist = TRUE;
+}
+
+VOID ImportTwain::LoadImages()
+{	
+	Query = ~Select ImagesOrderID From Orders Where ID = '<fOrderID>'~;
+	dBase( GetValuesFor, ~<Query>~, imagesOrderID );
+
+	orderToSearch = ~OrderID = '<fOrderID>'~;
+	if ( !IsNull( ~<imagesOrderID>~ ) )
+	{
+		orderToSearch = ~OrderID = '<fOrderID>' OR OrderID = '<imagesOrderID>'~;
+	}
+	
+	Query = ~select * from images where <orderToSearch> Order By Roll,Frame~;
+	RefreshThumbNailView( ViewImages,~<Query>~ );
+	return;
+}
+
+VOID ImportTwain::HelpRoutine()			
+{ 
+	OpenHelpPage(~<$App.HTTPServer>/Manual/Import/Import.kpl#ImportingfromTwain~,TR(ImportTwainTrans,HelpPageTitle));
+}
+//STR	ImportTwain::ShortCuts()			{ return F1ShortCuts(); }
+
+VOID BaseMenu::AddMenuItems( &View )	// OVERRIDE FROM BASEMENU TO ADD RIGHT CLICK MENU ITEMS
+{
+	if ( Authorized( ~KEXDSS~ ) )
+	{
+		return;
+	}
+
+	if ( CheckPrivilege( ~RemoveImages~ ) )
+	{
+		Action = ACTION EXEC ( TwainObj.RemoveImages( 0 ) );
+		AddMenuItem( TRUE,FALSE,TR( ImportTwainTrans, Remove),Action );
+	}
+	
+	if ( CheckPrivilege( ~DeleteImages~ ) )
+	{
+		Action = ACTION EXEC ( TwainObj.RemoveImages( 1 ) );
+		AddMenuItem( TRUE,FALSE,TR( ImportTwainTrans, Delete ),Action );
+	}
+	
+	Action = ACTION EXEC ( TwainObj.ShowImageInfo() );
+	AddMenuItem( TRUE,FALSE,TR( ImportTwainTrans, ImageInfo ),Action );	
+	
+	Action = ACTION EXEC ( TwainObj.OpenImageInExtApp() );
+	AddMenuItem( TRUE,FALSE,TR( ImportImages, SelectFiles),Action );
+}
+
+/***********************************************/
+
+VOID ImportTwain::SetOrderIDFromCurrentID( OrderID )
+{
+	fOrderID = ~<OrderID>~;
+		
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	fHtmlView( Set,~OrderIdText~,0,value,~<OrderID>~ );
+	fHtmlView( Set,~RollText~,0,value,~~ );
+//	fHtmlView( Set,~FrameText~,0,value,~~ );	
+		
+	GetDefaults(~PathText~,~OrderIdText~);	
+	
+	// Try to choose the correct path.
+	Query = ~Select Path From Images Where OrderID = '<OrderID>'~;
+	if ( PGenConList( List,Connection,dBase,Cursor,Forward,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+	{
+		if ( List( GetFirst, Record ) )
+		{
+			Path = ~<$pcon.Record[Path].path>~;
+	
+			if ( !IsNull( ~<Path>~ ) )
+			{
+				fHtmlView( Set,~PathText~,0,value,~<Path>~ );
+			}
+		}
+	}
+
+	ChangeOrder();
+}
+
+NUMERIC ImportTwain::AddImageToView( OrderID, Roll, Frame, Path )
+{
+if ( 0 )
+{
+	if ( SimilarStr( ~<fOrderID>~, ~<OrderID>~ ) )
+	{
+		
+		Query = ~Select * From Images Where OrderID = '<OrderID>' AND Roll = '<Roll>' and Frame = '<Frame>'~;
+
+		if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			Log( Session, ~Query Failed: <Query>. <theErr>~ );
+			return Warning( TR( BaseImportTrans, DBQueryFailed ) );
+		}
+
+		if ( !List( GetFirst,Record ) )	
+		{
+			List( GetErrorDescription,0,theErr );
+			Log( Session, ~Failed to find any records for: <Query>. <theErr>~ );
+			return FALSE;
+		}
+
+		ViewImages( SelectAll,FALSE );	// Make sure nothing is selected
+		
+		GenCon( ImageThumbNailImage,New,DDICImageDef,SetValues,	
+					Info1,			~<$pcon.Record[Roll]>~, 
+					Info2,			~<$pcon.Record[OrderID]>-<$pcon.Record[Roll]>-<$pcon.Record[Frame]>  <$pcon.Record[SubjectID]>~,
+					Info3,			~<$pcon.Record[OrderID]>-<$pcon.Record[Roll]>-<$pcon.Record[Frame]>  <$pcon.Record[SubjectID]>    <$pcon.Record[Path]>~,
+					OrderID,		~<$pcon.Record[OrderID]>~,
+					Roll,			~<$pcon.Record[Roll]>~,
+					Frame,			~<$pcon.Record[Frame]>~,
+					Path,			~<$pcon.Record[Path]>~,
+					IsDeleted,		~<$pcon.Record[Rejected].numeric>~,
+					ImageSource,		~<$pcon.Record[ImageSource]>~,
+					IsReprocessed,	~<$pcon.Record[Reprocess].numeric>~,
+					AutoRetouchComplete,	~<$pcon.Record[AutoRetouchComplete].numeric>~,
+					IsSelected,		FALSE, 
+					DropTypes,		~Image~,
+					DataType,		Image,
+					Table,			Image,
+					Key,			~OrderID = '<$pcon.Record[OrderID]>' AND Roll = '<$pcon.Record[Roll]>' AND Frame = '<$pcon.Record[Frame]>'~ );
+
+		ViewImages( AddThumbNailToThisView,ImageThumbNailImage,~<OrderID>~,Image,Record );
+}
+
+	ViewImages( SelectAll,FALSE );	// Make sure nothing is selected
+
+	if ( ViewImages( FindI,Key,~OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~,Where,Image ) )
+	{ 
+		ViewImages( RemoveThumbNailFor,Image );
+		ForgetPrivate( Image );
+	}
+	
+	// Add the thumbnail
+	GenCon( ImageThumbNailImage,New,DDICImageDef,SetValues,
+		Info1,		~~,
+		Info2,		~<$Str.$Path.FileName>~,
+		Info3,		~<Path>~,
+		OrderID,	~<Order>~,
+		Roll,		~<Roll>~,
+		Frame,		~<Frame>~,
+		Path,		~<Path>~,
+		IsSelected,	FALSE, 
+		AutoRetouchComplete, ~0~,
+		DropTypes,	~Image~,
+		DataType,	Image, 
+		Table,		Image,
+		Key,		~OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~
+		) ;
+
+	ViewImages( AddThumbNailToThisView,ImageThumbNailImage,NULL,NULL,ImageThumbNailImage );
+		
+	}
+	else
+	{
+		// New OrderID passed in.  Refresh entire view.
+		CheckOrderID( ~<OrderID>~ );
+		LoadImages();
+	}
+	
+	return TRUE;
+	
+}
+
+STR ImportTwain::CheckImageDestination()
+{
+	defaultFileLocation = ~~;
+	Enabled = FALSE;
+	GetSystemSettings( KEXDSS, DefaultFileLocation, defaultFileLocation, Enabled );
+
+	if ( IsNULL( ~<defaultFileLocation>~ ) || !<Enabled> )
+	{
+		Directory( Create, ~<$App.ShareDirectory>\RemovableImages~ );
+		defaultFileLocation = ~<$App.ShareDirectory>\RemovableImages~;
+	}
+
+	return ~<defaultFileLocation>~;
+}
+
+NUMERIC ImportTwain::CloseCheck()
+{
+	
+	if ( Authorized( ~KEXDSS~ ) )
+	{
+		Action = ACTION DOC ( KEXIntroWin OpenOnce KEXIntroWin "InitStatic( ~<fOrderID>~,~1~ )" );
+		PerformActions( Action );
+	}
+
+	return TRUE;
+}
+VOID CurrentOrderUpdate( OrderID )
+{
+	TwainObj.SetOrderIDFromCurrentID( ~<OrderID>~, 0 );
+}	
+
+VOID InitDoc( WantStatic,OrderID )
+{
+	if ( !ObjectAlreadyExists( TwainObj ) )
+	{
+		ImportTwain( New,TwainObj,~<WantStatic>~,~<OrderID>~ );
+
+		TwainObj( Global );
+
+		TwainObj.InitWindow();
+
+		TwainObj.InitTwain();
+	}
+	
+	TwainObj.CheckOrderID( ~<OrderID>~ );
+	TwainObj.LoadImages();
+}
+
+// Entry Points from other scripts
+
+VOID InitStatic( OrderID )	{ InitDoc( TRUE,~<OrderID>~ ); }
+
+VOID Init( OrderID )		{ InitDoc( FALSE,~<OrderID>~ ); }

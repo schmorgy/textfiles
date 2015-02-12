@@ -1,0 +1,1270 @@
+//	CRenderJobHandlerCallBacks.txt
+
+//	THIS FILE CONTAINS ROUTINES THAT THE URenderJobHandler
+//	CLASS WILL CALL TO GET THINGS DONE.  THE main IN THIS FILE WILL
+//	JUST INITIALIZE THE THIS SCRIPT ONLY. ALL OTHER ROUTINES ARE
+//	CALLED DIRECTLY BY URENDERJOBHANDLER.
+
+//	CanParse( UGenCon *QueueStatusGC, long numProcessors, char *Requestor ) ;
+//	CanProgram( UGenCon *QueueStatusGC, long numProcessors, char *Requestor ) ;
+//	CanRead( UGenCon *QueueStatusGC, long numProcessors, char *Requestor ) ;
+//	CanReleaseJob( char *QueueStatusGC, long numProcessors ) ;
+//	CanRender( UGenCon *QueueStatusGC, long numProcessors, char *Requestor ) ;
+//	DoSQL( TCHAR *theSQLStatement ) ;
+//	GetBatchOrderSeq( TCHAR *JobID, TCHAR *BatchID, TCHAR *OrderID, TCHAR *OrderItemSeq ) ;
+//	GetPrintStatusNumber( TCHAR *Status ) ;
+//	HandleDBError(UADO *anADO) ;
+//	HandleError( TCHAR *Name, TCHAR *Location ) ;
+//	GetNextBatchID( UGenCon *QueueGC, TCHAR *BatchID) ;
+//	GetNextJob( char *RenderJobHandler, UGenCon *QueueGC ) ;
+//	GetPrinterStatus( UGenCon *thePrinterGC, TCHAR *PrinterStatus ) ;
+//	GetUpdateCommand( char *cmd , char *PrinterName, char *BatchID, TCHAR *QueueName, TCHAR *PrintStatus ) ;
+//	main() ;
+//	QueryQueue( UGenCon *QueueGC, UPGenConList *QueuePGCList) ;
+//	RemoveBatchFromQueue( TCHAR *QueueName, TCHAR *BatchID ) ;
+//	ResetDataBase() ;
+//	ResetJobQueueRecord( TCHAR *BatchID ) ;
+//	SetADO( UADO *anADO ) ;
+//	SetPrinterStatus( UGenCon *thePrinterGC, int PrinterStatus ) ;	  NOT USED
+//	SetRenderJobHandler( char *JobHandler ) ;
+//	SubmitTheOrder( char *OrderPGCList, char *BatchID, TCHAR *QueueName ) ;
+//	term() ;
+//	UpdateDBQueue( char *BatchID ) ;
+//	UpdateOrderItemTable( TCHAR *PrinterName, int PrintStatus, TCHAR *OrderID, TCHAR *OrderItemSeq ) ;
+//	WriteFile( TCHAR *path, TCHAR *job ) ;
+
+//	PRINTSTATUS VALUES:
+//	~Hold~,~Ready~,~Reserved~,~Printing~,~Completed~,~Saved~,~Error~,~Cancelled~,~Pending~
+//		0		1		2		3			4			5		6		7			8
+
+ExecC() ;
+
+//	ADD INCLUDE FILES HERE
+#include "CQueue.txt"
+#include "CEditWindow.txt"
+
+//	USEFUL GLOBALS
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE = ! FALSE ;
+
+int gDebug = 0 ;
+
+char	*gRenderJobHandler ;
+char	*gQueuePGCList ;
+UGenCon	*gRELookAhead ;
+UADO	*gADO = NULL ;
+
+UGenCon	*gQueueGC ;
+
+
+main()
+{
+	Debug( 0 ) ;
+	MessagePumpEnable(0) ;
+	gRELookAhead = GetTreeObject(_T("RELookAhead"),_T("[GenCons]")) ;
+//	trace( 1 ) ;
+}
+
+term()
+{
+	UADO	*ADO ;
+
+	if( gQueuePGCList )
+	{
+		ADO = GetConnection( gQueuePGCList ) ;
+		gQueuePGCList = Delete( gQueuePGCList ) ;
+		if( ADO )
+		{
+			ADO = Delete( ADO ) ;
+		}
+	}
+}
+
+SetADO( UADO *anADO )
+{
+	anADO = delete anADO ;
+}
+
+SetRenderJobHandler( char *JobHandler )
+{
+	gRenderJobHandler = JobHandler ;
+}
+
+
+//	LogThisProcessMemoryInfo(_T("CRenderJobHandlerCallBacks.GetNextJob: Start") ) ;
+//	Debug( ! HeapCheck( "GetNextJob: Start" )) ;
+
+
+//	THIS ROUTINE WILL GET THE NEXT JOB FROM THE JOB QUEUE
+GetNextJob( char *RenderJobHandler, UGenCon *QueueGC )
+{
+	TCHAR	 theQuery[1024] ;
+	TCHAR	 PrinterName[128] ;
+	TCHAR	 BatchID[128] ;
+	TCHAR	 QueueName[128] ;
+	long	 result ;
+	int		 Reserved = 2 ;
+	int		 Printing = 3 ;
+	long	 Level ;
+
+	gADO = ConnectToADO() ;
+
+	gRenderJobHandler = RenderJobHandler ;
+
+	gQueueGC = QueueGC ;
+
+	GetAttrValue( QueueGC, "PrinterName", PrinterName ) ;
+	GetAttrValue( QueueGC, "QueueName", QueueName ) ;
+
+	int	Result = GetNextBatchID( QueueGC, BatchID ) ;
+	if( Result != 1 )
+	{
+		gADO = delete gADO ;
+		return( -1 ) ;
+	}
+
+	if( BatchID[0] == 0 )
+	{
+		UGenCon	*RELookAhead = (UGenCon	*) GetTreeObject( _T("RELookAhead"), _T("GenCons")) ;
+		if( RELookAhead )
+		{
+			long RunContinuous = RELookAhead->GetLongValue( _T("RunContinuous")) ;
+
+			if( RunContinuous )
+				{ ResetDataBase(QueueName) ; }	//	RESET THE DATABASE; FOR TEST PURPOSES ONLY !
+		}
+		gADO = delete gADO ;
+		return( 0 ) ;
+	}
+
+	if( ! GetUpdateCommand( theQuery, PrinterName, BatchID, QueueName,  Reserved ))
+	{
+		gADO = delete gADO ;
+		return( 0 ) ;
+	}
+
+	//	RESERVE THE NEW BATCH
+	result = ADOCommand( gADO, theQuery, "SQL", NULL ) ;
+	long RecordsAffected = gADO->GetRecordsAffected() ;
+	SessionLogDirect("GetNextJob: After Query: [%s] result = %0lX, RecordsAffected = %ld", theQuery, result, RecordsAffected ) ;
+
+	if( result != 0 || RecordsAffected == 0 )
+	{
+		//	THE UPDATE FAILED
+		SessionLogDirect("GetNextJob: Query Failed: [%s] result = %0lX, RecordsAffected = %ld", theQuery, result, RecordsAffected ) ;
+
+		result = gADO->RefreshConnectionCache() ;
+		gADO = delete gADO ;
+		return( 0 ) ;
+	}
+
+	result = gADO->RefreshConnectionCache() ;
+
+	TCHAR	theDumpCmd[1024] ;
+	TCHAR	*DumpCmd = "Select * From JobQueue Where BatchID = '%s' AND QueueName = '%s'" ;
+	sprintf( theDumpCmd, DumpCmd, BatchID, QueueName ) ;
+	QueryAndDump(	_T("QueryAndDump: After Reserving"), theDumpCmd ) ;
+
+	result = SubmitTheOrder( BatchID, QueueName ) ;
+	if( result == -1 )	//	WE HAVE A DATABASE ERROR 
+	{
+		gADO = delete gADO ;
+		return( result ) ;
+	}
+
+//	THIS DOES NOT SEEM TO UPDATE THE QUEUE TO PRINTING !
+//	GetUpdateCommand( theQuery, PrinterName, BatchID, QueueName, Printing ) ;
+	sprintf( theQuery, "Update JobQueue Set PrinterName = '%s', PrintStatus = %d \
+ Where BatchID = '%s' AND Queuename = '%s' AND PrintStatus = 2",
+				PrinterName, Printing, BatchID, QueueName ) ;
+
+	result = DoSQL( theQuery ) ;
+	if( result == 0 )
+	{
+		result = gADO->RefreshConnectionCache() ;
+	}
+
+	QueryAndDump( _T("QueryAndDump: After Printing"), theDumpCmd ) ;
+
+	gADO = delete gADO ;
+	return( result ) ;
+}
+
+
+//	THIS ROUTINE WILL GET THE NEXT ORDER ID FROM THE JOB QUEUE
+GetNextBatchID( UGenCon *QueueGC, TCHAR *BatchID)
+{
+	UPGenConList	*QueuePGCList = NULL ;
+	char			*thePGC = NULL ;
+	TCHAR			*Result = NULL ;
+//	TCHAR			 BatchID2[64] ;
+//	TCHAR			 OrdItemSeq[64] ;
+	long			 PrintStatus = -1L ;
+	long			 Count = 0L ;
+	int				 Error = FALSE ;
+
+	if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 7 )
+	{
+		SessionLogDirect( _T("GetNextBatchID: On Entry BatchID = %s"), BatchID ) ;
+	}
+
+	QueuePGCList = new UPGenConList( gADO ) ;
+	if( QueuePGCList == NULL )
+	{
+		HandleDBError(gADO) ;
+		Error = TRUE ;
+	}
+
+	if( ! Error )
+	{
+		QueuePGCList->SetName("GetNextBatchID_UPGCList") ;
+		Error = QueryQueue( QueueGC, QueuePGCList ) ;
+
+		if( Error == 1 )
+		{
+			thePGC = GetFirst(QueuePGCList) ;
+			if( thePGC  )
+			{
+				GetAttrValue( thePGC, "BatchID", BatchID ) ;
+				Result = BatchID ;
+			}
+		} 
+	}
+	
+	if( QueuePGCList )	{ QueuePGCList = Delete( QueuePGCList ) ; }
+
+	return( Error ) ;
+}
+
+
+SubmitTheOrder( TCHAR *BatchID, TCHAR *QueueName )
+{
+	TCHAR			 theQuery[2048] ;
+	TCHAR			 JobPath[1024] ;
+	TCHAR			 JobName[64] ;
+	TCHAR			 temp[64] ;
+	TCHAR			 FileName[260] ;
+	TCHAR			 OrderID[34] ;
+	TCHAR			 JobID[34] ;
+	TCHAR			*theJobText ;
+	TCHAR			*theLenText ;
+	UPGenConList	*OrderPGCList ;
+	char			*thePGC ;
+	char			*aRenderJob = NULL ;
+	int				 result ;
+	long			 StrLength ;
+	long			 OrderSequence ;
+	long			 OrderItemID ;
+	long			 OrderItemSeq = 1L ;
+	long			 OrderItemQty = 1L ;
+
+	OrderPGCList = new UPGenConList( gADO ) ;
+	if( OrderPGCList == NULL )
+	{
+		HandleDBError(gADO) ;
+		return( 0 ) ;
+	}
+
+	OrderPGCList->SetName(_T("SubmitOrder_UPGCList")) ;
+	//	IF WE GOT HERE THEN WE HAVE AN ORDER TO SUBMIT !
+	//	CHANGED 12/08/00 LK
+	sprintf( theQuery,
+		_T("Select JobPath, OrderID, OrderSequence, OrderItemID, OrderItemSequence, OrderItemQty, JobID From JobQueue\
+ Where BatchID = '%s' AND QueueName = '%s' AND PrintStatus = 2 \
+Order By BatchID, OrderSequence, OrderID, OrderItemSequence"),
+		BatchID, QueueName ) ;
+
+	result = Query( OrderPGCList, theQuery, _T("ReadOnly"), _T("Static") ) ;
+	if( result != 1 )
+	{
+		HandleDBError(gADO) ;
+		OrderPGCList = Delete( OrderPGCList ) ;
+
+		if( gQueueGC )
+		{
+			gQueueGC->SetLongValue(_T("DBError"), result ) ;
+		}
+
+		return(-1) ;
+	}
+
+	//	SUBMIT EACH LINE ITEM OF THE ORDER TO THE JOB
+	thePGC = GetFirst( OrderPGCList ) ;
+	while( thePGC )
+	{
+		GetAttrValue( thePGC, "JobPath", JobPath ) ;
+		GetAttrValue( thePGC, "OrderID", OrderID ) ;
+		GetAttrValue( thePGC, "JobID", JobID ) ;
+		OrderItemSeq  = GetLongValue( thePGC, "OrderItemSequence" ) ;
+		OrderSequence = GetLongValue( thePGC, "OrderSequence" ) ;
+		OrderItemID   = GetLongValue( thePGC, "OrderItemID" ) ;
+
+		printf( "Submitting Page = '%s.%s.%3ld' JobID: '%s' JobPath = '%s'\r\n",
+								BatchID, OrderID, OrderItemSeq, JobID, JobPath ) ;
+
+		if( JobPath[0] )
+		{
+			OrderItemQty = GetLongValue( thePGC, "OrderItemQty" ) ;
+
+			aRenderJob = SubmitBatch( gRenderJobHandler, aRenderJob, JobPath,
+									  BatchID, OrderID, OrderSequence, OrderItemID,
+									  OrderItemSeq, JobID, OrderItemQty ) ;
+
+		}
+		thePGC = GetNext( OrderPGCList ) ;
+	}
+
+	OrderPGCList = Delete( OrderPGCList ) ;
+
+	//	SAVE THE BatchID AS THE JOB NAME
+	if( aRenderJob && BatchID )
+	{
+		if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 5 )
+		{
+			SessionLogDirect( "Submitted Order: %s.%s", BatchID, OrderID ) ;
+		}
+	}
+
+	//	SUBMIT THE ENTIRE ORDER TO THE JOB HANDLER
+	SubmitBatch( gRenderJobHandler, aRenderJob, NULL, NULL, NULL, 0L, 0L, 0L, NULL, 0L ) ;
+
+	return(1) ;
+}
+
+//			sprintf( FileName, "F:\\%s.txt", JobName ) ;
+//			WriteFile( FileName, theJobText ) ;		//	DEBUG ONLY !!!!!
+
+
+//	PRINTSTATUS VALUES 0 = HOLD, READY = 1, RESERVED = 2, PRINTING = 3, PRINTED = 4, ERROR = 5
+GetUpdateCommand( TCHAR *cmd , TCHAR *PrinterName, TCHAR *BatchID, TCHAR *QueueName, int PrintStatus )
+{
+
+	if( PrinterName && BatchID && QueueName )
+	{
+		sprintf( cmd, "Update JobQueue Set PrinterName = '%s', PrintStatus = %d Where BatchID = '%s' AND Queuename = '%s' AND PrintStatus = 1",
+								PrinterName, PrintStatus, BatchID, QueueName ) ;
+		return( TRUE ) ;
+	}
+	return( FALSE ) ;
+}
+
+
+
+QueryQueue( UGenCon *QueueGC, UPGenConList *QueuePGCList)
+{
+	TCHAR	theQuery[1024] ;
+	TCHAR	theMsg[1024] ;
+	int		result ;
+
+	sprintf( theQuery,
+"Select BatchID From JobQueue\
+   Where QueueName = '%s' AND PrintStatus = 1 AND (PrinterName IS NULL OR PrinterName = '%s')\
+   Order By Priority DESC, SubmitDate",
+	GetStringValue( QueueGC, "QueueName" ), GetStringValue( QueueGC, "PrinterName") ) ;
+
+	if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 5 )
+	{
+		SessionLogDirect( "QueryQueue: %s",theQuery ) ;
+	}
+
+	result = Query( QueuePGCList, theQuery, "ReadOnly", "Static" ) ;
+	if( result != 1 )
+	{
+		SessionLogDirect( "CRenderJobHandlerCallBacks.QueryQueue:\r\n%s\r\n\tFAILED. result = %ld", theQuery, result ) ;
+		QueueGC->SetLongValue( _T("DBError"), result ) ;
+//		HandleDBError(gADO) ;	JUST LOG THIS... WE WILL BE CHECKING THIS AGAIN IN ABOUT 5 SECONDS.s
+	}
+	
+	return( result ) ;
+}
+
+QueryAndDump( TCHAR *Msg, TCHAR *theQuery )
+{
+	int		 Result ;
+	int		 Error = FALSE ;
+	int		 Count = 0 ;
+	TCHAR	 BatchID2[64] ;
+	TCHAR	 OrdItemSeq[64] ;
+	long	 PrintStatus ;
+
+	if( gRELookAhead->GetLongValue(_T("RELogLevel")) < 9 )
+	{
+		return ;
+	}
+
+	SessionLogDirect( Msg ) ;
+
+//	UPGenConList	*QueuePGCList = NewPGenConList( gADO ) ;
+	UPGenConList	*QueuePGCList = new UPGenConList( gADO ) ;
+	if( QueuePGCList == NULL )
+	{
+		HandleDBError(gADO) ;
+		Error = TRUE ;
+	}
+
+	if( ! Error )
+	{
+		QueuePGCList->SetName("QueryAndDump_UPGCList") ;
+		Result = Query( QueuePGCList, theQuery, "ReadOnly", "Formard" ) ;
+		if( Result == 1 )
+		{
+			char *thePGC = GetFirst(QueuePGCList) ;
+			while( thePGC && Count < 30 )
+			{
+				GetAttrValue( thePGC, "BatchID", BatchID2 ) ;
+				PrintStatus = GetLongValue(thePGC, _T("PrintStatus")) ;
+				GetAttrValue( thePGC, "OrderItemSequence", OrdItemSeq ) ;
+				SessionLogDirect( _T("GetNextBatchID: Found BatchID2 = %s, OrderItemSequence = %s, PrintStatus = %ld"),
+										BatchID2, OrdItemSeq, PrintStatus ) ;
+				Count++ ;
+				thePGC = GetNext(QueuePGCList) ;
+			}
+		}
+		else
+		{
+			SessionLogDirect( _T("QueryAndDump: Query Failed - [%s]"), theQuery ) ;
+		}
+	}
+
+	if( QueuePGCList )
+		{ delete QueuePGCList ; }
+}
+
+
+WriteFile( TCHAR *path, TCHAR *job )
+{
+	char *fp ;
+	int	  charsWritten ;
+	short unicode = 0xFEFF ;
+
+	fp = fopen( path, "wb" ) ;
+	if( fp )
+	{
+		fwrite( &unicode, 1, 2, fp ) ;
+		charsWritten = fwrite( job, 2, strlen(job), fp );
+		fclose( fp ) ;
+	}
+}
+
+
+
+//	THIS ROUTINE IS USED FOR TESTING!  IT WILL RESET THE DATABASE
+//	SO THAT WE WILL ALWAYS HAVE JOBS AVAILABLE TO PRINT !
+ResetDataBase(TCHAR *QueueName)
+{
+	int		 result = 0x8000405 ;	//	COULD NOT UPDATE BECAUSE LOCKED BY ANOTHER
+	TCHAR	*theUpdateCmd = "Update JobQueue Set PrintStatus = 1, PrinterName = NULL Where QueueName = '%s'" ;
+	TCHAR	 UpdateCmd[1024] ;
+	
+	sprintf( UpdateCmd, theUpdateCmd, QueueName ) ;
+
+	result = DoSQL( UpdateCmd ) ;
+
+	result = gADO->RefreshConnectionCache() ;
+
+	return( result ) ;
+}
+
+
+//	THIS ROUTINE IS USED FOR TESTING!  IT WILL RESET THE DATABASE
+//	SO THAT WE WILL ALWAYS HAVE JOBS AVAILABLE TO PRINT !
+ResetJobQueueRecord( TCHAR *BatchID )
+{
+	TCHAR	 theQuery[1024] ;
+	int		 result = 0x8000405 ;	//	COULD NOT UPDATE BECAUSE LOCKED BY ANOTHER
+	TCHAR	*UpdateCmd = "Update JobQueue Set PrintStatus = 1, PrinterName = NULL Where BatchID = '%s'" ;
+	
+	gADO = ConnectToADO() ;
+
+	sprintf( theQuery, UpdateCmd, BatchID ) ;
+
+	if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 7 )
+	{
+		SessionLogDirect( "ResetJobQueueRecord: %s", theQuery ) ;
+	}
+
+	result = DoSQL( theQuery ) ;
+
+	result = gADO->RefreshConnectionCache() ;
+
+	gADO = delete gADO ;
+	return( result ) ;
+}
+
+
+CancelJobQueueRecord( TCHAR *BatchID )
+{
+
+//Debug(1) ;
+
+	TCHAR	 theQuery[1024] ;
+	int		 result = 0x80004005 ;	//	COULD NOT UPDATE BECAUSE LOCKED BY ANOTHER
+	TCHAR	*UpdateCmd = "Update JobQueue Set PrintStatus = 7, PrinterName = NULL \
+Where BatchID = '%s' AND PrintStatus > 0 AND PrintStatus < 4" ;
+	
+	gADO = ConnectToADO() ;
+
+	sprintf( theQuery, UpdateCmd, BatchID ) ;
+
+	if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 7 )
+	{
+		SessionLogDirect( "CancelJobQueueRecord: %s", theQuery ) ;
+	}
+
+	result = DoSQL( theQuery ) ;
+
+	result = gADO->RefreshConnectionCache() ;
+
+	gADO = delete gADO ;
+	return( result ) ;
+}
+
+
+GetPrinterStatus( UGenCon *thePrinterGC )
+{
+	UPGenConList	*PGCList ;
+	TCHAR			 theQuery[256] ;
+	char			*thePGC ;
+	int				 result = 0 ;
+	long			 Status = 0 ;
+	long			 RunAttended = 1 ;
+	
+	gADO = ConnectToADO() ;
+
+	// CREATE A NEW UPGENCONLIST.
+	if( gADO == NULL )	{ return( result ) ; }
+
+//	PGCList = NewPGenConList(gADO);
+	PGCList = new UPGenConList(gADO);
+	if( PGCList == NULL )
+	{
+		HandleDBError(gADO) ;
+		gADO = delete gADO ;
+		return( result ) ;
+	}
+
+	PGCList->SetName("GetPrinterStatus_UPGCList") ;
+	sprintf( theQuery, "Select Status, RunAttended From Printers Where PrinterName = '%s'",
+					GetStringValue( thePrinterGC, "PrinterName")) ;
+//	sprintf( theQuery, "Select * From Printers Where PrinterName = '%s'",
+//					GetStringValue( thePrinterGC, "PrinterName")) ;		CHANGED 12/08/2000 LK
+
+	// GET THE PRINTER INFO FROM THE DATABASE.
+	result = Query( PGCList, theQuery, "ReadOnly", "Static" ) ;
+
+	if( result == 0 )
+	{
+		HandleDBError(gADO) ;
+		if( PGCList != NULL )
+		{ 
+			PGCList = delete PGCList ;
+		}
+		thePrinterGC->SetLongValue(_T("DBError"), result ) ;
+		gADO = delete gADO ;
+		return( result ) ;
+	}
+
+	thePGC = GetFirst( PGCList ) ;
+	if( thePGC == NULL )
+	{
+		HandleDBError(gADO) ;
+		if( PGCList != NULL )
+		{
+			PGCList = delete PGCList ;
+		}
+		thePrinterGC->SetLongValue(_T("DBError"), TRUE ) ;
+		gADO = delete gADO ;
+		return( result ) ;
+	}
+
+	//	WE FOUND THE RECORD
+	Status = GetLongValue( thePGC, "Status" ) ;
+
+	RunAttended = GetLongValue( thePGC, "RunAttended" ) ;
+	SetLongValue( thePrinterGC, "RunAttended", RunAttended ) ;
+
+//AllDone:
+	if( PGCList  != NULL )
+	{
+		PGCList = Delete( PGCList ) ;
+	}
+
+	result = gADO->RefreshConnectionCache() ;
+
+	gADO = delete gADO ;
+	return( Status ) ;
+}
+
+
+SetPrinterStatus( UGenCon *thePrinterGC, int PrinterStatus )
+{
+	char	*PGCList ;
+	TCHAR	 theQuery[256] ;
+	char	*thePGC ;
+	int		 result = 0 ;
+
+	Debug(1) ;		//	DO WE EVER GET HERE ??????????????????
+
+
+	// CREATE A NEW UPGENCONLIST.
+	if( gADO == NULL )	{ return( result ) ; }
+
+	PGCList = NewPGenConList(gADO);
+	if( PGCList == NULL )
+	{
+		HandleDBError(gADO) ;
+		return( result ) ;
+		//goto AllDone ;
+	}
+
+	sprintf( theQuery, "Update Printers Set PrinterStatus = %d Where Printername = '%s'",
+		PrinterStatus, GetStringValue( thePrinterGC, "PrinterName")) ;
+
+	// GET THE PRINTER INFO FROM THE DATABASE.
+	result = Query( PGCList, theQuery, "ReadOnly", "Static" ) ;
+//	result = Query( PGCList, theQuery, "Optmistic","Keyset") ;
+
+	if( result != 1 )
+	{
+		HandleDBError(gADO) ;
+		if( PGCList )	{ PGCList = Delete( PGCList ) ; }
+		return( result ) ;
+		//goto AllDone ;
+	}
+
+	thePGC = GetFirst( PGCList ) ;
+	if( thePGC == NULL )
+	{
+		HandleDBError(gADO) ;
+		if( PGCList )	{ PGCList = Delete( PGCList ) ; }
+		return( result ) ;
+		//goto AllDone ;
+	}
+
+	//	WE FOUND THE RECORD
+	PrinterStatus = GetLongValue( thePGC, "PrinterStatus" ) ;
+	result = TRUE ;
+
+//AllDone:
+	if( PGCList )	{ PGCList = Delete( PGCList ) ; }
+	return( result ) ;
+}
+
+
+CanRead( UGenCon *QueueStatusGC, long numProcessors, long Requestor )
+{
+	long	numRead			= QueueStatusGC->GetLongValue( "FilesRead" ) ;
+	long	BatchPrinting	= QueueStatusGC->GetLongValue( "BatchPrinting" ) ;
+
+	Debug(gDebug) ;
+
+	//	OTHERWISE CHECK IF WE HAVE ROOM TO READ THE NEXT JOB
+	if( BatchPrinting == Requestor )
+	{
+		if( numRead < 4 )
+		{
+			return( TRUE ) ;
+		}
+	}
+
+	return( FALSE ) ;
+}
+
+CanParse( UGenCon *QueueStatusGC, long numProcessors, long Requestor )
+{
+	long	numParsed  = QueueStatusGC->GetLongValue( "Parsed" ) ;
+	long	numParsing = QueueStatusGC->GetLongValue( "Parsing") ;
+	long	BatchPrinting	= QueueStatusGC->GetLongValue( "BatchPrinting" ) ;
+
+	Debug(gDebug) ;
+
+	//	OTHERWISE CHECK IF WE HAVE ROOM TO PARSE
+	if( BatchPrinting == Requestor )
+	{
+		if( numParsing < 1 && numParsed < 4 )
+		{
+			return( TRUE ) ;
+		}
+	}
+	return( FALSE ) ;
+}
+
+
+CanProgram( UGenCon *QueueStatusGC, long numProcessors, long Requestor )
+{
+	long	numProgrammed	= QueueStatusGC->GetLongValue( "Programmed" ) ;
+	long	BatchPrinting	= QueueStatusGC->GetLongValue( "BatchPrinting" ) ;
+	long	numRendering	= QueueStatusGC->GetLongValue( "Rendering" ) ;
+
+	Debug(gDebug) ;
+
+	//	OTHERWISE CHECK IF WE HAVE ROOM TO PROGRAM
+	if( BatchPrinting != Requestor )	{ return( FALSE ) ; }
+//	if( numRendering  >= 1 )			{ return( FALSE ) ; }
+	if( numProgrammed >= 3 )			{ return( FALSE ) ; }
+	return( TRUE ) ;
+}
+
+
+CanRender( UGenCon *QueueStatusGC, long numProcessors, long Requestor )
+{
+	long	numRendering	= QueueStatusGC->GetLongValue( "Rendering" ) ;
+	long	numRendered		= QueueStatusGC->GetLongValue( "Printing" ) ;
+	long	BatchPrinting	= QueueStatusGC->GetLongValue( "BatchPrinting" ) ;
+
+	Debug(gDebug) ;
+
+	long	halfProcs = numProcessors / 2 ;
+
+	if( halfProcs < 1 ) { halfProcs = 1 ; }
+
+	if( BatchPrinting == Requestor )
+	{
+		//	OTHERWISE CHECK IF WE HAVE ROOM TO RENDER
+		if( numRendering < halfProcs && numRendered < 4 )
+		{
+			return( TRUE ) ;
+		}
+	}
+	return( FALSE ) ;
+}
+//	long	numSuspended	= QueueStatusGC->GetLongValue( "Suspended" ) ;
+//	long	BatchPrinting	= QueueStatusGC->GetLongValue( "BatchPrinting" ) ;
+
+
+CanReleaseJob( char *QueueStatusGC, long numProcessors )
+{
+	long	QtyToRender = 0L ;
+
+	Debug(gDebug) ;
+
+	if( GetLongValue( QueueStatusGC, "HandlerRenderer" ) > numProcessors )
+	{
+		return( FALSE ) ;
+	}
+
+	QtyToRender += GetLongValue( QueueStatusGC, "Submitted" ) ;
+	QtyToRender += GetLongValue( QueueStatusGC, "ReadingFile" ) ;
+	QtyToRender += GetLongValue( QueueStatusGC, "FilesRead" ) ;
+	QtyToRender += GetLongValue( QueueStatusGC, "Parsing" ) ;
+	QtyToRender += GetLongValue( QueueStatusGC, "Parsed" ) ;
+	QtyToRender += GetLongValue( QueueStatusGC, "Programming" ) ;
+	QtyToRender += GetLongValue( QueueStatusGC, "Programmed" ) ;
+	QtyToRender += GetLongValue( QueueStatusGC, "Rendering" ) ;
+	QtyToRender += GetLongValue( QueueStatusGC, "Rendered" ) ;
+	
+	if( QtyToRender > 1 )
+	{
+		return( FALSE ) ;
+	}
+
+	return( TRUE ) ;
+}
+
+
+HandleError( TCHAR *Name, TCHAR *Location )
+{
+	TCHAR *ErrStr = GetTreeString( Name, Location ) ;
+	if( ErrStr )
+	{
+//		ReportError( ErrStr, 0, 0 );
+		ShowDialog( ErrStr ) ;
+	}
+}
+
+
+HandleDBError(UADO *anADO)
+{
+	long	ErrorCount, ErrorIndex ;
+	TCHAR	ADOErrDesc[2048] ;
+	TCHAR	theMsg[4096] ;
+	long	StopHere = 0 ;
+
+	Debug(StopHere) ;
+
+	ErrorCount = GetErrorCount( gADO ) ;
+	if( ErrorCount == 0L )
+	{
+		HandleError( _T("LostDBConnection"), _T("Strings UIMessages")) ;
+	}
+	else
+	{
+		for( ErrorIndex = 0L ; ErrorIndex < ErrorCount ; ErrorIndex++ )
+		{
+			GetErrorDescription( gADO, ErrorIndex, ADOErrDesc ) ;
+			sprintf( theMsg, "Database Error: %s", ADOErrDesc ) ;
+			ShowDialog( theMsg ) ;
+		}
+	}
+}
+
+
+ShowDialog( TCHAR *theMsg )
+{
+	UGenCon	*aGC = new UGenCon( GetDataDictionary( _T("DDMessageDialog"))) ;
+	aGC->SetLongValue( _T("xPosition"), -1L ) ;
+	aGC->SetLongValue( _T("yPosition"), -1L ) ;
+	aGC->SetAttrValue( _T("Message1"), theMsg ) ;
+	aGC->SetLongValue( _T("DefaultButton"), 1L ) ;
+	aGC->SetAttrValue( _T("Button1"), _T("Oh...") ) ;
+	aGC->SetAttrValue( _T("Button1Response"), _T("Cancel") ) ;
+
+	SessionLogDirect( theMsg ) ;
+
+	MessageDialog( aGC, TRUE ) ;
+
+	delete aGC ;
+}
+
+
+//	=========================================================================
+
+
+
+UpdateDBQueue( TCHAR *BatchID, TCHAR *OrderID, TCHAR *JobID, long OrderItemID, UGenCon *PrinterSetupGC, TCHAR *Status )
+{
+	TCHAR	theUpdateCmd[1024] ;
+	TCHAR	PrinterName[34] ;
+	int		thePrintStatus ;
+	int		result ;
+
+	UGenCon	*RP30Setup = PrinterSetupGC->GetLongValue(_T("RP30Setup")) ;
+	if( RP30Setup )
+	{
+		//	WE HAVE AN RP30 / SRP30 OR RR30.
+		//	DO NOT UPDATE THE QUEUES AT THIS TIME.
+		//	THEY WILL BE UPDATED WHEN THE RESPONSE
+		//	FILE COMES BACK FROM THE PRINTER.
+		return( TRUE ) ;
+	}
+
+
+	gADO = ConnectToADO() ;
+
+	TCHAR	*UpdateCmd = "UPDATE JobQueue SET PrintStatus = %d WHERE JobID = '%s'" ;
+//	TCHAR	*UpdateCmd = "UPDATE JobQueue SET PrintStatus = %d WHERE BatchID = '%s' AND OrderID = '%s' AND OrderItemID = %ld" ;
+
+	thePrintStatus = GetPrintStatusNumber( Status ) ;
+
+	sprintf( theUpdateCmd, UpdateCmd, thePrintStatus, JobID ) ;
+//	sprintf( theUpdateCmd, UpdateCmd, thePrintStatus, BatchID, OrderID, OrderItemSeq ) ;
+
+	if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 7 )
+	{
+		SessionLogDirect("UpdateDBQueue: Cmd = [%s]", theUpdateCmd ) ;
+	}
+
+	result = DoSQL( theUpdateCmd ) ;
+	if( result == 0 )
+	{
+		PrinterSetupGC->GetAttrValue(_T("PrinterName"), PrinterName ) ;
+		result = UpdateOrderItemTable( PrinterName, thePrintStatus, OrderID, OrderItemID ) ;
+	}
+
+	//	PostDocMessage( "Job Queue", "RefreshDoc()" ) ;
+
+	result = gADO->RefreshConnectionCache() ;
+
+	TCHAR	theDumpCmd[1024] ;
+	TCHAR	*DumpCmd = "Select * From JobQueue Where JobID = '%s'" ;
+//	TCHAR	*DumpCmd = "Select * From JobQueue Where BatchID = '%s' AND OrderID = '%s' AND OrderItemSequence = %ld" ;
+	sprintf( theDumpCmd, DumpCmd, JobID ) ;
+//	sprintf( theDumpCmd, DumpCmd, BatchID, OrderID, OrderItemSeq ) ;
+	QueryAndDump(	_T("QueryAndDump: After UpdateDBQueue"), theDumpCmd ) ;
+
+	gADO = delete gADO ;
+
+	return( result == 0 ) ;
+}
+
+
+/*		OLD WAY (BEFORE RP30 CHANGES)
+UpdateDBQueue( TCHAR *BatchID, TCHAR *OrderID, TCHAR *JobID, long OrderItemID, UGenCon *PrinterSetupGC, TCHAR *Status )
+{
+	TCHAR	theUpdateCmd[1024] ;
+	TCHAR	PrinterName[34] ;
+	int		thePrintStatus ;
+	int		result ;
+
+	gADO = ConnectToADO() ;
+
+	TCHAR	*UpdateCmd = "UPDATE JobQueue SET PrintStatus = %d WHERE JobID = '%s'" ;
+//	TCHAR	*UpdateCmd = "UPDATE JobQueue SET PrintStatus = %d WHERE BatchID = '%s' AND OrderID = '%s' AND OrderItemID = %ld" ;
+
+	thePrintStatus = GetPrintStatusNumber( Status ) ;
+
+	sprintf( theUpdateCmd, UpdateCmd, thePrintStatus, JobID ) ;
+//	sprintf( theUpdateCmd, UpdateCmd, thePrintStatus, BatchID, OrderID, OrderItemSeq ) ;
+
+	if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 7 )
+	{
+		SessionLogDirect("UpdateDBQueue: Cmd = [%s]", theUpdateCmd ) ;
+	}
+
+	result = DoSQL( theUpdateCmd ) ;
+	if( result == 0 )
+	{
+		PrinterSetupGC->GetAttrValue(_T("PrinterName"), PrinterName ) ;
+		result = UpdateOrderItemTable( PrinterName, thePrintStatus, OrderID, OrderItemID ) ;
+	}
+
+	//	PostDocMessage( "Job Queue", "RefreshDoc()" ) ;
+
+	result = gADO->RefreshConnectionCache() ;
+
+	TCHAR	theDumpCmd[1024] ;
+	TCHAR	*DumpCmd = "Select * From JobQueue Where JobID = '%s'" ;
+//	TCHAR	*DumpCmd = "Select * From JobQueue Where BatchID = '%s' AND OrderID = '%s' AND OrderItemSequence = %ld" ;
+	sprintf( theDumpCmd, DumpCmd, JobID ) ;
+//	sprintf( theDumpCmd, DumpCmd, BatchID, OrderID, OrderItemSeq ) ;
+	QueryAndDump(	_T("QueryAndDump: After UpdateDBQueue"), theDumpCmd ) ;
+
+	gADO = delete gADO ;
+
+	return( result == 0 ) ;
+}
+*/
+
+
+UpdateOrderItemTable( TCHAR *PrinterName, int PrintStatus, TCHAR *OrderID, long OrderItemID )
+{
+	TCHAR	 theQuery[1024] ;
+	TCHAR	 DateTime[128] ;
+	int		 result ;
+
+	GetSortableTimeNow(DateTime) ;
+
+	sprintf( theQuery,
+		"UPDATE OrderItems SET PrintCount=PrintCount+1, PrinterName = '%s', PrintStatus = %d, TimePrinted = '%s', Remake = 0 WHERE OrderID = '%s' AND ID = %ld",
+		PrinterName, PrintStatus, DateTime, OrderID, OrderItemID ) ;
+
+//	sprintf( theQuery,
+//		"UPDATE OrderItems SET PrinterName = '%s', PrintStatus = %d, TimePrinted = '%s' WHERE OrderID = '%s' AND Sequence = %ld",
+//		PrinterName, PrintStatus, DateTime, OrderID, OrderItemSeq ) ;
+
+	result = DoSQL( theQuery ) ;
+
+	if( result != 0 )
+	{
+		SessionLogDirect("UpdateOrderItemTable: Cmd = [%s] result = %0lX", theQuery, result ) ;
+	}
+
+	return( result ) ;
+}
+
+
+DoSQL( TCHAR *theSQLStatement )
+{
+	int		result	= 0x8000405 ;	//	COULD NOT UPDATE BECAUSE LOCKED BY ANOTHER
+	long	count	= 0 ;
+	long	Level ;
+	int		RefreshResult ;
+
+	while( result && count < 30 )
+	{
+		result = ADOCommand( gADO, theSQLStatement, "SQL", NULL ) ;
+		count++ ;
+		if( result != 0L )
+		{
+			RefreshResult = gADO->RefreshConnectionCache() ;
+			Sleep(2000) ;
+		}
+
+		if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 7 )
+		{
+			SessionLogDirect( "DoSQL: %s, result = %0lX, Count = %ld [%0lX]",
+								theSQLStatement, result, count, gADO ) ;
+		}
+	}
+
+	if( result != 0 )
+	{
+		HandleDBError(gADO) ;
+	}
+	else
+	{
+		RefreshResult = gADO->RefreshConnectionCache() ;
+		if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 7 )
+		{
+			SessionLogDirect("DoSQL: CommitTransaction result = %0lX", result) ;
+		}
+	}
+	return( result ) ;
+}
+
+//	CONVERT THE STRING TO A NUMBER BASED UPON THE STRING LIST ON THE TREE.
+//  ~Hold~,~Ready~,~Reserved~,~Printing~,~Completed~,~Saved~,~Error~,~Cancelled~,~Pending~ 
+int GetPrintStatusNumber( TCHAR *Status )
+{
+	int		 loop ;
+	TCHAR	*aStatus ;
+
+	if( Status )
+	{
+		UStringList	*theSL = GetTreeObject(_T("PrintStatus"), _T("[STRINGS]")) ;
+		for( loop = 0 ; loop < 8 ; loop++ )
+		{
+			aStatus = theSL->GetString( loop ) ;
+			if( aStatus )
+			{
+				if( stricmp( aStatus, Status ) == 0 )
+				{
+					return( loop ) ;
+				}
+			}
+		}
+	}
+	return( -1 ) ;
+}
+
+
+
+//	THIS ROUTINE WILL REMOVE JOBS FROM THE JOB QUEUE
+//	THE JOBS MUST HAVE COMPLETED SUCCESSFULLY !
+RemoveBatchFromQueue( TCHAR *QueueName, TCHAR *BatchID, TCHAR *OrderID )
+{
+
+//	PrintStatus:		Printing (3)			Printed (4)			   Saved (5)
+	TCHAR			*SelectCmd =
+_T("Select JobPath, OrderID,JobID From JobQueue \
+Where QueueName = '%s' AND BatchID = '%s' AND \
+(PrintStatus = 3 OR PrintStatus = 4 OR PrintStatus = 5) \
+Order By BatchID, OrderSequence, OrderID, OrderItemSequence") ;
+
+	TCHAR			 theSelectCmd[1024] ;
+	TCHAR			 theCmd[1024] ;
+	TCHAR			 theJobPath[2048] ;
+	TCHAR			 theOrderID[2048] ;
+	TCHAR			 LastOrderID[2048] ;
+	TCHAR			 JobID[64];
+	TCHAR			 aMsg[1024] ;
+	UPGenConList	*aPGCList ;
+	UPGenCon		*aPGC ;
+	int				 result ;
+	int				 NewOrder = FALSE ;
+	int				 FirstTime = TRUE ;
+	
+	UGenCon	*RP30Setup = gQueueGC->GetLongValue(_T("RP30Setup")) ;
+	if( RP30Setup )
+	{
+		//	WE HAVE AN RP30, SRP30 OR RR30.
+		//	DO NOT REMOVE THE ENTRIES FROM
+		//	THE JOB QUEUE UNTIL THE RESPONSE
+		//	FILE COMES BACK FROM THE PRINTER.
+		return( TRUE ) ;
+	}
+
+
+	UGenCon	*RELookAhead = (UGenCon	*) GetTreeObject( _T("RELookAhead"), _T("GenCons")) ;
+	if( RELookAhead )
+	{
+		long RunContinuous = RELookAhead->GetLongValue( _T("RunContinuous")) ;
+
+		if( RunContinuous )
+		{
+			return( TRUE ) ;
+		}
+	}
+
+	sprintf( theSelectCmd, SelectCmd, QueueName, BatchID ) ;
+
+	gADO = ConnectToADO() ;
+
+	if( gADO == NULL )
+	{
+		if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 7 )
+		{
+			SessionLogDirect("RemoveBatchFromQueue: gADO = %0lX", gADO ) ;
+		}
+		return( FALSE ) ;
+	}
+
+	// CREATE A NEW UPGENCONLIST.
+	aPGCList = new UPGenConList( gADO ) ;
+	if( aPGCList == NULL )
+	{
+		HandleDBError(gADO) ;
+		SessionLogDirect("RemoveBatchFromQueue: new PGenConList result = NULL") ;
+		gADO = delete gADO ;
+		return( FALSE ) ;
+	}
+
+	aPGCList->SetName("RemoveBatchFromQueue_UPGCList") ;
+	result = Query( aPGCList, theSelectCmd, "ReadOnly", "Static" ) ;
+	if( result != 1 )
+	{
+		HandleDBError(gADO) ;
+		aPGCList = Delete( aPGCList ) ;
+		SessionLogDirect("RemoveBatchFromQueue: Query result = %ld", result ) ;
+		gADO = delete gADO ;
+		return(FALSE) ;
+	}
+
+	Debug(0) ;
+
+	//	FOR EACH ENTRY WE HAVE TO DELETE THE JOB FILE
+	aPGC = GetFirst(aPGCList) ;
+	while( aPGC && ! NewOrder )
+	{
+		aPGC->GetAttrValue( _T("JobPath"), theJobPath ) ;
+		aPGC->GetAttrValue( _T("OrderID"), theOrderID ) ;
+		aPGC->GetAttrValue( _T("JobID"), JobID ) ;
+
+		if( FirstTime )
+		{
+			strcpy( LastOrderID, theOrderID ) ;
+			FirstTime = FALSE ;
+		}
+
+		if( strcmp( theOrderID, LastOrderID ) != 0 )
+		{
+			NewOrder = TRUE ;
+		}
+
+		if( ! NewOrder && *theJobPath )
+		{
+			if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 5 )
+			{
+				SessionLogDirect("RemoveBatchFromQueue: Deleting = [%s]", theJobPath ) ;
+			}
+
+			unlink( theJobPath ) ;
+
+			sprintf( theCmd, "Delete From JobQueue Where JobID = '%s'",JobID );		
+
+			result = DoSQL( theCmd ) ;
+
+			// if ( !aPGCList->RemoveItem( aPGC ) )
+		}
+		aPGC = GetNext(aPGCList) ;
+	}
+
+	aPGCList = delete aPGCList ;
+
+	gADO = delete gADO ;
+	return( result == 0 ) ;
+}
+
+UADO *ConnectToADO()
+{
+	UADO	*anADO = new UADO ;
+	if( anADO )
+	{
+		int	Result = anADO->ConnectKPIS() ;
+		if( Result )
+		{
+			TCHAR	Msg[1024] ;
+			sprint
+			sprintf(Msg, _T("CRJHCB.ConnectToADO: Failed. Result = %0lX"), Result) ;
+			SessionLogDirect( Msg ) ;
+			anADO = delete anADO ;
+		}
+	}
+	return( anADO ) ;
+}
+
+
+/*
+//	THIS ROUTINE WILL REMOVE JOBS FROM THE JOB QUEUE
+//	THE JOBS MUST HAVE COMPLETED SUCCESSFULLY !
+RemoveBatchFromQueue( TCHAR *QueueName, TCHAR *BatchID, TCHAR *OrderID )
+{
+	char			*aPGC ;
+	UPGenConList	*aPGCList ;
+	TCHAR			 theSelectCmd[1024] ;
+	TCHAR			 theDeleteCmd[1024] ;
+	TCHAR			 theJobPath[2048] ;
+	int				 result ;
+	long			 Level ;
+	TCHAR			*SelectCmd = "Select JobPath From JobQueue Where QueueName = '%s' AND BatchID = '%s' AND OrderID = '%s'\
+ AND (PrintStatus = 4 OR PrintStatus = 5 OR PrintStatus = 3)" ;
+	//			Printed			   Saved			Printing
+
+	TCHAR			*DeleteCmd = "Delete From JobQueue Where QueueName = '%s' AND BatchID = '%s' AND OrderID = '%s'\
+ AND (PrintStatus = 4 OR PrintStatus = 5 OR PrintStatus = 3)" ;
+	//			Printed			   Saved			Printing
+
+	UGenCon	*RELookAhead = (UGenCon	*) GetTreeObject( _T("RELookAhead"), _T("GenCons")) ;
+	if( RELookAhead )
+	{
+		long RunContinuous = RELookAhead->GetLongValue( _T("RunContinuous")) ;
+
+		if( RunContinuous )
+		{
+			return( TRUE ) ;
+		}
+	}
+
+	sprintf( theSelectCmd, SelectCmd, QueueName, BatchID, OrderID ) ;
+	sprintf( theDeleteCmd, DeleteCmd, QueueName, BatchID, OrderID ) ;
+
+	gADO = ConnectToADO() ;
+
+	if( gADO == NULL )
+	{
+		if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 7 )
+		{
+			SessionLogDirect("RemoveBatchFromQueue: gADO = %0lX", gADO ) ;
+		}
+		return( FALSE ) ;
+	}
+
+	// CREATE A NEW UPGENCONLIST.
+//	aPGCList = NewPGenConList( gADO ) ;
+	aPGCList = new UPGenConList( gADO ) ;
+	if( aPGCList == NULL )
+	{
+		HandleDBError(gADO) ;
+		SessionLogDirect("RemoveBatchFromQueue: NewPGenConList result = NULL") ;
+		gADO = delete gADO ;
+		return( FALSE ) ;
+	}
+
+	aPGCList->SetName("RemoveBatchFromQueue_UPGCList") ;
+	result = Query( aPGCList, theSelectCmd, "ReadOnly", "Static" ) ;
+	if( result != 1 )
+	{
+		HandleDBError(gADO) ;
+		aPGCList = Delete( aPGCList ) ;
+		SessionLogDirect("RemoveBatchFromQueue: Query result = %ld", result ) ;
+		gADO = delete gADO ;
+		return(FALSE) ;
+	}
+
+	//	FOR EACH ENTRY WE HAVE TO DELETE THE JOB FILE
+	aPGC = GetFirst( aPGCList ) ;
+	while( aPGC )
+	{
+		GetAttrValue( aPGC, "JobPath", theJobPath ) ;
+		if( *theJobPath )
+		{
+			if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 5 )
+			{
+				SessionLogDirect("RemoveBatchFromQueue: Deleting = [%s]", theJobPath ) ;
+			}
+			unlink( theJobPath ) ;
+		}
+		aPGC = GetNext( aPGCList ) ;
+	}
+
+	aPGCList = Delete( aPGCList ) ;
+
+	result = DoSQL( theDeleteCmd ) ;
+
+	if( result == 0 )
+	{
+		result = gADO->RefreshConnectionCache() ;
+	}
+
+	gADO = delete gADO ;
+	return( result == 0 ) ;
+}
+*/
+
+
+
+
+
+

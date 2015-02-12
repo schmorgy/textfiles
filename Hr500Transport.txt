@@ -1,0 +1,1042 @@
+
+// HR500 LR FILM DRIVE COMMANDS (GENERAL - HIGH LEVEL)
+
+gFilmMarkType = ~~;
+gNotchNumber = 0;
+gNotchIncrement = 0;
+
+NUMERIC HR500_OpenFilmDrive( UpdateStatus,SkipCalCheck )
+{
+	if ( !Defined( Scanner ) )
+	{	return FALSE;	}
+
+	if ( !Scanner( GetSerialNumber,ScannerSerialNumber ) )
+	{
+		Warning( Translate( ~Could not get serial number of scanner.~ ) );
+		ScannerSerialNumber = 0;
+	}
+
+	dlg( GetInput );
+    DlgData( Get,FilmDriveSetup,FilmDriveSetup );
+
+	TensionAborted = FALSE;
+
+	if ( ~<FilmDriveSetup>~ == ~~ )
+	{
+		return Warning( Translate( ~You must select a film drive setup first~ ) );
+	}
+
+	Query = ~Select * From HR500FilmDrive Where Name = '<FilmDriveSetup>' and ScannerSerialNo = '<ScannerSerialNumber>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+	}
+
+	if ( !List( GetFirst,Setup ) )
+	{
+		Query = ~Select * From HR500FilmDrive Where Name = '<FilmDriveSetup>' and ScannerSerialNo = '0'~;
+		if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+		}
+		if ( !List( GetFirst,Setup ) )
+		{
+			return Warning( Translate( ~Could not find a setup named <FilmDriveSetup> for scanner serial number <ScannerSerialNumber>~ ) );
+		}
+
+		if ( !HR500_UpdateSetupWithSerialNumber( ~<FilmDriveSetup>~,~<ScannerSerialNumber>~ ) )
+		{
+			Warning( Translate( ~Please update the FilmDrive Setup with the scanner serial number.~ ) );
+		}
+	}
+
+	SimulateFilmDrive = Setup( GetNumeric, Simulate );
+	Setup( Get,FilmMarkType,TempMark );
+	gFilmMarkType = (~<TempMark>~ == ~2~) ? ~Notch~ : (~<TempMark>~ == ~1~) ? ~Punch~ : ~None~;
+	MinPunchNumber = 0;
+	MaxPunchNumber = 32767;
+
+	TXOffsetIncrementUnit = 0.001;
+	MaxXIncrements = <MaxXIncrementsInInches>/<TXOffsetIncrementUnit>;
+
+	Scanner( Simulating, <SimulateFilmDrive> );
+
+	DlgData( Get,FilmType,FilmType );
+	DlgData( Get,SFSFile,SFSFile );
+	FilmTermsFile = ~<$App.ShareDirectory>\Scan\<$con.dlgData[ScannerType]>\FilmTerms\<FilmType>.flt~;
+
+	if ( ~<SFSFile>~ == ~~ )
+	{
+		SFSFile = ~<$App.Directory>\Scan\HR500\kcdfs.satdef~;
+	}
+
+	if ( !Scanner( LoadFilmTermsFromFile,~<FilmTermsFile>~,~<FilmType>~,~<SFSFile>~ ) )
+	{
+		ErrMsg = Translate( ~Could not find or load <FilmTermsFile>~ );
+		return HandleHR500Error( ~<ErrMsg>~ );
+	}
+
+	Hr500FilmDrive = 1; // Default to Long Roll Drive Type
+
+	if ( !Scanner( InstallFilmDrive,<Hr500FilmDrive> ) )
+	{
+		ErrMsg = Translate( ~Failed to setup the film drive.~ );
+		return HandleHR500Error( ~<ErrMsg>~ );
+	}
+
+	if ( !Scanner( InitializeFilmDrive,Setup ) )
+	{
+		ErrMsg = Translate( ~Failed to initialize the film drive.~ );
+		return HandleHR500Error( ~<ErrMsg>~ );
+	}
+
+	FilmDrive = Scanner( FilmDriveInitialized );
+	Global( FilmDrive );
+	FilmDriveCmdInProgress( Translate( ~Film drive enabled.~ ) );
+
+	HR500_Tension( FALSE );
+	FilmDirection = Setup( GetNumeric, Direction );
+	DlgData( SetValues,TXOffsetIncrementUnit,<TXOffsetIncrementUnit> );
+
+	gNotchNumber = 0;
+	if ( !CheckStoredCalibration( TRUE,FALSE,FALSE ) && !<SkipCalCheck> )
+	{
+			OnHR500CalibrateButton( FALSE,FALSE,TRUE );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC HR500_UpdateSetupWithSerialNumber( SetupName,SerialNumber )
+{
+	Cmd = ~Update HR500FilmDrive Set ScannerSerialNo = '<SerialNumber>' Where Name = '<SetupName>' and ScannerSerialNo = '0'~;
+
+	if ( !Ado( dBase,Connect,Cmd,~<Cmd>~ ) )	
+	{ 
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not <cmd>. <theErr>~ );
+	}
+	return TRUE;
+}
+
+
+NUMERIC HR500_Tension( Tension )
+{
+	TensionAborted = FALSE;
+	_LogMessage( ~Tension~ );
+	gNotchNumber = 0;
+	if ( <Tension> && !Scanner( FilmDriveInitialized ) )
+	{
+		return HandleHR500Error( Translate( ~Failed to initialize the film drive for tensioning~ ));
+	}
+	Scanner( Stop );
+	if ( <Tension> )
+	{
+		if ( !Scanner( ClampFilm,TRUE ) )
+		{
+			Scanner( ClampFilm,FALSE ); // Attempt release
+			Scanner( Stop );
+			return HandleHR500Error( Translate( ~Unable to open film clamp.~ ));
+		}
+		if ( MessageBox( ~Is the film loaded and ready to be clamped?~,YESNO ) != YES )
+		{
+			TensionAborted = TRUE;
+			Scanner( ClampFilm,FALSE );
+			Scanner( Stop );
+			return FALSE;
+			//return HandleHR500Error( Translate( ~Film not loaded.~ ));
+		}
+		if ( Scanner( IsSimulating ) )
+		{
+			CurrentPunchNumber = 1;
+			CurrentPunchNumber = HR500_FormatPunchNumber( <CurrentPunchNumber> );
+			SetCurrentPunchNumber( ~<CurrentPunchNumber>~ );
+		}
+
+		dlg( EnableControls,TRUE,UnloadRevButton,UnloadFwdButton );
+	}
+	else
+	{
+		dlg( EnableControls,TRUE,LoadRevButton,LoadFwdButton );
+		dlg( EnableControls,FALSE,UnloadRevButton,UnloadFwdButton );
+	}
+	//Scanner( Stop );
+	return Scanner( Tension,<Tension> );
+}
+
+
+NUMERIC HR500_LoadFilmFwd( XOffset )
+{
+	if ( <ContinueRunning> )
+	{
+		LogMessage( ~Load First Punch with Adjust X Offset~ );
+		if ( !Scanner( LoadFilmFwd, <XOffset> ) )
+		{
+			if ( <ContinueRunning> )
+			{
+				CurrentPunchNumber = Scanner( GetCurrentPunchNumber );
+				CurrentPunchNumber = HR500_FormatPunchNumber( <CurrentPunchNumber> );
+				Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~,FALSE );
+				Invoke( UserFrameErrorMessage,~Frame Movement Failed...~, FALSE, TRUE );
+				Invoke( FilmDriveOperationError, ~load film forward~, FALSE );
+				return FALSE;
+			}
+		}
+	}
+
+	if ( <ContinueRunning> )
+	{
+		Invoke( LoadFilmComplete );
+		return TRUE;
+	}
+	Invoke( UserFrameErrorMessage,~Film Load Aborted~, FALSE, FALSE );
+	return FALSE;
+}
+
+
+NUMERIC HR500_LoadFilmRev( XOffset )
+{
+	if ( <ContinueRunning> )
+	{
+		LogMessage( ~Load Film Reverse with Adjust X Offset~ );
+		if ( !Scanner( LoadFilmRev, <XOffset> ) )
+		{
+			if ( <ContinueRunning> )
+			{
+				CurrentPunchNumber = Scanner( GetCurrentPunchNumber );
+				CurrentPunchNumber = HR500_FormatPunchNumber( <CurrentPunchNumber> );
+				Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~,FALSE );
+				Invoke( UserFrameErrorMessage,~Frame Movement Failed... ~, FALSE, TRUE );
+				Invoke( FilmDriveOperationError, ~load film in reverse~, FALSE );
+				return FALSE;
+			}
+		}
+	}
+
+	if ( <ContinueRunning> )
+	{
+		Invoke( LoadFilmComplete );
+		return TRUE;
+	}
+	Invoke( UserFrameErrorMessage,~Film Load Aborted~, FALSE, FALSE );
+	return FALSE;
+}
+
+NUMERIC HR500_NextFrame( XOffset, YOffset, ScanMode, PunchWaitOverride, FrameToPunch, UseAdjustedFramePosition, IgnoreFdaErrors, BypassFda, AutoSkipBlankFDA )
+{
+	if ( <ContinueRunning> )
+	{
+		LogMessage( ~Next Frame with Adjust X Offset~ );
+		if ( !Scanner( NextFrame, <XOffset>, <PunchWaitOverride> ) )
+		{
+			if ( <ContinueRunning> )
+			{
+				CurrentPunchNumber = Scanner( GetCurrentPunchNumber );
+				CurrentPunchNumber = HR500_FormatPunchNumber( <CurrentPunchNumber> );
+				Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~,<FrameToPunch> );
+				Invoke( UserFrameErrorMessage,~Frame Movement Failed...~, FALSE, TRUE );
+				if ( <ScanMode> ) { Invoke( FilmDriveOperationError, ~move to next frame~, FALSE ); }
+				return FALSE;
+			}
+		}
+	}
+
+	if ( <gFilmMarkType> == ~Notch~ )
+	{
+		if ( !<PunchWaitOverride> )
+		{	gNotchNumber = <gNotchNumber> + 1;	}
+		CurrentPunchNumber = <gNotchNumber>;
+	}
+	else
+	{
+		CurrentPunchNumber = Scanner( GetCurrentPunchNumber );
+	}
+
+	CurrentPunchNumber = HR500_FormatPunchNumber( <CurrentPunchNumber> );
+	Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~,<FrameToPunch> );
+	if ( <ContinueRunning> )
+	{
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Complete~ );
+		if ( !<ScanMode> )
+		{
+			Invoke( EnableScanningControls, TRUE );
+			Invoke( SetTransportControlsStopped );
+		}
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationComplete, ~<CurrentPunchNumber>~ ); }
+		return TRUE;
+	}
+	Invoke( UserFrameErrorMessage,~Frame Movement Aborted~, FALSE, FALSE );
+	if ( <ScanMode> ) { Invoke( FilmDriveOperationStopped ); }
+	return FALSE;
+}
+
+
+NUMERIC HR500_PrevFrame( XOffset, YOffset, ScanMode, PunchWaitOverride, FrameToPunch )
+{
+	if ( <ContinueRunning> )
+	{
+		LogMessage( ~Previous Frame with Adjust X Offset~ );
+		if ( !Scanner( PrevFrame, <XOffset>, <PunchWaitOverride> ) )
+		{
+			if ( <ContinueRunning> )
+			{
+				CurrentPunchNumber = Scanner( GetCurrentPunchNumber );
+				CurrentPunchNumber = HR500_FormatPunchNumber( <CurrentPunchNumber> );
+				Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~,<FrameToPunch> );
+				Invoke( UserFrameErrorMessage,~Frame Movement Failed... ~, FALSE, TRUE );
+				if ( <ScanMode> ) { Invoke( FilmDriveOperationError, ~move to previous frame~, FALSE ); }
+				return FALSE;
+			}
+		}
+	}
+
+	if ( <gFilmMarkType> == ~Notch~ )
+	{
+		gNotchNumber = (<gNotchNumber> <= 0 ) ? 0 : <gNotchNumber> - 1;
+		CurrentPunchNumber = <gNotchNumber>;
+	}
+	else
+	{
+		CurrentPunchNumber = Scanner( GetCurrentPunchNumber );
+	}
+
+	CurrentPunchNumber = HR500_FormatPunchNumber( <CurrentPunchNumber> );
+	Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~,<FrameToPunch> );
+	if ( <ContinueRunning> )
+	{
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Complete~ );
+		if ( !<ScanMode> )
+		{
+			Invoke( EnableScanningControls, TRUE );
+			Invoke( SetTransportControlsStopped );
+		}
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationComplete, ~<CurrentPunchNumber>~ ); }
+		return TRUE;
+	}
+	Invoke( UserFrameErrorMessage,~Frame Movement Aborted~, FALSE, FALSE );
+	if ( <ScanMode> ) { Invoke( FilmDriveOperationStopped ); }
+	return FALSE;
+}
+
+
+NUMERIC HR500_FastForward()
+{
+	_LogMessage( ~Fast Forward~ );
+	if ( Scanner( FastForward ) )
+	{
+		ForwardRewindFlag = TRUE;
+		return TRUE;
+	}
+	UserFrameErrorMessage( ~Fast Forward Failed~, FALSE, TRUE );
+	return FALSE;
+}
+
+
+NUMERIC HR500_Rewind()
+{
+	_LogMessage( ~Rewind~ );
+	if ( Scanner( Rewind ) )
+	{
+		ForwardRewindFlag = TRUE;
+		return TRUE;
+	}
+	UserFrameErrorMessage( ~Rewind Failed~, FALSE, TRUE );
+	return FALSE;
+}
+
+
+NUMERIC HR500_UnloadFilmFwd( Msg )
+{
+	ForwardRewindFlag = TRUE;
+	if ( <ContinueRunning> )
+	{
+		UnloadFlag = TRUE;
+		LogMessage( ~<Msg>~ );
+		if ( ~<Msg>~ == ~Fastforward~ )
+		{
+			UnloadFlag = FALSE;
+		}
+		if ( !Scanner( UnloadFilmFwd,<UnloadFlag>,SizzleControl ) )
+		{
+			if ( <ContinueRunning> )
+			{
+				ForwardRewindFlag = FALSE;
+				Invoke( UserFrameErrorMessage,~<Msg> Failed... ~, FALSE, TRUE );
+				Invoke( FilmDriveOperationError, ~<Msg>~, FALSE ); 
+				return FALSE;
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC HR500_UnloadFilmRev( Msg )
+{
+	ForwardRewindFlag = TRUE;
+	if ( <ContinueRunning> )
+	{
+		UnloadFlag = TRUE;
+		LogMessage( ~<Msg>~ );
+		if ( ~<Msg>~ == ~Rewind~ )
+		{
+			UnloadFlag = FALSE;
+		}
+		if ( !Scanner( UnloadFilmRev,<UnloadFlag>,SizzleControl ) )
+		{
+			if ( <ContinueRunning> )
+			{
+				ForwardRewindFlag = FALSE;
+				Invoke( UserFrameErrorMessage,~<Msg> Failed... ~, FALSE, TRUE );
+				Invoke( FilmDriveOperationError, ~<Msg>~, FALSE ); 
+				return FALSE;
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC HR500_SeekPunch( CurrentPunch, SeekPunch, XOffset, YOffset, FirstPunch, LastPunch, ScanMode, PunchWaitOverride, FrameToPunch )
+{
+	LogMessage( ~Seek <gFilmMarkType> <SeekPunch>~ );
+	// If non scanning mode then default to max ranges - to allow manual
+	// frame movement
+	if ( !<ScanMode> )
+	{
+		FirstPunch = HR500_FormatPunchNumber( <MinPunchNumber> );
+		LastPunch  = HR500_FormatPunchNumber( <MaxPunchNumber> );
+	}
+	// Halt the drive to clear DLL
+	// Scanner( Stop );
+	if ( <ContinueRunning> )
+	{
+		if ( !HR500_FindPunchNumber( ~<CurrentPunch>~,~<SeekPunch>~,~<FirstPunch>~,~<LastPunch>~, ~<XOffset>~, ~<PunchWaitOverride>~, FoundPunchNumber ) )
+		{
+			Invoke( FilmDriveOperationError, ~seek <gFilmMarkType> [<SeekPunch>]~,<PunchWaitOverride> );
+			return FALSE;
+		}
+	}
+
+	if ( <ContinueRunning> )
+	{
+		if ( <gFilmMarkType> == ~Notch~ )
+		{
+			CurrentPunchNumber = <gNotchNumber>;
+		}
+		else
+		{
+			CurrentPunchNumber = ~<FoundPunchNumber>~;
+		}
+		CurrentPunchNumber = HR500_FormatPunchNumber( <CurrentPunchNumber> );
+		Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~,<FrameToPunch> );
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Complete~ );
+		if ( !<ScanMode> )
+		{
+			Invoke( EnableScanningControls, TRUE );
+			Invoke( SetTransportControlsStopped );
+		}
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationComplete, ~<CurrentPunchNumber>~ ); }
+		return TRUE;
+	}
+	Invoke( UserFrameErrorMessage,~Frame Movement Aborted~, FALSE, FALSE );
+	if ( <ScanMode> ) { Invoke( FilmDriveOperationStopped ); }
+	return TRUE;
+}
+
+
+NUMERIC HR500_MoveDeltaX( Delta, IgnoreAdjustment )
+{
+	if ( <Delta> == 0 )
+	{
+		return TRUE;
+	}
+
+	DlgData( GetValues,TXOffsetPositionInUnits,CurrentXOffset,TXOffsetIncrementUnit,TXOffsetIncrementUnit );
+
+	if ( <IgnoreAdjustment> )
+	{
+		AllowedDelta = <Delta>;
+	}
+	else
+	{
+		if ( <CurrentXOffset> >= 0 )
+		{
+			sign = ~+~;
+			DeltaAvailable =  <MaxXIncrements> - <CurrentXOffset>;
+			AllowedDelta = pin( <Delta>,-<MaxXIncrements>,<DeltaAvailable> );
+		}
+		else
+		{
+			sign = ~-~;
+			DeltaAvailable =  (-<MaxXIncrements>) - <CurrentXOffset>;
+			AllowedDelta = pin( <Delta>,<DeltaAvailable>,<MaxXIncrements> );
+		}
+
+		if ( <AllowedDelta> == 0 )
+		{
+			Warning( Translate( ~Film Offset at end of limit of <sign><MaxXIncrementsInDisplayUnits> <DisplayUnits>.~ ) );
+			return TRUE;
+		}
+	}
+
+	_LogMessage( ~Move Delta X Offset by <AllowedDelta>~ );
+
+	EnableScanningControls( FALSE );
+	SetTransportControlsRunning();
+	if ( !Scanner( MoveDeltaX,<AllowedDelta> ) )
+	{
+		EnableScanningControls( TRUE );
+		return FALSE;
+	}
+	if ( <FrameNotInDB> )
+	{	UseImageOverrides = FALSE;	}
+	EnableScanningControls( TRUE );
+	SetTransportControlsStopped();
+	if ( !<IgnoreAdjustment> )
+	{
+		SetDialogVendorXOffsetInfo( <CurrentXOffset> + Numeric( <AllowedDelta> ), <TXOffsetIncrementUnit> );
+	}
+	return TRUE;
+
+}
+
+
+NUMERIC HR500_Stop( )
+{
+	ContinueRunning = FALSE;
+	if ( Scanner( Stop ) )
+	{
+		if ( <ForwardRewindFlag> == TRUE )
+		{
+			// Reset the counters
+			Scanner( InitializeStartInfo );
+			ForwardRewindFlag = FALSE;
+		}
+		SetTransportControlsStopped();
+		EnableScanningControls( TRUE );
+		return TRUE;
+	}
+	return FALSE;
+}
+
+
+// HR500 FILM DRIVE COMMANDS (THREADED UTILITIES - LOW LEVEL - CALLED BY HIGH LEVEL)
+
+NUMERIC HR500_FindPunchNumber( CurrentPunchNumber, SeekPunchNumber, FilmFirstPunchNumber, FilmLastPunchNumber, XOffSet, PunchWaitOverride, &FoundPunchNumber )
+{
+	InvalidParameter = ~BLANK~;
+	if ( !HR500_ValidPunchNumber( ~<SeekPunchNumber>~ ) )
+	{
+		InvalidParameter = ~Seek~;
+	}
+	if ( ~<InvalidParameter>~ != ~BLANK~ && !HR500_ValidPunchNumber( ~<FilmFirstPunchNumber>~ ) )
+	{
+		InvalidParameter = ~Film Start~;
+	}
+	if ( ~<InvalidParameter>~ != ~BLANK~ && !HR500_ValidPunchNumber( ~<FilmLastPunchNumber>~ ) )
+	{
+		InvalidParameter = ~Film End~;
+	}
+	if ( ~<InvalidParameter>~ != ~BLANK~ )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Aborted... Invalid <InvalidParameter> Frame Number Specified~, TRUE, FALSE );
+		return FALSE;
+	}
+	if ( <FilmFirstPunchNumber> > <FilmLastPunchNumber> )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Aborted... Invalid Frame Numbers Specified~, TRUE, FALSE );
+		return FALSE;
+	}
+	if ( <SeekPunchNumber> < <FilmFirstPunchNumber> || <SeekPunchNumber> > <FilmLastPunchNumber> )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Aborted... Seek Frame Number Out of Range~, TRUE, FALSE );
+		return FALSE;
+	}
+
+	Retries = 0;
+	FoundPunchNumber = ~<CurrentPunchNumber>~;
+	// Force call to scanner object
+	FoundPunchNumber = ~-1~;
+	JogRetries = 0;
+
+	if ( <gFilmMarkType> != ~Notch~ )
+	{
+		while ( <ContinueRunning> && ( <FoundPunchNumber> != <SeekPunchNumber> ) )
+		{
+			if ( !Scanner( SeekPunch, <SeekPunchNumber>, <XOffset>, <PunchWaitOverride> ) )
+			{
+				if ( <ContinueRunning> )
+				{
+					Invoke( UserFrameErrorMessage,~Frame Movement Failed...  ~, FALSE, TRUE );
+					return FALSE;
+				}
+				return TRUE;
+			}
+			FoundPunchNumber = Scanner( GetCurrentPunchNumber );
+			FoundPunchNumber = HR500_FormatPunchNumber( <FoundPunchNumber> );
+			Invoke( SetCurrentPunchNumber,~<FoundPunchNumber>~ );
+			if ( Numeric( ~<SeekPunchNumber>~ ) != Numeric( ~<FoundPunchNumber>~ ) )
+			{
+				Invoke( UserFrameErrorMessage,~Frame Movement Failed... Exceeded Retries~, TRUE, TRUE );
+				return FALSE;
+			}
+		}
+	}
+	else
+	{
+		NumberOfFrames = atof( ~<SeekPunchNumber>~ ) - atof( ~<CurrentPunchNumber>~ );
+		LogMessage( ~Advancing <NumberOfFrames> frames.~ );
+
+		NumberRemaining = Scanner( AdvanceNFrames,<NumberOfFrames>,<XOffset> );
+		FoundPunchNumber = atof( ~<SeekPunchNumber>~ ) - <NumberRemaining>;
+		gNotchNumber = <FoundPunchNumber>;
+		TotalSkipped = atof( ~<FoundPunchNumber>~ ) - atof( ~<CurrentPunchNumber>~ );
+
+		if ( <NumberRemaining> != 0 )
+		{
+			Invoke( UserFrameErrorMessage,~Frame Movement Failed... Incorrect Advance~, TRUE, TRUE );
+			return FALSE;
+		}
+	}
+
+	if ( !<ContinueRunning> )
+	{
+		return TRUE;
+	}
+
+	if ( <FoundPunchNumber> != <SeekPunchNumber> )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+// TBD - This method is not used
+NUMERIC HR500_VerifyPunchNumber( ExpectedPunchNumber, FilmFirstPunchNumber, FilmLastPunchNumber )
+{
+	// Verify Punch Number by Jogging Film
+
+	JogDirection = ( <ExpectedPunchNumber> > <FilmFirstPunchNumber> ) ? ~PrevFrame~ : ~NextFrame~;
+
+	if ( !Scanner( ~<JogDirection>~ ) )
+	{
+		return FALSE;
+	}
+
+	CurrentPunchNumber = Scanner( GetCurrentPunchNumber );
+	CurrentPunchNumber = HR500_FormatPunchNumber( <CurrentPunchNumber> );
+	Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~ );
+
+	// Jog Back to the Frame
+	JogDirection = ( ~<JogDirection>~ == ~PrevFrame~ ) ? ~NextFrame~ : ~PrevFrame~;
+	if ( !Scanner( ~<JogDirection>~ ) )
+	{
+		return FALSE;
+	}
+
+	CurrentPunchNumber = Scanner( GetCurrentPunchNumber );
+	CurrentPunchNumber = HR500_FormatPunchNumber( <CurrentPunchNumber> );
+	Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~ );
+
+	if ( <ExpectedPunchNumber> != <CurrentPunchNumber> )
+	{
+		return FALSE;
+	}
+	return TRUE;
+}
+
+NUMERIC HR500_UpdateNextFrameInfo()
+{
+	// get from scan setup for next frame if from db
+	Mag = ~<$Con.DlgData[Format]>~;
+	ScanSize = ~<$Con.DlgData[SpeedQuality]>~;
+	OpticalZoom = ~<$Con.DlgData[OpticalZoom]>~;
+	Index = MagNames( IndexOf,~<Mag>~ );
+	MinMagnification = atof(MinMagnifications(ValueOf,$Index));
+	MaxMagnification = atof(MaxMagnifications(ValueOf,$Index));
+	ScanSize = (((<MaxMagnification> - <MinMagnification>) / (<SpeedQualityHighVal> - <SpeedQualityLowVal>)) * <ScanSize>) + <MinMagnification>;
+	ScanSize = Pin( $ScanSize,<MinMagnification>,<MaxMagnification> );
+	SizzleControl( SetValues,ScanSize,<ScanSize>,OpticalZoom,<OpticalZoom> );
+
+	if ( !Scanner( UpdateNextFrameInfo,SizzleControl ) )
+	{
+		ErrMsg = Translate( ~Unable to update next frame information.~ );
+		HandleHR500Error( ~<ErrMsg>~ );
+		return FALSE;
+	}
+	return TRUE;
+}
+
+// HR500 FILM DRIVES COMMANDS (CONFIGURATION - HIGH LEVEL)
+
+
+VOID HR500_FilmDriveSelected( )
+{
+	// Restore the UI
+	
+	// Reset the labels
+	if ( ~<gFilmMarkType>~ == ~Notch~ )
+	{
+		dlg( SetControlTitle, GoTo_Button, Translate( ~Go To Notch~ ));
+		dlg( SetControlTitle, CurrentPunchNumberText, Translate( ~Notch~ ));
+		dlg( SetValueInCtrlDef, GotoPunchNumberTextBox,~Tooltip~,Translate( ~Enter Notch Number To Go To~ ));
+		dlg( SetValueInCtrlDef, GoTo_Button,~Tooltip~,Translate( ~Go To Notch #~ ));
+		dlg( SetValueInCtrlDef, CurrentPunchNumberTextBox,~Tooltip~,Translate( ~Current Notch Number~ ));
+		dlg( SetValueInCtrlDef, LoadFwdButton,~Tooltip~,
+			 Translate(~Advance past the leader and find the first notch in the forward direction (left to right)~));
+		dlg( SetValueInCtrlDef, LoadRevButton,~Tooltip~,
+			 Translate(~Advance past the leader and find the first notch in the reverse direction (right to left)~));
+	}
+	else
+	{
+		dlg( SetControlTitle, GoTo_Button, Translate( ~Go To Punch~ ));
+		dlg( SetControlTitle, CurrentPunchNumberText, Translate( ~Punch~ ));
+		dlg( SetValueInCtrlDef, GotoPunchNumberTextBox,~Tooltip~,Translate( ~Enter Punch Number To Go To~ ));
+		dlg( SetValueInCtrlDef, GoTo_Button,~Tooltip~,Translate( ~Go To Punch #~ ));
+		dlg( SetValueInCtrlDef, CurrentPunchNumberTextBox,~Tooltip~,Translate( ~Current Punch Number~ ));
+		dlg( SetValueInCtrlDef, LoadFwdButton,~Tooltip~,
+			 Translate(~Advance past the leader and find the first punch in the forward direction (left to right)~));
+		dlg( SetValueInCtrlDef, LoadRevButton,~Tooltip~,
+			 Translate(~Advance past the leader and find the first punch in the reverse direction (right to left)~));
+	}
+
+	dlg( SetControlTitle, TensionBox, Translate( ~Tension~ ));
+	dlg( SetControlTitle, FastForwardButton, Translate( ~>>>>~ ));
+	dlg( SetControlTitle, FastRewindButton, Translate( ~<<<<~ ));
+	dlg( SetValueInCtrlDef, FastForwardButton,~Tooltip~,Translate( ~Fast Forward~ ));
+	dlg( SetValueInCtrlDef, FastRewindButton,~Tooltip~,Translate( ~Fast Rewind~ ));	
+
+	dlg( SetCheck, FALSE, ContinueFrameNumCheckBox );
+	dlg( SetCheck, FALSE, AutoIncRollNumbersCheckBox );
+	dlg( SetCheck, FALSE, FocusEveryFrameCheckBox );
+	dlg( SetCheck, FALSE, TwinCheckCheckBox );
+	dlg( SetCheck, FALSE, UseAdjustedFramesCheckBox );
+	dlg( SetCheck, FALSE, AdjustFramePositionBox );
+	dlg( SetCheck, FALSE, AutoSkipBlankFrameBox );
+	dlg( SetCheck, FALSE, IgnoreFdaErrorsCheckBox );
+	dlg( SetCheck, FALSE, DisableFilmDriveCheckBox );
+
+	// Reenable the controls
+	dlg( EnableControls,TRUE,EditFilmEditorsButton );
+	dlg( EnableControls,TRUE,EditorStaticText );
+	dlg( EnableControls,TRUE,EditorComboBox );
+	dlg( EnableControls,TRUE,EnableFilmDriveBox );
+	dlg( EnableControls,TRUE,ViewFilmDriveControlsBox );
+	//dlg( EnableControls,TRUE,VendorSetupComboBox );
+	dlg( EnableControls,TRUE,EditVendorButton );
+	dlg( EnableControls,TRUE,FrameToPunchPaddingField );
+	dlg( EnableControls,TRUE,ScanFromDataBaseButton );
+	dlg( EnableControls,TRUE,VendorYOffsetClearButton );
+	dlg( EnableControls,TRUE,VendorYOffsetStaticText );
+	dlg( EnableControls,TRUE,VendorYOffsetTextBox );
+	dlg( EnableControls,TRUE,VendorXOffsetStaticText );
+	dlg( EnableControls,TRUE,VendorXOffsetTextBox );
+	dlg( EnableControls,TRUE,XSliderIFactorStaticText );
+	dlg( EnableControls,TRUE,VendorXOffsetClearButton );
+	dlg( EnableControls,TRUE,VendorXOffsetZeroButton );
+	dlg( EnableControls,TRUE,XSliderIFactorField );
+	dlg( EnableControls,TRUE,GoTo_Button );
+	dlg( EnableControls,TRUE,GoToPunchNumberTextBox );
+
+	dlg( EnableControls,FALSE,IgnoreXAdjustmentsCheckBox );
+	dlg( EnableControls,FALSE,DisableFilmDriveCheckBox );
+	dlg( EnableControls,FALSE,FastRewindButton );
+	dlg( EnableControls,FALSE,FastForwardButton );
+	dlg( EnableControls,FALSE,CutNegPromptCheckBox );
+	dlg( ShowControls,  FALSE,CutNegPromptCheckBox );
+
+	if ( RunningVersion( 5.1) )
+	{
+		dlg( EnableControls,FALSE,FdaSetupStaticText,FdaSetupComboBox,EditFdaButton );
+	}
+	else
+	{
+		dlg( EnableControls,FALSE,OverrideFrameButton,OverrideFrameTextBox);
+	}
+
+	dlg( ShowControls,  TRUE,PrevScanButton );
+
+	if ( DlgData(GetNumeric,FilmDriveEnabled) )
+	{
+		dlg( EnableControls,FALSE,VendorSetupComboBox );
+	}
+	else
+	{
+		dlg( EnableControls,TRUE,VendorSetupComboBox );
+	}
+
+	filmDriveEnabled = DlgData( GetNumeric,FilmDriveEnabled );
+	dlg( GetStrings,CurrentPunchPosition,CurrentPunchPosition );
+	if ( ~<CurrentPunchPosition>~ != ~~ && IsNumeric( ~<CurrentPunchPosition>~ ) )
+	{
+		dlg( EnableControls,FALSE,LoadRevButton,LoadFwdButton );
+	}
+	else
+	{
+		dlg( EnableControls,<filmDriveEnabled>,LoadRevButton,LoadFwdButton );
+	}
+
+	dlg( EnableControls,FALSE,IgnoreFdaErrorsCheckBox );
+	dlg( EnableControls,FALSE,AdjustFramePositionBox );
+	dlg( EnableControls,FALSE,AutoSkipBlankFrameBox );
+	dlg( EnableControls,FALSE,EdgeSensitivityTextBox );
+	dlg( EnableControls,FALSE,MinGapTextBox,FixedAdvanceTextBox );
+	dlg( EnableControls,FALSE,GetStripSensorStateButton );
+	dlg( EnableControls,FALSE,TwinCheckCheckBox );
+	dlg( EnableControls,FALSE,UseAdjustedFramesCheckBox );
+	dlg( EnableControls,FALSE,SetFrameOverrideButton );
+	dlg( EnableControls,FALSE,ContinueFrameNumCheckBox,AutoIncRollNumbersCheckBox,FocusEveryFrameCheckBox );
+	dlg( EnableControls,FALSE,DisableFrameDetectCheckbox );
+	dlg( EnableControls,FALSE,EdgeSensitivityStaticText );
+	dlg( EnableControls,FALSE,MinGapStaticText,FixedAdvanceStaticText,MinGapLabel,FixedAdvanceLabel );
+	EnableSequentialPunches(TRUE);
+
+	// Restore the film format selections - and current selection if possible
+	CurrentFormat = ~<$con.DlgData[Format]>~;
+	StringList( OriginalFilmSizeChoices,New,InListOrder,AddStrings,~35mm~,~35mm_Unperfed~,~35mm_Camera_Card~,~46mm~,~46mm_Camera_Card~,~62mm_6x4.5~,~62mm_6x6~,~62mm_6x7~,~62mm_6x8~,~62mm_6x9~,~Split_70mm~,~Split_70mm_Camera_Card~,~70mm_Unperfed~ );
+	dlg( SetControlFromStringList, ~FilmSizeChoices~, OriginalFilmSizeChoices, Update );
+	dlg( SetControlFromStringList, ~FilmFormatComboBox~, OriginalFilmSizeChoices, Update );
+	if ( ~<CurrentFormat>~ != ~~ )
+	{
+		dlg( SelectString,FilmFormatComboBox,~<CurrentFormat>~ );
+	}
+
+    SizzleControl( Set, PreScanNotification, ~~ );
+    SizzleControl( Set, ScanCompleteNotification, ~~ );
+	SizzleControl( SetValues, OverScan, FALSE);
+	dlg( SetString,~~,StripSensorState );
+
+	ShowFilmDriveControls();
+
+	// We are going to replace the following global variables
+	ForgetGlobal( MagNames);
+	ForgetGlobal( FullFrameWidths);
+	ForgetGlobal( FullFrameHeights);
+	ForgetGlobal( MinMagnifications);
+	ForgetGlobal( MaxMagnifications);
+
+	// Restore all the control strings
+	NewString( MagNames,Set,		~Undefined,35mm,35mm_Unperfed,35mm_Camera_Card,46mm,46mm_Camera_Card,62mm_6x4.5,62mm_6x6,62mm_6x7,62mm_6x8,62mm_6x9,Split_70mm,Split_70mm_Camera_Card,70mm_Unperfed~,Delimiters,~,~ );
+	NewString( FullFrameWidths, Set, ~0,26,33,33,45,45,61,61,61,61,61,69,69,69~,Delimiters,~,~ );
+	NewString( FullFrameHeights, Set, ~0,38,44,62,66,67,45,58,71,79,85,45,45,88~,Delimiters,~,~ );
+	NewString( MinMagnifications,Set,~0,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5~,Delimiters,~,~ );
+	NewString( MaxMagnifications,Set,~0,2.0,2.0,1.77,1.46,1.45,1.18,1.18,1.18,1.15,1.11,1.04,1.04,1.02~,Delimiters,~,~ );
+	
+	// Reglobalize the control string variables
+	Global( MagNames);
+	Global( FullFrameWidths);
+	Global( FullFrameHeights);
+	Global( MinMagnifications);
+	Global( MaxMagnifications);
+
+	ChangeEnableSetOverscanArea( FALSE );
+	MaxXIncrementsInInches = 30.00000;
+	MaxXIncrementsInDisplayUnits = InchesTo<DisplayUnits>( <MaxXIncrementsInInches> );
+
+	return;
+}
+
+
+// HR500 FILM DRIVES COMMANDS (MISCELLANEOUS - HIGH LEVEL)
+
+NUMERIC HR500_ValidPunchNumber( PunchNumber )
+{
+	// allow for punch #0 from scanner
+	if ( strlen( ~<PunchNumber>~ ) == 0 || ( strlen( ~<PunchNumber>~ ) > 5 ) ||
+	   !IsNumeric( ~<PunchNumber>~ ) ||
+	   ( Numeric( ~<PunchNumber>~ ) < <MinPunchNumber> ) || ( Numeric( ~<PunchNumber>~ ) > <MaxPunchNumber> ) )
+	{
+		return FALSE;
+	}
+	return TRUE;
+}
+
+
+STR HR500_FormatPunchNumber( PunchNumber )
+{
+	return Format( Numeric( ~<PunchNumber>~ ), ~%05d~ );
+}
+
+NUMERIC HR500_ValidPunchRange( PunchNumber )
+{
+	// allow for punch #0 from scanner
+	if ( !IsNumeric( ~<PunchNumber>~ ) ||
+	   ( Numeric( ~<PunchNumber>~ ) < <MinPunchNumber> ) || ( Numeric( ~<PunchNumber>~ ) > <MaxPunchNumber> ) )
+	{
+		return FALSE;
+	}
+	return TRUE;
+}
+
+NUMERIC HandleNonsequentialPunch( Punch,ExpectedPunchNumber )
+{
+	dlg( SetStrings,GotoPunchNumber,~<ExpectedPunchNumber>~ );
+    dlg( Save,GotoPunchNumber );
+	Msg = ~Nonsequential punch read:\nFound Punch <Punch>\nExpected Punch <ExpectedPunchNumber>~ ;
+	GenCon( MbInfo,New,DDCustomMessageBox );
+	MbInfo( SetValues,Title,Translate(~HR500 Scanning~),Message,~<Msg>~,
+				Button1,Translate(~&Jog to Retry Punch~),Button2,Translate(~&Scan Current~),Button3,Translate(~&Cancel~),
+				SetWindowPos,1,X,-1,Y,-1,Width,325,Height,215 ) ;
+	result = CustomMessageBox(MbInfo);
+	button = MbInfo(GetNumeric, ButtonPressed);
+	if ( <result> == 2 || <button> == 3 )	// result = 2 when X in dialog is pressed
+	{
+		dlg( SetStatus,0,Translate( ~Scanning cancelled~ ) );
+		ClearFilmDriveOperationHandlers();
+		EnableScanningControls( TRUE );
+		SetTransportControlsStopped();
+		return FALSE; 
+	}
+	else if ( <button> == 2 )
+	{
+		dlg( SetStatus,0,Translate( ~Scanning nonsequential punch~ ) );
+		return TRUE;
+	}
+	else if ( <button> == 1 )
+	{
+		dlg( SetStatus,0,Translate( ~Jogging to retry punch~ ) );
+		StartRetryPunchCommand( <Punch>,<ExpectedPunchNumber> );
+		return FALSE;
+	}
+	return FALSE;
+}
+
+NUMERIC HR500_ForgetGlobals( UpdateStatus,ClosingDialog )
+{
+	TensionAborted = FALSE;
+	dlg( EnableControls,FALSE,LoadRevButton,LoadFwdButton );
+	ForgetGlobal( FilmDrive );
+	return CloseFilmDriveComplete( <UpdateStatus>,<ClosingDialog> );
+}
+
+
+VOID StartRetryPunchCommand( CurrentPunch,ExpectedPunch )
+{
+	JogThread( New,RunRetryPunchCommand,<CurrentPunch>,~<ExpectedPunch>~ );
+}
+
+
+VOID RunRetryPunchCommand( CurrentPunch,ExpectedPunch )
+{
+	Action = STR ( RetryPunchComplete(<ExpectedPunch>,FALSE); );
+
+	// Build Jog Film Command
+	if ( !BuildJogFilmCommand( <CurrentPosition>, ~<ExpectedPunch>~ ) )
+	{
+		mesg = Translate( ~Unable to create jog film command sequence.~ );
+		Warning( Translate( ~<mesg>~ ) );
+		QueueContentsToMainThread( Action,1000 );
+		return;
+	}
+
+	// Verify Jog Film Command sequence was built
+	if ( ( ~<JogNextCommand>~ == ~~ ) || ( ~<JogPrevCommand>~ == ~~ ) )
+	{
+		mesg = Translate( ~Jog film commands are missing.~ );
+		Warning( Translate( ~<mesg>~ ) );
+		QueueContentsToMainThread( Action,1000 );
+		return;
+	}
+
+	MaxRetries	= 2;
+	Retry		= 1;
+	foundPunch	= <CurrentPunch>;
+	success		= FALSE;
+
+	while ( <Retry> <= <MaxRetries> && <foundPunch> != <ExpectedPunch> )
+	{
+		if ( <JogInDirection> < 0 )
+		{
+			ContinueRunning = TRUE;
+			results = <JogPrevCommand> ;
+
+			if ( !<results> )
+			{
+				QueueContentsToMainThread( Action,1000 );
+				return;
+			}
+
+			foundPunch = Scanner( GetCurrentPunchNumber );
+			if ( <foundPunch> != <ExpectedPunch> )
+			{
+				ContinueRunning = TRUE;
+				results = <JogNextCommand> ;
+
+				if ( !<results> )
+				{
+					QueueContentsToMainThread( Action,1000 );
+					return;
+				}
+			}
+		}
+		else
+		{
+			ContinueRunning = TRUE;
+			results = <JogNextCommand> ;
+
+			if ( !<results> )
+			{
+				QueueContentsToMainThread( Action,1000 );
+				return;
+			}
+
+			foundPunch = Scanner( GetCurrentPunchNumber );
+			if ( <foundPunch> != <ExpectedPunch> )
+			{
+				ContinueRunning = TRUE;
+				results = <JogPrevCommand> ;
+
+				if ( !<results> )
+				{
+					QueueContentsToMainThread( Action,1000 );
+					return;
+				}
+			}
+		}
+		Retry = <Retry> + 1;
+		foundPunch = Scanner( GetCurrentPunchNumber );
+		JogInDirection = -<JogInDirection>;
+	}
+
+	if ( <foundPunch> == <ExpectedPunch> )
+	{	success = TRUE;	}
+
+	Action = STR ( RetryPunchComplete(~<ExpectedPunch>~,<success>); );
+
+	QueueContentsToMainThread( Action,1000 );
+
+	return;
+}
+
+
+VOID RetryPunchComplete( ExpectedPunch,CommandStatus )
+{
+	IgnoreControlCommands = FALSE;
+	ClearJogFilmCommand();
+	if ( !<CommandStatus> )
+	{
+		dlg( SetStatus,0,Translate( ~Scanning cancelled.~ ) );
+		ClearFilmDriveOperationHandlers();
+		EnableScanningControls( TRUE );
+		SetTransportControlsStopped();
+		Warning( Translate( ~Could not find next sequential punch <ExpectedPunch>.  Scanning cancelled.~ ) );
+		return;
+	}
+
+	FilmDriveOperationComplete( ~<ExpectedPunch>~ );
+
+
+	return;
+}
+
+
+

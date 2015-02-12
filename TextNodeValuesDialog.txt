@@ -1,0 +1,1837 @@
+LeftMargin = 20;
+StaticTextWidth = 110;
+BigStaticTextWidth = 160;
+SmallStaticTextWidth = 65;
+EditTextWidth = 50;
+BigEditTextWidth = 115;
+HugeEditTextWidth = 250;
+SliderWidth = 170;
+HelpButtonXOffset = 15;	HelpButtonYOffset = 25;
+HelpButtonWidth = 30;	HelpButtonLength = 20;
+VerticalGap = 10;
+MedStaticTextWidth = 70;
+MediumRadioButtonWidth = 60;
+TabStartPosition = 90;
+
+Query = ~Select TextureName from Textures Order By Sequence~;
+
+// ypos = current y value within the tab
+// Prefix unique 2 character prefix for each tab.  Cannot be more than 2 characters
+// SpotColorKeyword for example ISpotColorImage: - name of keyword to turn spot color on (actually a bit value within ISpotColor: keyword)
+// SpotTextureKeyword for example ISpotTextureImage - name of keyword to turn spot texture on (actually a bit value within ISpotColor: keyword)
+// TranslucenceKeyword for example ISpotColorTranslucence - name of keyword that shows value of translucence ( = 100 - opacity) 
+// TextureNameKeyword for example SpotColorImageTexture: name of keyword that contains the nae of the texture.
+VOID DefineSpotColorControls(&ypos,Prefix,SpotColorKeyword,SpotTextureKeyword,TranslucenceKeyword,TextureNameKeyword)
+{
+	Define: <Prefix>SpotColorComboBox Using DDwinCtrlDef AsSymbol <Prefix>SpotColorComboBox
+	Fields: TypeName		SComboBox
+			Position		$LeftMargin ,  <ypos>+5, $MediumRadioButtonWidth+ 30, 100
+			// Iactions were moved into the engine 2/1/11 in ImageNodeValuesDialog.cpp for speed reasons
+			//IActionsText ACTIONS ( 	
+			//				GetList(SpotColorChoices)
+			//				ExecFile(ImageNodeDlgRoutines.txt)
+			//				Exec(SetComboBox(<Prefix>SpotColorComboBox,~<SpotColorKeyword>~, ~<SpotTextureKeyword>~,<Prefix>TextureComboBox,<Prefix>SpotColorTranslucenceEditText,<Prefix>SpotColorTranslucenceSlider);)
+			//				) 
+			DActionsText ACTIONS ( 
+							ExecFile(ImageNodeDlgRoutines.txt)
+							Exec(OnSpotColorComboBoxPressed(TextNodeValuesDialog,<Prefix>SpotColorComboBox,~<SpotColorKeyword>~, ~<SpotTextureKeyword>~,<Prefix>TextureComboBox,<Prefix>SpotColorTranslucenceEditText,<Prefix>SpotColorTranslucenceSlider);)
+							) 
+			Text			~Texture~
+			Keyword1		~<SpotColorKeyword>~			// used for engine processing of this control
+			Keyword2		~<SpotTextureKeyword>~			// used for engine processing of this control
+			Tooltip			~Select the type of spot color~;
+
+	Define: <Prefix>SpotColorTranslucenceStatic Using DDWinCtrlDef AsSymbol <Prefix>SpotColorTranslucenceStatic
+	fields:	TypeName StaticText
+			Text ~Spot color opacity:~
+			Position <Prefix>SpotColorComboBox(GetRight,Position) + 15 <Prefix>SpotColorComboBox(GetTop,Position) 90  30
+
+	Define: <Prefix>SpotColorTranslucenceEditText Using DDWinCtrlDef AsSymbol <Prefix>SpotColorTranslucenceEditText
+	fields:	TypeName MaskedEditText
+			GenConName THIS
+			GenConField ~<TranslucenceKeyword>~
+			IActionsText [Get]
+			Position <Prefix>SpotColorTranslucenceStatic(GetRight,Position) + 15, <Prefix>SpotColorComboBox(GetTop,Position) , 40 , 20
+			Mask		 ~###~ 
+			AllowedChars ~-~
+			PromptChar	 ~ ~		
+			InsertOn	~T~	
+			ControlToUpdate <Prefix>SpotColorTranslucenceSlider
+			EnableIfFieldTrue ~<SpotColorKeyword>~
+			Tooltip ~0 = greatest amount of spot color, 100 = no spot color~;
+
+
+	Define: <Prefix>SpotColorTranslucenceSlider Using DDWinCtrlDef AsSymbol <Prefix>SpotColorTranslucenceSlider
+	fields:	TypeName Slider
+			GenConName THIS
+			GenConField ~<TranslucenceKeyword>~
+			Position <Prefix>SpotColorTranslucenceEditText(GetRight,Position) + 5, <Prefix>SpotColorComboBox(GetTop,Position) , 100 , 20
+			ControlToUpdate <Prefix>SpotColorTranslucenceEditText
+			EnableIfFieldTrue ~<SpotColorKeyword>~
+			Tooltip ~0 = greatest amount of spot color, 100 = no spot color~;
+
+	ypos = <ypos> + 30;
+	Define: <Prefix>TextureStaticText Using DDWinCtrlDef AsSymbol <Prefix>TextureStaticText
+	fields:	TypeName StaticText
+			Position $LeftMargin <ypos>  $StaticTextWidth + 20  30
+			Text ~Spot Texture:~;
+
+
+	Define: <Prefix>TextureComboBox Using DDWinCtrlDef AsSymbol <Prefix>TextureComboBox
+	fields:	TypeName SComboBox
+			GenConName THIS
+			GenConField ~<TextureNameKeyword>~
+			Position <Prefix>TextureStaticText(GetRight,Position)+ 5,  <ypos> , 200 , 100
+			IActionsText	~[GetList(TextureChoices) Get]~
+			DactionsText ACTIONS ( 
+								ExecFile(ImageNodeDlgRoutines.txt)
+								Exec(SaveComboBox(TextNodeValuesDialog,<Prefix>TextureComboBox,~<TextureNameKeyword>~,~<Prefix>SpotColorTranslucenceSlider~,~<Prefix>SpotColorTranslucenceEditText~);)
+								) 								
+			Tooltip ~Select a texture.  This is for Nexpress prints using dimensional ink~;
+
+	Define: ZZ<Prefix>SpotColorGroupBox Using DDWinCtrlDef
+	fields:	TypeName GroupBox
+			Text ~Spot Color~
+			Position $LeftMargin - 5, <Prefix>SpotColorComboBox(GetTop,Position) - 17, 370, <Prefix>TextureStaticText(GetBottom,Position) - <Prefix>SpotColorComboBox(GetTop,Position) + 14  ;
+
+}
+
+VOID DefineTab1()
+{
+	Define: Tab1 Using DDWinCtrlDef
+	fields:	Text ~Style~
+		TypeName Tab
+		Tooltip ~Choose a text style~;
+				
+	Contains: InListOrder
+	{
+		// static text fields must have a genconname set
+		// in order to disable the control if an image node is
+		// selected and to enable the control if a text node is selected
+		// as long as the IActions in the control has an action of
+		// GetIfTextNode
+		ypos = $TabStartPosition;
+		Define: PromptStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				Position $LeftMargin <ypos>  $StaticTextWidth  20
+				GenConName THIS
+				Text ~Prompt:~
+
+		Define: PromptEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				Position $StaticTextWidth + $LeftMargin,  <ypos> , 250 , 20
+				GenConField ~TPrompt:~
+				InsertOn	~T~	
+				Mask		 RepeatStr(1023,~%~)
+				PromptChar	 ~ ~		
+				Tooltip ~Enter a prompt.  You can control which node is initially selected when you open a job by having a prompt.~;
+
+		ypos = <ypos> + 30;
+		Define: MinFontSizeStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				Text ~Minimum font size (points):~
+				Position $LeftMargin <ypos> $StaticTextWidth+21  20
+
+		Define: MinFontSizeEditText Using DDWinCtrlDef AsSymbol MinFontSizeEditText
+		fields:	TypeName MaskedEditText
+				GenConField ~MinFontSize:~
+				Position $LeftMargin + $StaticTextWidth + 20, <ypos> , $EditTextWidth, 20
+				Mask		 ~############~  
+				AllowedChars ~.~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Set minimum font size in points~;
+
+		Define: MetricsTypeStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				Text ~Font Metrics Type:~
+				Position MinFontSizeEditText(GetRight,Position) + 20 <ypos>+10 $StaticTextWidth+21  20;
+
+		ypos = <ypos> + 30;
+		Define: MaxFontSizeStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				Text ~Maximum font size (points):~
+				Position $LeftMargin <ypos> $StaticTextWidth+20  20
+
+		Define: MaxFontSizeEditText Using DDWinCtrlDef AsSymbol MaxFontSizeEditText
+		fields:	TypeName MaskedEditText
+				GenConField ~TSize:~
+				Position $LeftMargin + $StaticTextWidth + 20, <ypos> , $EditTextWidth , 20
+				Mask		 ~############~ 
+				AllowedChars ~-.~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Set maximum font size in points~;
+
+		Define: UseAlternateMetricsComboBox Using DDWinCtrlDef
+		fields: TypeName SComboBox  
+				Position MaxFontSizeEditText(GetRight,Position) + 20,  <ypos> 144 150
+				GenConField ~UseAlternateFontMetrics:~
+				IActionsText ACTIONS ( GetList(FontMetricChoices) GetIfTextNode
+										ExecFile(TextNodeDlgRoutines.txt)
+										Exec(SetValueInControlDefinition(UseAlternateMetricsComboBox,Tooltip);) 
+									)					
+				DActionsText ACTIONS ( Save 
+										ExecFile(TextNodeDlgRoutines.txt)
+										Exec(SetValueInControlDefinition(UseAlternateMetricsComboBox,Tooltip);) 
+									  )																	
+				OActionsText ~[Save]~
+				IsIndex 1
+				GenConName THIS
+				Tooltip ~Depending on the font, different text size and vertical line spacing may result.~;
+
+		ypos = <ypos> + 30;
+		Define: BoldCheckBox Using DDWinCtrlDef
+		fields:	TypeName CheckBox
+				GenConField ~Bold:~
+				Text ~Bold~
+				Position $LeftMargin <ypos> 120 15
+				IsTabStop 1
+				Tooltip ~Use bold text~;
+		Define: ItalicCheckBox Using DDWinCtrlDef
+		fields:	TypeName CheckBox
+				GenConField ~Italic:~
+				Text ~Italic~
+				Position $LeftMargin + 150,  <ypos> 120 15
+				IsTabStop 1
+				Tooltip ~Use italic text~;
+
+// The font and script are done out of order for a reason - so that
+// the font combo box can be naturally updated from the combo box of the script
+		ypos = <ypos> + 60 ;
+		Define:	FontScriptStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				Text ~Character Set:~
+				Position $LeftMargin  <ypos> 100 20
+				GenConName THIS
+
+		Define:	FontScriptComboBox Using DDWinCtrlDef AsSymbol FontScriptComboBox
+		fields: TypeName SComboBox  
+				Position 150 <ypos> 200 150 
+				GenConField ~TScriptSystem:~
+				UseSystemFont T
+				Tooltip ~Select a character set~; 
+
+		Define:	FontSampleText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				Text ~The quick brown fox jumps over the lazy dog~
+				FontSize	24
+				GenConField ~Text:~
+				Position FontScriptComboBox(GetLeft,Position), FontScriptComboBox(GetTop,Position) + 60 ,180 50;
+
+		ypos = <ypos> - 30 ;
+		Define:	FontStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				Text ~Font:~
+				Position $LeftMargin <ypos> 90 20
+				GenConName THIS
+
+		Define:	FontComboBox Using DDWinCtrlDef
+		fields: TypeName SComboBox  
+				Position 150 <ypos> 200 150 
+				GenConField ~TFont:~
+				InsertValueIntoList ~T~
+				UseSystemFont T
+				Tooltip ~Select a font~;
+
+
+		ypos = <ypos> + 60 ;
+		
+		Define: AntialiasCheckBox Using DDWinCtrlDef AsSymbol AntialiasCheckBox
+		fields:	TypeName CheckBox
+				GenConField ~Antialias:~
+				Text ~Antialias~
+				Position $LeftMargin <ypos> 120 15
+				IsTabStop 1
+				Tooltip ~Antialias the text; antialiasing should be turned off for bar code fonts~;
+
+		Define: KerningCheckBox Using DDWinCtrlDef AsSymbol KerningCheckBox
+		fields:	TypeName CheckBox
+				GenConField ~TextKerning:~
+				Text ~Kerning~
+				Position AntialiasCheckBox(GetRight,Position) + 30, <ypos>, 120, 15
+				IsTabStop 1
+				Tooltip ~Adjusts the spacing between characters~;
+
+		ypos = <ypos> + 30 ;
+		Define: StyleHelpButton Using DDWinCtrlDef
+		fields:	TypeName		Button
+				Text			~Help~
+				Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+								ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+								$HelpButtonWidth $HelpButtonLength
+				DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "TNStyle.htm" ) ;
+
+	}
+}
+
+VOID DefineTab1a()
+{
+		Define: Tab1a Using DDWinCtrlDef
+		fields: Text ~Coordinates~
+				TypeName Tab
+				Tooltip ~Change node coordinates~
+
+		Contains: InListOrder
+	{
+
+	ypos = $TabStartPosition;
+	Define: XStaticText Using DDWinCtrlDef AsSymbol XStaticText
+	fields:	TypeName StaticText
+			Text ~Left offset from image node:~
+			Position $LeftMargin <ypos>   $BigStaticTextWidth  50 
+			GenConName THIS
+
+	Define: XEditText Using DDWinCtrlDef AsSymbol XEditText
+	fields:	TypeName MaskedEditText
+			Position XStaticText(GetRight,Position) + 10 <ypos> $BigEditTextWidth  20
+			GenConField ~TX:~
+			Mask		 ~##################~  // Must be the same as DummyEditText in this dialog
+			AllowedChars ~.-~
+			PromptChar	 ~ ~		
+			InsertOn	~T~	
+			Tooltip ~Edit left.  This is the offset from the text's image node~;
+
+	Define: XUnitsStaticText Using DDWinCtrlDef AsSymbol XUnitsStaticText
+	fields:	TypeName StaticText
+			Text ~in.~
+			GenConName THIS
+			Position XEditText(GetRight,Position) + 5 <ypos>  20  20 ;
+
+	
+	ypos = <ypos> + 30;
+	Define: YStaticText Using DDWinCtrlDef AsSymbol YStaticText
+	fields:	TypeName StaticText
+			Text ~Top offset from image node:~
+			GenConName THIS
+			Position $LeftMargin  <ypos>   $BigStaticTextWidth  50 
+
+
+	Define: YEditText Using DDWinCtrlDef AsSymbol YEditText
+	fields:	TypeName MaskedEditText
+			Position YStaticText(GetRight,Position) + 10 <ypos> $BigEditTextWidth  20
+			GenConField ~TY:~
+			Mask		 ~##################~  // Must be the same DummyEditText in this dialog
+			AllowedChars ~.-~
+			PromptChar	 ~ ~		
+			InsertOn	~T~	
+			Tooltip ~Edit top.  This is the offset from the text's image node.~;
+
+	Define: YUnitsStaticText Using DDWinCtrlDef AsSymbol YUnitsStaticText
+	fields:	TypeName StaticText
+			Text ~in.~
+			GenConName THIS
+			Position YEditText(GetRight,Position) + 5 <ypos>  20  20 ;
+
+	ypos = <ypos> + 30;
+	Define: WidthStaticText Using DDWinCtrlDef AsSymbol WidthStaticText
+	fields:	TypeName StaticText
+			Text ~Width:~
+			GenConName THIS
+			Position $LeftMargin <ypos>   $BigStaticTextWidth  20 
+
+	Define: WidthEditText Using DDWinCtrlDef AsSymbol WidthEditText
+	fields:	TypeName MaskedEditText
+			Position WidthStaticText(GetRight,Position)+10 <ypos> $BigEditTextWidth  20
+			GenConField ~TWidth:~
+			Mask		 ~##################~ // Must be the same as the other mask fields in this dialog
+			AllowedChars ~.~
+			PromptChar	 ~ ~		
+			InsertOn	~T~	
+			Tooltip ~Edit width~;
+
+	Define: WUnitsStaticText Using DDWinCtrlDef AsSymbol WUnitsStaticText
+	fields:	TypeName StaticText
+			Text ~in.~
+			GenConName THIS
+			Position WidthEditText(GetRight,Position) + 5 <ypos>  20  20 ;
+
+	ypos = <ypos> + 30;
+	Define: HeightStaticText Using DDWinCtrlDef AsSymbol HeightStaticText
+	fields:	TypeName StaticText
+			Text ~Height:~
+			GenConName THIS
+			Position $LeftMargin  <ypos>   $BigStaticTextWidth  50 
+
+	Define: HeightEditText Using DDWinCtrlDef AsSymbol HeightEditText
+	fields:	TypeName MaskedEditText
+			Position HeightStaticText(GetRight,Position) + 10 <ypos> $BigEditTextWidth  20
+			GenConField ~THeight:~
+			Mask		 ~##################~ // Must be the same as DummyEditText in this dialog
+			AllowedChars ~.~
+			PromptChar	 ~ ~		
+			InsertOn	~T~	
+			Tooltip ~Edit height~;
+
+	Define: HUnitsStaticText Using DDWinCtrlDef AsSymbol HUnitsStaticText
+	fields:	TypeName StaticText
+			Text ~in.~
+			GenConName THIS
+			Position HeightEditText(GetRight,Position) + 5 <ypos>  20  20 ;
+
+	ypos = <ypos> + 30;
+
+	Define: CoordinatesHelpButton Using DDWinCtrlDef
+	fields:	TypeName		Button
+			Text			~Help~
+			Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+							ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+							$HelpButtonWidth $HelpButtonLength
+			DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "TNCoordinates.htm" ) ;
+
+	}
+}
+
+VOID DefineTab1b()
+{
+	Define: Tab1b Using DDWinCtrlDef
+	fields:	Text ~Blending~
+			TypeName Tab
+			Tooltip ~Set background color and blending with background~;
+	Contains: InListOrder
+	{
+		ypos = $TabStartPosition - 10;
+		Define: BGColorButton Using DDWinCtrlDef AsSymbol BGColorButton
+		fields:	TypeName Button
+				Text ~Background Color...~
+				Position $LeftMargin  <ypos> 200  20
+				GenConField ~TextBGColor:~
+				Tooltip ~Choose a color to be applied underneath the text inside the text node~;
+
+		// Note: SetFieldInGenCon called to make the document dirty
+		Define: ApplyBGColor Using DDWinCtrlDef
+		fields:	TypeName CheckBox
+				GenConName THIS
+				GenConField ~TextBGColor:~
+				Text ~Apply~
+				IsTabStop 1
+				Position BGColorButton(GetRight,Position) + 15 <ypos> 120 15
+				Tooltip ~If checked, will insert the background color underneath the text inside the text node.  If unchecked, none will be inserted.~;
+
+		ypos = <ypos> + 30;
+		Define: TextBGColorOverrideStatic Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				GenConName THIS
+				Text ~Macro for Background Color:~
+				Position $LeftMargin  <ypos> 115 30
+
+		Define: TextBGColorOverrideEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				GenConField ~TextBGColorOverride:~
+				MASK			RepeatStr(1024,~*~)
+				Position $LeftMargin + 115 , <ypos> , 245 , 20
+				Tooltip ~Insert RGB values or a macro.  This overrides the color selected above.~;
+
+		ypos = <ypos> + 25;
+		Define: BGColorMaskButton Using DDWinCtrlDef
+		fields:	TypeName Button
+				Text ~Background Color Mask...~
+				Position $LeftMargin <ypos> 200  20
+				GenConName THIS
+				GenConField ~TextBGColorMask:~
+				Tooltip ~Choose a background color mask.  Setting a mask overrides the opacity setting below~;
+		Define: ClearBGColorMaskButton Using DDWinCtrlDef
+				fields:	TypeName Button
+				Text ~Remove Mask~
+				Position $LeftMargin + 210, <ypos> , 150 , 20
+				GenConField ~TextBGColorMask:~
+				Tooltip ~Clear the text background color mask field~;
+		ypos = <ypos> + 25;
+		Define: BGColorMaskEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				Position $LeftMargin <ypos> 360  20
+				GenConField ~TextBGColorMask:~
+				InsertOn	~T~	
+				Mask			~<$[DATABASE FieldTypes].FilePath[Mask]>~
+				PromptChar		~<$[DATABASE FieldTypes].FilePath[PromptChar]>~
+				AllowedChars	~<$[DATABASE FieldTypes].FilePath[AllowedChars]>~
+				DisallowedChars ~<$[DATABASE FieldTypes].FilePath[DisallowedChars]>~
+				Tooltip ~Edit background color mask file path~;
+		ypos = <ypos> + 25;
+		Define: TextBGColorOpacityEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				GenConField ~TextBGColorOpacity:~
+				Position $LeftMargin +110  <ypos>  50 20
+				Mask		 ~###~
+				AllowedChars ~~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Set the opacity of the background color underneath the text.  A value of 0 makes the background color invisible.~;
+
+		Define: TextBGColorOpacitySlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				GenConName THIS
+				GenConField ~TextBGColorOpacity:~
+				Position $LeftMargin +170  <ypos> 180 20
+				Tooltip ~Set the opacity of the background color underneath the text.  A value of 0 makes the background color invisible. ~;
+
+		Define: TextBGColorOpacityStatic Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				GenConName THIS
+				Text ~Opacity of background color:~
+				Position $LeftMargin  <ypos> 100 50
+				DActionsText ~[NULL]~
+				OActionsText ~[NULL]~;
+
+		ypos = <ypos> + 30;
+		Define: TranslucentTextStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				GenConName THIS
+				Text ~Text, shadow and stroke translucence:~
+				Position $LeftMargin <ypos> 100  40
+
+		Define: TranslucentTextEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				GenConField ~TranslucentText:~
+				Position $LeftMargin + 110, <ypos> , 50 , 20
+				Mask		 ~###~
+				AllowedChars ~~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Set text translucence.  A value of 0 produces solid text and a value of 100 produces invisible text, shadow and stroke~;
+
+		Define: TranslucentTextSlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				GenConField ~TranslucentText:~
+				Position $LeftMargin + 170, <ypos>, 180, 20
+				Tooltip ~Set text translucence.  A value of 0 produces solid text and a value of 100 produces invisible text, shadow and stroke~;
+
+		ypos = <ypos> + 30;
+		Define: TranslucentFillStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				GenConName THIS
+				Text ~Text translucence :~
+				Position $LeftMargin <ypos> 100  20
+
+		Define: TranslucentTextFillEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				GenConField ~TranslucentTextFill:~
+				Position $LeftMargin + 110, <ypos> , 50 , 20
+				Mask		 ~###~
+				AllowedChars ~~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				IActionsText ~[GetIfTextNode]~
+				DActionsText ~[SaveIfTextNode UpdateControl(TranslucentTextFillSlider)]~
+				OActionsText ~[SaveIfTextNode]~
+				Tooltip ~Set text translucence.  A value of 0 produces solid text and a value of 100 produces invisible text (without affecting shadow or stroke)~;
+
+		Define: TranslucentTextFillSlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				GenConField ~TranslucentTextFill:~
+				Position $LeftMargin + 170, <ypos>, 180, 20
+				IActionsText ~[GetIfTextNode]~
+				DActionsText ~[SaveIfTextNode UpdateControl(TranslucentTextFillEditText)]~
+				OActionsText ~[SaveIfTextNode]~
+				Tooltip ~Set text translucence.  A value of 0 produces solid text and a value of 100 produces invisible text (without affecting shadow or stroke)~;
+
+		ypos = <ypos> + 30 ;
+		
+		Prefix = BL;	// use different 2 character prefix for each tab.  Cannot be more than 2 characters
+						// ISpotColorImage: - name of keyword to turn spot color on (actually a bit value within ISpotColor: keyword
+						// ISpotTextureImage - name of keyword to turn spot texture on (actually a bit value within ISpotColor: keyword
+						// ISpotColorTranslucence - name of keyword that shows value of translucence ( = 100 - opacity) 
+						// SpotColorImageTexture: name of keyword that contains the nae of the texture.
+		DefineSpotColorControls(ypos,~<Prefix>~,~TSpotColorTColor:~, ~TSpotTextureTColor:~, ~TSpotColorTColorTranslucence:~,~SpotColorTextFillColorTexture:~);
+
+		ypos = <ypos> + 30;
+		Define: BlendingHelpButton Using DDWinCtrlDef
+		fields:	TypeName		Button
+				Text			~Help~
+				Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+								ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+								$HelpButtonWidth $HelpButtonLength
+				DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "TNBlending.htm" ) ;
+
+	}
+}
+
+VOID DefineTab2()
+{
+	Define: Tab2 Using DDWinCtrlDef
+	fields: Text ~Color/Texture~
+		TypeName Tab
+		Tooltip ~Use an image file as the ink used for text~;
+	Contains: InListOrder
+	{
+
+		ypos = $TabStartPosition;
+		Define: TextColorButton Using DDWinCtrlDef
+		fields:	TypeName Button
+				Text ~Text Color...~
+				Position $LeftMargin, <ypos>, 150, 20
+				GenConField ~TColor:~
+				Tooltip ~Select text color~;
+		ypos = <ypos> + 30;
+		Define: TextColorOverrideStatic Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				GenConName THIS
+				Text ~Macro for Text Color:~
+				Position $LeftMargin  <ypos> - 3 80 30
+
+		Define: TextColorOverrideEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				GenConField ~TextColorOverride:~
+				Position $LeftMargin + 115 , <ypos> , 245 , 20
+				MASK			RepeatStr(1024,~*~)
+				Tooltip ~Insert RGB values or a macro.  This overrides the color selected above.~;
+		ypos = <ypos> + 30;
+		Define: TextureButton Using DDWinCtrlDef
+		fields:	TypeName Button
+				GenConField ~TextTexture:~
+				Text ~Character Texture...~
+				Position $LeftMargin,  <ypos>,  150,  20
+				Tooltip ~Select a character texture file~;
+
+		Define: ClearTextureButton Using DDWinCtrlDef
+				fields:	TypeName Button
+				Text ~Remove Texture~
+				Position $LeftMargin + 160, <ypos> , 150 , 20
+				GenConField ~TextTexture:~
+				Tooltip ~Clear the text texture field~;
+
+		ypos = <ypos> + 30;
+		Define: TextureEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				GenConField ~TextTexture:~
+				Position $LeftMargin, <ypos> , 350 , 20
+				InsertOn	~T~	
+				Mask			~<$[DATABASE FieldTypes].FilePath[Mask]>~
+				PromptChar		~<$[DATABASE FieldTypes].FilePath[PromptChar]>~
+				AllowedChars	~<$[DATABASE FieldTypes].FilePath[AllowedChars]>~
+				DisallowedChars ~<$[DATABASE FieldTypes].FilePath[DisallowedChars]>~
+				Tooltip ~Edit texture file path~;
+
+		ypos = <ypos> + 30;
+
+		Define: BlockTextureButton Using DDWinCtrlDef
+		fields:	TypeName Button
+				Text ~Block Texture...~
+				GenConField ~TextBlockTexture:~
+				Position $LeftMargin, <ypos>,  150, 20
+				Tooltip ~Select a block texture file~;
+
+
+		Define: ClearBlockTextureButton Using DDWinCtrlDef
+				fields:	TypeName Button
+				Text ~Remove Block Texture~
+				Position $LeftMargin + 160, <ypos> , 150 , 20
+				GenConField ~TextBlockTexture:~
+				Tooltip ~Clear the text texture field~;
+
+		ypos = <ypos> + 30;
+		Define: BlockTextureEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				GenConField ~TextBlockTexture:~
+				Position $LeftMargin, <ypos>, 350, 20
+				InsertOn	~T~	
+				Mask			~<$[DATABASE FieldTypes].FilePath[Mask]>~
+				PromptChar		~<$[DATABASE FieldTypes].FilePath[PromptChar]>~
+				AllowedChars	~<$[DATABASE FieldTypes].FilePath[AllowedChars]>~
+				DisallowedChars ~<$[DATABASE FieldTypes].FilePath[DisallowedChars]>~
+				Tooltip ~Edit block texture path~;
+		ypos = <ypos> + 60;
+		Define: TextureHelpButton Using DDWinCtrlDef
+		fields:	TypeName		Button
+				Text			~Help~
+				Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+								ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+								$HelpButtonWidth $HelpButtonLength
+				DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "TNTextures.htm" ) ;
+
+	}
+
+}
+
+VOID DefineTab3()
+{
+		Define: Tab3 Using DDWinCtrlDef
+		fields: Text ~Shadows~
+			TypeName Tab
+			Tooltip ~Change Shadows~;
+		Contains: InListOrder
+	{
+		ypos = $TabStartPosition;
+		Define: ShadowEnableCheckBox Using DDWinCtrlDef
+		fields:	TypeName CheckBox
+				GenConField ~ShadowEnable:~
+				Text ~Enable shadows~
+				Position $LeftMargin <ypos> 150 15
+				IsTabStop 1
+				Tooltip ~Enable shadows~;
+
+		ypos = <ypos> + 20;
+		Define: ShadowColorButton Using DDWinCtrlDef
+		fields:	TypeName Button
+				Text ~Shadow Color...~
+				Position $LeftMargin, <ypos>, 150, 20
+				GenConName THIS
+				GenConField ~ShadowColor:~
+				Tooltip ~Select Shadow Color~;
+
+
+		ypos = <ypos> + 30;
+		Define: ShadowOffsetXEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				Position $LeftMargin + $StaticTextWidth + 10 <ypos>  $EditTextWidth  20
+				GenConName THIS
+				GenConField ~ShadowOffsetX:~
+				Mask		 ~######~
+				AllowedChars ~-.~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Set horizontal shadow offset in points.    Enter a negative number to place the shadow to the left of the text, and a positive number to place the shadow to the right of the text.~;
+if ( 0 )
+{
+		Define: ShadowOffsetXSlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				Position $LeftMargin + $StaticTextWidth + 10 + $EditTextWidth + 20 <ypos> 170  20
+				GenConField ~ShadowOffsetX:~
+				Tooltip ~Set horizontal shadow offset~;
+}
+		Define: ShadowOffsetXStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				GenConName THIS
+				Text ~Horizontal Offset:~
+				Position $LeftMargin <ypos> $StaticTextWidth  20;
+
+		ypos = <ypos> + 30;
+		Define: ShadowOffsetYEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				Position $LeftMargin + $StaticTextWidth + 10 <ypos>  $EditTextWidth  20
+				GenConField ~ShadowOffsetY:~
+				Mask		 ~######~
+				AllowedChars ~-.~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Set vertical shadow offset in points.  Enter a negative number to place the shadow above the text, and a positive number to place the shadow below the text.~;
+if ( 0 )
+{
+		Define: ShadowOffsetYSlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				Position $LeftMargin + $StaticTextWidth + 10 + $EditTextWidth + 20 <ypos> 170  20
+				GenConField ~ShadowOffsetY:~
+				Tooltip ~Set vertical shadow offset~;
+}
+		Define: ShadowOffsetYStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				GenConName THIS
+				Text ~Vertical Offset:~
+				Position $LeftMargin <ypos> $StaticTextWidth  20;
+
+		ypos = <ypos> + 30;
+		Define: ShadowBlurEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				Position $LeftMargin + $StaticTextWidth + 10 <ypos>  $EditTextWidth  20
+				GenConField ~ShadowBlur:~
+				Mask		 ~###~
+				AllowedChars ~~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Set shadow blur amount from 0 to 100~;
+
+		Define: ShadowBlurSlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				Position $LeftMargin + $StaticTextWidth + 10 + $EditTextWidth + 20 <ypos> 170  20
+				GenConField ~ShadowBlur:~
+				Tooltip ~Set shadow blur amount from 0 to 100~;
+
+		Define: ShadowBlurStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				Position $LeftMargin <ypos> $StaticTextWidth  20
+				Text ~Blur:~;
+
+		ypos = <ypos> + 30;
+		Define: ShadowStrengthEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				Position $LeftMargin + $StaticTextWidth + 10 <ypos>  $EditTextWidth  20
+				GenConField ~ShadowStrength:~
+				Mask		 ~###~
+				AllowedChars ~~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Set shadow strength amount from 0 to 100.~;
+
+		Define: ShadowStrengthSlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				Position $LeftMargin + $StaticTextWidth + 10 + $EditTextWidth + 20 <ypos> 170  20
+				GenConName THIS
+				GenConField ~ShadowStrength:~
+				Tooltip ~Set shadow strength amount from 0 to 100.~;
+
+		Define: ShadowStrengthStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				Text ~Strength:~
+				GenConName THIS
+				Position $LeftMargin <ypos> $StaticTextWidth  20;
+
+		ypos = <ypos> + 40 ;
+		
+		Prefix = TS;	// use different 2 character prefix for each tab.  Cannot be more than 2 characters
+						// ISpotColorImage: - name of keyword to turn spot color on (actually a bit value within ISpotColor: keyword
+						// ISpotTextureImage - name of keyword to turn spot texture on (actually a bit value within ISpotColor: keyword
+						// ISpotColorTranslucence - name of keyword that shows value of translucence ( = 100 - opacity) 
+						// SpotColorImageTexture: name of keyword that contains the nae of the texture.
+	DefineSpotColorControls(ypos,~<Prefix>~,~TSpotColorShadow:~, ~TSpotTextureShadow:~, ~TSpotColorShadowTranslucence:~,~SpotColorTextShadowTexture:~);
+
+		ypos = <ypos> + 30;
+
+		Define: ShadowHelpButton Using DDWinCtrlDef
+		fields:	TypeName		Button
+				Text			~Help~
+//					Position		$LeftMargin,$ypos,$HelpButtonWidth $HelpButtonLength
+				Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+								ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+								$HelpButtonWidth $HelpButtonLength
+				DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "TNShadows.htm" ) ;
+
+	}
+}
+
+VOID DefineTab16()
+{
+	Define: Tab16 Using DDWinCtrlDef
+	fields:	Text ~Spot Color~
+		TypeName Tab
+		Tooltip ~Spot color for NexPress printer~;
+	Contains: InListOrder
+	{
+		ypos = $TabStartPosition;
+
+
+		Prefix = TX;	// use different 2 character prefix for each tab.  Cannot be more than 2 characters
+						// ISpotColorImage: - name of keyword to turn spot color on (actually a bit value within ISpotColor: keyword
+						// ISpotTextureImage - name of keyword to turn spot texture on (actually a bit value within ISpotColor: keyword
+						// ISpotColorTranslucence - name of keyword that shows value of translucence ( = 100 - opacity) 
+						// SpotColorImageTexture: name of keyword that contains the nae of the texture.
+		DefineSpotColorControls(ypos,~<Prefix>~,~TSpotColorText:~, ~TSpotTextureText:~, ~TSpotColorTranslucence:~,~SpotColorTextTexture:~);
+
+
+		ypos = <ypos> + 30;
+		Define: SupressTextCheckBox Using DDWinCtrlDef AsSymbol SupressTextCheckBox
+		fields:	TypeName CheckBox
+				GenConField ~SuppressTextRendering:~
+				Text ~Spot color only (suppress text)~
+				Position $LeftMargin, <ypos>, 225, 15
+				IsTabStop 1
+				Tooltip ~For NexPress printers only.  Suppress the DP2 rendered text but show spot color on the print~;
+
+		Define: SpotColroHelpButton Using DDWinCtrlDef
+		fields:	TypeName		Button
+				Text			~Help~
+				Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+								ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+								$HelpButtonWidth $HelpButtonLength
+				DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "SpotColor.htm" ) ;
+	}
+}
+
+VOID DefineTab1c()
+{
+		Define: Tab1c Using DDWinCtrlDef
+		fields: Text ~Fit~
+			TypeName Tab
+			Tooltip ~Fit text to region~;
+		Contains: InListOrder
+		{
+
+			ypos = $TabStartPosition;
+			Define: JustificationRadioButtonLeft Using DDWinCtrlDef AsSymbol JustificationRadioButtonLeft
+			fields: TypeName RadioButton  
+					Position $LeftMargin + 20 , <ypos> ,80 ,20 
+					GenConField ~Justification:~
+					RadioTrueValue ~L~
+ 					IsTabStop 1
+					Text ~Left~
+					Tooltip ~Left justify the text~;
+
+			Define: JustificationRadioButtonCenter Using DDWinCtrlDef
+			fields: TypeName RadioButton  
+					Position $LeftMargin + 100 , <ypos> ,80 ,20 
+					GenConField ~Justification:~
+					RadioTrueValue ~C~
+ 					IsTabStop 1
+					Text ~Center~
+					Tooltip ~Center the text horizontally~;
+
+			Define: JustificationRadioButtonRight Using DDWinCtrlDef
+			fields: TypeName RadioButton  
+					Position $LeftMargin + 180 , <ypos> ,80 ,20 
+					GenConField ~Justification:~
+					RadioTrueValue ~R~
+ 					IsTabStop 1
+					Text ~Right~
+					Tooltip ~Right justify the text~;
+
+			Define: JustificationRadioButtonFit Using DDWinCtrlDef
+			fields: TypeName RadioButton  
+					Position $LeftMargin + 260 , <ypos> ,90 ,20 
+					GenConField ~Justification:~
+					RadioTrueValue ~F~
+ 					IsTabStop 1
+					Text ~Left and Right~
+					Tooltip ~Right and left justify text~;
+
+
+			ypos = JustificationRadioButtonLeft(GetTop,Position) - 20;
+			Define: ZZJustificationGroupBox Using DDWinCtrlDef AsSymbol ZZJustificationGroupBox
+			fields:	TypeName GroupBox
+					Text ~Justification~
+					GenConName THIS
+					Position $LeftMargin <ypos> 360  50;
+
+			ypos = ZZJustificationGroupBox(GetBottom,Position) + 30;
+			Define: AlignmentRadioButtonTop Using DDWinCtrlDef AsSymbol AlignmentRadioButtonTop
+			fields: TypeName RadioButton  
+					Position $LeftMargin + 20 , <ypos> ,80 ,20 
+					GenConField ~TextAlignment:~
+					RadioTrueValue ~T~
+ 					IsTabStop 1
+					Text ~Top~
+					Tooltip ~Place first line at the top of the text node~;
+
+			Define: AlignmentRadioButtonCenter Using DDWinCtrlDef
+			fields: TypeName RadioButton  
+					Position $LeftMargin + 100 , <ypos> ,80 ,20 
+					GenConField ~TextAlignment:~
+					IsTabStop 1
+					RadioTrueValue ~C~
+ 					Text ~Center~
+					Tooltip ~Center the text vertically in the text node~;
+
+			Define: AlignmentRadioButtonBottom Using DDWinCtrlDef
+			fields: TypeName RadioButton  
+					Position $LeftMargin + 180 , <ypos> ,80 ,20 
+					GenConField ~TextAlignment:~
+					RadioTrueValue ~B~
+					Text ~Bottom~
+ 					IsTabStop 1
+					Tooltip ~Place the last line at the bottom of the text node~;
+
+
+			ypos = AlignmentRadioButtonTop(GetTop,Position) - 20;
+			Define: ZZAlignmentGroupBox Using DDWinCtrlDef AsSymbol ZZAlignmentGroupBox
+			fields:	TypeName GroupBox
+					Text ~Alignment~
+					GenConName THIS
+					Position $LeftMargin <ypos> 360  50;
+
+
+			ypos = ZZAlignmentGroupBox(GetBottom,Position) + 10;
+			Define: TGroupStaticText Using DDWinCtrlDef
+			fields:	TypeName StaticText
+					Text ~Group:~
+					GenConName THIS
+					Position $LeftMargin <ypos> $StaticTextWidth  20;
+
+			Define: TGroupComboBox Using DDWinCtrlDef
+			fields: TypeName SComboBox  
+					Position $LeftMargin + $StaticTextWidth + 20 , <ypos> ,200 ,150 
+					GenConField ~TGroup:~
+					Tooltip ~Select a group of nodes to be rendered at the same font size~;
+
+			ypos = $TabStartPosition + 140;
+			Define: TLeadingStaticText Using DDWinCtrlDef
+			fields:	TypeName StaticText
+					Text ~Leading:~
+					GenConName THIS
+					Position $LeftMargin <ypos> $StaticTextWidth  20
+
+			Define: TLeadingEditText Using DDWinCtrlDef
+			fields:	TypeName MaskedEditText
+					GenConField ~TLeading:~
+					Position $LeftMargin + $StaticTextWidth + 20, <ypos> , $EditTextWidth , 20
+					Mask		 ~############~ // 
+					InsertOn	~T~	
+					AllowedChars ~.-~
+					PromptChar	 ~ ~		
+					Tooltip ~Set leading~;
+
+			Define: TLeadingSlider Using DDWinCtrlDef
+			fields:	TypeName Slider
+					GenConName THIS
+					GenConField ~TLeading:~
+					Units ~0.1~
+					Position $LeftMargin + $StaticTextWidth + $EditTextWidth + 20, <ypos>, $SliderWidth, 20
+					Tooltip ~Set leading~;
+
+			ypos = <ypos> + 30 ;
+			Define: WordWrapCheckBox Using DDWinCtrlDef
+			fields:	TypeName CheckBox
+					GenConName THIS
+					GenConField ~WordWrap:~
+					Text ~Word Wrap~
+					Position $LeftMargin,	<ypos> , 120 , 15
+					IsTabStop 1
+					Tooltip ~Turn word wrap on or off~;
+
+			Define: IgnoreCRCheckBox Using DDWinCtrlDef AsSymbol IgnoreCRCheckBox
+			fields:	TypeName CheckBox
+					GenConName THIS
+					GenConField ~IgnoreCR:~
+					Text ~Ignore newline characters~
+					Position $LeftMargin + 150,	<ypos> , 180 , 15
+					Tooltip ~Ignore newline characters in the text string~;
+
+			ypos = <ypos> + 30 ;
+			Define: JoinLinesCheckBox Using DDWinCtrlDef AsSymbol JoinLinesCheckBox
+			fields:	TypeName CheckBox
+					GenConField ~JoinLines:~
+					Text ~Join Lines:~
+					Position $LeftMargin,	<ypos> , 120 , 15
+					IsTabStop 1
+					Tooltip ~Change join lines characters (unicode 194) to space characters if checked; otherwise replace with return characters~;
+
+			ypos = <ypos> + 30 ;
+			Define: DisableJoinLinesCheckBox Using DDWinCtrlDef
+			fields:	TypeName CheckBox
+					GenConField ~DisableJoinLines:~
+					Text ~Disable Join Lines:~
+					Position IgnoreCRCheckBox(GetLeft,Position),JoinLinesCheckBox(GetTop,Position) , 120 , 15
+					IsTabStop 1
+					Tooltip ~Do not replace join lines characters.  May be used for bar code fonts when computing checksum~;
+
+			Define: FitHelpButton Using DDWinCtrlDef
+			fields:	TypeName		Button
+					Text			~Help~
+					Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+									ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+									$HelpButtonWidth $HelpButtonLength
+					DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "TNFit.htm" ) ;
+	}
+}
+
+VOID DefineTab5()
+{
+		Define: Tab5 Using DDWinCtrlDef
+		fields: Text ~Orientation~
+			TypeName Tab
+			Tooltip ~Set text orientation~;
+		Contains: InListOrder
+		{
+
+			ypos = $TabStartPosition + 10;
+
+			Define: RotateTextRadioButton0 Using DDWinCtrlDef
+			fields: TypeName RadioButton  
+					Position $LeftMargin + 20 , <ypos> ,80 ,20 
+					GenConName THIS
+					GenConField ~RotateText:~
+					RadioTrueValue ~0~
+ 					Text ~0~
+					IsTabStop 1
+					Tooltip ~Don't rotate text~;
+
+			Define: RotateTextRadioButton90 Using DDWinCtrlDef
+			fields: TypeName RadioButton  
+					Position $LeftMargin + 100 , <ypos> ,80 ,20 
+					GenConField ~RotateText:~
+					RadioTrueValue ~90~
+ 					IsTabStop 1
+					Text ~90~
+					Tooltip ~Rotate the text 90 degrees clockwise before placing it into the text node~;
+
+			Define: RotateTextRadioButton180 Using DDWinCtrlDef
+			fields: TypeName RadioButton  
+					Position $LeftMargin + 180 , <ypos> ,80 ,20 
+					GenConField ~RotateText:~
+					RadioTrueValue ~180~
+					IsTabStop 1
+					Text ~180~
+					Tooltip ~Rotate the text 180 degrees before placing it into the text node~;
+
+			Define: RotateTextRadioButton270 Using DDWinCtrlDef
+			fields: TypeName RadioButton  
+					Position $LeftMargin + 260 , <ypos> ,80 ,20 
+					GenConField ~RotateText:~
+					RadioTrueValue ~270~
+					IsTabStop 1
+					Text ~270~
+					Tooltip ~Rotate the text 90 degrees counterclockwise before placing it into the text node~;
+
+			ypos = <ypos> - 18;
+			Define: ZZRotateTextGroupBox Using DDWinCtrlDef
+			fields:	TypeName GroupBox
+					Text ~Text Orientation~
+					GenConName THIS
+					Position $LeftMargin <ypos> 360  50;
+
+
+			ypos = <ypos> +78;
+			Define: DirectionRadioButtonH Using DDWinCtrlDef
+			fields: TypeName RadioButton  
+					Position $LeftMargin + 20 , <ypos> ,80 ,20 
+					GenConField ~TextFlowDirection:~
+					RadioTrueValue ~~
+ 					IsTabStop 1
+					Text ~Horizontal~
+					Tooltip ~Horizonal~;
+
+			Define: DirectionRadioButtonV Using DDWinCtrlDef
+			fields: TypeName RadioButton  
+					Position $LeftMargin + 100 , <ypos> ,80 ,20 
+					GenConField ~TextFlowDirection:~
+					RadioTrueValue ~V~
+ 					IsTabStop 1
+					Text ~Vertical~
+					Tooltip ~Vertical~;
+
+			ypos = <ypos> - 18;
+			Define: ZZVerticalTextGroupBox Using DDWinCtrlDef
+			fields:	TypeName GroupBox
+					Text ~Text Direction~
+					GenConName THIS
+					Position $LeftMargin <ypos> 360  50;
+
+if (0)
+{
+			ypos = <ypos> + 60;
+			Define: MirrorHorizontal Using DDWinCtrlDef
+			fields:	TypeName CheckBox
+					GenConName THIS
+					GenConField ~MirrorTextHorizontal:~
+					Text ~Mirror Horizontal~
+					IsTabStop 1
+					Position $LeftMargin <ypos> 120 15
+					IActionsText ~[GetIfTextNode]~
+					DActionsText ~[SaveIfTextNode]~
+					OActionsText ~[SaveIfTextNode]~
+					Tooltip ~If checked, will mirror the text horizontally.~;
+
+			ypos = <ypos> + 30 ;
+
+			Define: MirrorVertical Using DDWinCtrlDef
+			fields:	TypeName CheckBox
+					GenConName THIS
+					GenConField ~MirrorTextVertical:~
+					Text ~Mirror Vertical~
+					IsTabStop 1
+					Position $LeftMargin <ypos> 120 15
+					IActionsText ~[GetIfTextNode]~
+					DActionsText ~[SaveIfTextNode]~
+					OActionsText ~[SaveIfTextNode]~
+					Tooltip ~If checked, will mirror the text vertically.~;
+}
+		Define: TextOrientationHelpButton Using DDWinCtrlDef
+			fields:	TypeName		Button
+					Text			~Help~
+					Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+									ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+									$HelpButtonWidth $HelpButtonLength
+					DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "TNOrientation.htm" ) ;
+
+		}
+}
+
+VOID DefineTab12()
+{
+	Define: Tab12 Using DDWinCtrlDef
+	fields: Text ~Bevel Node~
+	TypeName Tab
+	Tooltip ~Add Bevel~
+	Contains: InListOrder
+	{
+		ypos = $TabStartPosition;
+		Define: BevelInside Using DDWinCtrlDef AsSymbol BevelInside
+		fields: TypeName RadioButton  
+				Position $LeftMargin + 10 , <ypos> ,70 ,20 
+				GenConField ~BTRInside:~
+				RadioTrueValue ~1~
+				Text ~Inside~
+				Tooltip ~Create a bevel inside the text node~;
+
+		Define: BevelOutside Using DDWinCtrlDef AsSymbol BevelOutside
+		fields: TypeName RadioButton  
+				Position BevelInside(GetRight,Position) + 5 , <ypos> ,70 ,20 
+				GenConField ~BTRInside:~
+				RadioTrueValue ~0~
+				Text ~Outside~
+				Tooltip ~Create a bevel outside the text node~;
+
+		ypos =  BevelOutside(GetBottom,Position) + 18;
+
+		Define: BTRWidthStaticText Using DDWinCtrlDef AsSymbol BTRWidthStaticText
+		fields:	TypeName StaticText
+				Text ~Width/Percent:~
+				Position $LeftMargin <ypos> $MedStaticTextWidth  20
+
+		Define: BTRWidthEditText Using DDWinCtrlDef AsSymbol BTRWidthEditText
+		fields:	TypeName MaskedEditText
+				Position 120 <ypos>  $BigEditTextWidth  20
+				GenConField ~BTRWidth:~
+				Mask		 ~##################~ // Must be the same as DummyEditText in this dialog
+				AllowedChars ~.~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Specify width and height of beveled area~;
+
+		Define: BevelUnitsArePercent Using DDWinCtrlDef AsSymbol BevelUnitsArePercent
+		fields: TypeName SComboBox  
+				Position BTRWidthEditText(GetRight,Position)+10 , <ypos> ,100 ,90
+				GenConField ~BTRUnits:~
+				IsIndex 1
+				Tooltip ~Select units~;
+
+		ypos = <ypos> + 25;
+		Define: BTRLeftStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				Text ~Left:~
+				Position $LeftMargin <ypos> 100  20
+
+		Define: BTRLeftEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				Position 120 <ypos>  $EditTextWidth  20
+				GenConField ~BTRLeftDelta:~
+				Mask		 ~####~
+				AllowedChars ~-~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Specify left brightness change~
+
+		Define: BTRLeftSlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				Position 200 <ypos> 170  20
+				GenConName THIS
+				GenConField ~BTRLeftDelta:~
+				Tooltip ~Specify left brightness change~;
+
+		ypos = <ypos> + 25;
+
+		Define: BTRTopStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				Text ~Top:~
+				Position $LeftMargin <ypos> 100  20
+		Define: BTRTopEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				Position 120 <ypos>  $EditTextWidth  20
+				GenConField ~BTRTopDelta:~
+				Tooltip ~Specify top brightness change~
+				Mask		 ~####~
+				AllowedChars ~-~
+				InsertOn	~T~	
+				PromptChar	 ~ ~		
+		Define: BTRTopSlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				Position 200 <ypos> 170  20
+				GenConField ~BTRTopDelta:~
+				Tooltip ~Specify top brightness change~
+				OActionsText ~[SaveIfTextNode]~;
+		ypos = <ypos> + 25;
+		Define: BTRRightStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				Text ~Right:~
+				Position $LeftMargin <ypos> 100  20
+		Define: BTRRightEditText Using DDWinCtrlDef
+		fields:	TypeName MaskedEditText
+				Position 120 <ypos>  $EditTextWidth  20
+				GenConField ~BTRRightDelta:~
+				Mask		 ~####~
+				AllowedChars ~-~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Specify right brightness change~;
+
+		Define: BTRRightSlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				Position 200 <ypos> 170  20
+				GenConField ~BTRRightDelta:~
+				Tooltip ~Specify right brightness change~;
+
+		ypos = <ypos> + 25;
+		Define: BTRBottomStaticText Using DDWinCtrlDef
+		fields:	TypeName StaticText
+				Text ~Bottom:~
+				Position $LeftMargin <ypos> 100  20
+		Define: BTRBottomEditText Using DDWinCtrlDef AsSymbol BTRBottomEditText
+		fields:	TypeName MaskedEditText
+				Position 120 <ypos>  $EditTextWidth  20
+				GenConField ~BTRBottomDelta:~
+				Mask		 ~####~
+				AllowedChars ~-~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Specify bottom brightness change~
+		Define: BTRBottomSlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				Position 200 <ypos> 170  20
+				GenConField ~BTRBottomDelta:~
+				Tooltip ~Specify bottom brightness change~;
+
+		ypos = <ypos> + 35;
+		Prefix = BN;	// use different 2 character prefix for each tab.  Cannot be more than 2 characters
+						// ISpotColorImage: - name of keyword to turn spot color on (actually a bit value within ISpotColor: keyword
+						// ISpotTextureImage - name of keyword to turn spot texture on (actually a bit value within ISpotColor: keyword
+						// ISpotColorTranslucence - name of keyword that shows value of translucence ( = 100 - opacity) 
+						// SpotColorImageTexture: name of keyword that contains the nae of the texture.
+		DefineSpotColorControls(ypos,~<Prefix>~,~TSpotColorBevelNode:~, ~TSpotTextureBevelNode:~, ~TSpotColorBevNodeTranslucence:~,~SpotColorTextBevelNodeTexture:~);
+
+		ypos = BevelInside(GetTop,Position)- 15;
+		Define: ZZBevelInsideGroupBox Using DDWinCtrlDef AsSymbol ZZBevelInsideGroupBox
+		fields:	TypeName GroupBox
+				Text ~Inside or Outside Bevel~
+				Tooltip ~Specify an inside or outside bevel~
+				Position $LeftMargin <ypos> 165  45;
+
+		ypos = BTRBottomEditText(GetBottom,Position)+ 8;
+
+		Define: BevelHelpButton Using DDWinCtrlDef
+		fields:	TypeName		Button
+				Text			~Help~
+				Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+								ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+								$HelpButtonWidth $HelpButtonLength
+				DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "TNBevelNode.htm" ) ;
+
+	}
+}
+
+VOID DefineTab15()
+{
+	Define: Tab15 Using DDWinCtrlDef
+	fields: Text ~Bevel Text~
+	TypeName Tab
+	Tooltip ~Add Bevel~
+	Contains: InListOrder
+	{
+				ypos = 72;
+		Define: ApplyTextBevel Using DDWinCtrlDef
+		fields:	TypeName CheckBox
+				GenConName THIS
+				GenConField ~TextBevel:~
+				Text ~Bevel~
+				IsTabStop 1
+				Position $LeftMargin <ypos> 120 15
+				Tooltip ~If checked, will Bevel the text.  If unchecked, no Bevel will be applied.~;
+
+		ypos = <ypos> + 30;
+
+		Define: BevelSizeStaticText Using DDWinCtrlDef AsSymbol BevelSizeStaticText
+		fields:	TypeName StaticText
+				Text ~Size (pixels):~
+				Position $LeftMargin <ypos> 100  20
+
+		Define: BevelSizeEditText Using DDWinCtrlDef AsSymbol BevelSizeEditText
+		fields:	TypeName MaskedEditText
+				Position BevelSizeStaticText(GetRight,Position)+10 <ypos>  50  20
+				GenConName THIS
+				GenConField ~TextBevelSize:~
+				Mask		 ~###~
+				AllowedChars ~~
+				InsertOn	~T~	
+				IActionsText ~[GetIfTextNode]~
+				DActionsText ~[SaveIfTextNode UpdateControl(TextBevelSizeSlider)]~
+				OActionsText ~[SaveIfTextNode]~
+				Tooltip ~The size is expressed in pixels.~;
+
+		Define: TextBevelSizeSlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				GenConName THIS
+				GenConField ~TextBevelSize:~
+				Position BevelSizeEditText(GetRight,Position)+10  <ypos> 180 20
+				IActionsText ~[GetIfTextNode]~
+				DActionsText ~[SaveIfTextNode UpdateControl(BevelSizeEditText)]~
+				OActionsText ~[SaveIfTextNode]~
+				Tooltip ~The size is expressed as a percentage of the font size that is used.  Values between 2 and 8 are good starting points~;
+
+		ypos = <ypos> + 30;
+		Define: BevelLightAngleStaticText Using DDWinCtrlDef AsSymbol BevelLightAngleStaticText
+		fields:	TypeName StaticText
+				Text ~Light Source:~
+				Position $LeftMargin <ypos> $MedStaticTextWidth  20
+
+		Define: BevelLightAngleComboBox Using DDWinCtrlDef AsSymbol BevelLightAngleComboBox
+		fields:	TypeName SComboBox
+				GenConField ~TextBevelLightAngle:~
+				Position BevelSizeEditText(GetLeft,Position) <ypos> 90  210
+				Tooltip ~Specify source of light~;
+
+		ypos = <ypos> + 30;
+
+		Define: BevelStrengthStaticText Using DDWinCtrlDef AsSymbol BevelStrengthStaticText
+		fields:	TypeName StaticText
+				Text ~Strength:~
+				Position $LeftMargin <ypos> 100  20
+
+		Define: TextBevelStrengthEditText Using DDWinCtrlDef AsSymbol TextBevelStrengthEditText
+		fields:	TypeName MaskedEditText
+				GenConField ~TextBevelStrength:~
+				Position BevelSizeEditText(GetLeft,Position)  <ypos>  50 20
+				Mask		 ~###~
+				AllowedChars ~~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Sets the strength of the bevel (0-100)~;
+
+		Define: TextBevelStrengthSlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				GenConName THIS
+				GenConField ~TextBevelStrength:~
+				Position TextBevelStrengthEditText(GetRight,Position)+10  <ypos> 180 20
+				Tooltip ~Sets the strength of the bevel (0-100) ~;
+
+		ypos = <ypos> + 30;
+		Define: BevelSoftnessStaticText Using DDWinCtrlDef AsSymbol BevelSoftnessStaticText
+		fields:	TypeName StaticText
+				Text ~Softness:~
+				Position $LeftMargin <ypos> 100  20
+
+		Define: TextBevelSoftnessEditText Using DDWinCtrlDef AsSymbol TextBevelSoftnessEditText
+		fields:	TypeName MaskedEditText
+				GenConField ~TextBevelSoftness:~
+				Position BevelSizeEditText(GetLeft,Position)  <ypos>  50 20
+				Mask		 ~###~
+				AllowedChars ~~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Set the softness of the bevel (0-10)~;
+
+		Define: TextBevelSoftnessSlider Using DDWinCtrlDef
+		fields:	TypeName Slider
+				GenConName THIS
+				GenConField ~TextBevelSoftness:~
+				Position   TextBevelSoftnessEditText(GetRight,Position) + 10 <ypos> 180 20
+				Tooltip ~Set the softness of the bevel (0-10)~;
+
+		Define: TextBevelHelpButton Using DDWinCtrlDef
+		fields:	TypeName		Button
+				Text			~Help~
+				Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+								ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+								$HelpButtonWidth $HelpButtonLength
+				DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "TNBevel.htm" ) ;
+		}
+}
+VOID DefineTab13()
+{
+	Define: Tab13 Using DDWinCtrlDef
+	fields: Text ~Stroke Node~
+		TypeName Tab
+		Tooltip ~Add Stroke~
+		Contains: InListOrder
+	{
+			ypos = $TabStartPosition + 2;
+			Define: StrokeInside Using DDWinCtrlDef AsSymbol StrokeInside
+			fields: TypeName RadioButton  
+			Position $LeftMargin + 10 , <ypos> ,70 ,20 
+			GenConField ~STRInside:~
+			RadioTrueValue ~1~
+			Text ~Inside~
+			Tooltip ~Create a stroke inside the text node~;
+
+	Define: StrokeOutside Using DDWinCtrlDef AsSymbol StrokeOutside
+	fields: TypeName RadioButton  
+			Position StrokeInside(GetRight,Position) + 5 , <ypos> ,70 ,20 
+			GenConField ~STRInside:~
+			RadioTrueValue ~0~
+			Text ~Outside~
+			Tooltip ~Create a stroke outside the text node~;
+
+	ypos = StrokeOutside(GetBottom,Position) + 15;
+	Define: STRWidthStaticText Using DDWinCtrlDef AsSymbol STRWidthStaticText
+	fields:	TypeName StaticText
+			Text ~Width/Percent:~
+			Position $LeftMargin <ypos> 100  20
+
+	Define: STRWidthEditText Using DDWinCtrlDef AsSymbol STRWidthEditText
+	fields:	TypeName MaskedEditText
+			Position 120 <ypos>  $BigEditTextWidth  20
+			GenConField ~STRWidth:~
+			Mask		 ~##################~ // Must be the same as DummyEditText in this dialog
+			AllowedChars ~.~
+			PromptChar	 ~ ~		
+			InsertOn	~T~	
+			Tooltip ~Specify width and height of stroked area~;
+
+	Define: StrokeUnitsArePercent Using DDWinCtrlDef
+	fields: TypeName SComboBox  
+			Position STRWidthEditText(GetRight,Position)+10 , <ypos> ,100 ,90
+			GenConField ~STRUnits:~
+			IsIndex 1
+			Tooltip ~Select units~;
+
+	ypos = <ypos> + 30;
+	Define: STRRedStaticText Using DDWinCtrlDef
+	fields:	TypeName StaticText
+			Text ~Red:~
+			Position $LeftMargin <ypos> 100  20
+	Define: STRRedEditText Using DDWinCtrlDef
+	fields:	TypeName MaskedEditText
+			Position 120 <ypos>  $EditTextWidth  20
+			GenConField ~STRRed:~
+			Mask		 ~####~
+			AllowedChars ~-~
+			PromptChar	 ~ ~		
+			InsertOn	~T~	
+			Tooltip ~Specify red value~
+
+	Define: STRRedSlider Using DDWinCtrlDef
+	fields:	TypeName Slider
+			Position 200 <ypos> 170  20
+			GenConField ~STRRed:~
+			Tooltip ~Specify red value~;
+
+	ypos = <ypos> + 25;
+
+	Define: STRGreenStaticText Using DDWinCtrlDef
+	fields:	TypeName StaticText
+			Text ~Green:~
+			Position $LeftMargin <ypos> 100  20
+	Define: STRGreenEditText Using DDWinCtrlDef
+	fields:	TypeName MaskedEditText
+			Position 120 <ypos>  $EditTextWidth  20
+			GenConField ~STRGreen:~
+			Tooltip ~Specify green value~
+			Mask		 ~####~
+			AllowedChars ~-~
+			InsertOn	~T~	
+			PromptChar	 ~ ~		
+	Define: STRGreenSlider Using DDWinCtrlDef
+	fields:	TypeName Slider
+			Position 200 <ypos> 170  20
+			GenConField ~STRGreen:~
+			Tooltip ~Specify green value~
+			OActionsText ~[SaveIfTextNode]~;
+	ypos = <ypos> + 25;
+	Define: STRBlueStaticText Using DDWinCtrlDef
+	fields:	TypeName StaticText
+			Text ~Blue:~
+			Position $LeftMargin <ypos> 100  20
+	Define: STRBlueEditText Using DDWinCtrlDef
+	fields:	TypeName MaskedEditText
+			Position 120 <ypos>  $EditTextWidth  20
+			GenConField ~STRBlue:~
+			Mask		 ~####~
+			AllowedChars ~-~
+			PromptChar	 ~ ~		
+			InsertOn	~T~	
+			Tooltip ~Specify blue value~
+
+	Define: STRBlueSlider Using DDWinCtrlDef
+	fields:	TypeName Slider
+			Position 200 <ypos> 170  20
+			GenConField ~STRBlue:~
+			Tooltip ~Specify blue value~
+			OActionsText ~[SaveIfTextNode]~;
+
+	ypos = <ypos> + 25;
+	Define: STROpacityStaticText Using DDWinCtrlDef
+	fields:	TypeName StaticText
+			Text ~Opacity:~
+			Position $LeftMargin <ypos> 100  20
+	Define: STROpacityEditText Using DDWinCtrlDef
+	fields:	TypeName MaskedEditText
+			Position 120 <ypos>  $EditTextWidth  20
+			GenConField ~STROpacity:~
+			Mask		 ~####~
+			AllowedChars ~-~
+			PromptChar	 ~ ~		
+			InsertOn	~T~	
+			Tooltip ~Specify opacity~
+	Define: STROpacitySlider Using DDWinCtrlDef
+	fields:	TypeName Slider
+			Position 200 <ypos> 170  20
+			GenConField ~STROpacity:~
+			Tooltip ~Specify opacity~;
+
+	ypos = <ypos> + 35;
+	Prefix = SN;	// use different 2 character prefix for each tab.  Cannot be more than 2 characters
+					// ISpotColorImage: - name of keyword to turn spot color on (actually a bit value within ISpotColor: keyword
+					// ISpotTextureImage - name of keyword to turn spot texture on (actually a bit value within ISpotColor: keyword
+					// ISpotColorTranslucence - name of keyword that shows value of translucence ( = 100 - opacity) 
+					// SpotColorImageTexture: name of keyword that contains the nae of the texture.
+	DefineSpotColorControls(ypos,~<Prefix>~,~TSpotColorStrokeNode:~, ~TSpotTextureStrokeNode:~, ~TSpotColorStrNodeTranslucence:~,~SpotColorTextStrokeNodeTexture:~);
+
+	ypos = $TabStartPosition - 15;
+	Define: ZZStrokeInsideGroupBox Using DDWinCtrlDef
+	fields:	TypeName GroupBox
+			Text ~Stroke Node~
+			Tooltip ~Specify an inside or outside stroke~
+			Position $LeftMargin <ypos> 165  45;
+
+	// This has to be here because it is used to get the exact number of
+	// characters.  Also, the Mask field must be the same other mask field
+	// lengths in this dialog.  This dummy edit text is the primary way
+	// that precision is guaranteed (see UmaskedEditTextCtrl::Filter)
+	Define: DummyEditText Using DDWinCtrlDef
+	fields:	TypeName MaskedEditText
+			Position (-1000) (-1000)  100  100
+			GenConField ~Dummy~
+			Mask		 ~##################~
+			AllowedChars ~-.~
+			PromptChar	 ~ ~		
+
+	Define: StrokeHelpButton Using DDWinCtrlDef
+	fields:	TypeName		Button
+			Text			~Help~
+			Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+							ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+							$HelpButtonWidth $HelpButtonLength
+			DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "TNStrokeNode.htm" ) ;
+
+	}
+}
+
+VOID DefineTab14()
+{
+	Define: Tab14 Using DDWinCtrlDef
+	fields:	Text ~Stroke Text~
+			TypeName Tab
+			Tooltip ~Stroke text edges~;
+	Contains: InListOrder
+	{
+		ypos = $TabStartPosition - 10;
+		Define: StrokeTextColorButton Using DDWinCtrlDef
+		fields:	TypeName Button
+				Text ~Stroke Color...~
+				Position $LeftMargin  <ypos> 200  20
+				GenConField ~StrokeTextColor:~
+				Tooltip ~Choose a stroke color~;
+
+		ypos = <ypos> + 30;
+		Define: ApplyTextStroke Using DDWinCtrlDef
+		fields:	TypeName CheckBox
+				GenConName THIS
+				GenConField ~StrokeTextColor:~
+				Text ~Apply~
+				IsTabStop 1
+				Position $LeftMargin <ypos> 120 15
+				Tooltip ~If checked, will insert the stroke color around the edges if the text.  If unchecked, no stroke will be applied.~;
+
+		ypos = <ypos> + 20;
+		Define: StrokeTextColorStaticText Using DDWinCtrlDef  AsSymbol StrokeTextColorStaticText
+		fields:	TypeName StaticText
+				GenConName THIS
+				Text ~Stroke Color:~
+				Position $LeftMargin  <ypos> 100 30
+
+		Define: StrokeTextColorEditText Using DDWinCtrlDef AsSymbol StrokeTextColorEditText
+		fields:	TypeName MaskedEditText
+				GenConField ~StrokeTextColor:~
+				MASK	RepeatStr(1024,~*~)
+				Position StrokeTextColorStaticText(GetRight,Position) + 10 , <ypos> , 245 , 20
+				Tooltip ~Insert RGB values or a macro.~;
+
+		ypos = <ypos> + 30;
+		Define: StrokeTextOpacityStaticText Using DDWinCtrlDef  AsSymbol StrokeTextOpacityStaticText
+		fields:	TypeName StaticText
+				GenConName THIS
+				Text ~Opacity of stroke:~
+				Position $LeftMargin  <ypos> 100 50
+				DActionsText ~[NULL]~
+				OActionsText ~[NULL]~;
+				
+		Define: StrokeTextOpacityEditText Using DDWinCtrlDef AsSymbol StrokeTextOpacityEditText
+		fields:	TypeName MaskedEditText
+				GenConField ~StrokeTextOpacity:~
+				Position StrokeTextOpacityStaticText(GetRight,Position) + 10  <ypos>  50 20
+				Mask		 ~###~
+				AllowedChars ~~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Set the opacity of the stroke.  A value of 0 makes the stroke invisible.~;
+
+		Define: StrokeTextOpacitySlider Using DDWinCtrlDef AsSymbol StrokeTextOpacitySlider
+		fields:	TypeName Slider
+				GenConName THIS
+				GenConField ~StrokeTextOpacity:~
+				Position StrokeTextOpacityEditText(GetRight,Position) + 10  <ypos> 180 20
+				Tooltip ~Set the opacity of the stroke color.  A value of 0 makes the stroke invisible. ~;
+
+		ypos = <ypos> + 30;
+		Define: StrokeTextWidthStaticText Using DDWinCtrlDef  AsSymbol StrokeTextWidthStaticText
+		fields:	TypeName StaticText
+				GenConName THIS
+				Text ~Width of stroke (pixels):~
+				Position $LeftMargin  <ypos> 110 20
+				DActionsText ~[NULL]~
+				OActionsText ~[NULL]~;
+				
+		Define: StrokeTextWidthEditText Using DDWinCtrlDef AsSymbol StrokTextWidthEditText
+		fields:	TypeName MaskedEditText
+				GenConField ~StrokeTextWidth:~
+				Position StrokeTextWidthStaticText(GetRight,Position) + 10  <ypos>  40 20
+				Mask		 ~###~
+				AllowedChars ~~
+				PromptChar	 ~ ~		
+				InsertOn	~T~	
+				Tooltip ~Set the width of the stroke in pixels.~;
+
+		Define: StrokeTextWidthSlider Using DDWinCtrlDef AsSymbol StrokeTextWidthSlider
+		fields:	TypeName Slider
+				GenConName THIS
+				GenConField ~StrokeTextWidth:~
+				Position StrokTextWidthEditText(GetRight,Position) + 10  <ypos> 180 20
+				Tooltip ~Set the width of the stroke in pixels.~;
+
+		ypos = <ypos> + 30 ;
+		Define: StrokeTextAntialiasCheckBox Using DDWinCtrlDef
+		fields:	TypeName CheckBox
+				GenConField ~StrokeTextAntialias:~
+				Text ~Antialiased:~
+				Position $LeftMargin <ypos> 120 15
+				IsTabStop 1
+				Tooltip ~Antialias the stroke~;
+
+		ypos = <ypos> + 40 ;
+		
+
+		Prefix = SR;	// use different 2 character prefix for each tab.  Cannot be more than 2 characters
+						// ISpotColorImage: - name of keyword to turn spot color on (actually a bit value within ISpotColor: keyword
+						// ISpotTextureImage - name of keyword to turn spot texture on (actually a bit value within ISpotColor: keyword
+						// ISpotColorTranslucence - name of keyword that shows value of translucence ( = 100 - opacity) 
+						// SpotColorImageTexture: name of keyword that contains the nae of the texture.
+		DefineSpotColorControls(ypos,~<Prefix>~,~TSpotColorStroke:~, ~TSpotTextureStroke:~, ~TSpotColorStrokeTranslucence:~,~SpotColorTextStrokeTexture:~);
+
+
+		Define: TextStrokeHelpButton Using DDWinCtrlDef
+		fields:	TypeName		Button
+				Text			~Help~
+				Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+								ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+								$HelpButtonWidth $HelpButtonLength
+				DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "TNStroke.htm" ) ;
+
+	}
+}
+
+
+VOID DefineTab4()
+{
+		Define: Tab4 Using DDWinCtrlDef
+		fields: Text ~QR Code~
+				TypeName Tab
+				Tooltip ~Define a QR Code~
+
+		Contains: InListOrder
+	{
+
+		ypos = $TabStartPosition;
+		Define: GenerateQRCodeCheckBox Using DDWinCtrlDef AsSymbol GenerateQRCodeCheckBox
+		fields:	TypeName CheckBox
+				GenConField ~GenerateQRCode:~
+				Text ~Generate a QR Code~
+				Position $LeftMargin, <ypos>+5, 150, 15
+				IsTabStop 1
+				IActionsText ~[Get]~
+				DActionsText ~[Save]~
+				OActionsText ~[Save]~
+				Tooltip ~Generate a QR Code~;
+
+		ypos = <ypos> + 30;
+		Define: QRCodeErrorCorrectioStaticText Using DDWinCtrlDef AsSymbol QRCodeErrorCorrectioStaticText
+		fields:	TypeName StaticText
+				Text ~Error Correction Level:~
+				Position $LeftMargin <ypos> 120  30
+		Define: QRCodeErrorCorrectionComboBox Using DDWinCtrlDef AsSymbol QRCodeErrorCorrectionComboBox
+		fields:	TypeName SComboBox
+				GenConName THIS
+				GenConField ~QRCodeErrorCorrection:~
+				Position QRCodeErrorCorrectioStaticText(GetRight,Position)+ 5,  <ypos> , 50 , 100
+				IActionsText	~[GetList(QRCodeErrorCorrectionChoices) Get]~
+				DactionsText ACTIONS ( 
+									Save
+									) 								
+				Tooltip ~L provides the lowest amount of error correction.  M provides a slightly higher level of error correction.  L or M are recommended.  Q and H are for industrial environments where it will be difficult to keep the QR code clean, and are not recommended.~;
+
+		ypos = <ypos> + 30;
+		Define: QRCodeTooSmallStaticText Using DDWinCtrlDef AsSymbol QRCodeTooSmallStaticText
+		fields:	TypeName StaticText
+				Position $LeftMargin <ypos> 300  40
+				GenConName THIS
+				GenConField ~QRCodeTooSmallMsg~
+				IActionsText ~[Get]~
+
+		Define: QRCodeOptionsHelpButton Using DDWinCtrlDef
+		fields:	TypeName		Button
+				Text			~Help~
+				Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+								ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+								$HelpButtonWidth $HelpButtonLength
+				DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "QR_Codes.htm" ) ;
+
+		ypos = QRCodeTooSmallStaticText(GetBottom,Position) + 10;
+		Define: QRCodeContentsStaticText Using DDWinCtrlDef
+		fields:	TypeName MLEDITTEXT
+				Position $LeftMargin <ypos> 300  130
+				GenConName THIS
+				ReadOnly	T
+				NoHorizontalScroll	TRUE
+				NoVerticalScroll TRUE 
+				GenConField ~Text:~
+
+		Define: QRCodeOptionsHelpButton Using DDWinCtrlDef
+		fields:	TypeName		Button
+				Text			~Help~
+				Position		ATabControl(GetLeft,Position) + $HelpButtonXOffset,
+								ATabControl(GetBottom,Position) - $HelpButtonYOffset,
+								$HelpButtonWidth $HelpButtonLength
+				DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "QR_Codes.htm" ) ;
+	}
+}
+
+Define: TextNodeValuesDialog Using DDWinDef // if the name is ever changed, you must also change UGenDlgBar::GetWindowPosition
+fields: Position 410 30 400 400
+		AutoPosition	1
+		Title ~Text Node Properties~
+		TypeName ~DialogBar~
+		Purpose ~ImageAndTextNode~
+		IActionsText ~[NULL]~
+		OActionsText ~[PerformOActions]~
+		HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "TNEdit.htm" )
+
+Contains:
+{
+	Define: INTIDFieldAgain Using DDWinCtrlDef AsSymbol INTIDFieldAgain
+	fields:	TypeName StaticText
+			GenConField ~INTID:~
+			Position 10 368  70  20
+			FontWeight		600
+			IActionsText ~[Get]~
+			Tooltip ~Node ID~;
+
+	Define: NodeNameFieldAgain Using DDWinCtrlDef AsSymbol NodeNameFieldAgain
+	fields:	TypeName StaticText
+			GenConField ~NodeName:~
+			FontWeight		600
+			Position IntIDFieldAgain(GetRight,Position)+5 INTIDFieldAgain(GetTop,Position)  175  20
+			IActionsText ~[Get]~
+			Tooltip ~Node Name~;
+
+	Define: OKButton Using DDWinCtrlDef AsSymbol OKButton
+	fields:	TypeName Button
+			Text ~Close~
+			Position NodeNameFieldAgain(GetRight,Position)+5  INTIDFieldAgain(GetTop,Position) 55  20
+			Tooltip ~Close window~;
+
+	Define: PreviewButton Using DDWinCtrlDef
+	fields:	TypeName Button
+			Text ~Preview~
+			Position   OKButton(GetRight,Position)+5 INTIDFieldAgain(GetTop,Position) 55  20
+			Tooltip ~Re-render changes since the last preview~;
+
+	Define: ATabControl Using DDWinCtrlDef AsSymbol ATabControl
+	fields:	Position 10 10 400 350
+			TypeName TabCtrl
+			Tooltip ~Choose a tab~
+			Text ~TCS_HOTTRACK | TCS_MULTILINE | TCS_TOOLTIPS~
+			
+	Contains: INLISTORDER
+	{
+		ypos = 0;
+		DefineTab1();
+		DefineTab1a();
+		DefineTab1b();
+		DefineTab2();
+		DefineTab3();
+		DefineTab16();
+		DefineTab1c();
+		DefineTab5();
+		DefineTab12();
+		DefineTab15();
+		DefineTab13();
+		DefineTab14();
+		DefineTab4();
+	}
+}
+
+Hang: TextNodeValuesDialog ~[UI Dialogs]~ ;

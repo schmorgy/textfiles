@@ -1,0 +1,715 @@
+// Global:  WhichFilmterm
+//          DocumentQuery
+//          ListViewMenu
+
+Include: ~FormattingRoutines~;
+
+FirstTime = TRUE;
+FilmtermUpdateCount = 0;
+UpdatingFilmterms = FALSE;
+criteriaList = ~~;
+
+VOID RefreshDoc()
+{
+	KillTimer( 1 );
+	RefreshListView();
+}
+
+NUMERIC RefreshListView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	Count = List( NumEntries );
+
+	DataWindow( StatusBar,Text,Translate( ~Data for <Count> filmterms~ ) );
+
+	SetDocumentData( List(GetObject) );	
+	DataWindow( RefreshWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,ChangedItem,OrigItem,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no selected row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedItem[Filmterm]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Filmterm name cannot be blank.~ ) ); }
+
+	Key = ~Filmterm = '<$con.OrigItem[Filmterm]>'~;
+
+	Query = ~Select * From FilmtermData Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+		return Warning( Translate( ~Could not update FilmtermData record where <Key>. <theErr>~ ) );
+	}
+
+	if ( !List( UpdateFrom,ChangedItem,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update record where <Key>. <theErr>~ );
+	}
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+// [Delete]
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,ItemsToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	count = ItemsToDelete( ChildCount );
+
+	if ( MessageBox( ~Are you sure you want to delete the <count> selected items?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( ItemsToDelete( GetNext,Item ) )
+	{
+		Key = ~Filmterm = '<$con.Item[Filmterm]>'~;
+
+		Cmd = ~Delete From FilmtermData Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Could not delete item where <Key>. <theErr>~ );
+		}
+
+		RowsToDelete( AddString,ItemsToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+NUMERIC RightClickInListView()
+{
+	return DataView( DisplayMenu,ListViewMenu );
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if ( <key> == 0x74 )	// F5
+		{ return RefreshListView(); }
+
+	if (  !View( PerformMenuAction,ListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,ListViewMenu,0,0  );
+	}
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( Translate(UIMessages,NotImplemented,~<what>~) );
+	return TRUE;
+}
+
+
+VOID RememberWindowLocation( &theWindow,Item )
+{
+	theWindow( SaveWindowLocation,WindowLocation,~<Item>~ );
+}
+
+NUMERIC HandleHR500Error( ErrMsg )
+{
+	Message = ~~;
+	DiagMsg1 = ~~;
+	DiagMsg2 = ~~;
+	DiagAction = ~~;
+
+	if (GenCon( ScanErrorInfo,GetGenCon,ScanErrorInfo,PERMANENT ))
+	{
+		ScanErrorInfo( GetValues, APIErrorCode, APIErrorCode, ScannerErrorCode, ScannerErrorCode, Text, ErrorMsg );
+
+		// First check for a scanner error, then an API error.
+
+		if ( GenCon( DiagMsg1,GetFrom,~<ScannerErrorCode>~,~[STRINGS HR500ScanErrorMessages]~ ) )
+		{
+			DiagMsg1( GetValues, Text, TextMsg );
+			Temp = Translate( ~\n\n~ );
+			Message = ~<ErrMsg>~ + ~<Temp>~ + ~<TextMsg>~;
+		}
+		else if ( GenCon( DiagMsg2,GetFrom,~<APIErrorCode>~,~[STRINGS HR500APIErrorMessages]~ ) )
+		{
+			DiagMsg2( GetValues, Text, TextMsg );
+			Temp = Translate( ~\n\n~ );
+			Message = ~<ErrMsg>~ + ~<Temp>~ + ~<TextMsg>~;
+		}
+		else if ( DefinedAndNotNull( ErrMsg ) && DefinedAndNotNull( ErrorMsg ) ) 
+		{
+			Temp = Translate( ~\n\nDetailed error information:\n\n~ );
+			Message = ~<ErrMsg>~ + ~<Temp>~ + ~<ErrorMsg>~;
+		}
+		else if ( DefinedAndNotNull( ErrMsg ) && !DefinedAndNotNull( ErrorMsg ) ) 
+		{
+			Message = ~<ErrMsg>~;
+		}
+		else if ( !DefinedAndNotNull( ErrMsg ) && DefinedAndNotNull( ErrorMsg ) ) 
+		{
+			Message = ~<ErrorMsg>~;
+		}
+		else
+		{
+			Message = Translate( ~\n\nUnable to get detailed error information:\n\n~ );
+		}
+	}
+	else
+	{
+		Temp = Translate( ~\n\nUnable to get detailed error information:\n\n~ );
+		Message = ~<ErrMsg>~ + ~<Temp>~;
+	}
+	Warning( ~<Message>~ );
+
+	ScanErrorInfo( SetValues, APIErrorCode, ~0~, ScannerErrorCode, ~0~, Text, ~~ );
+	
+	return FALSE;
+}
+
+NUMERIC FilmtermConnect(filmType,sfsFile)
+{
+	WaitCursor( Begin );
+
+	if ( Defined( HrFilmterm ) )
+	{
+		ForgetGlobal( HrFilmterm );
+	}
+
+	if (  !HR500Filmterm( HrFilmterm ) )
+	{
+		DataWindow( StatusBar,Text,Translate( ~Error starting the filmterm analysis software.~ ) );
+		return Warning( Translate( ~Error starting the filmterm analysis software.~ ) );
+	}
+
+	Global( HrFilmterm );
+	return TRUE;
+}
+
+NUMERIC CheckForFilmtermAdjustment( MsgIfNotNeeded,StoreResults,MsgIfNeeded,CalledFromDataWindow,SelectedFilmterms )
+{
+	Selection = FALSE;
+	if ( DefinedAndNotNull( SelectedFilmterms ) )
+	{
+		Selection = <SelectedFilmterms>;
+	}
+	
+	msg = ~Please notify your quality control manager\nthat the following filmterms need to be adjusted:\n~;
+	Actions = ACTION DOC ( ~ScannerHR500Doc~ OpenOnce ScannerHR500Doc "FinishCloseDialog();" );
+
+	minScanCount = 1000;
+	GetSystemSettings( ~Scanning~,~FilmtermAdjustFrameCount~,minScanCount,Enabled );
+
+	FilmtermUpdateCount = 0;
+	count = DataView( GetSelectedRows,SelectedFTs );
+	if ( <count> == 0 )
+	{
+		Selection = FALSE;
+	}
+
+	criteriaList = ~~;
+	if ( <Selection> )
+	{
+		//DeleteExistingAdjustments();
+		criteriaList = ~AND (~;
+		while ( SelectedFTs( GetNext,Filmterm ) )
+		{
+			if ( ~<criteriaList>~ != ~AND (~ )
+			{
+				criteriaList = ~<criteriaList> OR~;
+			}
+			criteriaList = ~<criteriaList> (Filmterm = '<$con.Filmterm[Filmterm]>')~;
+
+			count = <count> + 1;
+			queryLength = strlen( ~<criteriaList>~ );
+		}
+		criteriaList = ~<criteriaList>)~;
+	}
+
+	fields = ~Filmterm,SFSFile,AvgDenR,AvgDenG,AvgDenB~;
+	query = ~Select <fields> from FilmtermData where TotalScans >= <minScanCount> <criteriaList>~;
+
+	if ( !PGenConList( FTList,Connect,Cursor,Forward,QUERY,~<query>~ ) )
+	{
+		FTList( GetErrorDescription, 0, theErr );
+		Warning( Translate(~Query Failed <query>. <theErr>~) );
+		if ( !<CalledFromDataWindow> )
+		{
+			PerformActions( Actions );
+			Exit();
+		}
+		return FALSE;
+	}
+	
+	Count = FTList( NumEntries );
+	StatusBarText( Translate( ~Reading accumulated averages for <Count> filmterms~ ) );
+
+	if ( <Count> > 0 )
+	{
+		if ( !Defined( HrFilmterm ) )
+		{
+			FilmtermConnect();			
+		}
+
+		more = FTList( GetFirst,FTRecord );
+		while ( <more> )
+		{
+			if ( HrFilmterm( Initialize,~<$pcon.FTRecord[Filmterm]>~,~<$pcon.FTRecord[SFSFile]>~ ) )
+			{
+				if ( HrFilmterm( FpoUpdateNeeded,~<StoreResults>~,
+												 ~<$pcon.FTRecord[AvgDenR]>~,
+												 ~<$pcon.FTRecord[AvgDenG]>~,
+												 ~<$pcon.FTRecord[AvgDenB]>~ ) )
+				{
+					msg = ~<msg>\n   <$pcon.FTRecord[Filmterm]> for SFS <$pcon.FTRecord[SFSFile]>~;
+					++FilmtermUpdateCount;
+				}
+			}
+			else
+			{
+
+				DataWindow( StatusBar,Text,Translate( ~Unable to connect to the filmterm analyzer.~ ) );
+				ErrMsg = Translate( ~Unable to connect to and initialize the filmterm analyzer for Filmterm <$pcon.FTRecord[Filmterm]>.~ );
+				HandleHR500Error( ~<ErrMsg>~ );
+			}
+			more = FTList( GetNext,FTRecord );
+		}
+
+		FTList( RefreshConnectionCache );
+
+		if ( <FilmtermUpdateCount> > 0 )
+		{
+			if ( <MsgIfNeeded> )
+			{
+				Warning( Translate( ~<msg>~ ) );
+			}
+			if ( !<CalledFromDataWindow> )
+			{
+				PerformActions( Actions );
+				Exit();
+			}
+			return TRUE;
+		}
+	}
+
+	if ( <MsgIfNotNeeded> )
+	{
+		if ( !<Selection> )
+		{
+			msg = ~No filmterms need to be updated at this time.~;
+		}
+		else
+		{
+			msg = ~The selected filmterms do not need to be updated at this time.~;
+		}
+
+		Warning( Translate( ~<msg>~ ) );
+	}
+
+	if ( !<CalledFromDataWindow> )
+	{
+		PerformActions( Actions );
+		Exit();
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC UpdateFilmterm()
+{
+	if ((~<$App.Name>~ !=~DP1.exe~) && (!GetUserPermissions( FilmTermEditing ) ))
+	{
+		Warning( Translate( ~You do not have permission to update the Filmterm files.\nPlease see your administrator.~ ) );
+		return FALSE;
+	}
+
+	Selection = FALSE;
+	count = DataView( GetSelectedRows,SelectedFTs );
+	if ( <count> > 0 )
+	{
+		Selection = TRUE;
+	}
+
+	criteriaList = ~~;
+	CheckForFilmtermAdjustment( FALSE,TRUE,FALSE,TRUE,<Selection> );
+	
+	if ( Defined( HrFilmterm ) && <FilmtermUpdateCount> > 0 )
+	{
+		UpdatingFilmterms = TRUE;
+		HrFilmterm( SetUpdateCompleteNotification,~UpdateComplete(%ld,%ld)~ );
+		HrFilmterm( UpdateFilmtermFile,~<criteriaList>~ );
+	}
+	else
+	{
+		if ( <Selection> )
+		{
+			msg = ~The selected filmterms do not need to be updated at this time.~;
+		}
+		else
+		{
+			msg = ~No filmterms need to be updated at this time.~;
+		}
+		Warning( Translate( ~<msg>~ ) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC UpdateComplete( success,count )
+{
+	UpdatingFilmterms = FALSE;
+	if ( <success> && <count> > 1 )
+	{
+		msg = ~<count> filmterm files were updated successfully.~;
+	}
+	else if ( <count> == 1 )
+	{
+		msg = ~1 filmterm file was updated successfully.~;
+	}
+	else if ( <count> == 0 )
+	{
+		msg = ~No filmterm files were updated.~;
+	}
+	else
+	{
+		msg = ~The filmterm update was not successful.\nPlease make the adjustments manually.~;
+	}
+	
+	Warning( Translate( ~<msg>~ ) );
+	
+	Actions = ACTION DOC ( ~FilmtermUpdate~ OpenOnce FilmtermUpdateDoc "RefreshListView();" );
+	PerformActions( Actions );
+
+	RefreshListView();
+	return <success>;
+}
+
+
+NUMERIC ViewFilmtermAdjustment()
+{
+	Update = TRUE;
+
+	CheckForFilmtermAdjustment( FALSE,TRUE,FALSE,TRUE,FALSE );
+	
+	if ( <FilmtermUpdateCount> > 0 )
+	{
+		Actions = ACTION DOC ( ~FilmtermUpdate~ OpenOnce FilmtermUpdateDoc "Init(~~);" );
+		return PerformActions( Actions );
+	}
+	else
+	{
+		msg = ~No filmterms need to be updated at this time.~;
+		Warning( Translate( ~<msg>~ ) );
+		Actions = ACTION DOC ( ~FilmtermUpdate~ OpenOnce FilmtermUpdateDoc "OnCloseDataView();" );
+		PerformActions( Actions );
+	}
+	return FALSE;
+}
+
+
+NUMERIC Init( WhichFilmterm,DocumentQuery )
+{
+	DataWindow( Set,Title,~<WhichFilmterm>~ == ~~ ? ~Filmterm Data~ : ~Filmterm Data - <WhichFilmterm>~ );
+
+	Global( Filmterm,DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		if ( !Tree( Name,HR500FTDScanErrorInfo,Location,~[GENCONS]~,Exists ) )
+		{
+			Dictionary:	DDHR500FTDScanErrorInfo
+				Fields:	Name APIErrorCode				Type long
+				Fields:	Name ScannerErrorCode			Type long
+				Fields:	Name Text						Type Text;
+		}
+
+		Tree( Location,~[GENCONS]~,Name,ScanErrorInfo,PluckAndFree );
+		Define: ScanErrorInfo Using DDHR500FTDScanErrorInfo 
+				Fields: APIErrorCode			0
+						ScannerErrorCode		0
+						Text					~~
+		Hang:	ScanErrorInfo	~[GENCONS]~ ;
+
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,CursorLocation,Client,Lock,ReadOnly,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{ 
+			List(GetErrorDescription,0,theErr);
+			Error( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+		}
+
+		Count = List( NumEntries );
+
+		if ( FALSE )
+		{
+			if ( MessageBox( Translate(DBMessages,LargeQuery,~<DocumentQuery>~,~<Count>~),YESNO ) != YES )
+			{
+				Exit();
+			}
+		}
+
+		StatusBarText( Translate(~Data for <Count> Filmterms~) );
+
+		SetDocumentData( List(GetObject) );
+
+		WindowLocation = ~<$UserSettings.WindowLocation[FilmtermDataList]>~;
+
+		if ( ~<WindowLocation>~ != ~~ )
+			{ DataWindow( Set,Position,~<WindowLocation>~ ); }
+
+		DefineMenu( FALSE );
+
+		if ( ! DataWindow( CreateWindow,~Filmterm Data~ ) )
+			{ Error( Translate(UIMessages,CreateWindowFailed,~Filmterm Data~) ); }
+
+		return TRUE;
+	}
+
+	Document( Doc,This,SetTitle,~<WhichFilmterm>~ == ~~ ? ~Filmterm Data~ : ~Filmterm Data - <WhichFilmterm>~ );
+
+	return RefreshListView( TRUE );
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( <UpdatingFilmterms> )
+	{
+		msg = ~Filmterm files are being updated.\nPlease wait until the update is complete to close the dialog.~;
+		return Warning( Translate( ~<msg>~ ) );
+	}
+
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	Actions = ACTION DOC ( ~FilmtermUpdate~ OpenOnce FilmtermUpdateDoc "OnCloseDataView();" );
+	PerformActions( Actions );
+
+	DeleteExistingAdjustments();
+
+	ForgetGlobal( ScanErrorInfo );
+	return DataWindow( ForceCloseWindow );
+}
+
+
+VOID DeleteExistingAdjustments()
+{
+	RemoveCmd = ~Delete * From FilmtermAdjustment~;
+	Log( Session,~<RemoveCmd>~ );
+	Ado( dBase,ConnectLocal,CMD,~<RemoveCmd>~ );	// OKAY FOR THIS TO ERROR OUT
+
+}
+
+NUMERIC AllOptions()
+{
+	return DataView( DisplayMenu,ListViewMenu,0,0  );
+}
+
+
+Include: ~FilmTypesCombo.txt~;
+
+NUMERIC RefreshComboBox()
+{
+	DataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,FilmtermDataTableDefinition(GetReferenceTo,Fields) );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+
+	if ( ~<ColumnName>~ == ~FILMTERM~ )
+	{
+		UpdateFilmTypesCombo( DataView,ColumnDefinition,<row>,<col>,FALSE,0,0,0 );
+	}
+
+	return TRUE;
+}
+
+
+Include: ~ExportSelectedToFile~;
+
+
+VOID DefineMenu( RecordSetIsAFile )
+{
+	Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu  // called once
+		Fields:		Position	(-1)		
+		Contains:	INLISTORDER
+		{
+			Define:	DeleteRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuDelete )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DeleteRecord() )
+
+			Define:	Refresh	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuRefresh )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RefreshListView(TRUE) )
+
+			Define:	NULL1 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	CheckForUpdate	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Check For Update~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( CheckForFilmtermAdjustment(TRUE,TRUE,TRUE,TRUE,FALSE) )
+
+			Define:	ViewUpdates	using	DDMenuItemDef
+				Fields:	Text		Translate( ~View Recommended Updates~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( ViewFilmtermAdjustment() )
+
+			Define:	NULL2 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	UpdateFilmterm	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Update Filmterm File~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( UpdateFilmterm() )
+
+			Define:	NULL3 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	Export	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuExport )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( ExportSelectedToFile(DataView,FilmtermData) )
+
+			Define:	RememberWindowLoc	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,RememberWindowLoc )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RememberWindowLocation(DataWindow,FilmtermDataList) )	
+		}
+
+	Global( ListViewMenu );
+}
+
+
+
+
+Include: ~DefineStdGridButtons~;
+
+Include: ~FileBrowseButtonsInGridView~;
+
+if ( !GenCon( FilmtermDataTableDefinition,GetFrom,FilmtermData,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The FilmtermData Table is not properly defined~ ); }
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 2; vGap = 2;
+
+Define: DataWindow Using DDWinDef
+	Fields:		Title					Translate(~Filmterm Data~)
+				Position				0 0 90 35
+				IsPositionPercent		T
+				TypeName				SplitterWnd
+				SplitterRows			~2 10 90~
+				SplitterColumns			1
+				EnableStatusBar			T
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "FilmtermData.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons(Filmterm) + 10;
+
+					Define: ExportDataButton Using DDWinCtrlDef AsSymbol ExportDataButton
+							Fields:	GENCONNAME		This
+									DACTIONSTEXT	ACTION EXEC ( ExportSelectedToFile(DataView,FilmtermData) )
+									POSITION		$position, $vGap $ButtonWidth $ButtonHeight
+									TEXT			Translate( ~Export~ )
+									TOOLTIP			Translate( ~Export data to a text file~ )
+									TYPENAME		BUTTON
+
+					Define: CheckForUpdateButton Using DDWinCtrlDef AsSymbol CheckForUpdateButton 
+							Fields: TypeName		Button
+									Text			Translate(~Check For Update~)
+									POSITION		ExportDataButton(GetRight,Position) + 10, $vGap 100 $ButtonHeight
+									IsEnabled		T
+									DActionsText	ACTION EXEC ( CheckForFilmtermAdjustment(TRUE,TRUE,TRUE,TRUE,FALSE) )
+									TOOLTIP			~Get the list of filmterms that need to be adjusted.~
+
+					Define: ViewUpdateButton Using DDWinCtrlDef AsSymbol ViewUpdateButton 
+							Fields: TypeName		Button
+									Text			Translate(~View Recommended Updates~)
+									POSITION		CheckForUpdateButton(GetRight,Position) + $hGap, $vGap 150 $ButtonHeight
+									IsEnabled		T
+									DActionsText	ACTION EXEC ( ViewFilmtermAdjustment() )
+									TOOLTIP			~View the list of filmterms with the recommended adjustments.~
+
+					Define: UpdateFTButton Using DDWinCtrlDef AsSymbol UpdateFTButton 
+							Fields: TypeName		Button
+									Text			Translate(~Update Filmterm~)
+									POSITION		ViewUpdateButton(GetRight,Position) + $hGap, $vGap 150 $ButtonHeight
+									IsEnabled		T
+									DActionsText	ACTION EXEC ( UpdateFilmterm() )
+									TOOLTIP			~Update the selected filmterm files with the recommended adjustments.~
+				}
+			
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		FilmtermDataTableDefinition( GetReferenceTo,Fields )
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					ComboBoxActionsText		ACTION Call ( RefreshComboBox() )
+					CloseActionsText		ACTION Call ( OnCloseDataView() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "FilmtermData.htm" )
+					ViewDataType			Text
+					//LoadAsync				T
+	}

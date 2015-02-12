@@ -1,0 +1,388 @@
+IncludeClass(BaseHTML);
+IncludeClass(BasePDF);
+
+
+Class( Web,Extends,BaseHTML,
+		Member,fPath,Str,~~,
+		Member,fLoadingPage,str,~<$App.HTTPServer>\PDFLoadingFrame.html~,
+		Member,fHiRes,Numeric,TRUE,
+		Member,fLongestSide,Numeric,0,
+		Member,fPPI,Numeric,200,
+		Member,fGroupID,Str,~~,
+		Member,fOrderID,Str,~~,
+		Member,fPDFSrcFile,Str,~~,
+		Member,fPDFDstFile,Str,~~,
+		Member,fDeleteOnClose,Numeric,FALSE,
+		Member,fThread,Object,Thread,
+		Member,fPage,Numeric,0 );
+
+
+NUMERIC	Web::CloseCheck()
+{
+	if ( <fDeleteOnClose> )
+	{
+		Action = STR ( DeleteFile Open DeleteFile "Init(~<fPDFDstFile>~,20000);" );
+		PerformDocActions( Action );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC Web::Failure(msg)
+{
+	if ( IsMainThread() )
+	{
+		Warning( ~<msg>~ );
+		ErrorMsg(~<msg>~);
+	}
+	else
+	{
+		Invoke( ~<THIS>.ErrorMsg~,~<msg>~ );
+		Log( Session,~<$Job.Title>: <msg>~ );
+	}
+	
+	return FALSE;
+}
+
+
+NUMERIC Web::Status(msg)
+{
+	ReturnOnFailure( IsMainThread() );
+	ReturnOnFailure( MemberDefined(fHTMLView) );
+	return fHTMLView( InsertHTML, Info, 0, afterBegin,~<br><msg>~ );
+}
+
+
+NUMERIC Web::ErrorMsg(msg)
+{
+	ReturnOnFailure( IsMainThread() );
+	ReturnOnFailure( MemberDefined(fHTMLView) );
+	return fHTMLView( InsertHTML, Info, 0, afterBegin,~<br><span style="color:red; font: 14"><msg></span>~ );
+}
+
+
+VOID	Web::OnLoadComplete()
+{
+	if ( <fOnLoadCount> == 1 )
+	{
+		GetActiveView();
+		PreviewBookCorrected();
+	}
+}
+
+
+NUMERIC Web::ResolvePath(Path)
+{
+	if ( IsNull(~<Path>~) )
+	{
+		ReturnOnFailure( FileDialog( Title,~Find The PDF File~,PATHMUSTEXIST,Path,Path,Open ) );
+	}
+	else
+	{
+		if ( !Files( FileExists,~<Path>~ ) )
+		{
+			return Warning( ~<Path>~ does not exist~ );
+		}
+	}
+	
+	fPath = ~<Path>~;
+	
+	return TRUE;
+}
+
+
+NUMERIC Web::Initialize(&theTitle,&Path,DeleteOnClose)
+{
+	ReturnOnFailure( ResolvePath(~<Path>~) );
+	Title = IsNull( ~<theTitle>~ ) ? ~<$str.$fPath.FileName>~ : ~<theTitle>~;
+	fDeleteOnClose = Numeric( ~<DeleteOnClose>~ );
+	return TRUE;
+}
+
+
+NUMERIC PreviewBook( OrderID,GroupID,PPI )	// Entry Point to Generate a temporary PDF file for the OrderItems of a book and show it
+{
+	Query = ~Select SourceType,SourceFile From Books Where OrderID='<OrderID>' And GroupID=<GroupID>~;
+
+	if ( ADO( db,Connect,GetValuesFor,~<Query>~,SourceType,SourceFile ) )
+	{
+		if ( SimilarStr( ~<SourceType>~,~PDF~ ) && !IsNull(~<SourceFile>~) )
+		{
+			Init( ~<SourceFile>~,~Book <GroupID> of Order <OrderID>~,TRUE );
+			return TRUE;	
+		}
+		
+	}
+	
+	return GenerateAndPreviewBook( db,~<OrderID>~,~<GroupID>~,PPI );
+}
+
+
+NUMERIC GenerateAndPreviewBook( &dbase,OrderID,GroupID,PPI )
+{
+	Query = ~Select * From OrderItems Where OrderID='<OrderID>' And GroupID=<GroupID> Order By Sequence,Subsequence~;
+	
+	if ( !PGenConList( List,Connection,dbase,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Failure( ~Failed to find book <GroupID> for Order <OrderID>.  <Query>.  <theErr>~ );
+	}
+	
+	BasePDF( New,aPDF );
+	
+	PPI = DefinedAndTRUE(PPI) ? ~<PPI>~  : ~200~;
+
+	aPDF.Create( ~<PPI>~ );
+	
+	while ( List( GetNext,Item ) )
+	{
+		if ( !IsNull(~<$pcon.Item[JobPath]>~) )
+		{
+			JobFileName =  ~<$pcon.Item[JobPath].filename.withoutext>~;
+			Folder = ~<$pcon.Item[JobPath].Path>~;
+			PreviewImage = ~<Folder>\Preview\<JobFileName>.jpg~;
+			
+			if ( Files( FileExists,~<PreviewImage>~ ) )
+			{
+				aPDF.AddPage( ~<PreviewImage>~,1 );
+			}
+		}
+	}
+	
+	PDFPath = ~<Folder>\Preview\<JobFileName>.pdf~;
+
+	if ( !aPDF.Write(~<PDFPath>~) )
+	{
+		return Failure( ~Failed to write ~<PDFPath>~ );
+	}
+	
+	ForgetLocal( aPDF );
+	
+	Init( ~<PDFPath>~,~Book <GroupID> of Order <OrderID>~,TRUE );	
+	
+	return TRUE;
+}
+
+
+
+
+
+NUMERIC Web::RestoreImageForNode( &Node,&renderedImageMem )		// RUNS ON A WORKER THREAD
+{
+	Node( Get,~IFile:~,ImagePath );
+	
+	ObjNum = Node( GetNumeric,~PDFObjNum:~ );
+	GenNum = Node( GetNumeric,~PDFGenNum:~ );
+	IgnoreSpatialOps = Node( GetNumeric,~IgnoreSpatialOps:~ );
+	
+	if ( <IgnoreSpatialOps> == FALSE )
+	{
+		Left = Node( GetNumeric,~IX:~ );
+		Top = Node( GetNumeric,~IY:~ );
+		Right = <Left> + Node( GetNumeric,~IWidth:~ );
+		Bottom = <Top> + Node( GetNumeric,~IHeight:~ );
+		renderedImageMem( CropTo,NodeImageMem,<left>*<fPPI>,<top>*<fPPI>,<right>*<fPPI>,<bottom>*<fPPI> );
+	}
+	
+	Invoke( ~<This>.Status~,~Page <fPage>: Restoring Node <$con.Node[INTID:]> to PDF Object <ObjNum>,<GenNum>~);
+	
+	if ( !fPDF.RestoreImageFrom( ~<fPDFSrcFile>~,( <IgnoreSpatialOps> ) ? renderedImageMem : NodeImageMem,~<ObjNum>~,~<GenNum>~,<fLongestSide> ) )
+	{
+		return Failure( ~Failed to restore image <fPDFSrcFile>,<ObjNum>,<GenNum>,<fLongestSide>~ );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC Web::RestoreImagesForJob(JobPath)		// RUNS ON A WORKER THREAD
+{
+	Document( Job );
+
+	Job( Create );
+
+	Job( SetNoMessageBox,TRUE );
+	
+	Invoke( ~<This>.Status~,~Parsing <JobPath>~ );
+
+	if ( !Job( ParseFile,~<JobPath>~ ) )
+	{
+		return Failure( ~An error occured while parsing the layout at <JobPath>~ );
+	}
+
+	if ( !Job( GetRenderList,0,aRenderList ) )
+	{ 
+		return Failure( ~There was no render list for <JobPath>~ );
+	}
+	
+	fPPI = aRenderList( GetResolution );
+	
+	Invoke( ~<This>.Status~,~Rendering <JobPath>~ );
+		
+	if ( !ImageMem( renderedImage,Render,aRenderList,aRenderList(GetBackgroundWidth),aRenderList(GetBackgroundHeight),<fPPi> ) )
+	{
+		return Failure( ~Failed to render <JobPath>~ );
+	}
+	
+	ImageCount = 0;
+	
+	more = aRenderList( GetFirstImageNode,TheNode );
+	
+	ReturnOnFailure( <more> );
+	
+	FirstImageNodeID = TheNode( GetNumeric,~INTID:~ );
+	
+	while ( <more> )
+	{
+		if ( TheNode( GetNumeric,~PDFOBJNUM:~ ) > 0 )
+		{
+			ReturnOnFailure( RestoreImageForNode(TheNode,renderedImage) );
+		}
+		
+		more = aRenderList( GetNextImageNode,TheNode );
+		
+		BreakIf( TheNode( GetNumeric,~INTID:~ ) == <FirstImageNodeID> );
+	} 
+	
+	return TRUE;
+}
+
+
+NUMERIC	Web::PreviewBookCorrected()
+{
+	return fThread( New,~<This>.PreviewThreadProc~ );
+	
+	debug( 1 );
+	return PreviewThreadProc();			// FOR TESTING WITHOUT A THREAD
+}
+
+	
+NUMERIC	Web::PreviewThreadProc()		// ON A WORKER THREAD.  NO UI WORK ALLOWED HERE
+{ 
+	ReturnOnFailure( GetBookPDF() );
+	
+	Query = ~Select * From OrderItems Where OrderID='<fOrderID>' And GroupID=<fGroupID> Order By Sequence,Subsequence~;
+	
+	if ( !PGenConList( List,Connection,fConnection,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Failure( ~Failed to find book <fGroupID> for Order <fOrderID>.  <Query>.  <theErr>~ );
+	}
+				
+	while ( List( GetNext,Item ) )
+	{
+		if ( !IsNull(~<$pcon.Item[JobPath]>~) )
+		{
+			++fPage;
+			ReturnOnFailure( RestoreImagesForJob( ~<$pcon.Item[JobPath]>~ ) );
+		}
+	}
+	
+	if ( !fPDF.WriteFile( ~<fPDFDstFile>~ ) )
+	{
+		return Failure( ~Failed to write PDF <fPDFSrcFile>.~ );
+	}
+	
+	Invoke( ~<THIS>.DisplayCorrectedBook~ );
+	
+	return TRUE;
+}
+
+
+NUMERIC	Web::DisplayCorrectedBook()		// RUNS ON THE MAIN THREAD
+{	
+	Status( ~Displaying <fPDFDstFile>~ );
+	
+	fHtmlView( Execute,~top.frames[1].location='<$str.$fPDFDstFile.cpath>'~ );
+	
+	fHtmlView( Execute,~top.frames[0].HideInfo()~ );
+	
+	return TRUE;
+}
+
+
+NUMERIC	Web::GetBookPDF()				// RUNS ON A WORKER THREAD
+{
+	Query = ~Select SourceType,SourceFile From Books Where OrderID='<fOrderID>' And GroupID=<fGroupID>~;
+	
+	if ( !fConnection( GetValuesFor,~<Query>~,SourceType,Source) )
+	{
+		return Failure( ~There is no book <fGroupID> for Order <fOrderID>~ );
+	}
+	
+	if ( !SimilarStr( ~<SourceType>~,~PDF~ ) )
+	{
+		return Failure( ~Book <fGroupID> for Order <fOrderID> does not contain a PDF file~ );
+	}
+	
+	Invoke( ~<THIS>.Status~,~Previewing <Source>~ );
+	
+	fPDFSrcFile = ~<Source>~;
+	
+	fPDFDstFile = ~<$str.$Source.withoutext>_Preview.pdf~;
+		
+	return TRUE;
+}
+
+
+NUMERIC	Web::PreviewBookSetup(theTitle,OrderID,GroupID,PPI,WantHiRes,DeleteOnClose)
+{
+	Title = IsNull( ~<theTitle>~ ) ? ~Book For <OrderID>,<GroupID>~ : ~<theTitle>~;
+	fOrderID = ~<OrderID>~;
+	fGroupID = Numeric( ~<GroupID>~ );
+	fPPI = Numeric( ~<PPI>~ ) ? Numeric( ~<PPI>~ )  : 200;
+	fHiRes = DefinedAndTRUE( WantHiRes );
+	fDeleteOnClose = DefinedAndTRUE( DeleteOnClose );
+	
+	BasePDF( New,fPDF );
+	Private( fPDF );
+		
+	if ( !ADO( fConnection,Connect ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		return Failure( ~Failed to connect to the Shared Database.  <theErr>~ );
+	}
+	
+	Private( fConnection );
+
+	return TRUE;
+}
+
+
+// ENTRY POINT PREVIEW A BOOK WITH CORRECTED IMAGES
+VOID PreviewBookCorrected( Title,OrderID,GroupID,PPI,WantHiRes,DeleteOnClose )	
+{
+	Web( New,Page );
+	Global( Page );
+		
+	if ( Page.PreviewBookSetup(~<Title>~,~<OrderID>~,~<GroupID>~,~<PPI>~,~<WantHiRes>~,~<DeleteOnClose>~) )
+	{
+		Page.DefineWindow();
+		Page.Init();
+		Page.Open( ~<fLoadingPage>~ );	// KEEP EM ENTERTAINED WHILE WE ARE GENERATING THE NEW PDF
+	}
+	else	// NOTHING TO OPEN
+	{
+		Exit();
+	}
+}
+
+
+// ENTRY POINT TO OPEN AN EXISTING PDF OR BROWSE TO AN OPEN A PDF
+VOID Init(Path,Title,DeleteOnClose)					
+{	
+	Web( New,Page );
+	Global( Page );
+
+	if ( Page.Initialize( Title,Path,DefinedAndTRUE(DeleteOnClose) ) )
+	{
+		Page.DefineWindow();
+		Page.Init();
+		Page.Open( ~<fPath>~ );
+	}
+	else	// NOTHING TO OPEN
+	{
+		Exit();
+	}
+}

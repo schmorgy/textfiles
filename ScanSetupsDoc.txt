@@ -1,0 +1,418 @@
+
+Include: ~FilmTypesCombo.txt~;
+
+NUMERIC RefreshComboBox()
+{
+	DataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+
+	if ( ~<ColumnName>~ == ~FILMTYPE~ )
+	{
+		UpdateFilmTypesCombo( DataView,ColumnDefinition,<row>,<col>,FALSE,0,0,0 );
+	}
+	else if ( ~<ColumnName>~ == ~ICCPROFILE~ )
+	{
+		UpdateScannerProfilesCombo( DataView,ColumnDefinition,<row>,<col> );
+	}
+	else if ( ~<ColumnName>~ == ~ICCOUTPUTPROFILE~ )
+	{
+		UpdateOutputProfilesCombo( DataView,ColumnDefinition,<row>,<col> );
+	}
+	else if ( ~<ColumnName>~ == ~DRGBREFS~ )
+	{
+		UpdateDRGBRefsCombo( DataView,ColumnDefinition,<row>,<col> );
+	}
+	else if ( ~<ColumnName>~ == ~DRGBPROFILENAME~ )
+	{
+		UpdateDRGBProfilesCombo( DataView,ColumnDefinition,<row>,<col> );
+	}
+
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateScannerProfilesCombo( &DataView,&ColumnDefinition,Row,Col )
+{
+	Query = ~Select * From Profiles Where Type = 'Input' And Path IS NOT NULL~;
+
+	if ( !PGenConList( ProfilesList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		ProfilesList( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Failed to query the Profiles table.\n\n<Query>\n\n<theErr>~ ) ); 
+		return FALSE;
+	}
+
+	ProfilesList( MakeStringList,ScannerProfiles,Name );
+	ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,ScannerProfiles(GetCopyOf) );
+	DataView( SetComboBox,ColumnDefinition,<Col> );
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateOutputProfilesCombo( &DataView,&ColumnDefinition,Row,Col )
+{
+	Query = ~Select * From Profiles Where (Type = 'Output') Or (Type Like 'W%') And Path IS NOT NULL~;
+
+	if ( !PGenConList( ProfilesList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		ProfilesList( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Failed to query the Profiles table.\n\n<Query>\n\n<theErr>~ ) ); 
+		return FALSE;
+	}
+
+	ProfilesList( MakeStringList,OutputProfiles,Name );
+	ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,OutputProfiles(GetCopyOf) );
+	DataView( SetComboBox,ColumnDefinition,<Col> );
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateDRGBRefsCombo( &DataView,&ColumnDefinition,Row,Col )
+{
+	Query = ~Select Name From DRGBRefs~;
+
+	if ( !PGenConList( DRGBRefsList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		DRGBRefsList( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Failed to query the DRGBRefs table.\n\n<Query>\n\n<theErr>~ ) ); 
+		return FALSE;
+	}
+
+	DRGBRefsList( MakeStringList,DRGBRefs,Name );
+	ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,DRGBRefs(GetCopyOf) );
+	DataView( SetComboBox,ColumnDefinition,<Col> );
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateDRGBProfilesCombo( &DataView,&ColumnDefinition,Row,Col )
+{
+	Query = ~Select * From Profiles Where Type = 'Exposure' And Path IS NOT NULL~;
+
+	if ( !PGenConList( ProfilesList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		ProfilesList( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Failed to query the Profiles table.\n\n<Query>\n\n<theErr>~ ) ); 
+		return FALSE;
+	}
+
+	ProfilesList( MakeStringList,ExposureProfiles,Name );
+	ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,ExposureProfiles(GetCopyOf) );
+	DataView( SetComboBox,ColumnDefinition,<Col> );
+
+	return TRUE;
+}
+
+
+NUMERIC RefreshListView( Requery )
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate( ~Would you like to save your pending changes?~ ),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+	NumEntries = List( NumEntries );
+	DataWindow( StatusBar,Text,~<NumEntries> Records~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,ChangedSetup,OrigSetup,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	Key = STR ( Name = '<$Con.OrigSetup[Name]>' );
+
+	Query = ~Select * From ScanSetups Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,ChangedSetup,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+		return Warning( Translate( ~Could not update ScanSetups record where <Key>. <theErr>~ ) );
+	}
+
+	DataView( CommitChanges );
+
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,SetupsToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	Count = SetupsToDelete( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( ~There are no selected setups to delete~ ); }
+
+	if ( MessageBox( ~Are you sure you want to delete the <Count> selected setups?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( SetupsToDelete( GetNext,Setup ) )
+	{
+		Key = ~Name = '<$con.Setup[Name]>'~;
+		if ( !dBase( CMD,~Delete From ScanSetups Where <Key>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Could not delete PrinterSetup where <Key>. <theErr>~ );
+		}
+
+		RowsToDelete( AddString,SetupsToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord( &DataLocation )
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	if ( ~<DataLocation>~ != ~~ )
+	{
+		if ( GenCon( Src,RemoveFrom,~<DataLocation>~,[GENCONS] ) )
+		{
+			NewRow( SetValuesFrom,Src );
+		}
+	}
+	
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	ActiveView( DisplayMenu,ViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new scan setups that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddSetup( WhichScanSetups,DocumentQuery,ScanSetupToAdd )
+{
+	if ( !Init( ~<WhichScanSetups>~,~<DocumentQuery>~ ) )	{ return FALSE; }
+
+	return AddRecord( ScanSetupToAdd );
+}
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+
+NUMERIC Init( WhichScanSetups,DocumentQuery )
+{
+	DataWindow( Set,Title,~<WhichScanSetups>~ == ~~ ? ~Scan Setup Data~ : ~Scan Setup Data - <WhichScanSetups>~ );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{
+			List( GetErrorDescription,0,theErr ); 
+			Error( ~Failed to query the ScanSetups table. <DocumentQuery>.  <theErr>~ );
+		}
+
+		SetDocumentData( List(GetObject) );
+
+		Global( WhichScanSetups,DocumentQuery );
+
+		if ( !DataWindow( CreateWindow,~Scan Setups~ ) )
+			{ Error( ~Failed to create the window~ ); }
+
+		NumEntries = List( NumEntries );
+		DataWindow( StatusBar,Text,~<NumEntries> Records~ );
+
+	}
+	else
+	{
+		RefreshListView();
+	}
+
+	return TRUE;
+}
+
+Include: ~ExportSelectedToFile~;
+
+Include: ~FileBrowseButtonsInGridView~;
+
+if ( !GenCon( TableDefinition,GetFrom,ScanSetups,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The ScanSetups Table is not properly defined~ ); }
+	
+
+Define:	ViewMenu Using DDMenuDef AsSymbol ViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+// TBD - Remove after approval from TOM
+//		Define:	AddRecord	using	DDMenuItemDef
+//			Fields:	Text		Translate( ~&Add Scan Setup~ )
+//					IDText		~ID~
+//					ActionsText  ACTION Exec ( AddRecord(); )
+//
+//		Define:	NULL1 using DDMenuItemDef
+//			Fields:	Text		~~
+//					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	NULL3 using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+		Define:	Export	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuExport )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ExportSelectedToFile(Dataview,ScanSetups) )
+	}
+
+Define: DataWindow Using DDWinDef
+	Fields:		Title					~Scan Setups~
+				Position				0 70 100 25
+				IsPositionPercent		T
+
+	Contains:	INLISTORDER
+	{
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord(); )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord(); )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					CloseActionsText		ACTION Call ( OnCloseDataView() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "ScanSetupTable.htm" )
+					ButtonClickActionsText	ACTION Exec ( OnButtonClick(DataView,Translate( ~Find the desired path ...~ ),~<$App.ShareDirectory>~) )
+					ComboBoxActionsText		ACTION Call ( RefreshComboBox() )
+	}
+	
+

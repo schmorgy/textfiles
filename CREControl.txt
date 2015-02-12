@@ -1,0 +1,750 @@
+//	CREDisplayDialog.txt
+
+ExecC() ;
+
+//	THIS FILE CONTAINS THE CODE TO CONTROL THE RENDER ENGINE
+
+//	SOME USEFUL GLOBALS
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+int		 gDEBUG = 0 ;
+int		 gSharpenParams = 0 ;
+
+UGenCon	*gPrinterSetup ;	//	THE DIALOG DATA GENCON
+UGenCon	*gDlgDef ;			//	THE DIALOG DEFINITION GC
+char	*gDlg ;				//	THE POINTER TO THE DIALOG OBJECT
+
+//	THE FOLLOWING VALUES HELP DEFINE THE DIALOG
+//	THE DIALOG DIMENSIONS
+long	gDlgLeft	= 750 ;
+long	gDlgTop		=  20 ;
+long	gDlgRight	= 300 ;
+long	gDlgBottom	= 425 ;
+
+//	THE BUTTON DIMENSIONS
+long	gBtnWidth	=  80 ;
+long	gBtnHeight	=  20 ;
+long	gBtnHGap	=  10 ;
+long	gBtnVGap	=  10 ;
+
+//	THE LEFT AND CENTER MARGINS
+long	gLeftStart	=  20 ;
+long	gLeftCenter	= 150 ;
+
+//	THE CONTROL DIMENSIONS
+long	gVertStart	=  50 ;
+long	gVertGap	=  20 ;
+long	gCtrlWidth	= 100 ;
+long	gCtrlHeight =  20 ;
+
+//	THE TAB SIZE
+long	gTabWidth	= 275 ;
+long	gTabHeight	= 300 ;
+
+main()
+{
+	UGenCon	*CREControlExists = GetTreeObject(_T("CREControlDlg"), _T("[GenCons]")) ;
+	if( CREControlExists )
+	{
+		MessageBox(
+			Translate(_T("The Printer Control Dialog is already active.")),
+			_T("MB_OK")) ;
+		return ;
+	}
+
+	DisplayDialog() ;
+}
+
+
+DisplayDialog()
+{
+	UGenCon	*theREGC = GetTreeObject( _T("RELookAhead"), _T("[GenCons]") ) ;
+
+	UGenCon	*theNewREGC = theREGC->Copy() ;
+
+	gDlgDef = GetDialogDefinition() ;
+
+	gDlg = Dialog( gDlgDef, 2, theNewREGC, _T("CREControlDlg.txt") ) ;
+
+	gDlgDef = delete gDlgDef ;
+
+	UGenCon *DlgExists = new UGenCon( GetDataDictionary( _T("DDText"))) ;
+	DlgExists->SetName(_T("CREControlDlg")) ;
+	HangTreeObject( DlgExists, _T("[GenCons]") ) ;
+
+}
+
+
+GetDialogDefinition()
+{
+	long		 BtnLeft, BtnTop ;
+	long		 YPos ;
+	TCHAR		 PositionBuf[32] ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+	UDataDict	*ddWinCtrlDef = GetDataDictionary( _T("DDWinCtrlDef")) ;
+
+	UGenCon	*DlgDef = new UGenCon( GetDataDictionary(_T("DDWinDef"))) ;
+	if( DlgDef )
+	{
+		DlgDef->SetName(_T("REControlDlgDef")) ;
+		sprintf( PositionBuf, PosFormat, gDlgLeft, gDlgTop, gDlgRight, gDlgBottom ) ;
+		DlgDef->SetAttrValue( _T("Position"), PositionBuf ) ;
+		DlgDef->SetAttrValue( _T("Title"), _T("Render Engine Control")) ;
+		DlgDef->SetAttrValue( _T("TypeName"), _T("Dialog")) ;
+		DlgDef->SetLongValue( _T("WantsMinimizeBox"), 1L ) ;
+	}
+
+	BtnTop  = gDlgBottom - 20 - ((gBtnVGap + gBtnHeight) * 2) ;
+
+
+	//	THE HELP BUTTON
+	BtnLeft = gBtnHGap ;
+	sprintf( PositionBuf, PosFormat, BtnLeft, BtnTop, gBtnWidth, gBtnHeight ) ;
+	UGenCon *DebugGC = GetButtonCtrl( ddWinCtrlDef, PositionBuf, _T("Help"),
+					_T("[CCallBack(Help();)]"), _T("Help") ) ;
+	DlgDef->AddChildBack( DebugGC ) ;
+
+
+	BtnLeft += gBtnHGap + gBtnWidth ;
+	sprintf( PositionBuf, PosFormat, BtnLeft, BtnTop, gBtnWidth, gBtnHeight ) ;
+	UGenCon *RunGC = GetButtonCtrl( ddWinCtrlDef, PositionBuf, _T("Apply"),
+						_T("[CCallBack(Apply();)]"), _T("Allow Render Engine to use these values.") ) ;
+	DlgDef->AddChild( RunGC ) ;
+
+	
+	BtnLeft += gBtnHGap + gBtnWidth ;
+	sprintf( PositionBuf, PosFormat, BtnLeft, BtnTop, gBtnWidth, gBtnHeight ) ;
+	UGenCon *ShutdownGC = GetButtonCtrl( ddWinCtrlDef, PositionBuf, _T("Close"),
+					_T("[CCallBack(Close();)]"), _T("Close this dialog.") ) ;
+	DlgDef->AddChild( ShutdownGC ) ;
+
+
+	UGenCon *TabCtrl = new UGenCon( ddWinCtrlDef ) ;
+	if( TabCtrl )
+	{
+		TabCtrl->SetName(_T("REDlgTabCtrlDef")) ;
+		sprintf( PositionBuf, PosFormat, 10, 10, gTabWidth, gTabHeight ) ;
+		TabCtrl->SetAttrValue( _T("Position"), PositionBuf ) ;
+		TabCtrl->SetAttrValue( _T("TypeName"), _T("TabCtrl")) ;
+		TabCtrl->SetAttrValue( _T("Text"), _T("TCS_HOTTRACK | TCS_MULTILINE | TCS_TOOLTIPS")) ;
+		DlgDef->AddChild( TabCtrl ) ;
+
+		UGenCon	*General = CreateTab0(ddWinCtrlDef) ;
+		if( General )
+		{
+			TabCtrl->AddChildBack( General ) ;
+		}
+
+		UGenCon	*ForPaperFill = CreatePaperFillTab(ddWinCtrlDef) ;
+		if( ForPaperFill )
+		{
+			TabCtrl->AddChildBack( ForPaperFill ) ;
+		}
+
+		if( gSharpenParams )
+		{
+			UGenCon *SharpenTab = CreateSharpenTab(ddWinCtrlDef) ;
+			if( SharpenTab )
+			{
+				TabCtrl->AddChildBack( SharpenTab ) ;
+			}
+		}
+
+		if( gDEBUG )
+		{
+
+			UGenCon	*ForDebugOnly = CreateDebug(ddWinCtrlDef) ;
+			if( ForDebugOnly )
+			{
+				TabCtrl->AddChildBack( ForDebugOnly ) ;
+			}
+		}
+	}
+
+	return( DlgDef ) ;
+}
+
+
+//	CREATE THE TUNING TAB
+CreateTab0(UDataDict *ddWinCtrlDef)
+{
+	long		 YPos = gVertStart ;
+	long		 Col1 = gLeftStart ;
+	long		 Col2 = Col1 + 100 ;
+	long		 Col3 = Col2 +  50 ;
+	long		 StaticWidth = 100 ;
+	long		 ValueWidth  =  50 ;
+	long		 SliderWidth = 100 ;
+	TCHAR		 PositionBuf[1024] ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+		
+	UGenCon *Tab0 = new UGenCon( ddWinCtrlDef ) ;
+	if( Tab0 )
+	{
+		Tab0->SetAttrValue( _T("Text"),			_T("Tuning")) ;
+		Tab0->SetAttrValue( _T("TypeName"),		_T("Tab")) ;
+
+		//	NOW ADD THE CONTROLS FOR THIS TAB
+//		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+		UGenCon *sReadAhead = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Read Ahead Qty:") ) ;
+		Tab0->AddChild( sReadAhead ) ;
+
+		sprintf( PositionBuf, PosFormat, Col2, YPos, ValueWidth, gCtrlHeight ) ;
+		UGenCon *ReadAhead = GetValueCtrl( ddWinCtrlDef, PositionBuf, _T("ReadAhead"), _T("ReadAhead"), _T("ReadAheadSlider") ) ;
+		Tab0->AddChild( ReadAhead ) ;
+
+		sprintf( PositionBuf, PosFormat, Col3, YPos, SliderWidth, gCtrlHeight ) ;
+		UGenCon *ReadAheadSlider = GetSliderCtrl( ddWinCtrlDef, PositionBuf, _T("ReadAhead"), _T("ReadAheadSlider"), _T("ReadAhead") ) ;
+		Tab0->AddChild( ReadAheadSlider ) ;
+
+
+		YPos += gVertGap * 1.25 ;
+		sprintf( PositionBuf, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+		UGenCon *sParseAhead = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Parse Ahead Qty:") ) ;
+		Tab0->AddChild( sParseAhead ) ;
+
+		sprintf( PositionBuf, PosFormat, Col2, YPos, ValueWidth, gCtrlHeight ) ;
+		UGenCon *ParseAhead = GetValueCtrl( ddWinCtrlDef, PositionBuf, _T("ParseAhead"), _T("ParseAhead"), _T("ParseAheadSlider") ) ;
+		Tab0->AddChild( ParseAhead ) ;
+
+		sprintf( PositionBuf, PosFormat, Col3, YPos, SliderWidth, gCtrlHeight ) ;
+		UGenCon *ParseAheadSlider = GetSliderCtrl( ddWinCtrlDef, PositionBuf, _T("ParseAhead"), _T("ParseAheadSlider"), _T("ParseAhead") ) ;
+		Tab0->AddChild( ParseAheadSlider ) ;
+
+
+		YPos += gVertGap * 1.25 ;
+		sprintf( PositionBuf, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+		UGenCon *sPrgmAhead = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Program Ahead Qty:") ) ;
+		Tab0->AddChild( sPrgmAhead ) ;
+
+		sprintf( PositionBuf, PosFormat, Col2, YPos, ValueWidth, gCtrlHeight ) ;
+		UGenCon *PgrmAhead = GetValueCtrl( ddWinCtrlDef, PositionBuf, _T("ProgramAhead"), _T("PgrmAhead"), _T("PgrmAheadSlider") ) ;
+		Tab0->AddChild( PgrmAhead ) ;
+
+		sprintf( PositionBuf, PosFormat, Col3, YPos, SliderWidth, gCtrlHeight ) ;
+		UGenCon *PgrmAheadSlider = GetSliderCtrl( ddWinCtrlDef, PositionBuf, _T("ProgramAhead"), _T("PgrmAheadSlider"), _T("PgrmAhead") ) ;
+		Tab0->AddChild( PgrmAheadSlider ) ;
+
+	
+		YPos += gVertGap * 1.25 ;
+		sprintf( PositionBuf, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+		UGenCon *sRenderAhead = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Render Ahead Qty:") ) ;
+		Tab0->AddChild( sRenderAhead ) ;
+
+		sprintf( PositionBuf, PosFormat, Col2, YPos, ValueWidth, gCtrlHeight ) ;
+		UGenCon *RenderAhead = GetValueCtrl( ddWinCtrlDef, PositionBuf, _T("RenderAhead"), _T("RenderAhead"), _T("RenderAheadSlider") ) ;
+		Tab0->AddChild( RenderAhead ) ;
+
+		sprintf( PositionBuf, PosFormat, Col3, YPos, SliderWidth, gCtrlHeight ) ;
+		UGenCon *RenderAheadSlider = GetSliderCtrl( ddWinCtrlDef, PositionBuf, _T("RenderAhead"), _T("RenderAheadSlider"), _T("RenderAhead") ) ;
+		Tab0->AddChild( RenderAheadSlider ) ;
+
+
+		YPos += gVertGap * 1.25 ;
+		sprintf( PositionBuf, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+		UGenCon *sQtyRendering = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Qty Rendering:") ) ;
+		Tab0->AddChild( sQtyRendering ) ;
+
+		sprintf( PositionBuf, PosFormat, Col2, YPos, ValueWidth, gCtrlHeight ) ;
+		UGenCon *QtyRendering = GetValueCtrl( ddWinCtrlDef, PositionBuf, _T("QtyToRender"), _T("QtyRendering"), _T("QtyRenderingSlider") ) ;
+		Tab0->AddChild( QtyRendering ) ;
+
+		sprintf( PositionBuf, PosFormat, Col3, YPos, SliderWidth, gCtrlHeight ) ;
+		UGenCon *QtyRenderingSlider = GetSliderCtrl( ddWinCtrlDef, PositionBuf, _T("QtyToRender"), _T("QtyRenderingSlider"), _T("QtyRendering") ) ;
+		Tab0->AddChild( QtyRenderingSlider ) ;
+
+
+		YPos += gVertGap * 1.5 ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		UGenCon *aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Batch Poll Time:")) ;
+		Tab0->AddChildBack(aGC) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetEditTextCtrl( ddWinCtrlDef, PositionBuf, _T("BatchPollTime") ) ;
+		Tab0->AddChildBack(aGC) ;
+
+		YPos += gVertGap * 1.25 ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Page Advance Time:")) ;
+		Tab0->AddChildBack(aGC) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetEditTextCtrl( ddWinCtrlDef, PositionBuf, _T("PageAdvanceTime") ) ;
+		Tab0->AddChildBack(aGC) ;
+
+
+		YPos += gVertGap * 1.5 ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		UGenCon *sSuspendNow = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Suspend Now:") ) ;
+		Tab0->AddChild( sSuspendNow ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos - 3, gCtrlWidth, gCtrlHeight ) ;
+		UGenCon *SuspendNow = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("SuspendNow"), _T("") ) ;
+		Tab0->AddChild( SuspendNow ) ;
+
+
+		YPos += gVertGap * 1.0 ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		UGenCon *sAllowPreProgram = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Allow PreProgram:") ) ;
+		Tab0->AddChild( sAllowPreProgram ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos - 3, gCtrlWidth, gCtrlHeight ) ;
+		UGenCon *PreProgram = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("AllowPreProgram"), _T("") ) ;
+		Tab0->AddChild( PreProgram ) ;
+	}
+
+	return( Tab0 ) ;
+}
+
+CreatePaperFillTab(UDataDict *ddWinCtrlDef)
+{
+	long		 YPos = gVertStart - 20 ;
+	long		 Col1 = gLeftStart ;
+	long		 Col2 = Col1 + 100 ;
+	long		 Col3 = Col2 +  50 ;
+	long		 StaticWidth = 100 ;
+	long		 ValueWidth  =  50 ;
+	long		 SliderWidth = 100 ;
+	TCHAR		 PositionBuf[1024] ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+	TCHAR		*GCTHIS		= _T("THIS") ;
+
+	UGenCon *Tab0 = new UGenCon( ddWinCtrlDef ) ;
+	if( Tab0 )
+	{
+		Tab0->SetAttrValue( _T("Text"),			_T("PaperFill")) ;
+		Tab0->SetAttrValue( _T("TypeName"),		_T("Tab")) ;
+
+/*		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		UGenCon *aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("CRT Spillover Amt:")) ;
+		Tab0->AddChildBack(aGC) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetEditTextCtrl( ddWinCtrlDef, PositionBuf, _T("PFCRTSpillOver") ) ;
+		Tab0->AddChildBack(aGC) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("LED Spillover Amt:")) ;
+		Tab0->AddChildBack(aGC) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetEditTextCtrl( ddWinCtrlDef, PositionBuf, _T("PFLEDSpillOver") ) ;
+		Tab0->AddChildBack(aGC) ;
+*/
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		UGenCon *aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Bar Code Color:")) ;
+		Tab0->AddChildBack(aGC) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetEditTextCtrl( ddWinCtrlDef, PositionBuf, _T("BarCodeColor") ) ;
+		Tab0->AddChildBack(aGC) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		UGenCon *sClearCRTBuffer = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Clear CRT Buffer:") ) ;
+		Tab0->AddChild( sClearCRTBuffer ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos - 3, gCtrlWidth, gCtrlHeight ) ;
+		UGenCon *ClearCRTBuffer = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("ClearCRTBuffer"), _T("") ) ;
+		Tab0->AddChild( ClearCRTBuffer ) ;
+	}
+	return( Tab0 ) ;
+}
+
+CreateSharpenTab(UDataDict *ddWinCtrlDef)
+{
+	long		 YPos = gVertStart - 20 ;
+	long		 Col1 = gLeftStart ;
+	long		 Col2 = Col1 + 100 ;
+	long		 Col3 = Col2 +  50 ;
+	long		 StaticWidth = 100 ;
+	long		 ValueWidth  =  50 ;
+	long		 SliderWidth = 100 ;
+	TCHAR		 PositionBuf[1024] ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+	TCHAR		*GCTHIS		= _T("THIS") ;
+
+	UGenCon *Tab0 = new UGenCon( ddWinCtrlDef ) ;
+	if( Tab0 )
+	{
+		Tab0->SetAttrValue( _T("Text"),			_T("Sharpen")) ;
+		Tab0->SetAttrValue( _T("TypeName"),		_T("Tab")) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		UGenCon *sUseNewTiff = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Use New Sharpen:") ) ;
+		Tab0->AddChild( sUseNewTiff ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos - 3, gCtrlWidth, gCtrlHeight ) ;
+		UGenCon *UseNewTiff = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("DP2Sharpen"), _T("") ) ;
+		Tab0->AddChild( UseNewTiff ) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		UGenCon *aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Sharpen Threshold:")) ;
+		Tab0->AddChildBack(aGC) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetEditTextCtrl( ddWinCtrlDef, PositionBuf, _T("SharpenThreshold") ) ;
+		Tab0->AddChildBack(aGC) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Sharpen Upper Limit:")) ;
+		Tab0->AddChildBack(aGC) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetEditTextCtrl( ddWinCtrlDef, PositionBuf, _T("SharpenUpperLimit") ) ;
+		Tab0->AddChildBack(aGC) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Sharpen Lower Limit:")) ;
+		Tab0->AddChildBack(aGC) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetEditTextCtrl( ddWinCtrlDef, PositionBuf, _T("SharpenLowerLimit") ) ;
+		Tab0->AddChildBack(aGC) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("X1:")) ;
+		Tab0->AddChildBack(aGC) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetEditTextCtrl( ddWinCtrlDef, PositionBuf, _T("X1") ) ;
+		Tab0->AddChildBack(aGC) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("X2:")) ;
+		Tab0->AddChildBack(aGC) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetEditTextCtrl( ddWinCtrlDef, PositionBuf, _T("X2") ) ;
+		Tab0->AddChildBack(aGC) ;
+
+		YPos += gVertGap * 1.5 ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Log Gain Table:") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos - 3, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("LogGainTable"), _T("") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Use Sparce Kernel:") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos - 3, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("UseSparceKernel"), _T("") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("BlurGain:")) ;
+		Tab0->AddChildBack(aGC) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetEditTextCtrl( ddWinCtrlDef, PositionBuf, _T("BlurGain") ) ;
+		Tab0->AddChildBack(aGC) ;
+	}
+	return( Tab0 ) ;
+}
+
+//	CREATE THE DEBUG TAB
+CreateDebug(UDataDict *ddWinCtrlDef)
+{
+	long		 YPos = gVertStart - 20 ;
+	long		 Col1 = gLeftStart ;
+	long		 Col2 = Col1 + 100 ;
+	long		 Col3 = Col2 +  50 ;
+	long		 StaticWidth = 100 ;
+	long		 ValueWidth  =  50 ;
+	long		 SliderWidth = 100 ;
+	TCHAR		 PositionBuf[1024] ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+	TCHAR		*GCTHIS		= _T("THIS") ;
+
+		
+	UGenCon *Tab0 = new UGenCon( ddWinCtrlDef ) ;
+	if( Tab0 )
+	{
+		Tab0->SetAttrValue( _T("Text"),			_T("Debug")) ;
+		Tab0->SetAttrValue( _T("TypeName"),		_T("Tab")) ;
+
+		//	NOW ADD THE CONTROLS FOR THIS TAB
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		UGenCon *aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Run Continuously:") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos - 3, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("RunContinuous"), _T("") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Delete Pkg Job:") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos - 3, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("DeletePackageJob"), _T("") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Use MMX:") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos - 3, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("UseMMX"), _T("") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Use LKTiff Src:") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos - 3, 20, gCtrlHeight ) ;
+		aGC = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("UseNewTiff"), _T("") ) ;
+		Tab0->AddChild( aGC ) ;
+
+//		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftCenter + 30, YPos, 50, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Sink:") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter + 100, YPos - 3, 20, gCtrlHeight ) ;
+		aGC = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("UseNewTiffSink"), _T("") ) ;
+		Tab0->AddChild( aGC ) ;
+
+
+
+	//	YPos += gVertGap ;
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("RE Log Level:") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, Col2, YPos, ValueWidth, gCtrlHeight ) ;
+		aGC = GetValueCtrl( ddWinCtrlDef, PositionBuf, _T("RELogLevel"), _T("RELogLevel"), _T("RELogLevelSlider") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, Col3, YPos, SliderWidth, gCtrlHeight ) ;
+		aGC = GetSliderCtrl( ddWinCtrlDef, PositionBuf, _T("RELogLevel"), _T("RELogLevelSlider"), _T("RELogLevel") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("RE Batch Log Level:") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, Col2, YPos, ValueWidth, gCtrlHeight ) ;
+		aGC = GetValueCtrl( ddWinCtrlDef, PositionBuf, _T("REBatchLogLevel"), _T("REBatchLogLevel"), _T("REBLogLevelSlider") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, Col3, YPos, SliderWidth, gCtrlHeight ) ;
+		aGC = GetSliderCtrl( ddWinCtrlDef, PositionBuf, _T("REBatchLogLevel"), _T("REBLogLevelSlider"), _T("REBatchLogLevel") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("HOP Log Level:") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, Col2, YPos, ValueWidth, gCtrlHeight ) ;
+		aGC = GetValueCtrl( ddWinCtrlDef, PositionBuf, _T("HOPLogLevel"), _T("HOPLogLevel"), _T("HOPLogLevelSlider") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, Col3, YPos, SliderWidth, gCtrlHeight ) ;
+		aGC = GetSliderCtrl( ddWinCtrlDef, PositionBuf, _T("HOPLogLevel"), _T("HOPLogLevelSlider"), _T("HOPLogLevel") ) ;
+		Tab0->AddChild( aGC ) ;
+
+//		YPos += gVertGap ;
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Program IMA:") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos - 3, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("ProgramIMA"), _T("") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Perform Render:") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos - 3, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("PerformRender"), _T("") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Chain Error:")) ;
+		Tab0->AddChildBack(aGC) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetEditTextCtrl( ddWinCtrlDef, PositionBuf, _T("ForceIMAChainError") ) ;
+		Tab0->AddChildBack(aGC) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("Render Error:")) ;
+		Tab0->AddChildBack(aGC) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetEditTextCtrl( ddWinCtrlDef, PositionBuf, _T("ForceIMARenderError") ) ;
+		Tab0->AddChildBack(aGC) ;
+
+		YPos += gVertGap ;
+		sprintf( PositionBuf, PosFormat, gLeftStart, YPos, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetStaticCtrl( ddWinCtrlDef, PositionBuf, _T("PreTrans No Catch:") ) ;
+		Tab0->AddChild( aGC ) ;
+
+		sprintf( PositionBuf, PosFormat, gLeftCenter, YPos - 3, gCtrlWidth, gCtrlHeight ) ;
+		aGC = GetCheckBoxCtrl( ddWinCtrlDef, PositionBuf, _T("PreTranslateNoCatch"), _T("") ) ;
+		Tab0->AddChild( aGC ) ;
+	}
+	return( Tab0 ) ;
+}
+
+
+
+UGenCon *GetButtonCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *Label, TCHAR *DAction, TCHAR *ToolTip )
+{
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName( Label ) ;
+		theGC->SetAttrValue( _T("Position"),		 Position ) ;
+		theGC->SetAttrValue( _T("TypeName"),		_T("Button") ) ;
+		theGC->SetAttrValue( _T("Text"),			 Label ) ;
+		theGC->SetAttrValue( _T("DActionsText"),	 DAction ) ;
+		theGC->SetAttrValue( _T("ToolTip"),			 ToolTip ) ;
+	}
+	return( theGC ) ;
+}
+
+UGenCon	*GetEditTextCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *Name )
+{
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName( Name ) ;
+		theGC->SetAttrValue( _T("Position"), Position ) ;
+		theGC->SetAttrValue( _T("TypeName"), _T("EditText")) ;
+		theGC->SetAttrValue( _T("GenConName"), _T("THIS")) ;
+		theGC->SetAttrValue( _T("GenConField"), Name ) ;
+		theGC->SetAttrValue( _T("IActionsText"), _T("[Get]")) ;
+		theGC->SetAttrValue( _T("DActionsText"), _T("[Save]")) ;
+		theGC->SetAttrValue( _T("OActionsText"), _T("[Save]")) ;
+	}
+	return( theGC ) ;
+}
+
+UGenCon *GetCheckBoxCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *Name, TCHAR *Text )
+{
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName( Name ) ;
+		theGC->SetAttrValue( _T("Position"), Position ) ;
+		theGC->SetAttrValue( _T("TypeName"), _T("CheckBox")) ;
+		theGC->SetAttrValue( _T("GenConName"), _T("THIS")) ;
+		theGC->SetAttrValue( _T("GenConField"), Name ) ;
+		theGC->SetAttrValue( _T("Text"), Text ) ;
+		theGC->SetAttrValue( _T("IActionsText"), _T("[Get]")) ;
+		theGC->SetAttrValue( _T("DActionsText"), _T("[Save]")) ;
+		theGC->SetAttrValue( _T("OActionsText"), _T("[Save]")) ;
+		theGC->SetLongValue( _T("IsTabStop"), 1L ) ;
+	}
+	return( theGC ) ;
+}
+
+
+UGenCon *GetStaticCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *Text )
+{
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetAttrValue( _T("Position"),	Position ) ;
+		theGC->SetAttrValue( _T("TypeName"),	_T("StaticText")) ;
+		theGC->SetAttrValue( _T("Text"),		Text) ;
+	}
+	return( theGC ) ;
+}
+
+
+UGenCon *GetOutputCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *FieldName )
+{
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetAttrValue( _T("Position"),		 Position ) ;
+		theGC->SetAttrValue( _T("TypeName"),		_T("StaticText")) ;
+		theGC->SetAttrValue( _T("GenConName"),		_T("THIS") ) ;
+		theGC->SetAttrValue( _T("GenConField"),		 FieldName) ;
+		theGC->SetAttrValue( _T("IActionsText"),	_T("[Get]")) ;
+		theGC->SetAttrValue( _T("DActionsText"),	_T("[Get]")) ;
+	}
+	return( theGC ) ;
+}
+
+
+UGenCon *GetValueCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *FieldName, TCHAR *Name, TCHAR *SliderName )
+{
+	TCHAR	 DActions[1024] ;
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		sprintf( DActions, _T("[Save Update(%s) DialogTimer(0 1000)]"), SliderName ) ;
+		theGC->SetName(Name) ;
+		theGC->SetAttrValue( _T("Position"),		 Position ) ;
+		theGC->SetAttrValue( _T("TypeName"),		_T("StaticText")) ;
+		theGC->SetAttrValue( _T("GenConName"),		_T("THIS") ) ;
+		theGC->SetAttrValue( _T("GenConField"),		 FieldName) ;
+		theGC->SetAttrValue( _T("IActionsText"),	_T("[Get]")) ;
+		theGC->SetAttrValue( _T("DActionsText"),	 DActions ) ;
+		theGC->SetAttrValue( _T("OActionsText"),	_T("[Save]")) ;
+	}
+	return( theGC ) ;
+}
+
+
+UGenCon *GetSliderCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *FieldName, TCHAR *Name, TCHAR *ValueName )
+{
+	TCHAR	 DActions[1024] ;
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		sprintf( DActions, _T("[Save Update(%s) DialogTimer(0 250)]"), ValueName ) ;
+		theGC->SetName(_T("PgrmAheadSlider")) ;
+		theGC->SetAttrValue( _T("Position"),		 Position ) ;
+		theGC->SetAttrValue( _T("TypeName"),		_T("Slider")) ;
+		theGC->SetAttrValue( _T("GenConName"),		_T("THIS") ) ;
+		theGC->SetAttrValue( _T("GenConField"),		 FieldName) ;
+		theGC->SetAttrValue( _T("IActionsText"),	_T("[Get]")) ;
+		theGC->SetAttrValue( _T("DActionsText"),	 DActions) ;
+		theGC->SetAttrValue( _T("OActionsText"),	_T("[Save]")) ;
+		theGC->SetAttrValue( _T("Units"),			_T("1") ) ;
+	}
+	return( theGC ) ;
+}
+
+
+TCHAR *Translate( TCHAR *Msg )
+{
+	return( Msg ) ;
+}
+

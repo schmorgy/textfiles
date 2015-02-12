@@ -1,0 +1,246 @@
+Include: ~UtilityRoutines~;
+IncludeClass( BaseDialog );
+
+VOID ImportKPISPattern::ImportKPISPattern()
+{
+	Title = ~Import KPIS Grid Patterns~;
+	Left = 200;
+	ButtonWidth = 50;
+	HelpPage = ~ImportKPISPattern.htm~;
+	Dictionary = ~DDImportKPISPatternDialog~;
+}
+
+
+VOID ImportKPISPattern::DefineDictionary()		// FOR THE FIELDS THAT THE DIALOG USES
+{
+	Dictionary: <Dictionary> 
+		Fields: Name	PatternPath		type text
+}
+
+VOID ImportKPISPattern::Reload()	// WITH ALL THE PATTERNS IN THE SELECTED DIRECTORY
+{
+	if ( !IsNULL( ~<fDirectory>~ ) )
+	{
+		dlg( ListBox,ConvertedListBox,ResetContent );
+		dlg( ListBox,ConvertedListBox,Dir,~<fDirectory>\*.*~ );
+	}
+}
+
+VOID ReOpen()	{ ImportDlg.ReOpen(); }
+
+NUMERIC ImportKPISPattern::OpenInPatternEditor( Path ) 
+{
+	Action = ACTION DOC ( PatternEditorDoc3 Open PatternEditorDoc3 "OpenPattern(~<Path>~);" );
+	return PerformActions( Action );
+}
+
+NUMERIC ImportKPISPattern::OpenPattern()	// TO SEE IT VISUALLY
+{
+	if ( dlg( ListBox,ConvertedListBox,GetSelectedItem,FileName )  >= 0 )
+	{
+		return OpenInPatternEditor( ~<fDirectory>\<FileName>~ );
+	}
+
+	return Warning( Translate( ~You must select a pattern first~ ) );
+}
+
+NUMERIC ImportKPISPattern::ViewPattern()		// SEE THE CONVERTED PATTERN IN NOTEPAD
+{
+	if ( dlg( ListBox,ConvertedListBox,GetSelectedItem,FileName ) >= 0 )
+	{
+		return ViewFileInNotepad( ~<fDirectory>\<FileName>~ );
+	}
+
+	return Warning( Translate( ~You must select a pattern first~ ) );
+}
+
+NUMERIC ImportKPISPattern::BrowseForOutputDirectory()	
+{
+	Title = Translate( ~Find the directory to store the DP2 pattern files~ );
+
+	if ( FileDialog( Title,~<title>~,PATH,Path,DefaultFile,~Any File~,Save ) )
+	{
+		fDirectory = ~<$Str.$Path.Path>~;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+NUMERIC ImportKPISPattern::Convert( &InFile )
+{
+	Count = Row = 0;
+
+	while ( InFile( ReadString,aLine ) )
+	{
+		if ( !IsNull( String( BeginsWith,~Set R~,~<ALine>~ ) ) )
+		{
+			GetTokens( ~<aLine>~,~|~,IgnoreThis,NodeList<++Row> );
+		}
+
+		if ( !IsNull( String( BeginsWith,~DL~,~<ALine>~ ) ) )
+		{
+			GetTokens( ~<aLine>~,~|~,IgnoreThis,ThePath );
+
+			TheNum = ~<$Str.$ThePath.Ext>~;
+
+			Directory( Create,~<fDirectory>~ );
+
+			PatternPath = ~<fDirectory>\Pattern.<$str.$TheNum.%03ld>~;
+
+			dlg( SetStatus,0,~Creating <PatternPath>~ );
+
+			if ( !File( OutFile,Open,~<PatternPath>~,Create,Write ) )	
+			{
+				return Warning( Translate( ~Failed to create <PatternPath>~ ) );
+			}
+			
+			index = 0;
+
+			While ( <++index> <= <Row> )
+			{
+				OutFile( ~R<index>	=	|<NodeList<index>>|;~ );
+			}
+
+			ForgetLocal( OutFile );
+
+			Row = 0;
+
+			++Count;
+
+			Reload();
+		}
+	}
+
+	dlg( SetStatus,0,~Created <Count> Paths~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ImportKPISPattern::FixCRInFile(Path)
+{
+
+	if ( !Files( FileExists,~<Path>~ ) ) 
+	{
+		return Warning( Translate( ~Could not find <Path>~ ) );
+	}
+
+	if ( !File( fp,OPEN,~<path>~,ReadWrite ) ) 
+	{
+		return Warning( Translate( ~Could not open <Path>~ ) );
+	}
+
+	if ( File( fp,Seek,0,Begin ) != 0 ) 
+	{
+		return Warning( Translate( ~Seek to beginnging of file failed for <Path>~ ) );
+	}
+
+	if ( !fp( ReadTextfile,Buffer ) ) 
+	{
+		return Warning( Translate( ~<Path> is an empty file~ ) );
+	}
+
+	if ( fp( SetLength,0 ) < 0 ) 
+	{
+		return Warning( Translate( ~Failed to set length to zero for <path>~ ) );
+	}
+
+	if ( !fp( WriteContentsOf,Buffer ) ) 
+	{
+		err = GetLastErrorMsg();
+		return Warning( Translate( ~Failed to write <path>.  <err>~ ) );
+	}
+
+	ForgetLocal( fp );
+
+	return TRUE;
+}
+
+NUMERIC ImportKPISPattern::Import( FromPath )
+{
+	if ( !Files( ChMod,~<FromPath>~,ReadWrite ) )
+	{
+		return Warning( Translate( ~Failed to un-write protect <FromPath>~ ) );
+	}
+
+	if ( !FixCRInFile( ~<FromPath>~ ) )
+	{
+		return Warning( Translate( ~Failed to fix CRLF problems in <FromPath>~ ) );
+	}
+
+	if ( !File( InFile,Open,~<FromPath>~,Read ) )	
+	{
+		return Warning( Translate( ~Failed to open <FromPath>~ ) );
+	}
+
+	return Convert( InFile );
+}
+
+NUMERIC	ImportKPISPattern::ProcessDraggedFile( &DroppedFile )
+{
+	Path = GetFileName( DroppedFile );
+
+	if ( !BrowseForOutputDirectory() )	{ return FALSE; }
+
+	return Import( ~<path>~ );
+
+	return TRUE;
+}
+
+
+VOID ImportKPISPattern::DefineControls()
+{
+	Define: DragPrompt Using DDWinCtrlDef AsSymbol DragPrompt Private
+		Fields:	TYPENAME			STATICTEXT
+				GENCONNAME			THIS
+				CenterText			TRUE
+				Position			<hgap> <vGap> 110 40
+				FontWeight			600
+				Text				~Drag KPIS Grid Pattern Definition files on to here~;
+
+	Define: ExplorerButton Using DDWinCtrlDef AsSymbol ExplorerButton
+		Fields:	TYPENAME			Button
+				POSITION			DragPrompt(Getright,Position)+$hGap*2, DragPrompt(GetTop,Position)+3,
+									$ButtonWidth,$ButtonHeight
+				DACTIONSTEXT		ACTION EXEC ( OpenExplorer( ~<$App.Volume>~ ) )
+				TEXT				~Explorer~;
+
+
+	Define: ConvertedListBox Using DDWinCtrlDef AsSymbol ConvertedListBox Private
+		Fields:	Position			$hGap, DragPrompt(GetBottom,Position)+$vGap
+									DragPrompt(GetWidth,Position)+ExplorerButton(GetWidth,Position)+$hGap*2,
+									 <ButtonHeight> * 15
+				GENCONFIELD			~PatternPath~
+				IACTIONSTEXT		ACTIONS ( Get )
+				DACTIONSTEXT		ACTIONS ( Save )
+				OACTIONSTEXT		ACTIONS ( Save )
+				DOUBLECLICKACTIONSTEXT	ACTION EXEC ( <THIS>.OpenPattern() )
+				TOOLTIP				~Select one of the items~
+				TYPENAME			ListBox ;
+
+	Define: OpenButton Using DDWinCtrlDef AsSymbol OpenButton Private
+		Fields:	TYPENAME			DefaultButton
+				POSITION			GetDialogCenter() - $ButtonWidth, ConvertedListBox(GetBottom,Position)+$vGap,
+									<ButtonWidth>,<ButtonHeight>
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OpenPattern() )
+				TOOLTIP				~Open the selected pattern in the pattern editor~
+				TEXT				~Open~;
+
+	Define: ViewButton Using DDWinCtrlDef AsSymbol ViewButton Private
+		Fields:	TYPENAME			Button
+				POSITION			OpenButton(GetRight,Position)+$hGap OpenButton(GetTop,Position),
+									<ButtonWidth>,<ButtonHeight>
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.ViewPattern() )
+				TOOLTIP				~View the selected pattern in NotePad~
+				TEXT				~View~;
+
+}
+
+Class( ImportKPISPattern,Extends,BaseDialog,
+		Member,fDirectory,Str,~~ );
+
+ImportKPISPattern( New,ImportDlg );
+
+ImportDlg.DefineDialog();
+

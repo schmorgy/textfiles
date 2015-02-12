@@ -1,0 +1,142 @@
+
+//	THIS FILE WILL HANDLE THE COPENJOB COMMAND
+//
+//	IT GETS THE LIST OF JOBS THROUGH THE CCODEGENCON'S
+//	CHILDREN.  THE CHILD LIST IS A LIST OF UPGENCONS.
+//	FOR EACH ENTRY IN THE LIST.  LOOK UP THE ACTUAL 
+//	JOB FILE NAME FROM THE ORDERITEM TABLE USING A QUERY.
+//	THEN OPEN A DOCUMENT WITH THE FILENAME.
+
+#include "CQueue.txt"
+#include "CUtils.txt"
+#include "CDebug.txt"
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = 1 ;
+
+
+main()
+{
+	char	*ListViewGenCon ;
+	char	*SelectedItemsList ;
+	char	*SelectedItem ;
+	char	*anIter ;
+	char	*anADO ;
+	char	*PGCList ;
+	char	*PGC ;
+	TCHAR	 Path[1024] ;
+	TCHAR	 theQuery[128] ;
+	int		 result ;
+	TCHAR	 SelectedItemID[32] ;
+
+	//Debug( TRUE ) ;	//	INVOKE THE DEBUGGER !
+
+	//	GET THE DATA PASSED IN FROM THE LIST VIEW
+	ListViewGenCon = GetCCodeGenCon() ;
+
+	if( ListViewGenCon == NULL )
+	{
+		MessageBox("Could not find GenCon.","MB_OK") ;
+		return ;
+	}
+
+	SelectedItemsList = GetChildren( ListViewGenCon ) ;
+	if( SelectedItemsList == NULL )
+	{
+		MessageBox("GenCon has no children.","MB_OK") ;
+		RemoveGCFromTree( ListViewGenCon ) ;
+		return ;
+	}
+
+	//	THE CHILDREN ARE GENCONS
+	//	THAT REPRESENT THE IDs OF THE LINE ITEMS
+	//	THAT WE NEED TO OPEN.
+
+	anIter = CreateIterator(SelectedItemsList) ;
+	if( anIter == NULL )
+	{
+		MessageBox("Cannot create iterator.","MB_OK") ;
+		RemoveGCFromTree( ListViewGenCon ) ;
+		return ;
+	}
+
+/*	anADO = ConnectToADO() ;
+	if( anADO == NULL )
+	{
+		MessageBox("Could not get ADO.","MB_OK") ;
+		RemoveGCFromTree( ListViewGenCon ) ;
+		anIter = Delete( anIter ) ;
+		return ;
+	}
+*/
+//	PGCList = NewPGenConList( anADO ) ;
+	PGCList = NewPGenConList( GetKPISConnection() ) ;
+	if( PGCList == NULL )
+	{
+//		ReleaseConnection( anADO ) ;
+//		Delete( anADO ) ;
+		anIter = Delete( anIter ) ;
+		MessageBox("Could not Create PGenConList.","MB_OK") ;
+		RemoveGCFromTree( ListViewGenCon ) ;
+		return ;
+	}
+
+	SelectedItem = GetFirst( anIter ) ;
+
+	while( SelectedItem )
+	{
+		//	FOR EACH ITEM IN THE LIST
+		//	BUILD THE QUERY
+		GetAttrValue( SelectedItem, "ID", SelectedItemID ) ;
+
+		BuildQuery( SelectedItemID, theQuery ) ;
+
+		//	VERIFY THAT THE OBJECT IS STILL IN THE DATABASE
+		result = Query( PGCList, theQuery, "ReadOnly", "ForwardOnly") ;
+		if( result == 1 )
+		{
+			PGC = GetFirst( PGCList ) ;
+			while( PGC )
+			{
+				ShowGenCon( PGC ) ;	//	A DEBUG LINE
+
+				//	OPEN THE DOCUMENT
+				GetAttrValue( PGC, "JobPath", Path ) ;
+
+				if( Path[0] )
+				{
+					OpenDocument( Path ) ; //"Job", 
+				}
+
+				PGC = GetNext( PGCList ) ;
+			}
+		}
+		else
+		{
+			char	msg[256] ;
+			sprintf( msg, "Could not locate Item = %s",
+						GetAttrValue( SelectedItem, "ID", SelectedItemID )) ;
+			MessageBox( msg, "MB_OK" ) ;
+		}
+
+		SelectedItem = GetNext( anIter ) ;
+	}
+
+	RemoveGCFromTree( ListViewGenCon ) ;
+	DeleteIterator( anIter ) ;
+	Delete( PGCList ) ;
+//	ReleaseConnection( anADO ) ;
+//	Delete( anADO ) ;
+}
+
+
+BuildQuery( TCHAR*  item, TCHAR *aquery )
+{
+	TCHAR *QueryText = "Select * From OrderItems Where ID = '%s'" ;
+
+	sprintf( aquery, QueryText, item ) ;
+
+	return( aquery ) ;
+}
+

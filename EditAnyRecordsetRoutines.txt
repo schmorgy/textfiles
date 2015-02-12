@@ -1,0 +1,1722 @@
+NEW_WAY = TRUE;
+
+NUMERIC SaveAsOrderSubjectData( OrderID )
+{
+	ControlView( GetControlValue,OrderField,OrderID );
+
+	DirectoryPath = ~<$App.ShareDirectory>\OrderSubjectData~;
+
+	Directory( Create,~<DirectoryPath>~ );
+
+	Path = ~<DirectoryPath>\<OrderID>.mdb~;
+
+	if ( Files( FileExists,~<Path>~ ) )
+	{ 
+		if ( MessageBox( Translate( UIMessages,AskCreateDB,~<Path>~ ),YESNO ) != YES )
+		{
+			return FALSE;
+		}
+
+		if ( !Files( Delete,~<Path>~ ) )
+		{
+			GetLastError( ErrorString,msg );
+			return Warning( Translate( ~Could not delete <Path>.  <msg>~ );
+		}
+	}
+
+	WaitCursor( Begin );
+
+	Language = ~<$[Symbols].Language[Value]>~;
+
+	if ( !CreateDatabase( ~<Path>~,Type,~Jet~,Language,~<Language>~ ) )
+	{	
+		WaitCursor( End );
+		return Warning( Translate( UIMessages,FailedToCreateDB,~<Path>~ ) );
+	}
+
+	numFields = List( FieldCount );
+
+	Position = 0;
+
+	Cmd = ~Create Table SubjectInfo OrderID CHAR[31], SubjectID CHAR[31] ~;
+
+	while ( <Position> < <numFields> )
+	{
+		List( FieldInfo,<Position++>,Name,FieldName,Length,FieldLength );
+
+		if ( <FieldLength> > 31 )
+		{
+			FieldLength = 31;
+		}
+
+		Cmd = ~<Cmd>,<FieldName> CHAR[<FieldLength>] ~;
+	}
+
+	SubjectList( Open );
+
+	count = 0;
+
+	more = List( GetFirst,InputRecord );
+
+	while ( <more> )
+	{
+		SubjectList( AddNew,SubjectRecord );
+
+		SubjectRecord( SetValue,OrderID,~<OrderID>~ );
+		SubjectRecord( SetValue,SubjectID,~<++count>~ );
+
+		SubjectRecord( UpdateFrom,InputRecord );
+
+		more = List( GetNext,InputRecord );
+	} 
+
+	if ( !SubjectList( Save,~<Path>~,~XML~ ) )
+	{
+		WaitCursor( Begin );
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Save to <Path> failed. <theErr>~ );
+	}
+
+	WaitCursor( Begin );
+
+	return TRUE;
+}
+
+
+
+NUMERIC SaveAsRecordSet()
+{
+
+	if ( !FileDialog( Title,Translate(~Where do I save the data to?~),Path,Path,Save ) )
+	{
+		return FALSE;
+	}
+
+	if ( ~<Path>~ != ~~ )
+	{
+		if ( !List( Save,~<Path>~,~xml~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( ~Save to <Path> failed. <theErr>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddToMacrosTable()
+{
+	StringList( DataFields,New );
+
+	Index = 0;
+
+	while ( List( GetFieldName,<Index++>,Name ) )
+	{
+		DataFields( AddString,~<Name>~ );
+	}
+
+	DataFields( Hang,DataFieldsForMacros,STRINGS );
+
+	Actions = ACTIONS ( Doc( ~AddToMacrosTable~ Open AddToMacrosTable ) );
+	return PerformActions( Actions );
+
+	return TRUE;
+}
+
+
+VOID ReOpen()
+{
+	return Warning( Translate( ~Sorry..  You can't do that!~ ) );
+}
+
+
+VOID RefreshDoc()
+{
+	RefreshListView();
+}
+
+
+NUMERIC RefreshListView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( ~<Path>~ == ~~ )
+	{
+		if ( !List( Requery ) )
+		{
+			List( GetErrorDescription,0,theErr );		
+			Error( ~Failed to Requery.  <theErr>~ ); 
+		}
+	}
+
+	Count = List( NumEntries );
+
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+	return DataWindow( StatusBar,Text,~<Count> Records~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,ChangedItem,OrigItem,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no selected row.~ ); }
+
+
+	if ( ~<Path>~ != ~~ )
+	{
+		if ( !List( MakeKeyFrom,OrigItem,Key ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( ~Could not make key for <Path>. <theErr>~ );
+		}
+	}
+	else
+	{
+		if ( !List( MakePrimaryKeyFrom,OrigItem,Key ) )
+		{
+			if ( !List( MakeKeyFrom,OrigItem,Key ) )
+			{
+				List( GetErrorDescription,0,theErr );
+				return Warning( ~Could not make key for <Table>. <theErr>~ );
+			}
+		}
+	}
+	
+	if ( !List( UpdateFrom,ChangedItem,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+		return Warning( Translate( ~Could not update record where <Key>. <theErr>~ ) );
+	}
+
+	if ( ~<Path>~ != ~~ )
+	{
+		if ( !List( Save,~<Path>~,~~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( ~Save to <Path> failed. <theErr>~ );
+		}
+	}	
+
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+NUMERIC CopyRecord()
+{
+	if ( !DataView( GetSelectedRows,Items ) )		
+		{ return Warning( ~There was no rows selected~ ); }
+
+	count = Items( ChildCount );
+
+	if ( <count> == 0 )
+		{ return Warning( Translate( ~There were no selected records~ ) ); }
+
+	Define: SrcView Using DDViewDef
+		Fields:		ViewDataType	~Text~
+					ViewType		~ListView~;
+
+	Items( Permanent );
+	SrcView( SetChildren,Items(GetList) );
+		
+	Define: DragDropInfo Using DDDropDef Permanent
+		Fields:		SrcView		SrcView( GetObjectReference ) ;
+
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,PluckAndFree );
+
+	Hang: DragDropInfo ~[GenCons]~;
+
+	StatusBarText( ~<count> items were copied~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,ItemsToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	count = ItemsToDelete( ChildCount );
+
+	if ( MessageBox( ~Are you sure you want to delete the <count> selected items?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	StringList( RowsToDelete,New );
+
+	while ( ItemsToDelete( GetNext,Item ) )
+	{
+		if ( ~<Path>~ != ~~ )
+		{
+			if ( !List( MakeKeyFrom,Item,Key ) )
+			{
+				List( GetErrorDescription,0,theErr );
+				return Warning( ~Could not make key for <Path>. <theErr>~ );
+			}
+		}
+		else
+		{
+			if ( !List( MakePrimaryKeyFrom,Item,Key ) )
+			{
+				if ( !List( MakeKeyFrom,Item,Key ) )
+				{
+					List( GetErrorDescription,0,theErr );
+					return Warning( ~Could not make key for <Table>. <theErr>~ );
+				}
+			}
+		}
+
+		if ( !List( DeleteWhere,~<Key>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			Warning( ~Failed to Delete the record where <Key>.  <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,ItemsToDelete(GetCurrentPosition) );
+	}
+		
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	if ( ~<Path>~ != ~~ )
+	{
+		if ( !List( Save,~<Path>~,~~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( ~Save to <Path> failed. <theErr>~ );
+		}
+	}	
+
+	return TRUE;
+}
+
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+		
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	DataView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,ListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,ListViewMenu,0,0  );
+	}
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	CancelCreateTableDialog();
+
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+FirstTime = TRUE;
+
+NUMERIC Init( Title,Path,Table )
+{
+	DataWindow( Set,Title,~<Title>~ );
+
+	StatusBarText( ~Opening <Path>~ );
+
+	if ( !PGenConList( List,Cursor,Keyset,File,~<Path>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );		
+		return Warning( ~Failed to load data from <Path>.  <theErr>~ ); 
+	}
+
+	Count = List( NumEntries );
+
+	if ( <Count> > 1000 )
+	{
+		if ( MessageBox( ~Your query will retrieve <Count> records\n\nAre you sure you want to continue?~,YESNO ) != YES )
+		{
+			return TRUE;
+		}
+	}
+
+	if ( ~<Table>~ != ~~ )
+	{
+		if ( GenCon( TableDefinition,GetFrom,<Table>,~[DATABASE TableDefinitions]~ ) )
+		{ 
+			Global( TableDefinition );
+			DataView( Set,GridControlTypes,TableDefinition( GetReferenceTo,Fields ) );
+		}
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	DataWindow( StatusBar,Text,~Loading <Count> records from <Path>~ );
+
+	if ( !DataWindow( CreateWindow,~<Table>~ ) )
+	{ 
+		Error( ~Failed to create the window for <Table>~ ); 
+	}
+
+	Global( List,Title,Path,Table );
+
+	DataWindow( StatusBar,Text,~<Count> Records from <Path>~ );
+
+	return TRUE;
+}
+
+STR		GetTableFromQuery(Query)
+{
+	Tab = Chr(0x09); CR = Chr(0x0D); LF = Chr(0x0A);
+
+	num = GetTokens( ~<Query>~,~, <Tab><CR><LF>~ );
+
+	i = 0;
+
+	while ( <++i> < <num> )
+	{
+		if ( SimilarStr(~<Token<i>>~,From) )
+		{
+			if ( <++i> <= <num> )
+			{
+				return ~<Token<i>>~;
+			}
+
+			break;
+		}
+	}
+
+	return ~~;
+}
+
+
+NUMERIC OpenShared( Query )
+{
+	DataWindow( Set,Title,~Shared database - <Query>~ );
+
+	StatusBarText( ~Opening Shared Database with Query <Query>~ );
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );		
+		return Warning( ~Failed to load data from <Query>.  <theErr>~ ); 
+	}
+
+	Count = List( NumEntries );
+
+	Table = GetTableFromQuery(~<Query>~);
+
+	if ( ~<Table>~ != ~~ )
+	{
+		if ( GenCon( TableDefinition,GetFrom,<Table>,~[DATABASE TableDefinitions]~ ) )
+		{ 
+			Global( TableDefinition );
+			DataView( Set,GridControlTypes,TableDefinition( GetReferenceTo,Fields ) );
+		}
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	DataWindow( StatusBar,Text,~Loading <Count> records from <Query>~ );
+
+	if ( !DataWindow( CreateWindow,~<Table>~ ) )
+	{ 
+		Error( ~Failed to create the window for <Table>~ ); 
+	}
+
+	Global( List,Title,Path,Table );
+
+	DataWindow( StatusBar,Text,~<Count> Records from <Query>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OpenWorkstation( Query )
+{
+	DataWindow( Set,Title,~Workstation database - <Query>~ );
+
+	StatusBarText( ~Opening Workstation Database with Query <Query>~ );
+
+	if ( !PGenConList( List,ConnectLocal,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );		
+		return Warning( ~Failed to load data from <Query>.  <theErr>~ ); 
+	}
+
+	Count = List( NumEntries );
+
+	Table = GetTableFromQuery(~<Query>~);
+
+	if ( ~<Table>~ != ~~ )
+	{
+		if ( GenCon( TableDefinition,GetFrom,<Table>,~[DATABASE TableDefinitions]~ ) )
+		{ 
+			Global( TableDefinition );
+			DataView( Set,GridControlTypes,TableDefinition( GetReferenceTo,Fields ) );
+		}
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	DataWindow( StatusBar,Text,~Loading <Count> records from <Query>~ );
+
+	if ( !DataWindow( CreateWindow,~<Table>~ ) )
+	{ 
+		Error( ~Failed to create the window for <Table>~ ); 
+	}
+
+	Global( List,Title,Path,Table );
+
+	DataWindow( StatusBar,Text,~<Count> Records from <Query>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ConnectTo( FilePath,Provider,User,Password,Table,Query )
+{
+	DataWindow( Set,Title,~<FilePath> - Table <Table>    <Query>~ );
+
+	StatusBarText( ~Opening <FilePath>~ );
+
+	ForgetGlobal( dBase,List );
+
+	Extension = ~<$Str.$FilePath.Ext>~;
+
+	if ( SimilarStr( ~<Extension>~,~UDL~ ) )	// IS THIS REALLY A UDL?
+	{
+		User = ~~;
+		Password = ~~;
+		Provider = ~~;
+		Source = ~File Name=<FilePath>~;
+	}
+	else
+	{
+		Source = ~<FilePath>~;
+	}
+
+	if ( !ADO( dBase,User,~<User>~,Password,~<Password>~,Provider,~<Provider>~,Source,~<Source>~,Connect ) ) 
+	{
+		dBase( GetErrorInformation,theErr );
+		Error( Translate( ~Could not open <FilePath>.  <theErr>~ ) );
+	}
+
+	StatusBarText( ~<Query> from <FilePath>~ );
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );		
+		Error( ~Failed to load data from <Table> in <FilePath>. <Query>.  <theErr>~ ); 
+	}
+
+	Path = ~~;
+
+	Global( dBase,List,Path,Table );
+
+	Count = List( NumEntries );
+
+	if ( <Count> > 1000 )
+	{
+		if ( MessageBox( ~Your query:\n\n   <Query>\n\nwill retrieve <Count> records\n\nAre you sure you want to continue?~,YESNO ) != YES )
+		{
+			return TRUE;
+		}
+	}
+
+	if ( <FirstTime> )
+	{
+		SetDocumentData( List(GetObject) );
+
+		DataWindow( StatusBar,Text,~Loading <Count> records from <Table> in <FilePath>~ );
+
+		if ( !DataWindow( CreateWindow,~<Table>~ ) )
+		{ 
+			Error( ~Failed to create the window for <Table> in <FilePath>~ ); 
+		}
+
+		FirstTime = FALSE;
+
+		return DataWindow( StatusBar,Text,~<Count> Records from <FilePath>~ );
+	}
+
+	return RefreshListView();
+}
+
+
+NUMERIC ConnectByConnectionString( s,Query )
+{
+	DataWindow( Set,Title,~<Query>~ );
+
+	StatusBarText( ~Opening <s>~ );
+
+	Table = Table;
+
+	ForgetGlobal( dBase,List );
+
+	if ( !ADO( dBase,User,~~,Password,~~,Provider,~~,Source,~<s>~,Connect ) ) 
+	{
+		dBase( GetErrorInformation,theErr );
+		Error( Translate( ~Could not open <s>.  <theErr>~ ) );
+	}
+
+	StatusBarText( ~<Query>~ );
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );		
+		Error( ~Failed to load data from <s>. <Query>.  <theErr>~ ); 
+	}
+
+	Path = ~~;
+
+	Global( dBase,List,Path,Table );
+
+	Count = List( NumEntries );
+
+	if ( <FirstTime> )
+	{
+		SetDocumentData( List(GetObject) );
+
+		DataWindow( StatusBar,Text,~Loading <Count> records from <Table> in <FilePath>~ );
+
+		if ( !DataWindow( CreateWindow,~<Table>~ ) )
+		{ 
+			Error( ~Failed to create the window for <Table> in <FilePath>~ ); 
+		}
+
+		FirstTime = FALSE;
+
+		return DataWindow( StatusBar,Text,~<Count> Records from <FilePath>~ );
+	}
+
+	return RefreshListView();
+}
+
+
+
+NUMERIC ConnectExcel( FilePath,Table,Query )
+{
+	DataWindow( Set,Title,~<FilePath> - Table <Table>    <Query>~ );
+
+	StatusBarText( ~Opening <FilePath>~ );
+
+	ForgetGlobal( dBase,List );
+
+	Provider = ~Microsoft.Jet.OLEDB.4.0~;
+
+	Props = ~;Extended Properties=Excel 8.0;Data Source=<FilePath>;HDR=No~;
+
+	if ( !ADO( dBase,Provider,~<Provider>~,Parameters,~<Props>~,Connect ) ) 
+	{
+		dBase( GetErrorInformation,theErr );
+		Error( Translate( ~Could not open <FilePath>.  <theErr>~ ) );
+	}
+
+	StatusBarText( ~<Query> from <FilePath>~ );
+
+	if ( !PGenConList( List,Connection,dBase,Lock,Pessimistic,Cursor,Static,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );		
+		Error( ~Failed to load data from <Table> in <FilePath>. <Query>.  <theErr>~ ); 
+	}
+
+	Path = ~~;
+
+	Global( dBase,List,Path,Table );
+
+	Count = List( NumEntries );
+
+	if ( <FirstTime> )
+	{
+		SetDocumentData( List(GetObject) );
+
+		DataWindow( StatusBar,Text,~Loading <Count> records from <Table> in <FilePath>~ );
+
+		if ( !DataWindow( CreateWindow,~<Table>~ ) )
+		{ 
+			Error( ~Failed to create the window for <Table> in <FilePath>~ ); 
+		}
+
+		FirstTime = FALSE;
+
+		return DataWindow( StatusBar,Text,~<Count> Records from <FilePath>~ );
+	}
+
+	return RefreshListView();
+}
+
+
+NUMERIC ConnectViaODBC( Source,Query,FilePath )
+{
+	if ( ~<FilePath>~ == ~~ )
+		{ FilePath = ~<Query>~; }
+
+	DataWindow( Set,Title,~<FilePath>~ );
+
+	StatusBarText( ~Opening <Source>  <FilePath>~ );
+
+	ForgetGlobal( dBase,List );
+
+	Provider = ~Microsoft OLE DB Provider For ODBC Drivers~;
+
+	if ( !ADO( dBase,Provider,~<Provider>~,Source,~<Source>~,Connect ) ) 
+	{
+		dBase( GetErrorInformation,theErr );
+		Error( Translate( ~Could not open <FilePath>.  <theErr>~ ) );
+	}
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Static,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );		
+		Error( ~Failed to load data from <Table> in <FilePath>. <Query>.  <theErr>~ ); 
+	}
+
+	Path = ~~;
+
+	Global( dBase,List,Path,Table );
+
+	Count = List( NumEntries );
+
+	if ( <FirstTime> )
+	{
+		SetDocumentData( List(GetObject) );
+
+		DataWindow( StatusBar,Text,~Loading <Count> records from <Table> in <FilePath>~ );
+
+		if ( !DataWindow( CreateWindow,~<Table>~ ) )
+		{ 
+			Error( ~Failed to create the window for <Table> in <FilePath>~ ); 
+		}
+
+		FirstTime = FALSE;
+
+		return DataWindow( StatusBar,Text,~<Count> Records from <FilePath>~ );
+	}
+
+	return RefreshListView();
+}
+
+
+NUMERIC CreateSchemaIniFile( filePath )
+{
+	path		= ~<$str.$filePath.Path>~;
+	dbFile		= ~<$str.$filePath.filename>~;
+	schemaFile	= ~<path>\schema.ini~;
+
+	useUnicode  = IsFileUnicode( ~<filePath>~ );
+
+	if ( !file( TheFile,Open,~<schemaFile>~,Create,ReadWrite ) )
+	{
+		Log( Session, ~Could not create file <schemaFile>~ );
+		Warning( Translate( ~Could not create file <schemaFile>~ ) );
+		return FALSE;
+	}
+
+	TheFile( ~[<dbFile>]~ );
+	TheFile( ~ColNameHeader=TRUE~ );
+	TheFile( ~Format=CSVDelimited~ );
+	TheFile( ~MaxScanRows=1~ );
+	if ( <useUnicode> )
+	{
+		TheFile( ~CharacterSet=Unicode~ );
+	}
+	else
+	{
+		TheFile( ~CharacterSet=ANSI~ );
+	}
+
+	TheFile( Close );
+
+	return TRUE;
+}
+
+
+NUMERIC CreateXMLRecordsetFrom( Source,Query,FilePath )
+{
+	if ( ~<FilePath>~ == ~~ )
+		{ FilePath = ~<Query>~; }
+	else
+	{
+		CreateSchemaIniFile( ~<FilePath>~ );
+	}
+
+	StatusBarText( ~Opening <Source>  <FilePath>~ );
+
+	ForgetGlobal( dBase,List );
+
+	Provider = ~Microsoft OLE DB Provider For ODBC Drivers~;
+
+	if ( !ADO( dBase,Provider,~<Provider>~,Source,~<Source>~,Connect ) ) 
+	{
+		dBase( GetErrorInformation,theErr );
+		Error( Translate( ~Could not open <FilePath>.  <theErr>~ ) );
+	}
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );		
+		Error( ~Failed to load data from <FilePath>. <Query>.  <theErr>~ ); 
+	}
+
+	StatusBarText( ~Converting <Source>  <FilePath> to XML~ );
+
+	Path = ~<$Str.$FilePath.Path>~;
+	FileName = ~<$Str.$FilePath.Filename.WithoutExt>~;
+	Extension = ~<$Str.$FilePath.Ext>~;
+
+	NewPath = ~<Path>\<FileName>.xml~;
+
+	if ( !Files( Delete,~<NewPath>~ ) )
+	{
+		return Warning( Translate( ~Could not delete <Path>~ ) );
+	}
+
+	if ( !List( Save,~<NewPath>~,~xml~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Save to <Path> failed. <theErr>~ );
+	}
+	
+	return init( ~<NewPath>~,~<NewPath>~ );
+}
+
+
+NUMERIC CreateTable( Which )
+{
+	TableDefinition( Get,TableName,Tablename );
+
+	if ( !ADO( dataBase,Connect,CMD,~DROP TABLE <TableName>~ ) )
+	{
+		dataBase( GetErrorDescription,theErr );
+		Log( Session,~Could not drop the TABLE <TableName> [<theErr>]~ );
+	}
+
+	if ( !GenCon( TableDefinitions,GetFrom,~TableDefinitions~,~[Database]~ ) )
+	{ 
+		return Warning( Translate( ~Could not find <TableDefinitions>~ ) );
+	}
+
+	if ( !TableDefinitions( GetByName,<Which>,TableDefinition ) )
+	{
+		return Warning( Translate( ~Could not find <Which> in <TableDefinitions>~ ) );
+	}
+
+	TableDefinition( CreateTableDefinition,Definition,dataBase );
+
+	if ( !dataBase( CMD,~CREATE TABLE <Tablename> (<Definition>)~ ) )
+	{
+		dataBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not create the TABLE <TableName>.]\n\n<Definition>\n\n[<theErr>]~ ) );
+	}
+
+	if ( GenCon( TableIndexes,Is,TableDefinition(GetNumeric,Indexes) ) )
+	{
+		while ( TableIndexes( GetNext,IndexDefinition ) )
+		{	
+			if ( !dataBase( CMD,~<$Con.IndexDefinition[Text]>~ ) )
+			{
+				dataBase( GetErrorDescription,theErr );
+				return Warning( Translate( ~Could not create index for TABLE <TableName>.\n\n<$Con.IndexDefinition[Text]>.\n\n[<theErr>]~ ) );
+			}	
+		}
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC DetermineFieldFormats()
+{
+	List( GetFirst,record ); // throw away first - headings
+
+	i = 0;
+	if ( DefinedAndNotNull( MaxFields ) )
+	{
+		while ( <i> < <MaxFields> )
+		{
+			ForgetGlobal( FieldsList<i> );
+		}
+		ForgetGlobal( MaxFields );
+	}
+
+	Position = 0;
+	while ( List( FieldInfo,<Position>,Name,FieldName,Length,FieldLength,Type,FieldType,ADOType,ADOType ) )
+	{
+			GenCon( FieldsList<Position>,New,DDFieldInfo );
+			FieldsList<Position>( SetValues,Name,~<FieldName>~,Length,~<FieldLength>~,Type,~<FieldType>~,ADOType,~<ADOType>~ );
+			Global( FieldsList<Position++> );
+	}
+	
+	MaxFields = <Position>;
+	while ( List( GetNext, record ) )
+	{
+		Position = 0;
+		While ( <Position> < <MaxFields> )
+		{
+			FieldsList<Position>( GetValues,Name,FieldName,Length,FieldLength,Type,FieldType );
+			if ( SimilarStr( ~<FieldName>~,~OrderID~,~SubjectID~ ) ||
+				 SimilarStr( ~<FieldType>~,~MACRO~ ) )
+			{
+				<Position++>;
+				continue;
+			}
+			length = strlen( MACROSOFF ~<$pcon.record[<FieldName>]>~ MACROSON );
+
+			if ( <length> == 0 )
+			{
+				<Position++>;
+				continue;
+			}
+//			if ( StringContents( ContainsMacro, MACROSOFF ~<$pcon.record[<FieldName>]>~ MACROSON ) )
+//			{
+//				FieldLength = 40;
+//				FieldType   = ~MACRO~;
+//				FieldsList<Position++>( SetValues,Length,<FieldLength>,Type,~<FieldType>~ );
+//				continue;
+//			}
+			name	= ~<$pcon.record[<FieldName>]>~;
+			length	= strlen( ~<name>~ );
+
+			if ( <length> == 0 )
+			{
+				<Position++>;
+				continue;
+			}
+			if ( IsDate( ~<name>~ ) && !SimilarStr( ~<FieldType>~,~CHAR~ ) )
+			{
+				FieldType = ~DATE~;
+				FieldLength = 16;
+			}
+			else if ( IsCurrency( ~<name>~ ) && !SimilarStr( ~<FieldType>~,~CHAR~ ) ) //currency
+			{
+				FieldType = ~CHAR~;
+				FieldLength = 16;
+			}
+			else if ( SimilarStr( ~<FieldType>~,~CHAR~ ) )
+			{
+				FieldLength = ( <length> > <FieldLength> ) ? <length> : <FieldLength>;
+			}
+			else if ( SimilarStr( ~<FieldType>~,~DOUBLE~ ) )
+			{
+				if ( !IsNumeric( ~<name>~ ) )
+				{
+					FieldType	= ~CHAR~;
+					FieldLength = ( <length> > 40 ) ? <length> : 40;
+				}
+			}
+			else if ( SimilarStr( ~<FieldType>~,~LONG~ ) )
+			{ 
+				if ( IsNumeric( ~<name>~ ) )
+				{
+					if ( IsDouble( ~<name>~ ) )
+					{
+						FieldType	= ~DOUBLE~;
+						FieldLength = 8;
+					}
+				}
+				else
+				{
+					FieldType	= ~CHAR~;
+					FieldLength = ( <length> > 40 ) ? <length> : 40;
+				}
+			}
+			else if ( SimilarStr( ~<FieldType>~, ~DATE~ ) )
+			{
+				FieldType	= ~CHAR~;
+				FieldLength = ( <length> > 40 ) ? <length> : 40;
+			}
+			else if ( IsNumeric( ~<name>~ ) )
+			{
+				FieldType	= ~LONG~;
+				FieldLength = 4;
+			}
+			else if ( SimilarStr( ~<FieldType>~, ~STRING~, ~TEXT~, ~UNKNOWN~ ) )
+			{
+				if ( !IsNumeric( ~<name>~ ) )
+				{ 
+					FieldType	= ~CHAR~;
+					FieldLength = ( <length> > 40 ) ? <length> : 40;
+				}
+				else 
+				{
+					if ( IsDouble( ~<name>~ ) )
+					{
+						FieldType = ~DOUBLE~;
+						FieldLength = 8;
+					}
+					else
+					{
+						FieldType = ~LONG~;
+						FieldLength = 4;
+					}
+				}
+			}
+
+			FieldsList<Position++>( SetValues,Length,<FieldLength>,Type,~<FieldType>~ );
+		}
+	}
+
+	Global( MaxFields );
+
+	return TRUE;
+}
+
+NUMERIC IsDouble( charString )
+{
+	if ( strlen( ~<charString>~ ) == 0 ||
+		 !IsNumeric( ~<charString>~ ) )
+	{
+		return FALSE;
+	}
+
+	result = strlen( String( StringInString, ~.~, ~<charString>~ ) ) > 0;
+
+	return <result>;
+}
+
+NUMERIC IsCurrency( charString )
+{
+	length    = strlen( ~<charString>~ );
+	
+	if ( <length> == 0 )
+	{
+		return FALSE;
+	}
+
+	result = FALSE;
+
+	firstChar = ~~;
+	lastChar  = ~~;
+
+	substr( ~<charString>~, 0, 1, firstChar );
+	substr( ~<charString>~, <length> - 1, 1, lastChar );
+
+	if ( SimilarStr( ~<firstChar>~, ~$~ ) && 
+			( <length> == 1 ||
+			  IsNumeric( ~<lastChar>~ ) || 
+			  SimilarStr( ~<lastChar>~,~-~ ) ) ) //currency
+	{
+		result = TRUE;
+	}
+
+	return <result>;
+}
+
+NUMERIC IsDate( charString )
+{
+	length    = strlen( ~<charString>~ );
+	
+	if ( <length> == 0 )
+	{
+		return FALSE;
+	}
+
+	result = FALSE;
+
+	result = IsValidDate( ~<charString>~ );
+
+	return <result>;
+}
+
+
+NUMERIC FillTableFormats( Which,PrimaryKey )
+{
+	Position = 0;	Sequence = 10;
+
+	Fields		  = ~TableName,Sequence,FieldName,FieldType,FieldLength,Displayname,MaskLength,Mask,AllowedChar,PrimaryKey,IndexOn~;
+
+	if ( !ADO( database,Connect ) ) 
+	{
+		dBase( GetErrorInformation,theErr );
+		Error( Translate( ~Could not connect to the shared database.  <theErr>~ ) );
+	}
+
+	database( Cmd,~Delete From TableFormats Where TableName = '<Which>'~ );
+
+	// SUBJECT INFO TABLES NEED AN ORDERID AND A SUBJECTID.  OTHERS DO NOT
+
+	if ( !IsNull( String( BeginsWith,~SubjectInfo~,~<Which>~ ) ) )
+	{
+		Values = STR ( '<Which>',<Sequence>,'OrderID','CHAR',31,'OrderID',31,'%','',1,0 );
+
+		Cmd = STR ( Insert Into TableFormats(<Fields>) Values(<Values>) );
+
+		if ( !database( CmdIn,Cmd ) ) 
+		{
+			database( GetErrorDescription,theErr );
+			return Warning( Translate( ~Cmd failed.  <Cmd>.  <theErr>~ ) );
+		}
+
+		Sequence += 10;
+
+		Values = STR ( '<Which>',<Sequence>,'SubjectID','CHAR',31,'SubjectID',31,'%','',1,0 );
+
+		Cmd = STR ( Insert Into TableFormats(<Fields>) Values(<Values>) );
+
+		if ( !database( CmdIn,Cmd ) ) 
+		{
+			database( GetErrorDescription,theErr );
+			return Warning( Translate( ~Cmd failed.  <Cmd>.  <theErr>~ ) );
+		}
+	}
+
+	FieldNamesWithSpaces = 0;
+	if ( <NEW_WAY> )
+	{
+		MAX_PATH_SIZE = 1024;
+
+		While ( <Position> < <MaxFields> )
+		{
+			FieldsList<Position>( GetValues,Name,FieldName,Length,FieldLength,Type,FieldType );
+			if ( SimilarStr( ~<FieldName>~,~OrderID~,~SubjectID~ ) )
+			{
+				<Position++>;
+				continue;
+			}
+
+			if ( strlen( String( StringInString,~ ~,~<FieldName>~ ) ) )
+			{
+				++FieldNamesWithSpaces;
+			}
+
+			Sequence += 10;
+
+			Mask = ~*~;
+			MaskLength = <FieldLength>;
+			AllowedChars = ~~;
+
+			firstChar = ~~;
+			lastChar  = ~~;
+			substr( ~<FieldName>~, 0, 1, firstChar );
+			len = strlen( ~<FieldName>~ );
+			substr( ~<FieldName>~, <len> - 1, 1, lastChar );
+
+			if ( SimilarStr( ~p~, ~<firstChar>~ ) &&
+				 IsNumeric( ~<lastChar>~ ) )	// product code
+			{
+				if ( !SimilarStr( ~<FieldType>~, ~CHAR~ ) )
+				{
+					FieldLength  = ( <FieldLength> > 255 ) ? <FieldLength> : 40;
+				}
+				else
+				{
+					FieldLength  = ( <FieldLength> > 40 ) ? <FieldLength> : 40;
+				}
+				FieldType    = ~CHAR~;
+				MaskLength   = <FieldLength>;
+
+			}
+			else if ( SimilarStr( ~q~, ~<firstChar>~ ) &&
+				 IsNumeric( ~<lastChar>~ ) )	// quantity
+			{
+				FieldType    = ~LONG~;
+				FieldLength  = 4;
+				MaskLength   = 9;
+				Mask         = ~#~;
+			}
+			else if ( strlen( String( StringInString, ~roll~,~<FieldName>~ ) ) > 0 ||
+					  strlen( String( StringInString, ~ROLL~,~<FieldName>~ ) ) > 0 )
+			{
+				FieldType    = ~CHAR~;
+				FieldLength  = 31;
+			}
+			else if ( strlen( String( StringInString, ~frame~,~<FieldName>~ ) ) > 0 ||
+					  strlen( String( StringInString, ~FRAME~,~<FieldName>~ ) ) > 0 )
+			{
+				FieldType    = ~CHAR~;
+				FieldLength  = 31;
+			}
+			else if ( SimilarStr(~<FieldType>~,~LONG~) )
+			{
+				MaskLength = 9;
+				Mask = ~#~;
+			}
+			else if ( SimilarStr(~<FieldType>~,~DOUBLE~) )
+			{
+				MaskLength = 9;
+				Mask = ~#~;
+				AllowedChars = ~.~;
+			}
+			else if ( SimilarStr(~<FieldType>~,~TEXT~,~STRING~) )
+			{
+				if ( strlen( String( StringInString, ~path~,~<FieldName>~ ) ) > 0 ||
+					 strlen( String( StringInString, ~PATH~,~<FieldName>~ ) ) > 0 )
+				{
+					FieldType    = ~LongText~;
+					FieldLength = <MAX_PATH_SIZE>;
+				}
+				else
+				{
+					FieldType     = ~CHAR~;
+					FieldLength = 40;
+				}
+				MaskLength    = <FieldLength>;
+			}
+
+			else if ( SimilarStr(~<FieldType>~,~CHAR~ ) )
+			{
+				if ( strlen( String( StringInString, ~path~,~<FieldName>~ ) ) > 0 ||
+					 strlen( String( StringInString, ~PATH~,~<FieldName>~ ) ) > 0 )
+				{
+					FieldType    = ~LongText~;
+					FieldLength = <MAX_PATH_SIZE>;
+				}
+				MaskLength = <FieldLength>;
+			}
+			else if ( SimilarStr( ~<FieldType>~,~DATE~ ) )
+			{
+				FieldType = ~DateTime~;
+			}
+			else if ( SimilarStr( ~<FieldType>~,~MACRO~ ) )
+			{
+				FieldType    = ~ProcessLongText~;
+			}
+
+			Values = STR ( '<Which>',<Sequence>,'<FieldName>','<FieldType>',<FieldLength>,'<FieldName>',<MaskLength>,'<Mask>','<AllowedChars>',0,0 );
+
+			Cmd = STR ( Insert Into TableFormats(<Fields>) Values(<Values>) );
+
+			if ( !database( CmdIn,Cmd ) ) 
+			{
+				database( GetErrorDescription,theErr );
+				return Warning( Translate( ~Cmd failed.  <Cmd>.  <theErr>~ ) );
+			}
+
+			ForgetGlobal( FieldsList<Position++> );
+		}
+	}
+	else
+	{
+		while ( List( FieldInfo,<Position++>,Name,FieldName,Length,FieldLength,Type,FieldType ) )
+		{
+			if ( SimilarStr( ~<FieldName>~,~OrderID~,~SubjectID~ ) )
+				continue;
+
+			if ( strlen( String( StringInString,~ ~,~<FieldName>~ ) ) )
+			{
+				++FieldNamesWithSpaces;
+			}
+
+			Sequence += 10;
+
+			Mask = ~*~;
+			MaskLength = <FieldLength>;
+
+			if ( SimilarStr(~<FieldType>~,~LONG~) )
+			{
+				MaskLength = 9;
+				Mask = ~#~;
+			}
+			else if ( SimilarStr(~<FieldType>~,~DOUBLE~) )
+			{
+				MaskLength = 9;
+				Mask = ~#~;
+			}
+			else if ( SimilarStr(~<FieldType>~,~TEXT~) )
+			{
+				FieldType = ~CHAR~;
+				FieldLength = ( <FieldLength> >= 255 ) ? 40 : <FieldLength>;
+				MaskLength = <FieldLength>;
+			}
+			else if ( SimilarStr(~<FieldType>~,~STRING~) )
+			{
+				FieldType = ~CHAR~;
+				FieldLength = ( <FieldLength> >= 255 ) ? 40 : <FieldLength>;
+				MaskLength = <FieldLength>;
+			}
+
+			Values = STR ( '<Which>',<Sequence>,'<FieldName>','<FieldType>',<FieldLength>,'<FieldName>',<MaskLength>,'<Mask>','',0,0 );
+
+			Cmd = STR ( Insert Into TableFormats(<Fields>) Values(<Values>) );
+
+			if ( !database( CmdIn,Cmd ) ) 
+			{
+				database( GetErrorDescription,theErr );
+				return Warning( Translate( ~Cmd failed.  <Cmd>.  <theErr>~ ) );
+			}
+		}
+	}
+
+	ForgetGlobal( MaxFields );
+	if ( <FieldNamesWithSpaces> )
+	{
+		Warning( ~You will not be able to create a table with these fields because some of the field names have spaces in them~ );
+	}
+
+	Action = STR ( QueueTableDefinitionsDoc(~<Which>~); );
+
+	WaitCursor( End );
+
+	return QueueContentsAfter( Action,1000 );
+
+}
+
+NUMERIC QueueTableDefinitionsDoc( Which )
+{
+	Actions = ACTION DOC ( ~<Which>~ OpenOnce TableDefinitionsDoc "Init(~<Which>~,~Select * From TableFormats Where TableName = '<Which>' Order By Sequence~);" );
+	PerformActions( Actions );
+
+	return CancelCreateTableDialog();
+}
+
+
+if ( !DataDict( TheDictionary,Get,DDCreateTableDialog ) )
+{
+	Dictionary: DDCreateTableDialog
+		Fields:	Name Tablename			Type	text
+		Fields:	Name PrimaryKey			Type	text ;
+}
+
+
+NUMERIC DefineCreateTableDialog()
+{
+	hGap = vGap = 10;
+	PromptHeight = 20;		PromptWidth = 120;		ValueWidth = 150;
+	ButtonWidth = 90;		ButtonHeight = 20;	
+	LeftX = $hGap;			CurrentY = $vGap;		CurrentRight = 0;
+
+	Define: CreateTableData Using DDCreateTableDialog;
+
+	Define: CreateTableDialog Using DDWinDef
+		Fields:	POSITION				100, 100, 600,600 
+				TITLE					~Create a Database Table Definition~
+				TYPENAME				Dialog 
+				OACTIONSTEXT			ACTION EXEC ( CancelCreateTableDialog() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "TableFormatsData.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: TableNamePrompt Using DDWinCtrlDef AsSymbol TableNamePrompt
+				Fields:	TypeName		StaticText
+						Text			~Table Name~
+						Position		$LeftX $CurrentY, $PromptWidth $ButtonHeight
+
+			Define: TableNameField Using DDWinCtrlDef AsSymbol TableNameField
+				Fields:	TypeName		MaskedEditText
+						Position		TableNamePrompt(GetRight,Position) + $hGap,
+										TableNamePrompt(GetTop,Position),
+										$ValueWidth, $ButtonHeight
+						GenConName		THIS
+						GenConField		TableName
+									//  ~SubjectInfo1234567890~
+						Mask			~AAAAAAAAAAAAAAAAAAAAA~ // ~<$[DATABASE FieldTypes].TableName[Mask]>~
+						PromptChar		~<$[DATABASE FieldTypes].TableName[PromptChar]>~
+						IActionsText	~[GET]~
+						DActionsText	~[SAVE]~ 
+						ToolTip			Translate( ~The total length of the table name should not exceed 21 characters~ );
+
+			IF 0
+			{
+				Define: PrimaryKeyPrompt Using DDWinCtrlDef AsSymbol PrimaryKeyPrompt
+					Fields:	TypeName		StaticText
+							Text			~Primary Key~
+							Position		TableNamePrompt(GetLeft,Position),
+											TableNamePrompt(GetBottom,Position)+$vGap,
+											 $PromptWidth $ButtonHeight
+
+				Define: PrimaryKeyField Using DDWinCtrlDef AsSymbol PrimaryKeyField
+					Fields:	TypeName		MaskedEditText
+							Position		PrimaryKeyPrompt(GetRight,Position) + $hGap,
+											PrimaryKeyPrompt(GetTop,Position),
+											$ValueWidth, $ButtonHeight
+							GenConName		THIS
+							GenConField		PrimaryKey
+							Mask			~<$[DATABASE FieldTypes].PrimaryKey[Mask]>~
+							PromptChar		~<$[DATABASE FieldTypes].PrimaryKey[PromptChar]>~
+							IActionsText	~[GET]~
+							DActionsText	~[SAVE]~ ;
+			}
+
+						
+			ButtonWidth = 120;
+
+			Define: CreateDefinitionButton Using DDWinCtrlDef AsSymbol CreateDefinitionButton
+				Fields:	GENCONNAME		This
+						DACTIONSTEXT	ACTION EXEC ( CreateTheTableDefinition() )
+						POSITION		$LeftX ,
+										TableNamePrompt(GetBottom,Position) + $vGap,$ButtonWidth, $ButtonHeight
+						TEXT			~Create Table Definition~
+						TOOLTIP			~Define a database table using the table name and primary key~
+						TYPENAME		BUTTON
+
+			Define: EditDefinitionButton Using DDWinCtrlDef AsSymbol EditDefinitionButton
+				Fields:	GENCONNAME		This
+						DACTIONSTEXT	ACTION EXEC ( EditTheTableDefinition() )
+						POSITION		CreateDefinitionButton(GetRight,Position) + ($hGap) ,
+										CreateDefinitionButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+						TEXT			~Edit Table Definition~
+						TOOLTIP			~Edit the definition of the database table~
+						TYPENAME		BUTTON
+
+
+			IF 0
+			{
+				Define: MakeTableButton Using DDWinCtrlDef AsSymbol MakeTableButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( CreateTheTable() )
+							POSITION		EditDefinitionButton(GetRight,Position) + ($hGap) ,
+											EditDefinitionButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+							TEXT			~Create Table~
+							TOOLTIP			~Create a database table using the table definition~
+							TYPENAME		BUTTON
+			}
+
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				Fields:	GENCONNAME		This
+						DACTIONSTEXT	ACTION EXEC ( CancelCreateTableDialog() )
+						POSITION		EditDefinitionButton(GetRight,Position) + ($hGap) ,
+										EditDefinitionButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+						TEXT			~Cancel~
+						TOOLTIP			~Close this dialog without adding a table~
+						TYPENAME		BUTTON
+		}
+
+	CurrentRight = CancelButton(GetRight,Position) + $hGap;
+	CurrentY = CancelButton(GetBottom,Position) + $vGap + 25;
+	CreateTableDialog( Set,Position,~20  20  <CurrentRight>  <CurrentY>~ );
+
+	GenDlg( dlgCreateTable,Definition,CreateTableDialog,Data,CreateTableData,Document,$Doc.This,New,Temporary );
+
+	return Global( dlgCreateTable,CreateTableDialog,CreateTableData );
+}
+
+
+NUMERIC CancelCreateTableDialog()
+{
+	if ( Defined( dlgCreateTable ) )
+	{
+		dlgCreateTable( END );
+		ForgetGlobal( dlgCreateTable,CreateTableDialog,CreateTableData );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC TableNameOkay( TableName )
+{
+	SubjectInfoMsg = STR ( It is very unusual to want to create a table called SubjectInfo.
+	
+There is already a table with that name defined by DP2.  If you are creating a new SubjectInfo
+table from data you have received from your customer, then it should have a unique name like
+SubjectInfoStudioA or SubjectInfoSports.  It must begin with SubjectInfo.  You cannot choose
+a name like Sports without prefixing the phrase SubjectInfo.
+
+Are you sure you want to create a table called SubjectInfo? );
+
+	if ( SimilarStr( ~<TableName>~,~SubjectInfo~ ) )
+	{
+		if ( MessageBox( ~<SubjectInfoMsg>~,YESNO ) != YES )
+		{
+			return FALSE;
+		}
+	}
+
+	if ( strlen( ~<TableName>~ ) > 21 )
+	{
+		return Warning( ~<TableName> is too long.  It must be less than or equal to 21 characters~ );
+	}
+
+	if ( !IsNull( String( StringInString,~ ~,~<TableName>~ ) ) )
+	{
+		return Warning( ~<TableName> cannot contain spaces~ );
+	}
+
+
+	NotSubjectInfoMsg = STR ( It is unusual to create a table that does not begin with SubjectInfo.
+If you are creating a table that can store subject information that you have received from your
+customers, then the table name needs to begin with SubjectInfo.  
+
+If you really are creating a new table that has nothing to do with subject info, then you
+correct in choosing a name like <TableName> that does not begin with the phrase SubjectInfo.
+
+Are you sure you want to create a table called <TableName>? );
+
+	if ( IsNull( String( BeginsWith,~SubjectInfo~,~<TableName>~ ) ) )
+	{
+		if ( MessageBox( ~<NotSubjectInfoMsg>~,YESNO ) != YES )
+		{
+			return FALSE;
+		}
+	}
+
+	return DeleteExistingTable( ~<TableName>~ );
+}
+
+
+NUMERIC DeleteExistingTable( TableName )
+{
+	if ( !ADO( dbConnection,Connect ) )
+	{
+		dbConnection( GetErrorDescription,theErr );
+		return Warning( ~Failed to connect to the shared database [<theErr>]~ );
+	}
+
+	if ( !PGenConList( SchemaList,Connection,dbConnection,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query Schema of type Tables.  <theErr>~ ) );
+	}
+
+	SchemaList( Filter,~Table_Name = '<TableName>'~ );
+
+	if ( SchemaList( NumEntries ) > 0 )	// IS THE TABLE ALREADY IN THE DATABASE?
+	{
+		if ( MessageBox( Translate( ~Table <TableName> already exists.\n\nAre you sure you want to recreate it?~ ),YESNO ) != YES )
+		{
+			return FALSE;
+		}
+
+		NumRecords = dbConnection( RecordCountFor,~Select * From <TableName>~ );
+
+		if ( <NumRecords> > 0 )		// ARE THERE RECORDS IN THE TABLE?
+		{
+			if ( MessageBox( Translate( ~Table <TableName> has <NumRecords> records(s). Is it okay to delete them?~ ),YESNO ) != YES )
+			{
+				return FALSE;
+			}
+
+			WaitCursor( Begin );
+
+			StatusBarText( ~Deleting all records in table <TableName>~ );
+		
+			if ( !dbConnection( CMD,~Delete From <TableName>~ ) )
+			{
+				WaitCursor( End );
+				dbConnection( GetErrorDescription,theErr );
+				return Warning( ~Could not delete all records from TABLE <TableName> [<theErr>]~ );
+			}
+
+			WaitCursor( End );
+		}
+
+		if ( !dbConnection( CMD,~DROP TABLE <TableName>~ ) )		// DROP THE TABLE
+		{
+			dbConnection( GetErrorDescription,theErr );
+			return Warning( ~Could not drop the TABLE <TableName> [<theErr>]~ );
+		}	
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CreateDatabaseTable( TableName,PrimaryKey )
+{
+	if ( !Defined( dlgCreateTable ) )
+	{
+		DefineCreateTableDialog();
+	}
+
+	dlgCreateTable( SetStrings,TableName,~<TableName>~,PrimaryKey,~<PrimaryKey>~  );
+
+	return TRUE;
+}
+
+
+NUMERIC CreateTheTableDefinition()
+{
+	dlgCreateTable( GetInput );
+
+	if ( ~<$con.CreateTableData[TableName]>~ == ~~ )
+	{
+		return Warning( Translate( UIMessages,TableNameNull ) );
+	}
+
+	if ( ~<$con.CreateTableData[PrimaryKey]>~ == ~~ )
+	{
+		return Warning( Translate( UIMessages,PrimaryKeyNull ) );
+	}
+
+	if ( strlen(~<$con.CreateTableData[PrimaryKey]>~) > 21 )
+	{
+		return Warning( Translate( ~The total length of the table name needs to be 21 characters or less~ ) );
+	}
+
+	if ( !TableNameOkay( ~<$con.CreateTableData[TableName]>~ ) )
+	{
+		return FALSE;
+	}
+
+	if ( MessageBox( Translate( ~Are you sure you want to create a new definition for table <$con.CreateTableData[TableName]>~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	WaitCursor( Begin );
+	if ( <NEW_WAY> )
+	{
+		if ( !DetermineFieldFormats() )
+		{
+			Warning( ~could not determine field types and sizes. Each field will default to a string.~ );
+		}
+	}
+	return FillTableFormats( ~<$con.CreateTableData[TableName]>~,~<$con.CreateTableData[PrimaryKey]>~ );
+}
+
+
+NUMERIC EditTheTableDefinition()
+{
+	dlgCreateTable( GetInput );
+
+	if ( ~<$con.CreateTableData[TableName]>~ == ~~ )
+	{
+		return Warning( Translate( UIMessages,TableNameNull ) );
+	}
+
+	Which =  ~<$con.CreateTableData[TableName]>~;
+
+	QueueTableDefinitionsDoc( ~<Which>~ );
+
+	return CancelCreateTableDialog();
+
+	Path = ~<$App.ShareDirectory>\Scripts\UserTableDefinitions\<$con.CreateTableData[TableName]>.txt~;
+
+	Program = ~<$Sys.Directory>\Notepad.exe~;
+
+	if ( !Files( FileExists,~<Program>~ ) )
+	{
+		return Warning( ~Could not find NotePad.exe at <Program>~ );
+	}
+
+	if ( !Files( FileExists,~<Path>~ ) )
+	{
+		return Warning( ~<Path> does not exist~ );
+	}
+
+	if ( !ShellExecute( Open,~<Program>~,~<Path>~ ) )
+	{
+		GetLastError( ErrorString,theErr );
+		return Warning( ~Could not open <$con.Product[ProductLayoutPath]>. <theErr>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CreateTheTable()
+{
+	dlgCreateTable( GetInput );
+
+	if ( ~<$con.CreateTableData[TableName]>~ == ~~ )
+	{
+		return Warning( Translate( UIMessages,TableNameNull ) );
+	}
+
+	if ( ~<$con.CreateTableData[PrimaryKey]>~ == ~~ )
+	{
+		return Warning( Translate( UIMessages,PrimaryKeyNull ) );
+	}
+
+	Path = ~<$App.ShareDirectory>\Scripts\UserTableDefinitions\<$con.CreateTableData[TableName]>.txt~;
+
+	if ( !Files( FileExists,~<Path>~ ) )
+	{
+		return Warning( ~<Path> does not exist.  Be sure to create the definition first~ );
+	}
+
+	Include: ~<Path>~;
+
+	if ( MessageBox( Translate( ~Are you sure you want to create the table <$con.CreateTableData[TableName]>~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	if ( CreateTable( ~<$con.CreateTableData[TableName]>~ ) )
+	{
+		Warning( Translate( ~Table <$con.CreateTableData[TableName]> was created~ ) );
+	}
+
+	CancelCreateTableDialog();
+
+	return TRUE;
+}
+
+
+STR ExpandQueryMacros( TheQuery )
+{
+}
+
+

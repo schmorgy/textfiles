@@ -1,0 +1,175 @@
+// QtyComps.txt
+
+// Use from CreatePackages.txt
+// FindProgramID();
+
+// 4 - Customer Product
+NUMERIC GetQtyForProduct4( &dBase,ID,NullField,ProgramID,CustomerID,ProductID )
+{
+
+	Qty = 0;
+
+	Key = ~CustomerID = '<CustomerID>' And ProgramID = '<ProgramID>' And ID = '<ID>' And ProductID = '<ProductID>' And PrintingRequest = 1~;  // 1 = Delay Printing
+
+	Query = ~Select * From CustomerProducts Where <Key> Order By Sequence~;
+
+//*** 12/10 Was Forward
+	if ( !PGenConList( List,Connection,dBase,Cursor,Static,Query,~<Query>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+//		Log( Session,Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		return 0;
+	}
+
+	if ( !List( NumEntries ) )
+	{
+		return 0;
+	}
+
+	else
+	{
+		while ( List( GetNext,Entry ) )
+		{
+			Entry(GetValue,Quantity,RecQty);
+			Qty = <Qty> + <RecQty>;
+		}
+
+	}
+
+	return <Qty>;
+}
+
+// 5 - ~Product of Customer Product/Qty~
+NUMERIC GetQtyForProduct5( &dBase,ID,NullField,ProgramID,CustomerID,ProductID )
+{
+	return 0;
+}
+
+
+// 6 - ~Quantity of Customer Product/Qty~
+NUMERIC GetQtyForProduct6( &dBase,Qty,ID,ProgramID,CustomerID,ProductID )
+{
+
+	if ( IsNull( ~<ID>~ ) )
+	{
+		return 0;	// IF THEY GIVE US A QTY WITHOUT A PRODUCT, DON'T DO ANYTHING
+	}
+
+	theQty = GetQtyForProduct4( dBase,~<ID>~,~<NullField>~,~<ProgramID>~,~<CustomerID>~,~<ProductID>~ );
+
+	TotalQuantity = <theQty> * MakeNumber( ~<Qty>~ );
+
+	return <TotalQuantity>;
+}
+
+
+// 7 - ~Multiple 1 character Customer Products In One Field~
+NUMERIC GetQtyForProduct7( &dBase,MultipleIDs,NullField,ProgramID,CustomerID,ProductID )
+{
+	len = strlen( ~<MultipleIDs>~ );
+
+	Index = 0;
+	Qty = 0;
+
+	while ( <Index> < <Len> )
+	{
+		substr( ~<MultipleIDs>~,<Index++>,1,ID );
+
+		Qty = <Qty> + GetQtyForProduct4( dBase,~<ID>~,~<NullField>~,~<ProgramID>~,~<CustomerID>~,~<ProductID>~ );
+	}
+
+	return <Qty>;
+}
+
+
+// Return Quantity of requested composites for the SubjectInfo group passed in.
+//   OrderID passed in is the ImagesOrderID, i.e. OrderID which has CustomerID and ProgramID to use.
+// NOTE: To have a Quantity from Packages, this indicates that there are
+//       ** Customer Packages defined for the order.  To have Customer Package
+//       - There must be Column Definitions for the SubjectInfo table.
+//       - There must be a CustomerID associated with the order
+//       - There must be a ProgramID indicated in the Order or Subject data
+NUMERIC GetQtyFromCustomerPackages(&dBase,OrderID,TableName,&SelectedRecords,CompName)
+{
+
+	// Get Column Definition Info - must have it for this type.
+	Query = ~Select * From SubjectInfoColumns Where TableName = '<TableName>'~;
+//*** 12/10 was Forward
+	if ( !PGenConList( ColumnsList,Connection,dBase,Cursor,Static,Query,~<Query>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Invoke( ShowWarning, Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		return 0;
+	}
+
+	HaveColumnInfo = ColumnsList( NumEntries );
+	if ( !<HaveColumnInfo> )
+	{	
+		Invoke( ShowWarning,Translate(~No Column definitions for table <TableName>~) );
+		return 0;
+	}
+
+	// Get Customer's ProgramID from the order if it is defined there
+	Query = ~Select CustomerID,ProgramID From Orders Where ID = '<OrderID>'~;
+	if ( !dBase( GetValuesFor,~<Query>~,CustomerID,OrderProgramID ) ) 
+	{
+		dBase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		return 0;
+	}
+
+	if ( ~<OrderProgramID>~ == ~~ )
+	{
+		OrderProgramID = ~*~;  // use default definition
+	}
+
+	if ( ~<CustomerID>~ == ~~)
+	{
+		Invoke( ShowWarning,~Order <OrderID> has no customer assigned~ );
+		return 0;
+	}
+
+
+	index = TotalQty = 0;
+
+	more = SelectedRecords( GetFirst,SubjectInfoRec );
+	while ( <more> )
+	{
+		// Check if this record has a program id which overrides the Order's Program ID
+		ProgramID = FindProgramID( dBase,ColumnsList,SubjectInfoRec,~<OrderProgramID>~ );
+
+		// Go thru columns to find those that are customer defined products
+		// then check those product definitions to see if need the composite.
+		Operation = GetFirst;
+		RecQty = 0;
+		while ( ColumnsList( <Operation>,ColumnInfo ) )
+		{
+			Operation = GetNext;
+
+			ColumnType = ~<$pcon.ColumnInfo[Type]>~;
+			if ( !FunctionDefined( ~GetQtyForProduct<ColumnType>~ ) )
+			{ continue;	}
+	
+			WhichColumn = ~<$pcon.ColumnInfo[ColumnName]>~;
+			SubjectInfoRec(GetValue,<WhichColumn>,ID);
+			if ( ~<ID>~ == ~~ )
+				continue;
+
+			ID2 = ~~;
+			WhichColumn = ~<$pcon.ColumnInfo[ForColumn]>~;
+			if (~<WhichColumn>~ != ~~)
+			{
+				SubjectInfoRec(GetValue,<WhichColumn>,ID2);
+			}
+	
+			RecQty = <RecQty> + GetQtyForProduct<ColumnType>( dBase,~<ID>~,~<ID2>~,~<ProgramID>~,~<CustomerID>~,~<CompName>~ );
+		}
+
+		TotalQty = <TotalQty> + <RecQty>;
+		more = SelectedRecords( GetNext,SubjectInfoRec );
+	}
+
+	return <TotalQty>;
+
+}  // GetNumCompositesFromPackages()

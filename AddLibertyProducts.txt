@@ -1,0 +1,434 @@
+IncludeClass(BaseDialog);
+IncludeClass(BaseThread);
+
+Class( LibertyDialog,Extends,BaseDialog,
+		Member,fAddingProducts,Numeric,0 );
+Class( LibertyThread,Extends,BaseThread );
+
+LibertyThread( New,aThread );
+
+VOID LibertyDialog::LibertyDialog()
+{
+	Left = 600;
+	Top = 300;
+	Dictionary = ~DDALPSetupDialog~;
+	Title = ~Add Liberty Products~;
+	GoButtonText = ~Go~;
+	CancelButtonText = ~Cancel~;	
+}
+
+VOID LibertyDialog::DefineDictionary()
+{
+	Dictionary: ~<Dictionary>~ 
+		Fields: Name PrinterQueue Type text
+}
+
+VOID LibertyDialog::InitDialogData()
+{
+	DlgData( SetValues,PrinterQueue,~~ );
+}
+
+VOID LibertyDialog::DefineControls()
+{
+	Define: PrinterQueueStaticText Using DDWinCtrlDef AsSymbol PrinterQueueStaticText 
+			Fields: TypeName        StaticText
+					Text            ~Select Gifting Printer Queue:~
+					RightJustified	FALSE
+					Position        $hGap*2,$hGap*4+16,165,20
+
+	Define: PrinterQueueComboBox Using DDWinCtrlDef AsSymbol PrinterQueueComboBox 
+			Fields: TypeName		SComboBox 
+					Position		PrinterQueueStaticText(GetRight,Position)+$hGap,PrinterQueueStaticText(GetTop,Position),285,125
+					IActionsText	ACTIONS ( Get )
+					DActionsText	~[Save]~
+					OActionsText    ~[Save]~
+					GenConName      THIS
+					GenConField     ~PrinterQueue~
+					Tooltip         ~Select a printer queue for the Liberty products~;
+
+	DialogWidth = aDialog(GetMaxRight,Position) + $hGap * 2;
+	DialogHeight = aDialog(GetMaxBottom,Position);
+
+	if ( $DialogWidth < $ButtonWidth * 2 + $hGap * 2 )
+	{
+		DialogWidth = $ButtonWidth * 2 + $hGap * 4;
+	}
+
+	Define: GoButton Using DDWinCtrlDef AsSymbol GoButton
+		Fields:	GENCONNAME			THIS
+					DACTIONSTEXT	ACTION EXEC ( <THIS>.OnGoButton() )
+					POSITION		($DialogWidth/2) - ($ButtonWidth) - $hGap,$DialogHeight+$vGap * 2 + 3, $ButtonWidth, $ButtonHeight
+					TEXT			Translate( ~<GoButtonText>~ )
+					TOOLTIP			Translate( ~Add Liberty Products~ )
+					TYPENAME		BUTTON
+					ISTABSTOP		TRUE;
+
+	Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+		Fields:	GENCONNAME			THIS
+					DACTIONSTEXT	ACTION EXEC ( <THIS>.DoCancelButton() )
+					POSITION		GoButton(GetRight,Position) + $hGap,GoButton(GetTop,Position),	$ButtonWidth, $ButtonHeight
+					TEXT			Translate( ~Close~ )
+					TYPENAME		BUTTON
+					ISTABSTOP		TRUE;
+}
+
+VOID LibertyDialog::GetPrinterQueues()
+{
+	Query = ~Select QueueName From QueueDefinition Where PrinterModel = 'Disk' Order By QueueName~;
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Log( Session,~Failed to query the QueueDefinition table.\n\n<Query>\n\n<theErr>~ ); 
+		Warning( ~Unable to get printers queues.~ );
+		return;
+	}
+
+	NumQueues = List(NumEntries);
+	if ( !<NumQueues> )
+	{
+		Warning( ~No Disk printer queues were found. You need to create a Disk printer queue to add Liberty Products.~ );
+		return;
+	}
+
+	List( MakeStringList,PrinterQueuesList,QueueName );
+	dlg( SetControlFromStringList,PrinterQueueComboBox,PrinterQueuesList,~NoSelection~ );
+}
+
+NUMERIC LibertyDialog::OnGoButton()
+{
+	dlg( GetInput );
+	PrinterQueue = ~<$con.dlgData[PrinterQueue]>~;
+	if ( SimilarStr( ~<PrinterQueue>~,~~ ) )
+	{
+		Warning( ~You need to select a Printer Queue for the Liberty Products.~ );
+		return FALSE;
+	}
+
+	if ( !ADO(dbase,connect) )
+	{
+		Log( Session,~Could not connect to database~ );
+		Warning( ~Adding Liberty Gifting Products failed.~ );
+		return FALSE;
+	}
+
+	if ( CheckProductsExist(dbase) )
+	{	
+		Msg = ~A product category called Liberty Gifting Products category already exists. If you previously added the Liberty gifting products to the database, any changes you have made to the products will be lost. Do you want to continue?~;
+		if ( MessageBox( ~<Msg>~, YESNO ) == NO )
+		{
+			return TRUE;
+		}
+
+		Cmd = ~Delete From Products Where Category = 'Liberty Photo Gifting'~;
+		if ( !dbase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Log( Session,~Could not delete Liberty gifting products. <theErr>~ );
+			Warning( ~Could not delete Liberty gifting products from the database.~ );
+			return FALSE;
+		}
+	}
+
+	dlg( EnableControls,FALSE,PrinterQueueComboBox,GoButton,CancelButton );
+
+	fAddingProducts = TRUE;
+	aThread.NewOneShot( ~<PrinterQueue>~ );
+	return TRUE;
+}
+
+NUMERIC LibertyDialog::CheckProductsExist(&dbase)
+{
+	Query = ~Select Category From Products Where Category = 'Liberty Photo Gifting'~;
+	if (dbase(GetValuesFor,~<Query>~,theCategory))
+	{
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+NUMERIC LibertyDialog::OkayToCancel()
+{
+	if ( <fAddingProducts> )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+VOID LibertyDialog::SetDlgStatus( msg )
+{
+	dlg( SetStatus,0,~<msg>~ );
+}
+
+VOID LibertyDialog::SetAddingProducts( value )
+{
+	fAddingProducts = Numeric( ~<value>~ );
+	if ( !<fAddingProducts> )
+	{
+		dlg( EnableControls,TRUE,PrinterQueueComboBox,GoButton,CancelButton );
+	}
+}
+
+NUMERIC LibertyThread::HandleThread( PrinterQueue )
+{
+	Invoke( ~ThisDialog.SetAddingProducts~,1 );
+
+	if ( !ADO(dbase,connect) )
+	{
+		Log( Session,~Could not connect to database~ );
+		Invoke( UserWarning,~Adding Liberty Gifting Products failed.~ );
+		Invoke( ~ThisDialog.SetAddingProducts~,0 );
+		return FALSE;
+	}
+
+	Log( Session,~Adding Liberty Gifting Products~ );
+	Invoke( ~ThisDialog.SetDlgStatus~,~Adding Liberty Gifting Products~ );
+
+	WaitCursor(Begin);
+
+	if ( AddProducts( dbase,~<PrinterQueue>~ ) )
+	{
+		Invoke( UserWarning,~Liberty Gifting Products added successfully.~ );
+	}
+	else
+	{
+		Invoke( UserWarning,~Adding Liberty Gifting Products failed.~ );
+	}
+
+	WaitCursor(End);
+
+	Invoke( ~ThisDialog.SetDlgStatus~,~Completed adding Liberty Gifting Products~ );
+	Log( Session,~Completed adding Liberty Gifting Products~ );
+
+	Invoke( ~ThisDialog.SetAddingProducts~,0 );
+
+	return TRUE;
+}
+
+NUMERIC LibertyThread::AddProducts(&dbase,PrinterQueue)
+{
+	if ( !dbase( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,ProductsTable,~SELECT * FROM Products~ ) )
+	{
+		WaitCursor( End );
+		Log( Session, ~Could not open Products Recordset~ );
+		return FALSE;
+	}
+
+	if ( !Document( Jobs,ParseFile,~<$App.ShareDirectory>\Layouts\BlankLayout.txt~ ) )
+	{
+		WaitCursor( End );
+		Log( Session, ~Could not open blank layout~ );
+		return FALSE;
+	}
+
+	if ( !Jobs( GetRenderList,0,theRenderList ) )
+	{ 
+		WaitCursor( End );
+		Log( Session, ~Unable to get render list for blank layout~ );
+		return FALSE;
+	}
+
+	xml( ProductParser );
+	if ( !ProductParser( Load,~<$App.ShareDirectory>\Scripts\XMLInfo\Master List Liberty DP2 products.xml~ ) )
+	{
+		WaitCursor( End );
+		Log( Session,~Unable to load Master List Liberty DP2 products.xml~ );
+		return FALSE;
+	}
+
+	NumberOfCategories = ProductParser( SelectNodes,TheCategoriesList,~/*/catagory~ );
+	if ( <NumberOfCategories> == 0 )
+	{
+		WaitCursor( End );
+		Log( Session,~No categories found in Master List Liberty DP2 products.xml~ );
+		return FALSE;
+	}
+
+	NumberOfProducts = ProductParser( SelectNodes,TheProductList,~/*/*/product~ );
+	if ( <NumberOfProducts> == 0 )
+	{
+		WaitCursor( End );
+		Log( Session,~No products found in Master List Liberty DP2 products.xml~ );
+		return FALSE;
+	}
+
+	ProductNum = 1;
+	i = -1;
+	while ( TheCategoriesList( GetNodeByIndex,CategoryNode,<++i> )  )
+	{
+		CategoryName = ~~;
+		if ( !CategoryNode( GetAttributeNode,~catagory_name~,CategoryNameNode ) )
+		{
+			Log( Session,~Unable to find category name node~ );
+			return FALSE;
+		}
+		CategoryNameNode( GetNodeText, CategoryName );
+
+		bNextProduct = CategoryNode( GetFirstChild,ProductNode );
+		while ( <bNextProduct> )
+		{
+			AddProduct( ProductsTable,theRenderList,~<CategoryName>~,ProductNode,<NumberOfProducts>,<ProductNum>,~<PrinterQueue>~ );
+			ProductNum = <ProductNum> + 1;
+			bNextProduct = ProductNode( GetNextSibling,ProductNode );
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC LibertyThread::AddProduct( &ProductsTable,&theRenderList,CategoryName,&ProductNode,NumberOfProducts,ProductNum,PrinterQueue )
+{
+	ProductDir = ~<$App.ShareDirectory>\Layouts\LibertyGifting~;
+	Directory( Create,~<ProductDir>~ );
+
+	if ( !ProductNode( GetAttributeNode,~inventory_name~,NameNode ) )
+	{
+		Log( Session,~Unable to find product name node~ );
+		return FALSE;
+	}
+	NameNode( GetNodeText, NameValue );
+	Invoke( ~ThisDialog.SetDlgStatus~,~(<ProductNum> of <NumberOfProducts>) <NameValue>~ );
+
+	ProductID = ~~;
+	if ( !ProductNode( SelectSingleNode, DP2NameNode, ~DP2Name~ ) )
+	{
+		Log( Session,~Unable to find product name node~ );
+		return FALSE;
+	}
+	DP2NameNode( GetNodeText, ProductID );
+	GetTokens( ~<ProductID>~,~_~,Token1,ProductName );
+
+	DPIValue = ~~;
+	if ( !ProductNode( SelectSingleNode, DPINode, ~DPI~ ) )
+	{
+		Log( Session,~Unable to find product DPI node~ );
+		return FALSE;
+	}
+	DPINode( GetNodeText, DPIValue );
+
+	UIText = ~~;
+	if ( !ProductNode( SelectSingleNode, UINode, ~UI~ ) )
+	{
+		Log( Session,~Unable to find product UI node~ );
+		return FALSE;
+	}
+
+	if ( !UINode( GetAttributeNode,~UI_Text~,UITextNode ) )
+	{
+		Log( Session,~Unable to find product UI_Text node~ );
+		return FALSE;
+	}
+	UITextNode( GetNodeText, UIText );
+
+	GetTokens( ~<UIText>~,~ ~,Token1,Token2,ProductWidth,Token4,ProductHeight,Token6 );
+	ProductWidth = Numeric( ~<ProductWidth>~ );
+	ProductHeight = Numeric( ~<ProductHeight>~ );
+
+	UINode(SetNodeText, ~ ~);
+	ProductNode(GetNodeXML, newXML);	
+
+	if ( !ProductsTable( AddNew ) )
+	{
+		Log( Session,~Unable to add new record to Products recordset~ );
+		return FALSE;
+	}
+
+	if ( !ProductsTable( SetFields,	
+			ID,					~<ProductID>~,
+			LayoutName,			~<ProductName>~,
+			Category,			~Liberty Photo Gifting~,
+			Sequence,			<ProductNum>,	
+			ProductType,		~Digital~,	
+			Multiple,			0,		
+			Style,				0,	
+			StyleType,			0,
+			ProductLayoutPath,	~<ProductDir>\<ProductName>.txt~,	
+			PreviewPath,		~<ProductDir>\Preview\<ProductName>.jpg~ ) )
+	{
+		Log( Session,~Unable to set fields in Products recordset~ );
+		return FALSE;
+	}
+
+	if ( !ProductsTable( Update ) )
+	{
+		ProductsTable( CancelUpdate );
+		Log( Session,~Unable to update Products recordset~ );
+		return FALSE;
+	}
+
+	if ( Files( FileOrDirectoryExists,~<ProductDir>\<ProductName>.txt~ ) )
+	{
+		Files( Delete,~<ProductDir>\<ProductName>.txt~ );
+		Sleep( 50 );
+	}
+
+	theRenderList( GetMainNode, mainNode);
+	mainNode( Set,~Ilocation:~,~0 0 <ProductWidth> <ProductHeight>~ );
+                   
+	if ( !theRenderList( GetNodeByID,10000,0,TheNode ) )
+	{
+		theRenderList( AddNode,10000,~IC:~,TheNode );
+	}
+	TheNode( Set,~Ilocation:~,~0 0 <ProductWidth> <ProductHeight>~ );
+
+	if ( !theRenderList( GetNodeByName,~Saveimage:~,0,SaveImageNode ) )
+	{
+		Log( Session,~Unable to get save image node~ );
+		return FALSE;
+	}
+
+	SaveImageNode( Set,~Queuename:~,~<PrinterQueue>~ );
+	SaveImageNode( Set,~Xres:~,~<DPIValue>~ );
+	SaveImageNode( Set,~ExtraInfo:~,~<catagory catagory_name="<CategoryName>"><$ContentsOf.newXML></catagory>~);
+
+	if ( !theRenderList( WriteJob,~<ProductDir>\<ProductName>.txt~ ) )
+	{
+		Log( Session,~Unable to write product layout <ProductDir>\<ProductName>.txt~ );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC UserWarning( msg )					{ return Warning( ~<msg>~ ); }
+
+NUMERIC DoCheck()
+{
+	Query = ~Select QueueName From QueueDefinition Where PrinterModel = 'Disk' Order By QueueName~;
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Log( Session,~Failed to query the QueueDefinition table.\n\n<Query>\n\n<theErr>~ ); 
+		Warning( ~Unable to get printers queues.~ );
+		return FALSE;
+	}
+
+	NumQueues = List(NumEntries);
+	if ( !<NumQueues> )
+	{
+		Warning( ~No Disk printer queues were found. You need to create a Disk printer queue to add Liberty Products.~ );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+VOID Init()
+{
+	if ( Defined( ALPDialog ) )
+	{
+		ALPDialog.ReOpen();
+		return;
+	}
+
+	if ( DoCheck() )
+	{
+		LibertyDialog( New,ThisDialog );
+		Global( ThisDialog );
+
+		ThisDialog.DefineDialog();
+		ThisDialog.GetPrinterQueues();
+	}
+}

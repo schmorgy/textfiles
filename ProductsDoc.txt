@@ -1,0 +1,3005 @@
+// HANDLE THE PRODUCTS SUBSYTEM
+
+Include: ~GetFullLayout~;
+
+Include: ~Utilities.txt~;
+Include: ~UtilityRoutines~;
+
+
+VOID RefreshDoc()
+{
+	if ( $ViewIsImages )
+	{
+		RefreshThumbNailView(FALSE);
+	}
+	else
+	{
+		RefreshListView( FALSE );
+	}
+}
+
+
+NUMERIC RefreshThumbNailView()
+{
+	if ( !ProductsWindow(GetWindowAddress) )
+		{ return FALSE; }
+
+	ProductsWindow( StatusBar,Text,Translate(~Querying~) );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	WaitCursor( Begin );
+
+	ProductsWindow( StatusBar,Text,Translate(~Creating Products View~) );
+	ProductsWindow( CreateThumbNailViews,ProductThumbNailCategory,ProductThumbNailImage,List,Category,Product );
+	ProductsWindow( StatusBar,Text,Translate(~Refreshing~) );
+	ProductsWindow( RefreshWindow );
+
+	WaitCursor( End );
+
+	return ProductsWindow( StatusBar,Text,~~ );
+}
+
+
+NUMERIC RefreshListView()
+{
+	if ( ProductsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	ProductsDataWindow( StatusBar,Text,Translate(~Querying~) );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	ProductsDataWindow( StatusBar,Text,~Refreshing~ );
+	ProductsDataWindow( RefreshWindow );
+	return ProductsDataWindow( StatusBar,Text,~~ );
+
+	return TRUE;
+}
+
+
+NUMERIC RefreshAllViews()
+{
+	Queue( ~RefreshThumbNailView();~ );
+	Queue( ~RefreshListView()~ );
+
+	return TRUE;
+}
+
+
+NUMERIC FindProducts()
+{
+	if ((~<$App.Name>~ !=~DP1.exe~) && (!GetUserPermissions( LayoutEditing ) ))
+	{
+		return Warning( Translate(UIMessages,NoPermission) );
+	}
+
+	msg = Translate( ~Find Products and Drag them to the Products Window~ );
+
+	action = ACTION DOC ( Explorer Open ExplorerDoc "Init( ~<msg>~,~~ );" );
+
+	return QueueContentsOf( action );
+}
+
+
+NUMERIC OnExternalXRef()
+{
+	action = ACTION DOC ( ProductsXRefDoc OpenOnce ProductsXRefDoc "Init()" );
+	return PerformActions( action );
+}
+
+
+
+NUMERIC CreateNewLayout()
+{
+	if ( !GenCon( ActiveView,GETACTIVEVIEW,GETNAME,Category ) )
+		{ return Warning( ~There was no active view for adding a category~ ); }
+
+	action = ACTION DOC ( LayoutNewDialog OpenOnce LayoutNewDialog "CreateDialog(~<Category>~);" );
+	return PerformActions( action );
+}
+
+
+NUMERIC CreateNewGridLayout()
+{
+	action = ACTION DOC ( GridGeneratorDialog Open GridGeneratorDialog "Init( );" );
+	return PerformActions( action );
+}
+
+
+NUMERIC AddCategory()
+{
+	if ( !GenCon( TheActiveWindow,GetActiveWindow ) )
+		{ return Warning( ~There was no active window to add a category to~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC RenameCategory()
+{
+	if ( !GenCon( ActiveView,GETACTIVEVIEW,GETNAME,NewCategory,GET,PreviousCategoryName,PrevCategory ) )
+		{ return Warning( ~There was no active view for adding a category~ ); }
+
+	Cmd = ~UPDATE Products SET Category = '<NewCategory>' WHERE Category = '<PrevCategory>'~;
+
+	if ( !Ado( dBase,Connect,CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed: <Cmd>. <theErr>~ ) );
+	}
+	
+	return RefreshAllViews();
+}
+
+
+VOID GetParentDirectory (&x)
+{
+	if ( !IsNull( String( EndsWith,~\~,~<x>~ ) ) )
+	{
+		substr( ~<x>~,0,strlen(~<x>~)-1,x );
+	}
+
+	x = ~<$Str.$x.Path>~;
+}
+
+NUMERIC ResequenceProductInCategory( Key,Category,FromLocation,ToLocation )
+{
+	// DPT 11/24/99
+	// Temporarily removed this message box for problem #852.
+	//return Warning( Translate( ~Resequencing of products is not available yet~ ) );
+	return TRUE;
+
+	if ( $FromLocation == $ToLocation )		// DID IT REALLY MOVE?
+		{ return FALSE; }					// NOPE, THERE IS NOTHING TO UPDATE
+
+	if ( $FromLocation > $ToLocation )		// A DRAG TO EARLIER IN THE LIST?
+	{
+		theSQL = ~UPDATE Products SET Sequence = Sequence + 1 WHERE Category = '<Category>' AND 
+					Sequence < <FromLocation> AND Sequence >= <ToLocation>~;
+	}
+	else									// NOPE, A DRAG TO LATER IN THE LIST
+	{
+		theSQL = ~UPDATE Products SET Sequence = Sequence - 1 WHERE Category = '<Category>' AND 
+					Sequence > <FromLocation> AND Sequence <= <ToLocation>~;
+
+	}
+
+	if ( !Ado( dBase,Connect,BeginTransaction ) )
+	{
+		dBase( GetErrorDescription,theErr);
+		return Warning( Translate( ~Could not connect to the database.  <theErr>~ ) );
+	}
+
+	if ( !dBase( CMD,~<theSQL>~ ) )	// MAKE ROOM FOR THE PRODUCT AT THE NEW POSITION
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not resequence the Products <theSQL>.  <theErr>~ ) );
+	}
+
+	if ( !dBase( CMD,~UPDATE Products SET Sequence = <ToLocation> WHERE <Key>~ ) )	// MOVE THE TARGET PRODUCT
+	{
+		dBase( GetErrorDescription,theErr);
+		return Warning( Translate( ~Could not set the sequence for Product where <key> from to <toLocation>.  <theErr>~ ) );
+	}
+
+	if ( !dBase( CommitTransaction ) )
+	{
+		dBase( GetErrorDescription,theErr);
+		return Warning( Translate( ~Could not commit the transaction.  <theErr>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC MoveProductToNewCategory( NewCategory,&ProductIcon,&SrcView,FromLocation,&DstView )
+{
+	// WARN THE USER IF HE/SHE IS DRAGGING A PACKAGE INTO THE PROOF CATEGORY
+
+	if ( SimilarStr( ~<NewCategory>~,~Proof~ ) )
+	{
+		if ( ProductIcon( GetData,Data ) )
+		{
+			if ( MakeNumber( ~<$con.Data[Package]>~ ) )
+			{
+				PopupMsg( ~Packages cannot be used for proofing~ );
+			}
+		}
+	}
+
+	if ( !Ado( dBase,Connect,BeginTransaction ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database.  <theErr>~ ) );
+	}
+
+	NextSequence = CalcNextSequenceForCategory( dBase,Products,Category,~<NewCategory>~,Sequence );
+
+	Cmd = ~UPDATE Products SET Category = '<NewCategory>', Sequence = <NextSequence> Where <$con.ProductIcon[Key]>~;
+
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr,RollBackTransaction );
+		return Warning( Translate( ~Database update failed: <Cmd>.  <theErr>~ ) );
+	}
+
+	if ( !dBase( CommitTransaction ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database CommitTransaction failed.  <theErr>~ ) );
+	}
+
+	return TRUE;
+}
+
+NUMERIC IsGridLayoutDirectory(&DraggedFileList)
+{
+
+}
+
+
+
+NUMERIC ProcessDraggedFiles( &DraggedFileList,Category )
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database.  <theErr>~ ) );
+	}
+
+	count = 0;
+	IsMultipleProduct = FALSE;
+	AlreadyAdded = FALSE;
+
+	WaitCursor( Begin );
+
+	success = DraggedFileList( GetFirst,Product );
+	while ( <success>)
+	{
+		DocumentPath = ~<$con.Product[Text]>~;
+
+		if ( !SQLSafe( ~<DocumentPath>~ ) )
+		{
+			Warning( ~Can't handle a path with a ' in it.  <DocumentPath>~ );
+			success = DraggedFileList( GetNext,Product );
+			continue;
+		}
+
+		if ( !Files( IsUNC,~<DocumentPath>~ ) && NetworkOperation() )
+		{
+			Msg = Translate( UIMessages,UnsharedFile,~<DocumentPath>~ );
+
+			if ( MessageBox( ~<Msg>~,YESNO ) != YES )
+			{ 
+				WaitCursor( End );
+				return FALSE;
+			}
+		}
+
+		if ( GetFileType(~<DocumentPath>~) == TEXT )
+		{
+			FixCRInFile(~<DocumentPath>~);
+
+			if (IsLayoutFileMultiple(~<DocumentPath>~))
+			{
+				IsMultipleProduct = TRUE;
+
+				if (!<AlreadyAdded>)
+				{
+					DocFolder = ~<DocumentPath>~;	
+					GetParentDirectory(DocFolder);
+
+					DocumentName = ~<$str.$DocFolder.FileName.WithoutExt>~;
+
+					if ( !AddANewMultipleProduct( dBase,ID,~<DocumentName>~,~<Category>~,~Digital~,~<DocFolder>~,~~,ProductsView,0 ) )
+					{ 
+						WaitCursor( End );
+						return <count>;
+					}
+
+					AlreadyAdded = TRUE;
+					
+				}
+			}
+
+			else
+			{
+				DocumentName = ~<$str.$DocumentPath.FileName.WithoutExt>~;
+
+				if ( !AddANewProduct( dBase,ID,~<DocumentName>~,~<Category>~,~Digital~,~<DocumentPath>~,~~,ProductsView,0 ) )
+				{ 
+					WaitCursor( End );
+					return <count>;
+				}
+
+				++count;
+
+			}
+
+			if (<IsMultipleProduct>)
+			{
+				//  May not result in the CompositeNodes being updated for the layout, 
+				//  as the DB may not be flushed yet as function gets different connection.
+				if ( !ConvertGridLayoutToDP2(~<DocumentPath>~,~<ID>~) )
+				{
+					DeleteProduct( connection,~<ID>~ );
+					return FALSE;
+				}
+				++count;
+
+			}
+		}
+			success = DraggedFileList( GetNext,Product );
+			IsMultipleProduct = FALSE;
+	}
+
+	WaitCursor( End );
+
+	return <count>;
+}
+
+
+NUMERIC ExternalDrop( &DragDropInfo )
+{
+	if ( !GenCon( DstView,Is,~<$CON.DragDropInfo[DstView]>~ ) ) 
+		{ return Warning( ~The Destination View is invalid~ ); }				
+
+	if ( ~<$con.DstView[ViewDataType]>~ != Products )
+		{ return Warning( ~The DstView contains <$con.DstView[ViewDataType]> instead of Products~ ); }
+
+	DstView( Get,Text,Category );
+
+	if ( ~<Category>~ == ~~  )
+		{ return Warning( ~There is no Category~ ); }
+
+	if ( !DragDropInfo( GetDraggedFiles,DraggedFileList ) )
+		{ return ~There were no files in the object you dragged~; }
+
+	count = DraggedFileList( ChildCount );
+		
+	if ( $count <= 0 )
+		{ return ~There were no files in the object you dragged~; }
+
+	if ( <count> > 1 )
+	{
+		if ( DraggedFileList( GetNext,Product ) )
+		{
+			DocumentPath = ~<$con.Product[Text]>~;
+			if (!IsLayoutFileMultiple(~<DocumentPath>~))
+			{
+				SortOrder = CustomMessageBox( Title,~Import Products~,Message,~Sort files by ...~,
+											Button1,~File Name~,
+											Button2,~Creation Date~,
+											Button3,~Cancel~ );
+				if ( <SortOrder> == 1 )
+				{
+					DraggedFileList( SortListBy,~Text~,~CreationTime~ );
+				}
+				else if ( <SortOrder> == 2 )
+				{
+					DraggedFileList( SortListBy,~CreationTime~,~Text~ );
+				}
+				else 
+				{
+					return FALSE;
+				}
+			}
+		}
+	}
+
+	count = ProcessDraggedFiles( DraggedFileList,~<Category>~ );
+
+	RefreshAllViews();
+
+	return TRUE;
+}
+
+
+
+NUMERIC HandleDrop()
+{
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+		{ return FALSE; }
+	
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );		// REMOVE THE DRAG INFO FROM THE TREE
+
+	if ( !GenCon( SrcView,Is,~<$CON.DragDropInfo[SrcView]>~ ) ) 
+		{ return ExternalDrop(DragDropInfo); }			
+
+	if ( !GenCon( DstView,Is,~<$CON.DragDropInfo[DstView]>~ ) ) 
+		{ return Warning( ~The Destination View is invalid~ ); }				
+
+	if ( ~<$con.SrcView[ViewDataType]>~ != Products )
+		{ return Warning( ~The DstView contains <$con.DstView[ViewDataType]> instead of Products~ ); }
+
+	if ( ~<$con.DstView[ViewDataType]>~ != Products )
+		{ return Warning( ~The DstView contains <$con.DstView[ViewDataType]> instead of Products~ ); }
+
+	while ( SrcView( Find,IsSelected,~1~,FromLocation,ProductIcon ) )	// LOOP FOR EACH SELECTED ITEM IN THE VIEW
+	{					
+		SrcView( Get,Text,Category );
+		DstView( Get,Text,NewCategory );	
+		ToLocation = ~<$CON.DragDropInfo[DropLocation]>~;
+
+		if ( ~<Category>~ == ~<NewCategory>~ )		// JUST A RESEQUENCE IN THE CURRENT CATEGORY?
+		{
+			ResequenceProductInCategory( ~<$CON.ProductIcon[Key]>~,~<Category>~,~<FromLocation>~,~<ToLocation>~ );
+		}
+		else										// MOVING THIS LAYOUT TO A DIFFERENT CATEGORY
+		{
+			MoveProductToNewCategory( ~<NewCategory>~,ProductIcon,SrcView,<FromLocation>,DstView );
+		}
+		ProductIcon( Set,IsSelected,FALSE );
+	}
+
+	return RefreshAllViews();
+}
+
+
+NUMERIC CalcNextSequenceForCategory( &Connection,Table,CategoryField,NewCategory,SequenceField )
+{
+	if ( !Connection( CMD,~Select MAX(<SequenceField>) From <Table> Where <CategoryField> = '<NewCategory>'~,MaxSequence ) )
+	{
+		NextSequence = -1;
+	}
+	else
+	{
+		NextSequence = ~<$rs.MaxSequence[#0]>~ == ~~ ? ~-1~ : ~<$rs.MaxSequence[#0]>~;
+	}
+
+	return $NextSequence + 1;
+}
+
+
+STR MakeUniqueProductID( &connection,ID )
+{
+	num = 1;
+	Question = FALSE;
+	OriginalID = ~<ID>~;
+	NewID = ~<ID>~;
+
+	while ( TRUE )
+	{
+		Query = ~Select ID,Category From Products Where ID = '<NewID>'~;
+
+		if ( !connection( GetValuesFor,~<Query>~,Temp,Category ) )
+		{
+			if (<Question>)
+			{
+				if ( MessageBox( ~There is already a Product with ID <OriginalID> in Category <Category>.\n\n Is it OK to use <num>.<ID> (You can change it later) ?~,OKCANCEL ) != OK )
+				{
+					return ~~;
+				}
+			}
+			return ~<NewID>~; 
+		}
+		else
+		{
+			NewID = ~<++num>.<ID>~;
+			Question = TRUE;
+		}
+	}
+}
+
+
+NUMERIC DuplicateSelectedProducts()
+{
+	if ( !GenCon( ProductsView,GETACTIVEVIEW ) )
+		{ return Warning( ~There is no active view~ ); }
+		
+	if ( !ProductsView( GetSelected,Products ) )
+		{ return Warning( ~There were no products selected~ ); }
+	
+	ProductsView( GetName,Category);
+
+
+	count = Products( ChildCount );
+
+	if ( !<count> )
+		{ return Warning( Translate( ~There were no products selected~ ) ); }
+
+	Left = 100;  Top = 400;  Count = 0;
+	
+	while ( Products( GetNext,Product ) )
+	{
+//		if ( Product(GetNumeric,Package) )
+//		{
+//			Warning( Translate( ~<$con.Product[ID]> is a package.  You can't duplicate a package.~ ) );
+//			continue;
+//		}  
+
+		Actions = ACTION DOC ( ~DuplicateProductDoc~ Open DuplicateProductDoc "Init( ~<$con.Product[ID]>~,<Left>,<Top>, ~<Category>~);" );
+		PerformActions( Actions );
+
+		if ( <++count> >= 10 )
+		{
+			return Warning( Translate( ~You have selected too many layouts at once.  Opening 10.~ ) );
+		}
+
+		Left += 20;  Top += 20;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ScaleLayouts()
+{
+	if ( !GenCon( ProductsView,GETACTIVEVIEW ) )
+		{ return Warning( ~There is no active view~ ); }
+		
+	if ( !ProductsView( GetSelected,Products ) )
+		{ return Warning( ~There were no products selected~ ); }
+	
+	count = Products( ChildCount );
+
+	if ( <count> != 1 )
+	{ 
+		return Warning( Translate( ~You should select one product.  This function works on one product at a time.~ ) );
+	}
+	
+	if ( !Products( GetNext,Product ) )
+	{ 
+		return Warning( Translate( ~You should select one product. This function works on one product at a time.~ ) );
+	}
+
+	IsMultiple = Product(GetNumeric,Multiple);
+
+	Actions = ACTION Doc ( ~ScaleLayoutDoc~ OpenOnce ScaleLayoutDoc "Init( ~<$con.Product[ID]>~ );" );
+
+	return PerformActions( Actions );
+}
+
+
+NUMERIC ConvertToPattern()
+{
+	if ( !GenCon( ProductsView,GETACTIVEVIEW ) )
+		{ return Warning( ~There is no active view~ ); }
+		
+	if ( !ProductsView( GetSelected,Products ) )
+		{ return Warning( ~There were no products selected~ ); }
+	
+	count = Products( ChildCount );
+
+	if ( <count> != 1 )
+	{ 
+		return Warning( Translate( ~You should select one product.  This function works on one product at a time.~ ) );
+	}
+	
+	if ( !Products( GetNext,Product ) )
+	{ 
+		return Warning( Translate( ~You should select one product. This function works on one product at a time.~ ) );
+	}
+
+	if ( !Product(GetNumeric,Multiple) )
+	{
+		if ( MessageBox( ~You are about to convert the layout for <$con.Product[ID]> to a simple pattern that contains only positional information.  Are you sure you wish to continue?  ~,YESNO ) != YES )
+		{ 
+			return FALSE;
+		}
+
+		if ( MessageBox( ~This operation cannot be undone.  Are you really sure you wish to continue?  ~,YESNO ) != YES )
+		{ 
+			return FALSE;
+		}
+
+		WaitCursor( Begin );
+
+		if ( !ConvertLayoutToPattern( ~<$con.Product[ProductLayoutPath]>~ ) )
+		{
+			return FALSE;
+		}
+
+		WaitCursor( End );
+
+		return FALSE;
+	}  
+
+	if ( MessageBox( ~<$con.Product[ID]> has multiple layouts.  You are about to convert all layouts for product <$con.Product[ID]> to simple patterns that contain only positional information.  Are you sure you wish to continue?  ~,YESNO ) != YES )
+	{ 
+		return FALSE;
+	}
+
+	if ( MessageBox( ~This operation cannot be undone.  Are you really sure you wish to continue?  ~,YESNO ) != YES )
+	{ 
+		return FALSE;
+	}
+
+	Count = 0;
+
+    MoreFiles = findfile( aDirectoryEntry,Find,~<$con.Product[ProductLayoutPath]>\*.*~ );
+
+	WaitCursor( Begin );
+
+    while ( $Morefiles )
+    {
+		WaitCursor( Begin );
+
+        Morefiles = aDirectoryEntry( Next );
+
+        aDirectoryEntry( Get,Path,aPath );
+                
+        if ( aDirectoryEntry( Dots ) )
+                continue;
+                
+        if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+			continue;
+
+        aDirectoryEntry( Get,Title,theFileName );
+
+		if ( !ConvertLayoutToPattern( ~<aPath>~ ) )
+		{
+			WaitCursor( End );
+			return FALSE;
+		}
+    }
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC ConvertGridLayoutToDP2( Path,ProductID )
+{
+	ProductsWindow( StatusBar,Text,~Converting <Path>~ );
+
+	if ( !Document( theLayout,ParseFile,~<Path>~ ) )
+	{
+		return Warning( ~An error occured while parsing the job at <Path>~ );
+	}
+
+	if ( !theLayout( GetRenderList,0,aRenderList ) )
+	{ 
+		return Warning( ~There was no render list for <Path>~ );
+	}
+
+	aRenderList( AddIPrompts,~Select an Image~,TRUE,FALSE );
+
+	if ( !aRenderList( WriteCompositeNodes,~<ProductID>~))
+	{
+		return Warning( ~Failed to update Composite Node Names~ );
+	}
+
+	if ( !aRenderList( WriteJob,~<Path>~ ) )
+	{
+		return Warning( ~Failed to write <Path>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ConvertLayoutToPattern( Path )
+{
+	ProductsWindow( StatusBar,Text,~Converting <Path>~ );
+
+	if ( !Document( theLayout,ParseFile,~<Path>~ ) )
+	{
+		Warning( ~An error occured while parsing the job at <Path>~ );
+		return FALSE;
+	}
+
+	if ( !theLayout( GetRenderList,0,aRenderList ) )
+	{ 
+		return Warning( ~There was no render list for <Path>~ );
+	}
+
+	if ( !aRenderList( WritePattern,~<Path>~ ) )
+	{
+		return Warning( ~Failed to write a pattern for <Path>~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC CreateNewNodeStyle()
+{
+	if ( !Files( UniqueFilename,~<$App.Directory>\Empty~,LayoutPath ) )
+	{
+		return Warning( Translate( ~Failed to create a unique filename~ ) );
+	}
+
+	if ( !CreateEmptyLayout( ~<LayoutPath>~ ) )
+	{
+		return FALSE;
+	}
+
+	if ( !Document( aLayout,Open,~<LayoutPath>~,Layout ) )
+	{ 
+		return Warning( ~Could not open <LayoutPath>~ );
+	}
+
+	Action = STR ( DelayedRemoveAJob( ~<LayoutPath>~ ); );
+
+	QueueContentsAfter( Action,1000 );
+
+	return TRUE;
+}
+
+
+VOID DelayedRemoveAJob( Path )
+{
+	Files( Delete,~<Path>~ );
+}
+
+
+
+NUMERIC CreateEmptyLayout( LayoutPath )
+{
+	if ( !File( aLayout,Open,~<LayoutPath>~,Create,Write ) )	// CREATE AND OPEN THE JOB
+	{
+		return Warning( ~Could not open the layout file <LayoutPath>~ );
+	}
+
+	aLayout( ~FileType: Layout~ );
+	aLayout( ~Unitofmeasure:   |Inches|~ );
+	aLayout( ~Macros: |Macros.txt|~);
+	aLayout( ~Main:~ );
+	aLayout( ~  IWidth: 6~ );
+	aLayout( ~  IHeight: 6~ );
+	aLayout( ~  IColor: 0 255 255 255~ );
+	
+	aLayout( Close );
+
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteProduct( &connection,ID )
+{
+	Count = connection( RecordCountFor,~Select PackageID from Packages Where ProductID = '<ID>'~ );
+
+	if ( <Count> )
+	{
+		if ( MessageBox( ~<Count> Package(s) use Product <ID>.  Are you sure you want to delete it? ~,YESNO ) != YES )
+			{ return FALSE ; }
+	}
+
+	cmd = ~Delete FROM Packages WHERE ProductID = '<ID>'~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed: <cmd>.  <theErr>~) );
+	}
+
+	cmd = ~Delete FROM Packages WHERE PackageID = '<ID>'~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed: <cmd>.  <theErr>~) );
+	}
+
+	cmd = ~Delete From Products Where ID = '<ID>'~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed <cmd>. <theErr>~ ) );
+	}
+
+	cmd = ~Delete From CompositeNodes Where ProductID = '<ID>'~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed <cmd>. <theErr>~ ) );
+	}
+
+	cmd = ~Delete From ProShotsProducts Where CustomerID = 'All' AND ProductID = '<ID>'~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed <cmd>. <theErr>~ ) );
+	}
+
+	cmd = ~Delete From DigProductPrintServicesPrices Where ProductID = '<ID>'~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed <cmd>. <theErr>~ ) );
+	}
+
+	cmd = ~Delete From BookProductAttributes Where ProductID = '<ID>'~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed <cmd>. <theErr>~ ) );
+	}
+
+	cmd = ~Delete From BookProductsForNexpress Where ProductID = '<ID>'~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed <cmd>. <theErr>~ ) );
+	}
+	Log( Session,Translate( ~Deleted Product <ID>~ ) );
+
+	return TRUE;
+}
+
+
+NUMERIC IsLayoutFileMultiple(LayoutPath)
+{
+	IsMultiple = FALSE;
+
+	aString = FileContainsSimilarStr( ~<LayoutPath>~,~CC:~,TRUE,TRUE );
+
+	IsMultiple = !IsContentsNull(aString);
+
+	if ( !<IsMultiple> )
+	{
+		aString = FileContainsSimilarStr( ~<LayoutPath>~,~CompositeContent:~,TRUE,TRUE );
+
+		IsMultiple = !IsContentsNull(aString);
+	}
+
+	if ( !<IsMultiple> )
+	{
+		aString = FileContainsSimilarStr( ~<LayoutPath>~,~CL:~,TRUE,TRUE );
+
+		IsMultiple = !IsContentsNull(aString);
+	}
+
+	if ( !<IsMultiple> )
+	{
+		aString = FileContainsSimilarStr( ~<LayoutPath>~,~CompositeLayout:~,TRUE,TRUE );
+
+		IsMultiple = !IsContentsNull(aString);
+	}
+
+	return <IsMultiple>;
+}
+
+
+NUMERIC AddANewProduct( &connection,&ID,Name,Category,ProductType,LayoutPath,PreviewPath,&ProductsView,Package )
+{
+
+	IsMultiple = FALSE;
+
+	ID = ~<$str.$LayoutPath.FileName.WithoutExt>~;
+
+	ID = MakeUniqueProductID( connection,~<ID>~ ) ;
+
+	if ( IsNULL( ~<ID>~ ) )
+	{
+		return FALSE;
+	}
+
+//	if ( MessageBox( ~Is it OK to add a product with an ID of <ID>? ~,YESNO ) != YES )
+//		{ return FALSE ; }
+
+	if ( !DeleteProduct( connection,~<ID>~ ) )
+	{
+		return FALSE;
+	}
+
+	NextSequence = CalcNextSequenceForCategory( connection,Products,Category,~<Category>~,Sequence );
+
+	UpdateCmd = ~INSERT INTO  Products(ID,LayoutName,Category,Sequence,ProductType,Package,ProductLayoutPath,PreviewPath,Multiple)
+								Values('<ID>','<Name>','<Category>',<NextSequence>,'<ProductType>',<Package>,'<LayoutPath>','<PreviewPath>',<IsMultiple>)~;
+
+	if ( !connection( CMD,~<UpdateCmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed <UpdateCmd>. <theErr>~ ) );
+	}
+
+	Query = ~Select * From Products Where ID = '<ID>'~;
+
+	if ( !PGenConList( List,Connection,connection,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( GetFirst,Record ) )	// WE ARE TOO SOON???? ... DATABASE HASN'T FLUSHED YET???????????
+	{
+		return FALSE;
+	}
+
+	GenCon( ThumbNailImage,New,DDICImageDef,SetValues,
+			Info1,		~~ ,
+			Info3,		~ID: <ID>     Name: <Name>~,
+			Info2,		~<ID>~,
+			Path,		~<PreviewPath>~,
+			IsDeleted,	FALSE,
+			IsSelected,	TRUE, 
+			DropTypes,	Products,
+			DataType,	Products, 
+			Table,		Products,
+			Key,		~ID = '<ID>'~ ) ;
+
+	ProductsWindow( AddThumbNailToExistingView,ThumbNailImage,~<ID>~,Product,Record );
+
+	return TRUE;
+}
+
+NUMERIC AddANewMultipleProduct( &connection,&ID,Name,Category,ProductType,LayoutPath,PreviewPath,&ProductsView,Package )
+{
+
+	ID = ~<$str.$LayoutPath.FileName.WithoutExt>~;
+	ID = MakeUniqueProductID( connection,~<ID>~ ) ;
+	IsMultiple = TRUE;
+
+	if ( IsNULL( ~<ID>~ ) )
+	{
+		return FALSE;
+	}
+
+//	if ( MessageBox( ~Is it OK to add a product with an ID of <ID>? ~,YESNO ) != YES )
+//		{ return FALSE ; }
+
+	if ( !DeleteProduct( connection,~<ID>~ ) )
+	{
+		return FALSE;
+	}
+
+	NextSequence = CalcNextSequenceForCategory( connection,Products,Category,~<Category>~,Sequence );
+
+	UpdateCmd = ~INSERT INTO  Products(ID,LayoutName,Category,Sequence,ProductType,Package,ProductLayoutPath,PreviewPath,Multiple)
+								Values('<ID>','<Name>','<Category>',<NextSequence>,'<ProductType>',<Package>,'<LayoutPath>','<PreviewPath>',<IsMultiple>)~;
+
+	if ( !connection( CMD,~<UpdateCmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed <UpdateCmd>. <theErr>~ ) );
+	}
+
+	Query = ~Select * From Products Where ID = '<ID>'~;
+
+	if ( !PGenConList( List,Connection,connection,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( GetFirst,Record ) )	// WE ARE TOO SOON???? ... DATABASE HASN'T FLUSHED YET???????????
+	{
+		return FALSE;
+	}
+
+	GenCon( ThumbNailImage,New,DDICImageDef,SetValues,
+			Info1,		~~ ,
+			Info3,		~ID: <ID>     Name: <Name>~,
+			Info2,		~<ID>~,
+			Path,		~<PreviewPath>~,
+			IsDeleted,	FALSE,
+			IsSelected,	TRUE, 
+			DropTypes,	Products,
+			DataType,	Products, 
+			Table,		Products,
+			Key,		~ID = '<ID>'~ ) ;
+
+	ProductsWindow( AddThumbNailToExistingView,ThumbNailImage,~<ID>~,Product,Record );
+
+	return TRUE;
+}
+
+STR MakePreviewPathFromPath( Path,CreateDirectory )
+{
+	if ( $CreateDirectory )
+	{ 
+		if ( !Directory( Create,~<$str.$Path.Path>\Preview~ ) )
+		{
+			Warning( ~Could not Create Directory: <$str.$Path.Path>\Preview.  <$Func.GetLastErrorMsg()>~ );
+		}
+	 }
+
+	AbsolutePath = ~<$str.$Path.Path>\Preview\<$str.$Path.FileName>.jpg~;
+
+	return ~<AbsolutePath>~;
+}
+
+
+NUMERIC UpdateProductPreviewImages( Path )
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database.  <theErr>~ );
+	}
+
+	WaitCursor( Begin );
+
+	Index = 0;
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( (~<ViewType>~ == LayoutView) || (~<ViewType>~ == ImageView) || (~<ViewType>~ == PIELayoutView) || (~<ViewType>~ == PIEView))
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<Path>~ != ~~ )	// JUST LOOKING FOR A CERTAIN ONE?
+			{
+				if ( Upper(~<DocumentPath>~) != Upper(~<Path>~) )	// RIGHT ONE?
+					{ continue; }
+			}
+
+			PreviewPath = MakePreviewPathFromPath( ~<DocumentPath>~,TRUE );
+			
+			returnVal = aView( MakePreviewImage,3,3,~<PreviewPath>~,JPEG );
+
+			if (<returnVal> == 0)
+			{
+				// fatal error
+				Warning( Translate(~Failed to make preview icon.  <PreviewPath> may be write protected.~) );
+				break;
+					
+			}
+			else if (<returnVal> == -1)
+			{
+				// fatal error
+				Warning( Translate(~Image not fully rendered.  Please try again later.~) );
+				break;
+			}
+
+			aView( GetProductID, ProductID);
+
+			Cmd = ~Update Products Set PreviewPath = '<PreviewPath>' Where ID = '<ProductID>'~;
+
+			//Cmd = ~Update Products Set PreviewPath = '<PreviewPath>' Where ProductLayoutPath = '<DocumentPath>'~;
+
+			if ( !dBase( CMD,~<Cmd>~ ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				return Warning( ~Database update failed: <Cmd>.  <theErr>~ );
+			}
+
+			RedrawLayoutIcon( ~<ProductID>~,~<PreviewPath>~ );  // added 11/18/04 to avoid refreshing entire view
+		}
+	}
+
+//	RefreshAllViews();  // commented 11/18/04 to avoid refreshing entire view
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC SetProductPreviewImages( Path )		// USUALLY USED FOR PACKAGES AND GRID LAYOUTS, BUT WILL WORK WITH ANY LAYOUT
+{
+	if ( !GenCon( ProductsView,GETACTIVEVIEW ) )
+		{ return Warning( ~There is no active view~ ); }
+		
+	if ( !ProductsView( GetSelected,Products ) )
+		{ return Warning( ~There were no products selected~ ); }
+
+	if ( Products( ChildCount ) < 1 || Products( ChildCount ) > 1 )
+	{
+		return Warning( Translate( ~You must select exactly one product to update~ ) );
+	}
+
+	Products( GetFirst,Product );
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database.  <theErr>~ );
+	}
+
+	WaitCursor( Begin );
+
+	Index = 0;
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( (~<ViewType>~ == LayoutView) || (~<ViewType>~ == ImageView) || (~<ViewType>~ == PIELayoutView) || (~<ViewType>~ == PIEView))
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			PreviewPath = MakePreviewPathFromPath( ~<DocumentPath>~,TRUE );
+
+			Window( SetWindowOrder,Top );
+			Window( GetWindowTitle,Title );
+
+			if ( MessageBox( ~You are about update the icon for product: <$con.Product[ID]>\nwith the image in the window: <Title>.\n\nAre you sure you want to update the icon?  ~,YESNO ) != YES )
+				{ return FALSE ; }
+
+			returnVal = aView( MakePreviewImage,3,3,~<PreviewPath>~,JPEG );
+
+			if ( <returnVal> == 0 )
+			{
+				Warning( Translate(~Failed to make preview icon.  ~<PreviewPath> may be write protected.~) );
+				break;
+					
+			}
+			else if (<returnVal> == -1)
+			{
+				Warning( Translate(~Image not fully rendered.  Please try again later.~) );
+				break;
+			}
+
+			Cmd = ~Update Products Set PreviewPath = '<PreviewPath>' Where ID = '<$con.Product[ID]>'~;
+
+			if ( !dBase( CMD,~<Cmd>~ ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				return Warning( ~Database update failed: <Cmd>.  <theErr>~ );
+			}
+
+			break;
+		}
+	}
+
+	RefreshAllViews();
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+
+NUMERIC ImagesForThisProduct( ID )
+{
+	if ( ~<ID>~ == ~~ )
+	{
+		if ( !GenCon( ProductsView,GETACTIVEVIEW ) )
+			{ return Warning( ~There is no active view~ ); }
+			
+		if ( !ProductsView( GetSelected,Products ) )
+			{ return Warning( ~There were no products selected~ ); }
+
+		if ( Products( ChildCount ) == 0 )
+			{ return Warning( ~There were no products selected~ ); }
+
+		count = 0;
+
+		while ( Products( GetNext,Product ) )
+		{
+			++count;
+
+			ID = ~<$con.Product[ID]>~;
+
+			OpenMode =  ~Open~;
+
+			Query = STR ( Select * from Images Where OrderID IN ('<ID>','Backgrounds','Frames','Textures','Images','Masks') And ImageType = 1 ) ;
+			
+			Actions = ACTION Doc ( ~ProductImages~ <OpenMode> ImagesDoc "Init( ~<ID>~,TRUE,~<Query>~,1 );" );
+			
+			PerformActions( Actions );
+		}
+
+		return TRUE;
+
+	}
+
+	Query = STR ( Select * from Images Where OrderID IN ('<ID>','Backgrounds','Frames','Textures','Images','Masks') And ImageType = 1 ) ;
+	
+	Actions = ACTION Doc ( ~ProductImages~ Open ImagesDoc "Init( ~<ID>~,TRUE,~<Query>~,1 );" );
+	
+	PerformActions( Actions );
+	
+	return TRUE;
+}
+
+NUMERIC RedrawLayoutIcon( ProductID, PreviewPath )
+{
+//	RefreshDoc();  <-- Commented 11/18/04 to avoid refreshing entire products window
+//	return TRUE;
+
+	more = ProductsWindow( GetFirst,View );
+
+	while ( $more )
+	{
+			if ( View( FindI,Key,~ID = '<ProductID>'~,position,ThumbNail ) ) 
+			{
+				ThumbNail( Set, Path, ~<PreviewPath>~);
+				View( RedrawThumbNail,ThumbNail,TRUE );
+				View( RefreshView );
+				return View( SetSelected,ThumbNail,TRUE , FALSE);
+			}
+
+		more = ProductsWindow( GetNext,View );
+	}
+
+	return 0;
+
+// below  not executed 11/18/04 to avoid refreshing entire products window
+
+	if ( !ProductsWindow( FindI,ViewDataFor,~<ProductID>~,position,View ) )  { return FALSE; }
+
+	if ( !View( FindI,Key,~ID = '<ProductID>'~,position,ThumbNail ) )  { return FALSE; }
+
+	return View( RedrawThumbNail,ThumbNail,TRUE );
+}
+
+
+
+NUMERIC EditListView()
+{
+	if ((~<$App.Name>~ !=~DP1.exe~) && (!GetUserPermissions( LayoutEditing ) ))
+	{
+		return Warning( Translate(UIMessages,NoPermission) );
+	}
+
+	if ( !GenCon( ProductCategory,GETACTIVEVIEW ) )
+		{ return Warning( ~There is no active view~ ); }
+		
+	if ( !ProductCategory( GetSelected,SelectedProducts ) )		
+		{ return Warning( Translate( ~There were no products selected~ ) ); }
+
+	ProductCategory( GetName,Category );
+			
+	Query = STR ( Select * From Products Where Category = '<Category>' Order By ID );
+
+	Count = SelectedProducts( ChildCount );
+
+	if ( <Count> > 0 )
+	{
+		if ( SelectedProducts( MakeSQLList,List,TRUE,ID ) )
+		{
+			if ( ~<List>~ != ~~ ) 
+			{
+				Query = STR ( Select * From Products Where ID In (<List>) Order By ID );
+			}
+		}
+	}
+
+	Actions = ACTION Doc ( ~ProductsDoc~ Open ProductsDoc "Init( ~~,FALSE,~<Query>~ );" );
+	return PerformActions( Actions );
+}
+
+
+
+NUMERIC OrdersUsingThisProduct( ID )
+{
+	InUse = FALSE;
+
+	Query = ~Select * from OrderItems Where ProductID = '<ID>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List(GetErrorDescription,0,theErr);
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( Empty ) )
+	{ 
+		InUse = TRUE;
+		
+		if ( MessageBox( ~Sorry, you can't delete the product <ID> because there are Order Items that require it. Would you like to see a list?~,YESNO ) == YES )
+		{
+			Actions = ACTION Doc ( ~OrderItemsDoc~ Open OrderItemsDoc "Init( ~OrderItems Using Product <ID>~,~<Query>~,0 );" );
+			PerformActions( Actions );
+		}
+	}
+
+	Query = ~Select * from RemoteJobDirs Where ProductID = '<ID>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{ 
+		List(GetErrorDescription,0,theErr);
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( Empty ) )
+	{ 
+		InUse = TRUE;
+		
+		if ( MessageBox( ~Sorry, you can't delete the product <ID> because there are Remote Job Directories that require it. Would you like to see a list?~,YESNO ) == YES )
+		{
+			Actions = ACTION Doc ( ~RemoteJobServer~ Open RemoteJobServerDoc "Init( ~Using Product <ID>~,~<Query>~);" );
+			PerformActions( Actions );
+		}
+	}
+
+
+if (0)
+{
+	Query = ~Select * from OrderDlvrbl Where Choice = '<ID>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{ 
+		List(GetErrorDescription,0,theErr);
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( Empty ) )
+	{ 
+		InUse = TRUE;
+		
+		if ( MessageBox( ~Sorry, you can't delete the product <ID> because there are Order Deliverables that require it. Would you like to see a list?~,YESNO ) == YES )
+		{
+			Actions = ACTION Doc ( ~OrderDlvrblDoc~ Open OrderDlvrblDoc "Init( ~Using Product <ID>~,~<Query>~);" );
+			PerformActions( Actions );
+		}
+	}
+
+	Query = ~Select * from OrderItemsToQueue Where ProductID = '<ID>'~;
+	Query = ~Select * from OrderToProof Where ProductID = '<ID>'~;
+	Query = ~Select * from CustomerProducts Where ProductID = '<ID>'~;
+	Query = ~Select * from Composites Where Collection = '<ID>'~;
+	Query = ~Select * from NodeDetails Where ProductID = '<ID>'~;
+	Query = ~Select * from NodeDetails Where NodeStyle = '<ID>'~;
+	Query = ~Select * from OrderDlvrblChoices Where Choice = '<ID>'~;
+
+	Query = ~Select * from GridDefinition Where NodeStyle = '<ID>'~;
+	Query = ~Select * from GridDefinition Where NodeStyleText = '<ID>'~;
+
+	// PackageDefinition, ShooterUnit, PrintUnit
+
+	// NOT searching through SubjectInfo tables
+	// NOT searching OrderItems files - they would include path to product, so are ok
+}
+
+	return <InUse>;
+}
+
+
+NUMERIC SeeOrderItemsForSelectedProducts()
+{
+	if ( !GenCon( ProductCategory,GETACTIVEVIEW ) )
+		{ return Warning( ~There is no active view~ ); }			
+
+	if ( !ProductCategory( GetSelected,Products ) )
+		{ return Warning( ~There are no Products to view~ ); }
+
+	Count = Products( ChildCount );
+
+	if ( $Count == 0 )
+		{ return Warning( ~There are no Products to view~ ); }
+
+	while ( Products( GETNEXT,Product ) )
+	{
+		if ( !Product( GetNumeric,Package ) )
+		{
+			Query = STR ( SELECT * FROM OrderItems WHERE ProductID = '<$Con.Product[ID]>' ORDER BY OrderID,ID ) ;
+			
+			Title = Translate( ~Which utilize Product <$Con.Product[ID]>~ );
+
+			Actions = ACTION Doc ( ~OrderItems~ Open OrderItemsDoc "Init( ~<Title>~,~<Query>~,0 );" );
+			PerformActions( Actions );
+		}
+		else
+		{
+			Warning( Translate( ~<$Con.Product[ID]> is a package~ ) );
+		}	
+	}
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC DeleteSelectedProducts()	// CALLED FOR THUMBNAIL VIEW ONLY
+{
+	if ( !GenCon( ProductCategory,GETACTIVEVIEW ) )
+		{ return Warning( ~There is no active view~ ); }
+		
+	if ( !ProductCategory( IsThumbNailView ) )
+	{
+		return Warning( ~Call DeleteSelectedProducts() for Thumbnail Views Only!~ );	
+	}			
+
+	if ( !ProductCategory( GetSelected,Products ) )
+		{ return Warning( ~There are no Products to remove~ ); }
+
+	Count = Products( ChildCount );
+
+	if ( $Count == 0 )
+		{ return Warning( ~There are no Products to remove~ ); }
+
+	if ( MessageBox( ~You are about to remove <Count> product(s) from the database. The layout file(s) associated with the product(s) will not be deleted.\n\nAre you sure you want to delete the selected product(s)?~,YESNO ) != YES )
+		{ return FALSE ; }
+
+	if ( MessageBox( ~It is very unusual to remove a product!\n\nAre you sure you want to remove the selected product(s)?~,YESNO ) != YES )
+		{ return FALSE ; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database.  <theErr>~ );
+	}
+
+	while ( Products( GetNext,Product ) )
+	{
+		if ( OrdersUsingThisProduct( ~<$con.Product[ID]>~ ) )
+			break;
+
+		if ( ProductCategory( FindI,Key,~ID = '<$con.Product[ID]>'~,Where,TheIcon ) )
+		{  
+			if ( !DeleteProduct( dBase,~<$con.Product[ID]>~ ) )
+				break;
+
+			ProductCategory( ReleaseImageByGenCon,TheIcon );
+		}
+	}
+
+	ProductCategory( RefreshView );
+
+	NotifyAffectedDocuments( PackageID );
+
+	return TRUE;
+}
+
+
+NUMERIC CloseWindow( theWindow )
+{
+	Register( Remove,~<theWindow>~ );
+	return TRUE;
+}
+
+
+NUMERIC ChangeField( FieldName,CurrentValue )
+{
+	if ( !ProductsDataView( GetChangedField,ChangedProduct,ChangedRow, ) )
+		{ return Warning( ~There was no selected row~ ); }
+
+	if ( ProductsDataView( GetCurrentField,Name ) )
+	{
+		ChangedProduct( Get,<Name>,Value );
+		ChangedProduct( Set,Priority,50 );
+		ProductsDataView( RefreshCurrentRow );
+	}
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !ProductsDataView( GetChangedRow,ChangedProduct,OrigProduct,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There were no changed rows.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedProduct[ID]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Product ID cannot be blank.~ ) ); }
+
+	Key = STR ( ID = '<$con.OrigProduct[ID]>' );
+	Query = ~Select * From Products Where <Key>~;
+
+	if ( <IsNewRow> )
+	{
+		if (!AddNew( ChangedProduct,OrigProduct,Query,Key ))
+			{ return FALSE; }
+	}
+	else
+	{
+		if (!UpdateExisting( ChangedProduct,OrigProduct,Query,Key ))
+			{ return FALSE; }
+	}
+
+	//Document( doc,THIS,NotifyOtherDocuments,~~,DataContains,~LayoutName~ );
+	//doc( NotifyOtherDocuments,~~,DataContains,~ProductID~ );
+
+	return TRUE;
+}
+
+
+NUMERIC AddNew( &ChangedProduct,&OrigProduct,&Query,&Key )
+{
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,ChangedProduct,~<Key>~,TRUE ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update Product record where <Key>. <theErr>~ );
+	}
+
+	ProductsDataView( CommitChanges );
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateExisting( &ChangedProduct,&OrigProduct,&Query,&Key )
+{
+	// If the Product ID hasn't changed, we only need to do an update of the fields
+	// that have changed in the Products table.
+	// If the Product ID has changed, we will insert a new row into the Products
+	// table using the existing Product data along with the new Product id.  Then
+	// we can update all of the entries in the order items and remote job dirs
+	// tables that refer to this Product ID. Finally, we can remove the old
+	// Product record from the Products table. Since this is all done within
+	// a transaction, it will all be transparent to the user.  Things need to
+	// be handled this way because of the foreign key constraints placed on
+	// the Product ID.
+	if ( ~<$con.OrigProduct[ID]>~ == ~<$con.ChangedProduct[ID]>~ )
+	{
+		if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( ~Query Failed: <Query>. <theErr>~ );
+		}
+
+		if ( !List( UpdateFrom,ChangedProduct,~<Key>~,FALSE ) )
+		{
+			List( GetErrorDescription,0,theErr,CancelUpdate );
+			return Warning( ~Could not update Product record where <Key>. <theErr>~ );
+		}
+	}
+	else
+	{
+		if ( !PGenConList( List,Connect,Cursor,Keyset,BeginTransaction,Query,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( ~Query Failed: <Query>. <theErr>~ );
+		}
+
+		origProductID = ~<$con.OrigProduct[ID]>~;
+		OrigProduct( SetValue,ID,~<$con.ChangedProduct[ID]>~);
+
+		if ( !List( UpdateFrom,OrigProduct,~<Key>~,TRUE ) )
+		{
+			List( GetErrorDescription,0,theErr,CancelUpdate,RollBackTransaction );
+			return Warning( ~Could not update Product record where <Key>. <theErr>~ );
+		}
+
+		List( GetConnection,dBase );
+
+		cmd = ~Update CompositeNodes SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update CompositeNodes records. <theErr>~ );
+		}
+
+		cmd = ~Update OrderItems SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update Order Item records. <theErr>~ );
+		}
+
+		cmd = ~Update Packages SET PackageID = '<$con.ChangedProduct[ID]>' Where PackageID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update the Package records. <theErr>~ );
+		}
+
+
+		cmd = ~Update ProductTree SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update ProductTree records. <theErr>~ );
+		}
+
+
+		cmd = ~Update RemoteJobDirs SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update Remote Job Dir records. <theErr>~ );
+		}
+
+		cmd = ~Update ProShotsProducts SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update ProShots Products records. <theErr>~ );
+		}
+
+		cmd = ~Update DigProductPrintServicesPrices SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update Digital Product Print Services Prices records. <theErr>~ );
+		}
+
+		cmd = ~Update BookProductAttributes SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update Book Product Attributes records. <theErr>~ );
+		}
+
+		cmd = ~Update BookProductsForNexPress SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update Book Products for NexPress records. <theErr>~ );
+		}
+
+		cmd = ~Update BremsonProductCrossRef SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update BremsonProductCrossRef records. <theErr>~ );
+		}
+
+		cmd = ~Update CropServices SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update CropServices records. <theErr>~ );
+		}
+
+		cmd = ~Update CustomerProducts SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update CustomerProducts records. <theErr>~ );
+		}
+		cmd = ~Update FTScanSetups SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update FTScanSetups records. <theErr>~ );
+		}
+
+		cmd = ~Update NodeDetails SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update NodeDetails records. <theErr>~ );
+		}
+
+		cmd = ~Update OrderedNodeServices SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update OrderedNodeServices records. <theErr>~ );
+		}
+
+		cmd = ~Update OrderItemsServices SET ProductID = '<$con.ChangedProduct[ID]>' Where ProductID = '<origProductID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update OrderItemsServices records. <theErr>~ );
+		}
+
+		if ( !DeleteProduct( dBase,~<origProductID>~ ) )
+		{
+			dBase( RollBackTransaction );
+			return FALSE;
+		}
+
+		if ( !dBase( CommitTransaction ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate( ~Database commit failed.  <theErr>~ ) );
+		}
+		
+		OrigProduct( NotifyAffectedDocuments,ProductID );
+	}
+
+	ProductsDataView( CommitChanges );
+
+	NotifyAffectedDocuments( PackageID );
+
+	return TRUE;
+}
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !ProductsDataView( GetSelectedRows,ProductsToDelete ) )		
+		{ return Warning( ~There was no row selected to remove~ ); }
+
+	if ( MessageBox( Translate( ~Are you sure you want to remove the selected Products?~ ),YESNO ) != YES )
+		{ return FALSE; }
+
+	StringList( RowsToDelete,New );
+
+	if ( !Ado( dBase,Connect ) )
+	{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	while ( ProductsToDelete( GetNext,Product ) )
+	{
+		if ( OrdersUsingThisProduct( ~<$Con.Product[ID]>~ ) )
+			break;
+
+		if ( !DeleteProduct( dBase,~<$Con.Product[ID]>~ ) )
+		{
+			break;
+		}
+
+		RowsToDelete( AddString,ProductsToDelete(GetCurrentPosition) );
+	}
+
+	ProductsDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	//NotifyAffectedDocuments( LayoutName );
+
+	//NotifyAffectedDocuments( PackageID );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	NewRow( SetValues,Category,~New Products~,ProductType,~Digital~,Sequence,~3~ );
+	
+	RowBeingAdded = ProductsDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	ProductsDataView( SetActiveCell,<RowBeingAdded>,~ID~ );
+
+	return TRUE;
+}
+
+
+
+STR
+CreateJob( LayoutPath )
+{
+	JobPath = ~<$App.ShareDirectory>\OrderlessJobs\<$Date.DateYMD>~;
+
+	if ( !Directory( Create,~<JobPath>~ ) )
+		{ return Warning( ~Could not create directory <JobPath>~ ); }
+
+	UniqueJobID = Ticks();
+
+	JobPath = ~<JobPath>\Job_<UniqueJobID>~;
+
+	if ( !file( Job,Open,~<JobPath>~,Create,Write ) )
+	{
+		Error( ~Could not open the job file <theJob>~ );
+	}
+
+	Job( ~FileType: Job~ );
+	Job( ~Use: |<LayoutPath>|~ );
+	Job( Close );
+
+	return ~<JobPath>~;
+}
+
+
+NUMERIC OpenALayout( LayoutPath,ProductID,LayoutName )
+{
+	IsMultiple = FALSE;
+
+	LayoutPath = GetFullLayout( ~<LayoutPath>~,IsMultiple );
+
+	if ( IsNull( ~<LayoutPath>~ ) )
+		{ return FALSE; }
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == LayoutView ||  ~<ViewType>~ == PIELayoutView)
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<LayoutPath>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+		}
+	}
+
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( ~Could not create document info for <LayoutPath>~ ); }
+
+	Info( SetValues,ProductID,~<ProductID>~,LayoutName,~<LayoutName>~ );
+
+	if (!Document( aLayout,Open,~<LayoutPath>~,Layout,~~,Info ) )
+		{ return Warning( ~Could not open <LayoutPath>~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC Search()
+{
+	Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( Products );" ) );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC ViewPackages()
+{
+	Query = ~Select * From Packages Where PackageID In (Select ID From Products Where Book = 0)~;
+	if ( ADO( dBase,Connect,RecordCountFor,~<Query>~ ) == 0 )
+	{
+		return Warning( ~There are no packages defined~ );
+	}
+
+	action = ACTION DOC ( PackagesDoc Open PackagesDoc "Init( ~Packages~, ~<Query> Order By PackageID,Sequence~ );" );
+	
+	return PerformActions( action );
+}
+
+NUMERIC ViewBookProducts()
+{
+	Query = ~Select * From Packages Where PackageID In (Select ID From Products Where Book <> 0)~;
+	if ( ADO( dBase,Connect,RecordCountFor,~Select * From Packages~ ) == 0 )
+	{
+		return Warning( ~There are no books defined~ );
+	}
+
+	action = ACTION DOC ( PackagesDoc Open PackagesDoc "Init( ~Book Products~, ~<Query> Order By PackageID,Sequence~ );" );
+	
+	return PerformActions( action );
+}
+
+NUMERIC AddNewPackage()
+{
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return Warning( ~There is no active view~ ); }			
+
+	if ( !View( GetSelected,ProductsForPackage ) )
+		{ return Warning( ~There are no selected products to create a package from~ ); }
+
+	Count = ProductsForPackage( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( ~There are no selected products to create a package from~ ); }
+
+	if ( !ProductsForPackage( MakeSQLList,ListOfProducts,TRUE,ID,RewindList ) )
+		{ return Warning( ~Error creating list of products~ ); }
+
+	Query = ~Select ID,LayoutName,Package From Products Where ID In (<ListOfProducts>) AND ((Package <> 0) OR (Multiple <> 0))~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( List( GetFirst,Product ) )
+	{
+		return Warning( Translate( ~Can't specify package or multiple layouts in a package.  Product ID: <$pcon.Product[ID]> '<$pcon.Product[LayoutName]>' cannot be part of a package~ ) ); 
+	}
+
+	ProductsForPackage( Hang,~[GenCons]~ );
+
+	action = ACTION DOC ( Packages Open NewPackageDoc "Init();" );
+	
+	return PerformActions( action );
+}
+
+NUMERIC EditBook()
+{
+	if ( !GenCon( View,GETACTIVEVIEW,GetName,Category ) )
+		{ return Warning( ~There is no active view~ ); }	
+
+	if ( !View( GetSelected,Products ) )
+		{ return Warning( ~There are no selected products to create a book from~ ); }
+
+	Count = Products( ChildCount );
+
+	if ( <Count> != 1 )
+		{ return Warning( ~Please select one book~ ); }
+
+	if (!Products( GetFirst,Product))
+	{
+		{ return Warning( ~No products selected~) ; }
+	}
+
+	ID = ~<$con.Product[ID]>~;
+	action = ACTION DOC ( Packages Open NewBookDoc "EditProduct(~<ID>~);" );
+	
+	return PerformActions( action );
+}
+
+NUMERIC AddNewBook()
+{
+	if ( !GenCon( View,GETACTIVEVIEW,GetName,Category ) )
+		{ return Warning( ~There is no active view~ ); }	
+
+	if ( !View( GetSelected,ProductsForPackage ) )
+		{ return Warning( ~There are no selected products to create a book from~ ); }
+
+	Count = ProductsForPackage( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( ~There are no selected products to create a book from~ ); }
+
+	if ( !ProductsForPackage( MakeSQLList,ListOfProducts,TRUE,ID,RewindList ) )
+		{ return Warning( ~Error creating list of products~ ); }
+
+	Query = ~Select ID,LayoutName,Package From Products Where ID In (<ListOfProducts>) AND ((Package <> 0) OR (Multiple <> 0))~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( List( GetFirst,Product ) )
+	{
+		return Warning( Translate( ~Can't specify a book or multiple layouts in a package.  Product ID: <$pcon.Product[ID]> '<$pcon.Product[LayoutName]>' cannot be part of a package~ ) ); 
+	}
+
+	action = ACTION DOC ( Packages Open NewBookDoc "Init();" );
+	
+	return PerformActions( action );
+}
+
+NUMERIC ViewAsText()
+{
+	if ((~<$App.Name>~ !=~DP1.exe~) && (!GetUserPermissions( LayoutEditing ) ))
+	{
+		return Warning( Translate(UIMessages,NoPermission) );
+	}
+
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return Warning( ~There is no active view~ ); }			
+
+	if ( !View( GetSelected,SelectedProducts ) )
+		{ return Warning( ~There are no Products to view as text~ ); }
+
+	Count = SelectedProducts( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( ~There are no selected Products to view as text~ ); }
+
+	Program = ~<$Sys.Directory>\Notepad.exe~;
+
+	if ( !Files( FileExists,~<Program>~ ) )
+	{
+		return Warning( ~Could not find NotePad.exe at <Program>~ );
+	}
+
+	while ( SelectedProducts(GetNext,Product) )
+	{
+		if ( Product( GetNumeric,Package ) )
+		{ 
+			Query = ~Select * From Packages Where PackageID = '<$Con.Product[ID]>' Order By Sequence~;
+			action = ACTION DOC ( Packages Open PackagesDoc "Init( ~Packages~, ~<Query>~ );" );
+			PerformActions( action );
+			continue;
+		}
+
+		IsMultiple = FALSE;
+
+		TheLayout = GetFullLayout( ~<$con.Product[ProductLayoutPath]>~,IsMultiple );
+
+		if ( IsNull( ~<TheLayout>~ ) )
+			continue;
+
+		if ( !ViewFileInNotepad( ~<TheLayout>~ ) )
+		{
+			GetLastError( ErrorString,theErr );
+			return Warning( ~Could not open <TheLayout>. <theErr>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC FixCR()
+{
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return Warning( ~There is no active view~ ); }			
+
+	if ( !View( GetSelected,SelectedProducts ) )
+		{ return Warning( ~There are no Products to view as text~ ); }
+
+	Count = SelectedProducts( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( ~There are no selected Products to fix the carriage returns for~ ); }
+
+	if ( MessageBox( ~Are you sure you want to convert carriage returns to carriage return/ line feeds for the selected <Count> products?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	while ( SelectedProducts(GetNext,Product) )
+	{
+		if ( Product( GetNumeric,Package ) )	{ continue; }
+
+		IsMultiple = FALSE;
+
+		TheLayout = GetFullLayout( ~<$con.Product[ProductLayoutPath]>~,IsMultiple );
+
+		if ( IsNull( ~<TheLayout>~ ) )
+			continue;
+
+		FixCRInFile( ~<TheLayout>~ );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC FixCRInFile(Path)
+{
+
+	if ( !Files( FileExists,~<Path>~ ) ) 
+	{
+		return Warning( Translate( ~Could not find <Path>~ ) );
+	}
+
+	if ( !File( fp,OPEN,~<path>~,ReadWrite ) ) 
+	{
+		return Warning( Translate( ~Could not open <Path>~ ) );
+	}
+
+
+	if ( File( fp,Seek,0,Begin ) != 0 ) 
+	{
+		return Warning( Translate( ~Seek to beginnging of file failed for <Path>~ ) );
+	}
+
+	if ( !fp( ReadTextfile,Buffer ) ) 
+	{
+		return Warning( Translate( ~<Path> is an empty file~ ) );
+	}
+
+	if ( fp( SetLength,0 ) < 0 ) 
+	{
+		return Warning( Translate( ~Failed to set length to zero for <path>~ ) );
+	}
+
+	if ( !fp( UnicodeOutput,WriteContentsOf,Buffer ) ) 
+	{
+		err = GetLastErrorMsg();
+		return Warning( Translate( ~Failed to write <path>.  <err>~ ) );
+	}
+
+	ForgetLocal( fp );
+
+	return TRUE;
+}
+
+NUMERIC OpenContainingFolder()
+{
+	if ( !( GenCon(View,GETACTIVEVIEW ) && GenCon(Window,GETACTIVEWINDOW) ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	if ( !View( GetSelected,SelectedItems ) )		
+		{ return Warning( Translate(~Select one and try again~) ); }
+
+	if ( SelectedItems( GetFirst,Item ) )
+	{
+		return OpenContainingFolderAndSelect( ~<$con.Item[ProductLayoutPath]>~ ); 
+	}
+
+	return Warning( Translate( ~Select one and try again~ ) );
+}
+
+
+
+NUMERIC OpenLayoutForSelectedProducts()
+{
+	if ((~<$App.Name>~ !=~DP1.exe~) && (!GetUserPermissions( LayoutEditing ) ))
+	{
+		return Warning( Translate(UIMessages,NoPermission) );
+	}
+
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	if ( !View( GetSelected,SelectedProducts ) )
+		{ return Warning( ~There were no selected Products~ ); }
+
+	Count = SelectedProducts( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( ~There were no selected Products~ ); }
+
+	CurrentlyOpen = NumWindows( LayoutOrJob );
+
+	MaxOpenJobsOrLayouts = ~<$[Symbols].MaxOpenJobsOrLayouts[Long]>~;
+
+	if ( <MaxOpenJobsOrLayouts> < 1 )
+	{ 
+		MaxOpenJobsOrLayouts = 1;
+	}
+
+	while ( SelectedProducts( GetNext,Product ) )
+	{
+		if ( Product( GetNumeric,Package ) )
+		{
+			Query = ~Select * From Packages Where PackageID = '<$Con.Product[ID]>' Order By Sequence~;
+			action = ACTION DOC ( Packages Open PackagesDoc "Init( ~Packages~, ~<Query>~ );" );
+			PerformActions( action );
+
+			if (!Defined(dBase))
+			{
+				if ( !Ado( dBase,Connect ) )
+				{ 
+					Warning( ~Could not open the database to view the book product attributes table.~ ); 
+					return FALSE;
+				}
+			}
+
+			CountQuery = ~SELECT COUNT(*) From BookProductAttributes Where ProductID = '<$Con.Product[ID]>'~;
+			if ( dBase( GetValuesFor,~<CountQuery>~,Count ) )
+			{
+				if (Numeric(~<Count>~) > 0)
+				{
+					Query = ~Select * From BookProductAttributes Where ProductID = '<$Con.Product[ID]>' Order By Sequence~;
+					action = ACTION DOC ( EditTemplateAttributes Open EditTemplateAttributes "Init( ~Book product Attributes for Product <$Con.Product[ID]>~, ~<Query>~ );" );
+					PerformActions( action );
+				}
+			}
+			else
+			{
+				Log( Session, ~Error with database query :<CountQuery>~ );
+			}
+		}
+		else
+		{
+			if ( <++CurrentlyOpen> > <MaxOpenJobsOrLayouts> )
+			{
+				Warning( Translate( ~You can only have <MaxOpenJobsOrLayouts> jobs or layouts open at a time~ ) );
+				break;
+			}
+
+			IsMultiple = FALSE;
+
+			TheLayout = GetFullLayout( ~<$con.Product[ProductLayoutPath]>~,IsMultiple );
+
+			if ( IsNull( ~<TheLayout>~ ) )
+				continue;
+
+			Operation = STR ( OpenALayout( ~<TheLayout>~,~<$Con.Product[ID]>~,~<$Con.Product[LayoutName]>~ ) );
+			QueueContentsOf( Operation );
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC DisplayProductCategories()
+{
+	Query = ~Select Distinct Category From Products Order By Category~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Products table: <Query>. <theErr>~ );
+	}
+
+	GenCon( ListMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+	Count = 0;
+
+	while ( List( GetNext,Item ) )
+	{
+		GenCon( Category<++Count>,New,DDMenuItemDef,AddTo,ListMenu,SetValues,
+				Text,		~<Count>)  <$pcon.Item[Category]>~,
+				IDText,		~ID~ );
+
+		ActionsText = ACTION Exec ( WantCategory(~<$pcon.Item[Category]>~); );
+
+		Category<Count>( SetValuesFrom,ActionsText,ActionsText );
+	}
+	
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	View( DisplayMenu,ListMenu,2,2 );
+
+	return TRUE;
+}
+
+
+NUMERIC WantCategory( which )
+{
+	ProductsWindow( ChangeView,~<which>~ );
+
+	if ( Document( Doc,FindByName,~OrderItemsDoc~ ) )
+	{
+		return DisplayProductListMenu( ~<Which>~ );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC DisplayCurrentProductListMenu()
+{
+	if ( GenCon( View,GETACTIVEVIEW,GETNAME,Category ) )
+	{ 
+		return DisplayProductListMenu( ~<Category>~ );
+	}
+
+	return DisplayProductCategories();
+}
+
+
+
+NUMERIC DisplayProductListMenu( WhichCategory )
+{
+	Query = ~Select ID,LayoutName From Products~;
+	
+	if ( ~<WhichCategory>~ != ~~ )
+	{
+		 Query = ~<Query> Where Category = '<WhichCategory>'~;
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Products table: <Query>. <theErr>~ );
+	}
+
+	GenCon( ListMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+	GenCon( Product0,New,DDMenuItemDef,AddTo,ListMenu,SetValues,
+			Text,			~&0   Categories~,
+			ActionsText,	ACTION Exec ( DisplayProductCategories() ),
+			IDText,			~ID~ );
+
+	//ActionsText = ACTION Exec ( DisplayProductCategories() ) ;
+
+	//Product0( SetValuesFrom,Product0,Product0 );
+
+	Count = 0;
+
+	while ( List( GetNext,Product ) )
+	{
+		GenCon( Product<++Count>,New,DDMenuItemDef,AddTo,ListMenu,SetValues,
+				Text,		~&<Count>   Create OrderItem for <$pcon.Product[ID]>,  (<$pcon.Product[LayoutName]>)~,
+				IDText,		~ID~ );
+
+		ActionsText = ACTION Exec ( WantProduct(~<$pcon.Product[ID]>~,~<$pcon.Product[LayoutName]>~) );
+
+		Product<Count>( SetValuesFrom,ActionsText,ActionsText );
+	}
+		
+
+	if ( GenCon( View,GetActiveView ) )
+	{
+		View( DisplayMenu,ListMenu,2,2 );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC WantProduct( ProductID,LayoutName )
+{
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	msg = STR ( AddItemForProduct(~<ProductID>~); );
+
+	action = ACTION DOC ( OrderItemsDoc "<msg>" );
+
+	return PerformActions( action );
+}
+
+
+NUMERIC CloseAllLayouts()
+{
+	ProductsWindow( StatusBar,Text,~Closing all open products~ );
+
+	Count = Index = 0;
+
+	app( ThisApp,MessagePump,3 );
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( Window( GETNEXT,aView ) )
+		{
+			aView( GET,ViewType,ViewType );
+
+			if ( ~<ViewType>~ == ~LayoutView~ || ~<ViewType>~ == ~PIELayoutView~)
+			{
+				aView( GetDocumentPath,DocumentPath );
+				Window( CloseWindow );
+				++Count;
+			}
+		}
+	}
+
+	ThisApp( MessagePump,0 );
+
+	return ProductsWindow( StatusBar,Text,Translate(~<Count> products closed~) );
+}
+
+
+NUMERIC GoButton()
+{
+	MessageBox( ~Got Here~ );
+	return TRUE;
+}
+
+
+
+NUMERIC FindLayouts()
+{
+	Define: ExplorerWindow Using DDWinDef		
+		Fields:         
+			Title						~Find Layouts and Drag them to the main window~
+			TypeName					~ExplorerWnd~
+			Position					0 0 50 50
+			IsPositionPercent			T
+			IsCenteredVertical			F
+			IsCenteredHorizontal		F
+			IsMaximized					F ;
+
+	return ExplorerWindow( CreateWindow,aWindow );
+}
+
+
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	ActiveView( DisplayMenu,EditProductListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC CreateCategory()
+{
+	HandleActions( ~ICCreateCategory()~ );
+	return TRUE;
+}
+
+VOID RememberWindowLocation( &theWindow,Item )
+{
+	theWindow( SaveWindowLocation,WindowLocation,~<Item>~ );
+}
+
+
+
+
+NUMERIC RightClickInImageView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	ActiveView( DisplayMenu,EditProductImageViewMenu );
+
+	return TRUE;
+}
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( ~<what> is not implemented yet!~ );
+	return TRUE;
+}
+
+
+
+NUMERIC OnCloseProductsDataView()
+{
+	if ( ProductsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	return ProductsDataWindow( ForceCloseWindow );
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( ProductsDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	Document( doc,THIS,NotifyOtherDocuments,~~,DataContains,~LayoutName~ );
+	doc( NotifyOtherDocuments,~~,DataContains,~ProductID~ );
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	while ( ProductsDataView( PendingChanges ) )
+	{
+		ProductsDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+NUMERIC OnButtonClick()
+{	
+	ProductsDataView( GetActiveCell,Row,Col );
+
+	if ( FileDialog( Title,Translate( ~Find the desired file~ ),Path,Path,Open ) )
+	{
+		Path = MakePath( Type,UNC,~<Path>~);
+
+		if ( !Files( IsUNC,~<Path>~ ) && NetworkOperation() )
+		{
+			Msg = Translate( UIMessages,UnsharedFile,~<Path>~ );
+
+			if ( MessageBox( ~<Msg>~,YESNO ) != YES )
+				{ return FALSE; }
+		}
+
+		ProductsDataView( SetCellValue,<Row>,<Col>,~<Path>~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC OnKeyDown()
+{
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return FALSE; }
+
+	if ( !View( IsThumbNailView ) )
+		{ return FALSE; }
+		
+	key = View( GetLastKeyStateless,KeyString );
+
+	if ( <key> > 32 && <key> <= 40 )			// Arrow keys,Home,End,PageUp&Dn
+		{ return TRUE ; }
+
+	if ( <key> == 0x74 )	// F5
+		{ return RefreshThumbNailView(TRUE); }
+
+	if ( <key> == 0x2E )	// Delete
+		{ return DeleteSelectedProducts(); }
+
+	if ( ~<KeyString>~ == ~0~ )	
+		{ return DisplayCurrentProductListMenu(); }
+
+	if ( SimilarStr(~<KeyString>~,~L~ ) )	
+		{ return DisplayProductCategories(); }
+
+	if ( KeyState( CONTROL ) )
+	{
+		if (  View( PerformMenuAction,EditProductImageViewMenu,~<KeyString>~ ) )
+		{
+			return TRUE;
+		}
+	}
+
+	return View( DisplayMenu,EditProductImageViewMenu,2,2 );
+}
+
+
+Include: ~ExportSelectedToFile~;
+
+FirstTime = TRUE; // Only open a new window the first time
+
+VOID Init( WhichProducts,ViewIsImages,DocumentQuery )
+{
+	ProductsWindow( Set,Title,~<WhichProducts>~ == ~~ ? ~Products~ : ~Products - <WhichProducts>~ );
+	ProductsDataWindow( Set,Title,~<WhichProducts>~ == ~~ ? ~Product Data~ : ~Product Data - <WhichProducts>~ );
+
+	if ( ~<DocumentQuery>~ == ~~ )
+	{
+		DocumentQuery = ~Select * From Products Order By Category,Sequence~;
+	}
+
+	Global( WhichProducts,ViewIsImages,DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		WaitCursor( Begin );
+
+		Start = Ticks();
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+			{ Error( ~Failed to query the Products table~ ); }
+
+		SetDocumentData( List(GetObject) );
+
+		Count = List( NumEntries );
+
+		StatusBarText( ~Reading <Count> Products~ );
+
+		If ( <ViewIsImages> )
+		{	
+			WindowLocation = ~<$UserSettings.WindowLocation[Products]>~;
+
+			if ( ~<WindowLocation>~ != ~~ )
+				{ ProductsWindow( Set,Position,~<WindowLocation>~ ); }
+
+			WindowLocation = ~<$User.WindowLocation[ProductsList]>~;
+
+			ProductsWindow( CreateThumbNailViews,ProductThumbNailCategory,ProductThumbNailImage,List,Category,Product );
+			ProductsWindow( CreateWindow,~Products~ );
+		}
+		else
+		{
+			ProductsDataWindow( CreateWindow,~Products Data~ );
+		}
+
+		WaitCursor( End );
+
+		duration = (Ticks() - <Start>) / 1000;
+
+		StatusBarText( ~<Count> Products read in <duration> seconds~ );
+
+		return;
+	}
+
+	RefreshDoc();
+}
+
+NUMERIC SelectProduct( ID )
+{
+	more = ProductsWindow( GetFirst,View );
+
+	while ( $more )
+	{
+		if ( View( FindI,Key,~ID = '<ID>'~,Where,TheProduct ) )
+		{ 
+			View( GetName,ViewName );
+			View( SetSelected,TheProduct,TRUE,TRUE );
+			View( ScrollIntoView );
+			return ProductsWindow( ChangeView,~<ViewName>~ );
+		}
+
+		more = ProductsWindow( GetNext,View );
+	}
+
+	return FALSE;
+}
+
+NUMERIC SelectCategory( Name )
+{
+	more = ProductsWindow( GetFirst,View );
+
+	while ( $more )
+	{
+		View( GetName,ViewName );
+
+		if ( SimilarStr( ~<ViewName>~,~<Name>~ ) )
+		{
+			return ProductsWindow( ChangeView,~<ViewName>~ );
+		}
+
+		more = ProductsWindow( GetNext,View );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC RefreshComboBox()
+{
+	ProductsDataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,ProductsTableDefinition(GetReferenceTo,Fields) );
+
+	ProductsDataView( GetColumnName,<col>,ColumnName );
+
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+
+	if ( SimilarStr(~<ColumnName>~,~ProdType~ ) )
+	{
+		UpdateProdTypeCombo( ColumnDefinition,<row>,<col>);
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC UpdateProdTypeCombo( &ColumnDefinition,Row,Col )
+{
+	Query = STR ( Select BackgroundType From BackgroundTypes Order By BackgroundType );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,ProdTypes,BackgroundType );
+
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,ProdTypes(GetCopyOf) );
+
+		ProductsDataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+
+Define:	EditProductImageViewMenu Using DDMenuDef AsSymbol EditProductImageViewMenu
+	Fields:	Title		~Choose Something~
+			Position	(-1)
+	Contains:	INLISTORDER
+	{	
+	
+		allowEditing = ((~<$App.Name>~ !=~DP1.exe~) && (GetUserPermissions( LayoutEditing ) )) ? T : F;
+	
+		Define:	OpenSelected using	DDMenuItemDef
+			Fields:	Text		~&Open~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( OpenLayoutForSelectedProducts() )
+
+		Define:	OpenContainingFolder using	DDMenuItemDef
+			Fields:	Text		~Open Containing Folder~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( OpenContainingFolder() )
+
+		Define:	NewLayout	using	DDMenuItemDef
+			Fields:	Text		~&New Product~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( CreateNewLayout() )
+
+		Define:	NewGridLayout	using	DDMenuItemDef
+			Fields:	Text		~New Composite~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( CreateNewGridLayout() )
+
+		Define:	Duplicate	using	DDMenuItemDef
+			Fields:	Text		~Du&plicate~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( DuplicateSelectedProducts(); )
+
+		Define:	ConvertToPattern	using	DDMenuItemDef
+			Fields:	Text		~Convert Layout(s) To Simple Layout(s)~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( ConvertToPattern() )
+
+		Define:	ScaleTheLayout	using	DDMenuItemDef
+			Fields:	Text		~Scale Layout(s) to a New Size~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( ScaleLayouts() )
+
+		Define:	DeleteProducts	using	DDMenuItemDef
+			Fields:	Text		~&Remove~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( DeleteSelectedProducts(); )
+
+		Define:	ListOfCategories	using	DDMenuItemDef
+			Fields:	Text		~&List Of Categories~
+					IDText		ID
+					ActionsText  ACTION Exec ( DisplayProductCategories(); )
+
+		Define:	UpdateIcons	using	DDMenuItemDef
+			Fields:	Text		~&Update Open Product Icons~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( UpdateProductPreviewImages(~~); )
+
+		Define:	SetIcons	using	DDMenuItemDef
+			Fields:	Text		~Set Product Icon for a Specific Product~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( SetProductPreviewImages(~~); )
+
+		Define:	CloseProduct	using	DDMenuItemDef
+			Fields:	Text		~&Close Open Products~
+					IDText		ID
+					ActionsText  ACTION Exec ( CloseAllLayouts(); )
+
+		Define:	RefreshProduct	using	DDMenuItemDef
+			Fields:	Text		~Refresh  (F5)~
+					IDText		ID
+					ActionsText  ACTION Exec ( RefreshThumbNailView(TRUE); )
+
+		Define:	LayoutsNULL0S using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+					
+		Define:	ViewGridData using	DDMenuItemDef
+			Fields:	Text		~&Edit~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( EditListView() )
+
+		Define:	Search using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuFind )
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( Search() )
+
+		Define:	ViewOrderItems	using	DDMenuItemDef
+			Fields:	Text		~View Order &Items Data For Selected Products~
+					IDText		ID
+					ActionsText  ACTION Exec ( SeeOrderItemsForSelectedProducts(); )
+
+		Define:	LayoutsNULL1S using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	CreateLayoutCategories using DDMenuItemDef
+			Fields:	Text		~Create Category~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText	ACTIONS ( ICCreateCategory() )
+
+		Define:	LayoutsNULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	ImagesForProduct	using	DDMenuItemDef
+			Fields:	Text		~View I&mages For This Product~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( ImagesForThisProduct(~~); )
+
+		Define:	LayoutsNULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	ViewProductAsText	using	DDMenuItemDef
+			Fields:	Text		~View As &Text~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( ViewAsText(); )
+
+		Define:	FixCarriageReturns	using	DDMenuItemDef
+			Fields:	Text		~Fix Carriage Returns~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( FixCR(); )
+
+		Define:	LayoutsNULL3 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	ViewPackages using	DDMenuItemDef
+			Fields:	Text		~Packages~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( ViewPackages(); )
+
+		Define:	ViewBooks using	DDMenuItemDef
+			Fields:	Text		~Book Products~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( ViewBookProducts(); )
+
+		Define:	NewPackage	using	DDMenuItemDef
+			Fields:	Text		~New Package~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( AddNewPackage(); )
+
+		Define:	LayoutsNULL4 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	NewBook	using	DDMenuItemDef
+			Fields:	Text		~Create a Book Product~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( AddNewBook(); )
+
+		Define:	EditBook	using	DDMenuItemDef
+			Fields:	Text		~Edit a Book Product~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( EditBook(); )
+
+		Define:	LayoutsNULL5 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	NewSetup	using	DDMenuItemDef
+			Fields:	Text		~New Node Style~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText  ACTION Exec ( CreateNewNodeStyle() )
+
+		Define:	LayoutsNULL8 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	Explorer	using	DDMenuItemDef
+			Fields:	Text		~&Find Products To Import~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText ACTION Exec ( FindProducts() )
+
+		/* DPT - Commented out on 7/1/03 because it's not used
+		Define:	ExternalXRef	using	DDMenuItemDef
+			Fields:	Text		~External System Product XRef~
+					IDText		ID
+					IsEnabled	<allowEditing>
+					ActionsText ACTION Exec ( OnExternalXRef() )
+		*/
+	}
+
+
+if ( !GenCon( ProductsTableDefinition,GetFrom,Products,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The Products Table is not properly defined~ ); }
+
+Define:	EditProductListViewMenu Using DDMenuDef AsSymbol EditProductListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	OpenProducts	using	DDMenuItemDef
+			Fields:	Text		~Open~
+					IDText		ID
+					ActionsText  ACTION Exec ( OpenLayoutForSelectedProducts(); )
+
+		Define:	OpenContainingFolder	using	DDMenuItemDef
+			Fields:	Text		~Open Containing Folder~
+					IDText		ID
+					ActionsText  ACTION Exec ( OpenContainingFolder(); )
+	
+		Define:	RefreshProduct	using	DDMenuItemDef
+			Fields:	Text		~Refresh  (F5)~
+					IDText		ID
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		~Add~
+					IDText		ID
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		~Save~
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		~Cancel~
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteProducts	using	DDMenuItemDef
+			Fields:	Text		~Remove~
+					IDText		ID
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	CloseProduct	using	DDMenuItemDef
+			Fields:	Text		~Close Open Products~
+					IDText		ID
+					ActionsText  ACTION Exec ( CloseAllLayouts(); )
+
+		Define:	NULL3 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	Search	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuFind )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( Search() )
+
+		Define:	Export	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Export~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ExportSelectedToFile(ProductsDataView,Products) )
+
+	}
+
+
+Define: ProductsWindow Using DDWinDef
+	Fields:	Title						~Products~
+			TypeName					~ImageWnd~
+			Position					0 75 100 22
+			IsPositionPercent			T
+			IsCenteredVertical			F
+			IsCenteredHorizontal		F
+			IsMaximized					F
+			ImageFrameSize				85 ;
+
+MACROSOFF
+
+Define: ProductThumbNailCategory Using DDViewDef
+	Fields:	Text						~<Category>~
+			ViewType					~ThumbnailView~
+			IsModifiable				~T~
+			IsNameModifiable			~T~
+			DoubleClickActionsText		ACTION Exec ( OpenLayoutForSelectedProducts() )
+			IActionsText				~~
+			OActionsText				~~
+			DropTypes					~Products~
+			ViewDataType				~Products~
+			ViewDataFor					~<Category>~
+			DropActionsText				ACTION Exec ( HandleDrop() )
+			AddCategoryActionsText		ACTION Exec ( AddCategory() )
+			RenameCategoryActionsText	ACTION Exec ( RenameCategory() )
+			RClickUpActionsText			ACTION Exec ( RightClickInImageView() ) 
+			KeyboardActionsText			ACTION Exec ( OnKeydown() ) 
+			HActionsText				ACTION SHOWHELPPAGE ( KPISHelpFile "Products.htm" )
+			ImageOpenFailedMsg			~No Product Icon~
+			NoSamplePreviewMsg			~No Product Icon~;
+
+Define: ProductThumbNailImage Using DDICImageDef
+	Fields:	Info1						~~ 
+			Info3						~ID: <$con.Product[ID]>     Name: <$con.Product[LayoutName]>~
+			Info2						~<$con.Product[ID]>~
+			Path						~<$con.Product[PreviewPath]>~
+			IsDeleted					FALSE
+			IsSelected					FALSE 
+			DropTypes					Products
+			DataType					Products 
+			Table						Products
+			Key							~ID = '<$con.Product[ID]>'~ ;
+
+MACROSON
+
+Define: ProductsDataWindow Using DDWinDef
+	Fields:	Title					~Product Data~
+			Position				0 50 100 30
+			IsPositionPercent		T
+
+	Contains:
+	{
+		Define: ProductsDataView Using DDViewDef AsSymbol ProductsDataView Permanent
+			Fields:	ViewType				~ListView~
+					GridControlTypes		ProductsTableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					ButtonClickActionsText	ACTION Exec ( OnButtonClick() )
+					DoubleClickActionsText	ACTION Exec ( OpenLayoutForSelectedProducts() )
+					CloseActionsText		ACTION Call ( OnCloseProductsDataView() )
+					ComboBoxActionsText		ACTION Call ( RefreshComboBox() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "ProductsData.htm" );
+	}
+
+
+Category = ~Main~;
+
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\ProductsDoc.txt~ );
+
+
+
+
+

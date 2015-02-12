@@ -1,0 +1,514 @@
+IncludeClass(BaseDialog);
+IncludeClass(BasePDF);
+
+Include: UtilityRoutines;
+
+
+Class( PDFDlg,Extends,BaseDialog,
+		Member,fOrderID,Str,~~,
+		Member,fCopies,Numeric,1,
+		Member,fOutputSpec,Str,~~,
+		Member,fPath,Str,~~,
+		Member,fImporting,Numeric,FALSE,
+		Member,fQueued,Numeric,0,
+		Member,fProcessed,Numeric,0,
+		Member,fCancel,Numeric,FALSE,
+		Member,fDiskDir,Str,~<$App.ShareDirectory>\OutputSpecifications\Disk~,
+		Member,fNexPressDir,Str,~<$App.ShareDirectory>\OutputSpecifications\NexPress~,
+		Member,fPDFThread,Object,Thread );
+
+
+VOID	PDFDlg::PDFDlg()
+{ 
+	Left = 100;
+	Top = 200;
+	Dictionary = ~DDImportPDFDoc~;
+	HelpPage = ~ImportPDF.html~;
+	Title = ~Import PDF Files As Order Items~;
+}
+
+
+VOID	PDFDlg::DefineControls()
+{
+	Define: OrderPrompt Using DDWinCtrlDef AsSymbol OrderPrompt Private
+		Fields:	TYPENAME		STATICTEXT
+				RightJustified	TRUE
+				Position		<hgap> <vGap>*3 110 <ButtonHeight>
+				Text			~Order ID~;
+
+	Define: OrderField Using DDWinCtrlDef AsSymbol OrderField Private
+		Fields:	TYPENAME		EDITTEXT
+				GENCONNAME		THIS
+				GENCONFIELD		OrderID
+				IACTIONSTEXT	ACTIONS ( Get )
+				DACTIONSTEXT	ACTIONS ( Save )
+				OACTIONSTEXT	ACTIONS ( Save )
+				Position		OrderPrompt(GetRight,Position)+$hGap OrderPrompt(GetTop,Position)-2 220 <ButtonHeight>
+				Text			~Initial Value~;
+
+	Define: BrowseButton Using DDWinCtrlDef AsSymbol BrowseButton Private
+		Fields:	TYPENAME		Button
+				Position		OrderField(GetRight,Position)+$hGap OrderField(GetTop,Position),20 20
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.BrowseOpen() )
+				Text			~?~;
+				
+	Define: CopiesPrompt Using DDWinCtrlDef AsSymbol CopiesPrompt Private
+		Fields:	TYPENAME		STATICTEXT
+				RightJustified	TRUE
+				Position		OrderPrompt(GetLeft,Position) OrderPrompt(GetBottom,Position)+<vGap> OrderPrompt(GetWidth,Position) <ButtonHeight>
+				Text			~Copies~;
+
+	Define: CopiesEditText Using DDWinCtrlDef AsSymbol CopiesEditText Private
+		fields:	TypeName		MaskedEditText
+				Position		CopiesPrompt(GetRight,Position)+<hGap> CopiesPrompt(GetTop,Position) 60 <ButtonHeight>
+				GenConName		THIS
+				GenConField		~Copies~
+				IActionsText	~[Get]~
+				DActionsText	~[Save]~
+				OActionsText	~[Save]~
+				Mask			~<$[DATABASE FieldTypes].Quantity[Mask]>~
+				PromptChar		~<$[DATABASE FieldTypes].Quantity[PromptChar]>~
+				AllowedChars	~<$[DATABASE FieldTypes].Quantity[AllowedChars]>~
+				DisallowedChars ~<$[DATABASE FieldTypes].Quantity[DisallowedChars]>~
+				Tooltip			~Enter the number of copies to print~;
+
+	Define: OuputTypePrompt Using DDWinCtrlDef AsSymbol OuputTypePrompt Private
+		Fields:	TYPENAME		STATICTEXT
+				RightJustified	TRUE
+				Position		CopiesPrompt(GetLeft,Position) CopiesPrompt(GetBottom,Position)+<vGap>*4 OrderPrompt(GetWidth,Position) <ButtonHeight>
+				Text			~~;
+
+	Define: DiskRadioButton Using DDWinCtrlDef AsSymbol DiskRadioButton
+		Fields: TypeName RadioButton  
+				Position		OuputTypePrompt(GetRight,Position)+<hGap> OuputTypePrompt(GetTop,Position) 70 20
+				IActionsText	~[Get]~
+				DActionsText	~[CheckButton(DiskRadioButton) 
+								UncheckButton(NexPressRadioButton)
+								Save
+								Exec("<THIS>.PopulateOutputSpecs()")]~
+				OActionsText	~[Save]~
+				GenConName		THIS
+				GenConField		~OutputDevice~
+				RadioTrueValue	~Disk~
+ 				Text			~Disk~
+				Tooltip			~Show output specifications that output to disk~;
+
+	Define: NexPressRadioButton Using DDWinCtrlDef AsSymbol NexPressRadioButton
+		Fields: TypeName RadioButton  
+				Position		DiskRadioButton(GetRight,Position)+<hGap> DiskRadioButton(GetTop,Position) DiskRadioButton(GetWidth,Position) 20
+				IActionsText	~[Get]~
+				DActionsText	~[UnCheckButton(DiskRadioButton) 
+								CheckButton(NexPressRadioButton)
+								Save
+								Exec("<THIS>.PopulateOutputSpecs()")
+								]~
+				OActionsText	~[Save]~
+				GenConName		THIS
+				GenConField		~OutputDevice~
+				RadioTrueValue	~NexPress~
+ 				Text			~NexPress~
+				Tooltip			~Show output specifications for a NexPress Printer~;
+				
+	Define: OutputSpecPrompt Using DDWinCtrlDef AsSymbol OutputSpecPrompt OutputSpecPrompt Private
+		Fields:	TYPENAME		STATICTEXT
+				RightJustified	TRUE
+				Position		OuputTypePrompt(GetLeft,Position) OuputTypePrompt(GetBottom,Position)+<vGap> CopiesPrompt(GetWidth,Position) <ButtonHeight>
+				Text			~Output Specification~;
+			
+	Define: OutputSpecComboBox Using DDWinCtrlDef AsSymbol OutputSpecComboBox  Private
+		Fields: TypeName				ComboBox  
+				Position				OutputSpecPrompt(GetRight,Position) + $hGap,OutputSpecPrompt(GetTop,Position),OrderField(GetWidth,Position),100
+				DropDownActionsText		ACTION EXEC ( <THIS>.PopulateOutputSpecs() )
+				IActionsText			ACTIONS ( Get )
+				DActionsText			ACTIONS ( Save )
+				OActionsText			ACTIONS ( Save )
+				GenConName				THIS
+				GenConField				~OutputSpec~
+				Mask					~<$[DATABASE FieldTypes].filepath[Mask]>~
+				PromptChar				~<$[DATABASE FieldTypes].filepath[PromptChar]>~
+				AllowedChars			~<$[DATABASE FieldTypes].filepath[AllowedChars]>~
+				DisallowedChars			~<$[DATABASE FieldTypes].filepath[DisallowedChars]>~
+				Tooltip					~Select a predefined Output Specification~
+
+	Define: ViewOutputSpecButton Using DDWinCtrlDef AsSymbol ViewOutputSpecButton Private
+		Fields:	TYPENAME		Button
+				Position		OutputSpecComboBox(GetRight,Position)+$hGap OutputSpecComboBox(GetTop,Position),20 20
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnViewOutputSpec() )
+				Text			~?~
+				Tooltip			~Open the selected Output Specification in Notepad~;
+
+	Define: DragPrompt Using DDWinCtrlDef AsSymbol DragPrompt Private
+		Fields:	TYPENAME		STATICTEXT
+				GENCONNAME		THIS
+				Position		OrderField(GetLeft,Position)+35,OutputSpecPrompt(GetBottom,Position)+20 + $vGap ,150,20
+				FontWeight		600
+				Text			~Drag PDF files here~;
+}
+
+
+NUMERIC	PDFDlg::PopulateOutputSpecs()
+{	
+	dlg( GetInput );
+	
+	ReturnOnFailure( !IsNull(~<$con.dlgData[OutputDevice]>~) );
+	
+	Directory( Create,~<f<$con.dlgData[OutputDevice]>Dir>~ );
+	
+	StringList( List,New );
+		
+	MoreFiles = findfile( aDirectoryEntry,Find,~<f<$con.dlgData[OutputDevice]>Dir>\*.txt~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )      
+			continue;
+
+		List( AddString,~<$str.$aPath.filename>~ );
+	}
+	
+	if ( List( NumEntries) == 0 )
+	{
+		x = dlg( ComboBox,OutputSpecComboBox,ResetContent );
+		return TRUe;
+	}
+	
+	return dlg( SetControlFromStringList,OutputSpecComboBox,List,Selection );
+}
+
+
+NUMERIC	PDFDlg::GetOutputSpecPath( &path )
+{
+	dlg( GetInput );
+	
+	if ( IsNull(~<$con.dlgData[OutputSpec]>~) )
+	{
+		return Warning( ~You have not selected an output specification~ );
+	}
+	
+	path = ~<f<$con.dlgData[OutputDevice]>Dir>\<$con.dlgData[OutputSpec]>~;
+		
+	return TRUE;
+}
+
+
+NUMERIC PDFDlg::OnViewOutputSpec()
+{
+	ReturnOnFailure( GetOutputSpecPath( FilePath ) );
+	return ViewFileInNotepad( ~<FilePath>~ );
+}
+
+
+VOID	PDFDlg::DefineDictionary()
+{
+	Dictionary: ~<Dictionary>~ 
+		Fields: Name OrderID		type text
+		Fields: Name Copies			type long
+		Fields: Name OutputDevice	type text
+		Fields: Name OutputSpec		type text
+}
+
+VOID	PDFDlg::InitDialogData()
+{ 
+	dlgData( SetValues, Copies,1 );
+	dlgData( SetValues, OutputDevice, ~Disk~ );
+} 
+
+
+
+
+
+NUMERIC PDFDlg::BrowseOpen()
+{
+	ReturnOnFailure( GetOrderID(OrderID) );
+	
+	Query = ~SELECT Customers.Name,Orders.* FROM Orders LEFT OUTER JOIN Customers ON Orders.CustomerID = Customers.ID WHERE Orders.ID Like '<OrderID>%'~;
+
+	Actions = STR ( Orders Open OrdersDoc "Init( ~Orders Like <OrderID>~,~<Query>~);" );
+
+	return PerformDocActions( Actions );
+}
+
+
+NUMERIC PDFDlg::AuditFileList()				// ENSURE THAT THERE ARE NO INVALID FILENAMES IN THE LIST OF DRAGGED FILES
+{
+	more = DraggedFileList( GetFirst,PDFFile );
+	
+	while ( <more> )
+	{
+		FilePath = ~<$con.PDFFile[Text]>~;
+		
+		if ( !SQLSafe(~*FilePath~) )
+		{
+			return Warning( ~Can't handle a file with a ' or tilde in it.~ );
+		}
+
+		if ( !PathSafe(~<FilePath>~) )
+		{
+			return Warning( ~Can't handle a file containing parenthesis.  <FilePath>~ );
+		}
+
+		if ( AuditPathString(~<FilePath>~) )
+		{
+			return Warning( ~Can't handle a file with a , " ^ & * = | < > or ? in it.   <FilePath>~ );
+		}
+		
+		if ( !Files( IsUNC,~<FilePath>~ ) && NetworkOperation()  )
+		{
+			return Warning( Translate( UIMessages,UnsharedFileOK,~<FilePath>~ ) );
+		}
+		
+		more = DraggedFileList( GetNext,PDFFile );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC PDFDlg::SortFileList()		// HANDLE SORTING OF THE DRAGGED FILE LIST
+{
+	ReturnOnSuccess( DraggedFileList( ChildCount ) <= 1 );	// Don't bother if there is only one file
+	
+	PromptForSortOrder = TRUE;
+	
+	GetUserSettings( ~ImportPDF~, ~PromptForSortOrder~, PromptForSortOrder, Enabled );
+	
+	if ( <PromptForSortOrder> )		// HAS USER ASKED US NOT TO PROMPT ANYMORE?
+	{
+		GenCon( MbInfo,New,DDCustomMessageBox );
+		MbInfo( SetValues,Title,~Import PDF Files~,
+					Message,~Sort files by ...~,
+					Button1,~&File Name~,
+					Button2,~Creation &Date~,
+					Button3,~Cancel~,
+					CheckBox,~Don't show this message again~,
+					SetWindowPos,1,X,-1,Y,-1,Width,350,Height,215 );
+		CustomMessageBox(MbInfo);
+		SortOrder = MbInfo(GetNumeric, ButtonPressed);
+		dontShowMessageAgain = MbInfo(GetNumeric, CheckBoxChecked);
+		
+		if ( <dontShowMessageAgain> && ( <SortOrder> == 1 || <SortOrder> == 2 ) )
+		{
+			SetUserSettings( ~ImportPDF~,~PromptForSortOrder~,~0~,TRUE );
+			SetUserSettings( ~ImportPDF~,~DefaultSortOrder~,~<SortOrder>~,TRUE );
+		}
+
+		if ( <SortOrder> == 1 )
+		{
+			DraggedFileList( SortListBy,~Text~,~CreationTime~ );
+		}
+		else if ( <SortOrder> == 2 )
+		{
+			DraggedFileList( SortListBy,~CreationTime~,~Text~ );
+		}
+		else 
+		{
+			return FALSE;
+		}
+	}
+	else	// WE AREN'T ALLOWED TO PROMPT.  SO USE THE DEFAULT SORT ORDER FROM LAST TIME
+	{
+		GetUserSettings(~ImportPDF~, ~DefaultSortOrder~, DefaultSortOrder, Enabled);
+		
+		if ( (<DefaultSortOrder> == 1) && <Enabled> )
+		{
+			DraggedFileList( SortListBy,~Text~,~CreationTime~ );
+		}
+		else if ( <DefaultSortOrder> == 2 )
+		{
+			DraggedFileList( SortListBy,~CreationTime~,~Text~ );
+		}
+		else
+		{
+			DraggedFileList( SortListBy,~Text~,~CreationTime~ );
+		}
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC	PDFDlg::HandleDrop()
+{
+	if ( GenCon( DragDropInfo,GetDropInfo ) )
+	{
+		Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );		// REMOVE THE DRAG INFO FROM THE TREE
+		
+		ReturnOnFailure( BeforeDrop(DragDropInfo) );
+
+		if ( !GenCon( SrcView,Is,~<$CON.DragDropInfo[SrcView]>~ ) )	// SEE IF THIS IS A DROP FROM OUTSIDE THE APPLICATION 
+		{ 
+			ReturnOnFailure( BeforeExternalDrop(DragDropInfo) );
+			return ExternalDrop(DragDropInfo);
+		}
+		else
+		{	
+			return Warning( ~You must drag a PDF file from an explorer window.~ );
+		}
+	}	
+	return FALSE;
+}
+
+
+NUMERIC	PDFDlg::BeforeDrop( &info )
+{ 
+	ReturnOnFailure( GetOrderID(OrderID) );
+	ReturnOnFailure( MessageBox( ~Are you sure you want to import into Order <OrderID>?~,YESNO ) == YES );
+	fOrderID = ~<OrderID>~;
+	
+	GetOutputSpecPath( fOutputSpec );
+	fCopies = ~<$con.DlgData[Copies].numeric>~;
+	return TRUE;
+}
+
+
+NUMERIC PDFDlg::ProcessDraggedFile( &DraggedFile )
+{
+	Filename = GetFileName( DraggedFile );
+	
+	if ( SimilarStr( ~<$str.$Filename.ext>~,~PDF~ ) )
+	{
+		fPDFThread( EnQueue,~<Filename>~ );
+		++fQueued;
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC PDFDlg::DragComplete( &DraggedFiles )
+{	
+	return StartImporting();
+}
+
+
+NUMERIC	PDFDlg::StartImporting()	
+{ 
+	ReturnOnSuccess( <fImporting> );						// Don't bother if the thread already running?
+	
+	fImporting = TRUE;
+	
+	Status( ~Importing ...~ );
+
+	return fPDFThread( New,~<THIS>.ThreadProc~ );
+	
+	return ThreadProc();									// For testing without threads
+}
+
+
+NUMERIC	PDFDlg::ThreadProc()								// Thread Entry Point.  NO UI WORK ALLOWED
+{ 
+	while ( fPDFThread( DeQueue,fPath ) )
+	{
+		Invoke( ~<THIS>.Status~,~<++fProcessed> of <fQueued>: Importing <$str.$fPath.FileName>~ );
+		AddOrderItemFromPDF();
+		ReturnOnSuccess( <fCancel> );	// Are we being interrupted?
+	}
+	
+	Invoke( ~<THIS>.Complete~ );
+	
+	return TRUE;
+}
+
+
+NUMERIC PDFDlg::AddOrderItemFromPDF()						// RUNS ON A THREAD.  NO UI WORK ALLOWED
+{
+	if ( !ADO( fConnection,Connect ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		return Failure( ~Failed to connect to the Shared Database.  <theErr>~ );
+	}
+	
+	Private( fConnection );
+	
+	BasePDF( new,aPDF );
+	Global( aPDF );
+	
+	aPDF.SetOutputSpecPath( ~<fOutputSpec>~ );
+	aPDF.SetCopies( ~<fCopies>~ );
+	
+	if ( !aPDF.ExtractToOrder( ~<fOrderID>~,~<fPath>~ ) )
+	{
+		WaitCursor( End );
+		return Warning( ~Import of PDF failed~ );
+	}
+		
+	ForgetPrivate( fConnection );
+	return ForgetGlobal( aPDF );
+}
+
+
+NUMERIC	PDFDlg::OkayToCancel()									// User has tried to close the dialog
+{
+	if ( fPDFThread( IsActive ) )
+	{
+		ReturnOnFailure( MessageBox( ~Are you sure you want to cancel importing of PDF files? ~,YESNO ) == YES );
+		
+		fCancel = TRUE;
+		
+		while ( fPDFThread( IsActive ) )
+		{
+			Sleep( 200 );
+			Status( ~Waiting to finish the current PDF~ );
+		}
+	}
+	
+	return TRUE;
+}
+
+
+VOID	PDFDlg::Status(msg)	{ dlg( SetStatus,0,~<msg>~ ); }		// Keep the user informed
+
+
+VOID	PDFDlg::Complete()										// Called when the thread completes.  But runs on the main thread
+{
+	fImporting = FALSE;
+	Status( ~Completed <fProcessed> of <fQueued>~ );
+	fProcessed = fQueued = 0;
+}
+
+
+NUMERIC PDFDlg::GetOrderID(&OrderID)
+{
+	dlg( GetInput );
+	
+	OrderID = ~<$con.DlgData[OrderID]>~;
+		
+	if ( IsNull(~<OrderID>~) )
+	{
+		Status(~You must enter an OrderID first~);
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+
+
+VOID	PDFDlg::Initialize(OrderID)	
+{
+	if ( DefinedAndNotNull(OrderID) )					// An optional OrderID may have been specified
+	{
+		fOrderID = ~<OrderID>~;
+		dlg( SetStrings,OrderID,~<fOrderID>~ );			// Show it in the dialog
+	}
+	
+	PopulateOutputSpecs();
+}
+
+
+VOID Init(OrderID)
+{
+	TraceParse( Heap );
+	PDFDlg( New,thisDialog );	
+	Global( thisDialog );
+	ThisDialog.DefineDialog();
+	ThisDialog.Initialize(~<OrderID>~);
+}
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\ImportPDFDoc.txt~ );

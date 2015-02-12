@@ -1,0 +1,104 @@
+// MergeSubjectInfo.txt
+
+
+Define:	MergeMessages Using DDSymbol
+	Fields:	Value	~These strings are MergeSubjectInfo related strings used by the user interface.~
+	Contains:
+	{
+	}
+
+NUMERIC SubjectInfoExists( ID,Type )
+{
+	Query = ~Select OrderID From SubjectInfo<Type> Where OrderID = '<ID>'~;
+
+	Success = Ado( dBase,Connect,GetValuesFor,~<Query>~,theID ) != FALSE;
+
+	return <Success>;
+}
+ 
+
+// dBase is gotten w/ "BeginTransaction", CommitTransaction is done by calling routine.
+// FromId - is table want to move SubjectInfo from
+// ToId - is table merging SubjectInfo into
+NUMERIC MergeSubjectInfo(&dBase,FromId,ToId,InfoType)
+{
+	// Check if SubjectInfo to move
+	if ( SubjectInfoExists( ~<FromId>~,~<InfoType>~) )
+	{
+		if ( !SubjectInfoExists( ~<ToId>~,~<InfoType>~) )
+		{
+			cmd = ~Update SubjectInfo<InfoType> SET OrderID = '<ToId>' Where OrderID = '<FromId>'~;
+			if ( !dBase( CMD,~<cmd>~ ) )
+			{
+				dBase( GetErrorDescription,theErr,RollBackTransaction );
+				return Warning( DBMessages,CmdFailed,~<cmd>~,~<theErr>~);
+			}
+			Log( Session, ~Changed SubjectInfo<InfoType> from <FromId> to <ToId>~);
+		}
+
+		else  // SubjectInfo existed for Id moving from and moving to - need to merge
+		{
+			Query = ~SELECT * FROM SubjectInfo<InfoType> WHERE OrderID = '<FromId>' Order By OrderID,SubjectID~;
+			if ( !PGenConList( SubjList,Connection,dBase,Cursor,Keyset,Query,~<Query>~ ) )
+			{
+				List( GetErrorDescription,0,theErr );
+				return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+			}
+
+			Log( Session, ~Merging SubjectInfo<InfoType> from <FromId> to <ToId>~);
+			
+			StringList( ImageUpdates,New );
+
+			while ( SubjList(GetNext,SubjRecord) )
+			{
+				SubjId = ~<$pcon.SubjRecord[SubjectID]>~;
+				if ( !dbase(GetValuesFor,~Select SubjectID from SubjectInfo<InfoType> where OrderID = '<ToId>' And SubjectID = '<SubjId>'~,theID))
+				{  // SubjectId doesn't exist, just change id
+					cmd = ~Update SubjectInfo<InfoType> SET OrderID = '<ToId>' Where OrderID = '<FromId>' And SubjectId = '<SubjId>'~;
+					if ( !dBase( CMD,~<cmd>~ ) )
+					{
+						dBase( GetErrorDescription,theErr,RollBackTransaction );
+						return Warning( DBMessages,CmdFailed,~<cmd>~,~<theErr>~);
+					}
+				}
+				else  // SubjectID already exists in table, change id
+				{
+					cmd = ~Select MAX(SubjectID) From SubjectInfo<InfoType> Where OrderID = '<ToId>'~;
+					if ( ! dbase(CMD,~<cmd>~,MaxSequence ) )
+					{
+						dBase( GetErrorDescription,theErr,RollBackTransaction );
+						return Warning( DBMessages,CmdFailed,~<cmd>~,~<theErr>~);
+					}
+
+					NextSequence = ~<$rs.MaxSequence[#0]>~ == ~~ ? ~0~ : ~<$rs.MaxSequence[#0]>~; 
+					len = IsNULL(~<NextSequence>~) ? 3 : strlen( ~<NextSequence>~ );
+					NextSequence = Format( MakeNumber(~<NextSequence>~) + 1,~%0<len>ld~ );
+
+					// Can't update OrderId with another field in SubjectInfo
+					cmd = ~Update SubjectInfo<InfoType> SET OrderID = '<ToId>', SubjectID = '<NextSequence>' Where OrderID = '<FromId>' And SubjectID = '<SubjId>'~;
+					if ( !dBase( CMD,~<cmd>~ ) )
+					{
+						dBase( GetErrorDescription,theErr,RollBackTransaction );
+						return Warning( DBMessages,CmdFailed,~<cmd>~,~<theErr>~);
+					}
+					
+					ImageUpdates( Push,~Update Images SET SubjectID = '<NextSequence>' Where OrderID = '<FromId>' And SubjectID = '<SubjId>'~ );
+				}
+			}  // while
+			
+			while ( ImageUpdates( Pop,cmd ) )	// NEED TO TO THE IMAGE UPDATES IN REVERSE ORDER TO PREVENT COLLISIONS
+			{
+				if ( !dBase( CMD,~<cmd>~ ) )
+				{
+					dBase( GetErrorDescription,theErr,RollBackTransaction );
+					return Warning( DBMessages,CmdFailed,~<cmd>~,~<theErr>~);
+				}
+			}
+
+		}  // else SubjectInfo exists in To Table
+
+	}  // SubjectInfo exists in From Table
+
+	return TRUE;
+
+}  // MergeSubjectInfo()

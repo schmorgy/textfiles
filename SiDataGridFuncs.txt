@@ -1,0 +1,461 @@
+// Kpars Queue Grid View Functions
+
+Class( SiGrid,Extends,BaseGrid,
+	    Member,CurrentObject,Str,~~,
+		Member,RowsChanged,Numeric,0
+);
+
+VOID	SiGrid::SiGrid()						// CONSTRUCTOR
+{
+	DocumentQuery = ~~;
+	Title = ~~;
+	WindowTop = 25;
+	WindowWidth = 50;
+	WindowHeight = 25;
+//	HelpPage = ~SiFileData.htm~;
+	SplitterRows = ~1 100~;
+	FromSplitter = TRUE;
+}
+
+
+
+NUMERIC SiGrid::OnCloseGridView()
+{
+	ForgetPrivate( fList );
+	return TRUE;
+}
+
+NUMERIC SiGrid::DefineFileView()
+{
+	if ( ~<TableName>~ != ~~ )
+	{
+		GetTableDefinition();
+	}
+	
+	Define: <ViewName>View Using DDViewDef AsSymbol <ViewName>View	Private
+		Fields:	ViewType				~ListView~
+				HActionsText			ACTION SHOWHELPPAGE ( <HelpFile> "<HelpPage>" )
+				ChangeRecordActionsText ACTION Exec ( <THIS>.ChangeRecord() )
+				DeleteRecordActionsText ACTION Exec ( <THIS>.DeleteRecord() )
+				RClickUpActionsText		ACTION Exec ( <THIS>.RightClickInListView() )
+				ComboBoxActionsText		ACTION Call ( <THIS>.OnComboBox() )
+				DoubleClickActionsText	ACTION Exec ( <THIS>.DoubleClick() )
+				ButtonClickActionsText	ACTION Exec ( <THIS>.OnButtonClick() )
+				DropActionsText			ACTION Exec ( <THIS>.HandleDrop() )
+				DragAcceptFiles			<DragAcceptFiles>
+				RefreshActionsText		ACTION Exec ( RefreshListView() )
+				CloseActionsText		ACTION Call ( <THIS>.OnCloseDataView() ) ;
+
+	InitForSplitter();
+	
+	return TRUE;
+}
+
+VOID	SiGrid::DataViewDefinition()			{ }	// OVERRIDE to specify other DDViewDef parameters
+VOID	SiGrid::InfoViewDefinition()			{ }	// OVERRIDE to specify other DDViewDef parameters
+
+STR		RawQGrid::GetKey( &Item )
+{
+	key = ~~;
+	if ( SimilarStr( ~<viewName>~,~Info~ ) )
+	{
+		key = ~TableName = ~'<CurrentObject>'~;
+	}
+}
+
+
+NUMERIC SiGrid::ClearListView()
+{
+	<ViewName>View( RemoveGridContents );
+	RowsChanged = 0;
+
+	DocumentQuery = ~~;
+	CurrentOjbect = ~~;
+
+	ForgetPrivate( fList );
+	return TRUE;
+}
+
+
+NUMERIC SiGrid::LoadListView(&fConnection,newObject)
+{
+	CurrentObject = ~~;
+
+	RowsChanged = 0;
+	ForgetPrivate( fList );
+
+	if ( !PGenConList( fList,Connection,fConnection,Cursor,Keyset,Query,~<DocumentQuery>~ ) )
+	{
+		fList( GetErrorDescription,0,theErr );	
+		msg = TR( siWizardTrans,LoadFileDataFailed, ~<newObject>~, ~<DocumentQuery>~, ~<theErr>~ );
+		Log( Session, ~<msg>~ );
+		Error( ~<msg>~ ); 
+	}
+
+	Private( fList );
+	if ( ~<TableName>~ != ~~ )
+	{
+		ForgetPrivate( TableDefinition );
+		GetTableDefinition();
+		<viewName>View( Set,GridControlTypes,TableDefinition( GetReferenceTo,Fields ) );
+	}
+
+	SetDocumentData( fList(GetObject), TRUE );
+
+	<viewName>View( RefreshView );
+	
+	CurrentObject = ~<newObject>~;
+	return TRUE;
+}
+
+NUMERIC SiGrid::LoadDataListView(newObject)
+{
+	CurrentObject = ~~;
+
+	RowsChanged = 0;
+	ForgetPrivate( fList );
+
+	if ( !PGenConList( fList,Cursor,Keyset,File,~<newObject>~ ) )
+	{
+		fList( GetErrorDescription,0,theErr );		
+		return Warning( ~Failed to load data from <newObject>.  <theErr>~ ); 
+	}
+
+	Count = fList( NumEntries );
+
+	if ( <Count> > 1000 )
+	{
+		if ( MessageBox( ~Your query will retrieve <Count> records\n\nAre you sure you want to continue?~,YESNO ) != YES )
+		{
+			return TRUE;
+		}
+	}
+
+	Private( fList );
+	SetDocumentData( fList(GetObject), TRUE );
+
+	<viewName>View( RefreshView );
+
+	CurrentObject = ~<$Str.$newObject.WithoutExt>~;
+	return TRUE;
+}
+
+NUMERIC SiGrid::ChangeRecord()
+{
+	<++RowsChanged>;
+	return Change<ViewName>Record();
+}
+
+NUMERIC SiGrid::DeleteRecord()
+{
+	<++RowsChanged>;
+	return Delete<ViewName>Record();
+}
+
+NUMERIC SiGrid::AddRecord()
+{
+	Document( Doc,This );
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	OnAdd<ViewName>Record( NewRow );
+	
+	RowBeingAdded = <ViewName>View( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( TR( BaseGridTrans, LowOnMemory ) ); }
+
+	<ViewName>View( GetColumnName,0,ColumnName );
+
+	SetActiveCell( <RowBeingAdded>,~<InsertActiveCell>~,TRUE );
+	<++RowsChanged>;
+
+	return <RowBeingAdded>;
+}
+
+NUMERIC SiGrid::OnAddInfoRecord( &NewRow )
+{
+	NewRow( Set,TableName,~<newObject>~ );
+
+	return TRUE;
+}
+
+NUMERIC SiGrid::OnAddDataRecord( &NewRow )
+{
+	return TRUE;
+}
+
+
+NUMERIC SiGrid::ChangeInfoRecord()
+{
+	if ( !<ViewName>View( GetChangedRow,Changed,Original,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.Changed[TableName]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  ID cannot be blank.~ ) ); }
+
+	if ( ~<$con.Changed[Sequence]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Sequence cannot be blank.~ ) ); }
+
+
+	Key = ~TableName = '<$con.Original[TableName]>' AND Sequence = <$con.Original[Sequence]>~;
+	
+	Query = ~Select * From <TableName> Where <Key> Order By TableName,Sequence~;
+	
+	fList( GetConnection,fConnection );
+	if ( !PGenConList( List,Connection,fConnection,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,Changed,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update record where <Key>. <theErr>~ );
+	}
+
+	<ViewName>View( CommitChanges );
+	
+	return TRUE;
+}
+
+
+NUMERIC SiGrid::DeleteInfoRecord()
+{
+	if ( !<ViewName>View( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( Translate( ~There were no rows selected to delete~ ) ); }
+
+	Count = SelectedRows( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( ~There were no rows selected to delete~ ) ); }
+
+	if ( MessageBox( Translate( ~Are you sure you want to delete the <Count> selected rows?~ ),YESNO ) != YES )
+		{ return FALSE; }
+
+
+	StringList( RowsToDelete,New );
+
+	fList( GetConnection,fConnection );
+
+	while ( SelectedRows( GetNext,Item ) )
+	{
+		Key = ~TableName = '<$con.Item[TableName]>' AND Sequence = <$con.Item[Sequence]>~;
+
+		Cmd = ~Delete From <TableName> Where <Key>~;
+
+		if ( !fConnection( Cmd,~<Cmd>~ ) )
+		{
+			fConnection( GetErrorDescription,theErr );
+			Warning( ~Database Update Failed: <Cmd>. <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,SelectedRows(GetCurrentPosition) );
+	}
+
+	<ViewName>View( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC SiGrid::ChangeDataRecord()
+{
+	if ( !<ViewName>View( GetChangedRow,ChangedItem,OrigItem,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no selected row.~ ); }
+
+
+	if ( ~<CurrentObject>~ != ~~ )
+	{
+		if ( !fList( MakeKeyFrom,OrigItem,Key ) )
+		{
+			fList( GetErrorDescription,0,theErr );
+			return Warning( ~Could not make key for <CurrentObject>. <theErr>~ );
+		}
+	}
+	else
+	{
+		if ( !fList( MakePrimaryKeyFrom,OrigItem,Key ) )
+		{
+			if ( !fList( MakeKeyFrom,OrigItem,Key ) )
+			{
+				fList( GetErrorDescription,0,theErr );
+				return Warning( ~Could not make key for <TableName>. <theErr>~ );
+			}
+		}
+	}
+	
+	if ( !fList( UpdateFrom,ChangedItem,~<Key>~,<IsNewRow> ) )
+	{
+		fList( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+		return Warning( Translate( ~Could not update record where <Key>. <theErr>~ ) );
+	}
+
+	if ( ~<CurrentObject>~ != ~~ )
+	{
+		if ( !fList( Save,~<CurrentObject>~,~~ ) )
+		{
+			fList( GetErrorDescription,0,theErr );
+			return Warning( ~Save to <CurrentObject> failed. <theErr>~ );
+		}
+	}	
+
+	<ViewName>View( CommitChanges );
+	
+	return TRUE;
+}
+
+
+
+
+NUMERIC SiGrid::DeleteDataRecord()
+{
+	if ( !<ViewName>View( GetSelectedRows,ItemsToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	count = ItemsToDelete( ChildCount );
+
+	if ( MessageBox( ~Are you sure you want to delete the <count> selected items?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	StringList( RowsToDelete,New );
+
+	while ( ItemsToDelete( GetNext,Item ) )
+	{
+		Key = ~SubjectID='<$con.Item[SubjectID]>'~;
+//		if ( ~<CurrentObject>~ != ~~ )
+//		{
+//			if ( !fList( MakeKeyFrom,Item,Key ) )
+//			{
+//				fList( GetErrorDescription,0,theErr );
+//				return Warning( ~Could not make key for <Path>. <theErr>~ );
+//			}
+//		}
+//		else
+//		{
+//			if ( !fList( MakePrimaryKeyFrom,Item,Key ) )
+//			{
+//				if ( !fList( MakeKeyFrom,Item,Key ) )
+//				{
+//					fList( GetErrorDescription,0,theErr );
+//					return Warning( ~Could not make key for <Table>. <theErr>~ );
+//				}
+//			}
+//		}
+
+		if ( !fList( DeleteWhere,~<Key>~ ) )
+		{
+			fList( GetErrorDescription,0,theErr );
+			Warning( ~Failed to Delete the record where <Key>.  <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,ItemsToDelete(GetCurrentPosition) );
+	}
+		
+	<ViewName>View( DeleteRows,SelectedIndex,RowsToDelete );
+
+	if ( ~<CurrentObject>~ != ~~ )
+	{
+		if ( !fList( Save,~<CurrentObject>~,~~ ) )
+		{
+			fList( GetErrorDescription,0,theErr );
+			return Warning( ~Save to <CurrentObject> failed. <theErr>~ );
+		}
+	}	
+
+	return TRUE;
+}
+
+
+NUMERIC SiGrid::RefreshView()
+{
+	<ViewName>View( RefreshView );
+	return TRUE;
+}
+
+
+NUMERIC SiGrid::RefreshListView()
+{
+	<ViewName>View( RefreshView );
+
+	return TRUE;
+}
+
+
+NUMERIC SiGrid::SetSelected()
+{
+		Count = 0;
+	if ( <ViewName>View( GetSelectedRows,SelectedRows ) )		
+	{  
+		Count = SelectedRows( ChildCount );
+	}
+
+	if ( <Count> <= 1 )
+	{
+		<ViewName>View( SetSelected,~ALL~ );
+	}
+
+	
+	return TRUE;
+}
+
+
+NUMERIC SiGrid::IsObjectDataLoaded( object )
+{
+	FileName     = ~<$Str.$object.WithoutExt>~;
+
+	return SimilarStr( ~<CurrentObject>~, ~<FileName>~ );
+}
+
+NUMERIC SiGrid::IsDataLoaded()
+{
+	return !IsNull( ~<CurrentObject>~ );
+}
+
+NUMERIC SiGrid::AnyRowsChanged()
+{
+	return ( <RowsChanged> > 0 || <ViewName>View( PendingChanges ) ) ;
+}
+
+
+NUMERIC SiGrid::InitForSplitter( Query )
+{
+	if ( !IsNull( ~<DocumentQuery>~ ) )
+	{
+		if ( <FirstTime> )
+		{
+			ForgetPrivate( fList );
+			if ( !PGenConList( fList,Connection,fConnection,Cursor,Keyset,Query,~<Query>~ ) )
+			{
+				fList( GetErrorDescription,0,theErr );
+				msg = Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+				Log( Session, ~<msg>~ );
+				Warning( ~<msg>~ );
+				Exit();
+			}
+
+			Private( fList );
+			SetDocumentData( fList(GetObject), TRUE );
+		}
+		
+		FirstTime = FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC SiGrid::Init( nameView, nameTable)
+{
+	TableName  = ~<nameTable>~;
+	ViewName   = ~<nameView>~
+	FirstTime = FALSE;
+
+	return TRUE;
+}
+
+

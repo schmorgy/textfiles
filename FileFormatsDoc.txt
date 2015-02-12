@@ -1,0 +1,572 @@
+
+
+NUMERIC RefreshListView()
+{
+	if ( FileFormatsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	FileFormatsDataWindow( StatusBar,Text,~Refreshing~ );
+	FileFormatsDataWindow( RefreshWindow );
+	FileFormatsDataWindow( StatusBar,Text,~~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !FileFormatsDataView( GetChangedRow,ChangedFileFormat,OrigFileFormat,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedFileFormat[ID]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  ID cannot be blank.~ ) ); }
+
+	if ( ~<$con.ChangedFileFormat[Sequence]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Sequence cannot be blank.~ ) ); }
+
+	if ( ~<$con.ChangedFileFormat[TableName]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  TableName cannot be blank.~ ) ); }
+
+
+	Key = ~ID = '<$con.OrigFileFormat[ID]>' AND Sequence = <$con.OrigFileFormat[Sequence]>~;
+	
+	Query = ~Select * From FileFormats Where <Key> Order By TableName,ID,Sequence~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,ChangedFileFormat,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update File Format record where <Key>. <theErr>~ );
+	}
+
+	FileFormatsDataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !FileFormatsDataView( GetSelectedRows,FileFormatsToDelete ) )		
+		{ return Warning( Translate( ~There were no FileFormats selected to delete~ ) ); }
+
+	Count = FileFormatsToDelete( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( ~There were no File Formats selected to delete~ ) ); }
+
+	if ( MessageBox( Translate( ~Are you sure you want to delete the <Count> selected File Formats?~ ),YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( FileFormatsToDelete( GetNext,FileFormat ) )
+	{
+		Key = ~ID = '<$con.FileFormat[ID]>' AND Sequence = <$con.FileFormat[Sequence]>~;
+
+		Cmd = ~Delete From FileFormats Where <Key>~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Database Update Failed: <Cmd>. <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,FileFormatsToDelete(GetCurrentPosition) );
+	}
+
+	FileFormatsDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+	
+	RowBeingAdded = FileFormatsDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate( ~You are too low on memory to add any more rows~ ) ); }
+
+	FileFormatsDataView( SetActiveCell,<RowBeingAdded>,SubmittedAt );
+
+	return TRUE;
+}
+
+
+IF 0	// DON'T REALLY NEED A SEARCH FOR THIS ONE
+{
+	VOID Search()
+	{
+		ControlView( GetControlValue,TablesComboBox,TableName );
+		ControlView( GetControlValue,IDField,ID );
+
+		DocumentQuery = ~Select * From FileFormats~;
+
+		Operator = ~Where~;
+
+		if ( ~<TableName>~ != ~~ )
+		{
+			DocumentQuery = ~<DocumentQuery> <Operator> TableName = '<TableName>'~;
+			Operator = ~AND~;
+		}
+
+		if ( ~<ID>~ != ~~ )
+		{
+			DocumentQuery = ~<DocumentQuery> <Operator> ID Like '<ID>%'~;
+		}
+
+		DocumentQuery = ~<DocumentQuery> Order By TableName,ID,Sequence~;
+
+		RefreshListView();
+	}
+}
+
+VOID UpdateTable( Table )
+{
+	TableName = ~<Table>~;
+	ControlView( SetControlValue,TablesComboBox,~<Table>~ );
+	Global( TableName );
+}
+
+
+NUMERIC SwitchTables()
+{
+	SetupFormatsComboBox();
+	ViewFieldsForTable();
+	return TRUE;
+}
+
+
+NUMERIC ViewFieldsForTable()
+{
+	ControlView( GetControlValue,TablesComboBox,TableName );
+	ControlView( GetControlValue,IDField,ID );
+
+	if ( ~<ID>~ == ~~ )
+	{
+		DocumentQuery = ~Select * From FileFormats Where TableName = '<TableName>' Order By TableName,ID,Sequence~;
+	}
+	else
+	{
+		DocumentQuery = ~Select * From FileFormats Where ID Like '<ID>%' AND TableName = '<TableName>' Order By TableName,ID,Sequence~;
+	}
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+
+NUMERIC AddFieldsForTable()
+{
+	ControlView( GetControlValue,TablesComboBox,TableName );
+	ControlView( GetControlValue,IDField,ID );
+
+	if ( ~<ID>~ == ~~ )
+	{
+		return Warning( Translate( ~ID cannot be NULL~ ) );
+	}
+
+	Global( TableName );
+
+	AddAllFields( ~<ID>~ );
+
+	SaveAllChanges();
+
+	SetupFormatsComboBox();
+
+	return TRUE;
+}
+
+
+
+NUMERIC AddAllFields( ID )
+{
+	Query = ~Select * From FileFormats Where ID = '<ID>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ return Warning( Translate( ~Failed to query the <TableName> table~ ) ); }
+
+	if ( List( NumEntries ) > 0 )
+	{
+		return Warning( Translate( ~Sorry, a file format with the name <ID> already exists~ ) );
+	}
+
+	List( GetConnection,dBase );
+
+	Query = ~Select * from <TableName>~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+		{ return Warning( Translate( ~Failed to query the <TableName> table~ ) ); }
+
+	Sequence = 10;
+	Index = -1;
+
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	LastField = List( FieldCount ) - 1;
+
+	while ( List( FieldInfo,<++Index>,Name,Name,Length,Length,ADOType,Type ) )
+	{
+		Delimiter = (<Index> != <LastField>) ? ~,~ : ~CarriageReturn~;
+
+		IgnoreIfNull = ~<Type>~ == ~DBTimeStamp~ ? ~1~ : ~0~;
+
+		NewRow( SetValues,ID,~<ID>~,TableName,~<TableName>~,Sequence,~<Sequence>~,FieldName,~<Name>~,
+					FieldSize,~<Length>~,Quoted,~1~,QuoteChar,~"~,FieldType,~<Type>~,
+					Delimiter,~<Delimiter>~,IgnoreIfNull,~<IgnoreIfNull>~ );
+
+		RowBeingAdded = FileFormatsDataView( AddRow, NewRow );
+
+		Sequence += 10;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnButtonClick()
+{
+	FileFormatsDataView( GetActiveCell,Row,Col );
+	
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	FileFormatsDataView( DisplayMenu,FileFormatsListViewMenu );
+
+	return TRUE;
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,FileFormatsListViewMenu,~<KeyString>~ ) )
+	{
+		FileFormatsDataView( DisplayMenu,FileFormatsListViewMenu,0,0  );
+	}
+}
+
+
+NUMERIC OnCloseFileFormatsDataView()
+{
+	if ( FileFormatsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate( ~Would you like to save your pending changes?~ ),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	return FileFormatsDataWindow( ForceCloseWindow );
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( FileFormatsDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !FileFormatsDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new file formats that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( FileFormatsDataView( PendingChanges ) )
+	{
+		FileFormatsDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+NUMERIC OnDoubleClick()
+{
+	return PopupMsg( Translate( ~Double Click has no meaning in this window~ ) );
+}
+
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+NUMERIC Init( FormatID,TableName,DocumentQuery )
+{
+	FileFormatsDataWindow( Set,Title,Translate( ~File Format Data~ ) );
+
+	Global( FormatID,TableName,DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = TRUE;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			Error( Translate( ~Database Query Failed: <DocumentQuery>. <theErr>~ ) );
+		}
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !FileFormatsDataWindow( CreateWindow,Translate( ~FileFormats~ ) ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			Error( Translate( ~Failed to create a window for FileFormats~ ) );
+		}
+
+		SetupTablesComboBox();
+
+		UpdateTable( ~<TableName>~ );
+
+		SetupFormatsComboBox();
+
+		return TRUE;
+	}
+
+	RefreshListView();
+
+	SetupFormatsComboBox();
+
+	return TRUE;
+}
+
+
+NUMERIC SetupTablesComboBox()
+{
+	if ( !PGenConList( TablesList,Connect,Cursor,Forward,Schema,~Tables~ ) )
+		{ return Warning( Translate( ~Failed to query the Tables table~ ) ); }
+
+	TablesList( MakeStringList,TableChoices,TABLE_NAME );
+
+	//TableChoices( GetString,Name );
+
+	ControlView( SetControlFromStringList,TablesComboBox,TableChoices );
+
+	return TRUE;	
+}
+
+
+NUMERIC SetupFormatsComboBox()
+{
+	ControlView( GetControlValue,TablesComboBox,TableName );
+	ControlView( GetControlValue,IDField,ID );
+
+	Query = ~Select Distinct ID From FileFormats Where TableName = '<TableName>' Order By ID~;
+
+	if ( !PGenConList( FileFormatsList,Connect,Cursor,Forward,Query,~<Query>~ ) )
+		{ return Warning( Translate( ~Failed to query the FileFormats table~ ) ); }
+
+	FileFormatsList( MakeStringList,FileFormatChoices,ID );
+
+	ControlView( SetControlFromStringList,IDField,FileFormatChoices );
+
+	ControlView( SetControlValue,IDField,~<FormatID>~ );
+
+	ControlView( GetControlValue,IDField,ID );	//FormatID
+
+
+
+	return TRUE;	
+}
+
+
+if ( !GenCon( FileFormatsTableDefinition,GetFrom,FileFormats,~[DATABASE TableDefinitions]~ ) )
+	{ Error( Translate( ~The FileFormats Table is not properly defined~ ) ); }
+	
+
+Define:	FileFormatsListViewMenu Using DDMenuDef AsSymbol FileFormatsListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add File Format~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(); )
+
+		Define:	NULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	AddAllFields	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Add All Fields~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddFieldsForTable(); )
+
+		Define:	ViewAllFields	using	DDMenuItemDef
+			Fields:	Text		Translate( ~View All Fields~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ViewFieldsForTable(); )
+	}
+
+
+
+Include: ~DefineStdGridButtons~;
+
+Define: FileFormatsDataWindow Using DDWinDef
+	Fields:		Title					Translate( ~FileFormats~ )
+				Position				0 50 70 40
+				IsPositionPercent		T
+				EnableStatusBar			F
+				TypeName				SplitterWnd
+				SplitterRows			~2 8 92~
+				SplitterColumns			1 ;
+
+	Contains:	INLISTORDER
+	{
+			ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2; TextWidth = 100;
+
+			Define: ControlView Using DDViewDef AsSymbol ControlView
+				Fields:	ViewType		FormView
+				KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+				HActionsText			ACTION SHOWHELPPAGE ( AdminHelpFile "FileFormatsData.htm" );
+				Contains:
+				{
+					position = DefineStdGridButtons(FileFormat) + 10;
+
+					Define: AddFieldsForTableButton Using DDWinCtrlDef AsSymbol AddFieldsForTableButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( AddFieldsForTable() )
+								POSITION		$position + $hGap, $vGap $ButtonWidth+35 $ButtonHeight
+								TEXT			Translate( ~Add Fields For~ )
+								TOOLTIP			Translate( ~Add all fields for the specified table~ )
+								TYPENAME		BUTTON
+
+					Define: TableField Using DDWinCtrlDef AsSymbol TableField         
+						Fields: TypeName		StaticText
+								Text			Translate(~Table~)
+								RightJustified	TRUE
+								Position        AddFieldsForTableButton(GetRight,Position) + $hGap,AddFieldsForTableButton(GetTop,Position)+3 
+												35 $ButtonHeight  
+
+					Define: TablesComboBox Using DDWinCtrlDef AsSymbol TablesComboBox 
+						Fields: TypeName		SComboBox  
+								Position		TableField(GetRight,Position) + $hGap,
+												AddFieldsForTableButton(GetTop,Position),120,300
+								GenConName      THIS
+								GenConField		~Table~
+								IActionsText	ACTION EXEC ( SwitchTables() )
+								DActionsText	ACTIONS  ( Save "EXEC(SwitchTables())" )
+								Tooltip         ~Select a Table~ ;
+
+					Define: IDPrompt Using DDWinCtrlDef AsSymbol IDPrompt         
+						Fields: TypeName		StaticText
+								Text			Translate(~ID~)
+								RightJustified	TRUE
+								Position        TablesComboBox(GetRight,Position) + $hGap,TablesComboBox(GetTop,Position)+3 
+												20 $ButtonHeight  
+
+					Define: IDField Using DDWinCtrlDef AsSymbol IDField         
+						Fields: TypeName		ComboBox
+								Position        IDPrompt(GetRight,Position) + $hGap,AddFieldsForTableButton(GetTop,Position) 
+												$TextWidth 200  
+								GenConName      THIS
+								GenConField		~ID~    
+								DActionsText	ACTIONS ( Save "EXEC(ViewFieldsForTable())" )
+								Tooltip			Translate( ~Enter an ID to identify the desired file format or leave blank to see all formats for the desired table~ ) ;
+
+					Define: ViewFieldsButton Using DDWinCtrlDef AsSymbol ViewFieldsButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( ViewFieldsForTable() )
+								Position		IDField(GetRight,Position) + $hGap*2,
+												TablesComboBox(GetTop,Position),30 $ButtonHeight
+								TEXT			Translate( ~View~ )
+								TOOLTIP			Translate( ~Add all fields for the specified table~ )
+								TYPENAME		BUTTON
+				}
+
+		Define: FileFormatsDataView Using DDViewDef AsSymbol FileFormatsDataView
+			Fields:	ViewType				ListView
+					GridControlTypes		FileFormatsTableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView() )
+					CloseActionsText		ACTION Call ( OnCloseFileFormatsDataView() )
+					DoubleClickActionsText	ACTION Exec ( OnDoubleClick() )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					HActionsText			ACTION SHOWHELPPAGE ( AdminHelpFile "FileFormatsData.htm" );
+	}
+	
+

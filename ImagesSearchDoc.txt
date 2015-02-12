@@ -1,0 +1,193 @@
+NUMERIC Search()
+{
+	GenDlg( SearchDialog,Definition,SearchCriteraDialog,Data,SearchCriteraData,Document,$Doc.This,New,Temporary );
+	Global( SearchDialog );
+	return TRUE;
+}
+
+NUMERIC OrderImageQuery( OrderID,AsImages,Query )
+{
+	Actions = ACTION Doc ( ~<OrderID>~ Open ImagesDoc "Init( ~<OrderID>~,<AsImages>,~<Query>~,0 );" );
+	PerformActions( Actions );
+	return TRUE;
+}
+
+NUMERIC WantToSeeAll()
+{
+	Query = ~Select Count(Images.Path) FROM Images~;
+
+	if ( !PGenConList( ImagesCount,Connect,Cursor,keyset,QUERY,~<Query>~ ) )
+	{ 
+		db( GetErrorDescription,err );
+		Warning( ~Failed to query the Images table. <err>  <Query>~ ); 
+		return FALSE;
+	} 
+
+	ImagesCount( GetFirst,NumImages );
+
+	NumImages( Get,Count );
+
+	if ( MessageBox( ~Are you sure you want to see all <$pcon.NumImages[#0]> of the images~,YESNO) != YES )
+		{ return FALSE; }
+
+	return TRUE;
+}
+
+
+NUMERIC DoASearchByOrder()
+{
+	SearchDialog( GetInput,GetString,OrderBeginsWith,OrderBeginsWith );
+	SearchDialog( GetString,ViewAsImages,ViewAsImages );
+
+	if ( ~<OrderBeginsWith>~ == ~~ )
+	{ 
+		if ( !WantToSeeAll() )
+			{ return FALSE; }
+	}
+
+	Query = ~SELECT * FROM Images WHERE OrderID LIKE '<OrderBeginsWith>%'~;
+
+	return OrderImageQuery( ~~,<ViewAsImages>,~<Query>~ );
+}
+
+
+NUMERIC DoASearchByCustomerID()
+{
+	SearchDialog( GetInput,GetString,CustomerBeginsWith,CustomerBeginsWith );
+	SearchDialog( GetString,ViewAsImages,ViewAsImages );
+
+	if ( ~<CustomerBeginsWith>~ == ~~ )
+		{ return Warning( ~You didn't specify a Customer ID~ ); }
+
+	Query = ~SELECT Images.* FROM Images,Orders WHERE Images.OrderID = Orders.ID AND CustomerID LIKE '<CustomerBeginsWith>%'~;
+
+	return OrderImageQuery( ~~,<ViewAsImages>,~<Query>~ );
+}
+
+
+NUMERIC DoASearchByCustomerName()
+{
+	SearchDialog( GetInput,GetString,CustomerNameBeginsWith,CustomerNameBeginsWith );
+	SearchDialog( GetString,ViewAsImages,ViewAsImages );
+
+	if ( ~<CustomerNameBeginsWith>~ == ~~ )
+		{ return Warning( ~You didn't specify a Customer Name~ ); }
+
+	Query = ~SELECT Images.* FROM Images,Orders,Customers WHERE Images.OrderID = Orders.ID AND Orders.CustomerID = Customers.ID AND Customers.Name LIKE '<CustomerNameBeginsWith>%'~;
+
+	return OrderImageQuery( ~~,<ViewAsImages>,~<Query>~ );
+}
+
+
+NUMERIC DoCancelButton()
+{
+	SearchDialog( End );
+	return TRUE;
+}
+
+Define:	SearchCriteraData Using ImagesSearchCriteraDictionary 
+	Fields:	OrderBeginsWith				~~
+			CustomerBeginsWith			~~ 
+			CustomerNameBeginsWith		~~ 
+			ViewAsImages				0 ;
+
+DialogWidth = 400;
+PromptX		= 10;	PromptY		= 10;	PromptWidth	= 150;	PromptHeight = 20;
+ValueWidth	= 100;
+
+hGap		= 10;	vGap = 10;
+
+ButtonWidth	= 90;	ButtonHeight	= 20;
+
+Define: SearchCriteraDialog Using DDWinDef
+	Fields:	POSITION				0, 0, $DialogWidth, 300
+			TITLE					~Images Search Criteria~
+			TYPENAME				~Dialog~
+			OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+			HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "T_Images Search.htm" ) 
+
+	Contains: INLISTORDER
+	{
+		Define: OrderBeginsWithPrompt Using DDWinCtrlDef AsSymbol OrderBeginsWithPrompt
+			Fields:	POSITION		$PromptX $PromptY $PromptWidth $PromptHeight
+					TEXT			~Order ID Begins With~
+					DACTIONSTEXT	ACTION EXEC ( DoASearchByOrder() )
+					TYPENAME		Button
+
+		Define: OrderBeginsWithField Using DDWinCtrlDef AsSymbol OrderBeginsWithField
+			Fields:	DACTIONSTEXT	ACTIONS ( Save )
+					GENCONFIELD		OrderBeginsWith
+					GENCONNAME		THIS
+					IACTIONSTEXT	ACTIONS ( Get )
+					OACTIONSTEXT	ACTIONS ( Save )
+					POSITION		(OrderBeginsWithPrompt(GetRight,Position) + $hGap) $PromptY $ValueWidth $PromptHeight
+					TEXT			~~
+					TOOLTIP			~Order ID Begins with~
+					TYPENAME		EditText
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "SearchCriteriaBeginsWith.html" )
+
+		Define: CustomerBeginsWithPrompt Using DDWinCtrlDef AsSymbol CustomerBeginsWithPrompt
+			Fields:	POSITION		$PromptX (OrderBeginsWithField(GetBottom,Position) +$vGap) $PromptWidth $PromptHeight
+					TEXT			~Customer ID Begins With~
+					DACTIONSTEXT	ACTION EXEC ( DoASearchByCustomerID() )
+					TYPENAME		Button
+
+		Define: CustomerBeginsWithField Using DDWinCtrlDef AsSymbol CustomerBeginsWithField
+			Fields:	DACTIONSTEXT	ACTIONS ( Save )
+					GENCONFIELD		CustomerBeginsWith
+					GENCONNAME		THIS
+					IACTIONSTEXT	ACTIONS ( Get )
+					OACTIONSTEXT	ACTIONS ( Save )
+					POSITION		(CustomerBeginsWithPrompt(GetRight,Position) + $hGap) 
+									CustomerBeginsWithPrompt(GetY,Position) $ValueWidth $PromptHeight
+					TEXT			~~
+					TOOLTIP			~CustomerID Begins with~
+					TYPENAME		EditText
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "SearchCriteriaBeginsWith.html" )
+	
+
+		Define: CustomerNameBeginsWithPrompt Using DDWinCtrlDef AsSymbol CustomerNameBeginsWithPrompt
+			Fields:	POSITION		$PromptX (CustomerBeginsWithField(GetBottom,Position) +$vGap) $PromptWidth $PromptHeight
+					TEXT			~Customer Name Begins With~
+					DACTIONSTEXT	ACTION EXEC ( DoASearchByCustomerName() )
+					TYPENAME		Button
+
+		Define: CustomerNameBeginsWithField Using DDWinCtrlDef AsSymbol CustomerNameBeginsWithField
+			Fields:	DACTIONSTEXT	ACTIONS ( Save )
+					GENCONFIELD		CustomerNameBeginsWith
+					GENCONNAME		THIS
+					IACTIONSTEXT	ACTIONS ( Get )
+					OACTIONSTEXT	ACTIONS ( Save )
+					POSITION		(CustomerNameBeginsWithPrompt(GetRight,Position) + $hGap) 
+									CustomerNameBeginsWithPrompt(GetY,Position) $ValueWidth $PromptHeight
+					TEXT			~~
+					TOOLTIP			~Customer Name Begins with~
+					TYPENAME		EditText
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "SearchCriteriaBeginsWith.html" ) ;
+
+		Define: AsImagesBox Using DDWinCtrlDef AsSymbol AsImagesBox
+			Fields:	POSITION		$PromptX (CustomerNameBeginsWithPrompt(GetBottom,Position) +$vGap) $PromptWidth $PromptHeight
+					TEXT			~View Thumbnails~
+					GENCONFIELD		ViewAsImages
+					GENCONNAME		THIS
+					DACTIONSTEXT	ACTIONS ( Save )
+					IACTIONSTEXT	ACTIONS ( Get )
+					OACTIONSTEXT	ACTIONS ( Save )
+					TYPENAME		CheckBox ;
+
+		DialogWidth = CustomerNameBeginsWithField(GetRight,Position) + $hGap;
+
+
+		Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+			Fields:	GENCONNAME		This
+					DACTIONSTEXT	ACTION EXEC ( DoCancelButton() )
+					POSITION		($DialogWidth / 2) - 30 ,AsImagesBox(GetBottom,Position)+$vGap, $ButtonWidth, $ButtonHeight
+					TEXT			~Cancel~
+					TOOLTIP			~Exit without searching~
+					TYPENAME		BUTTON
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "GoButton.htm" ) 
+	}
+
+
+DialogHeight = CancelButton(GetBottom,Position) + $vGap + 20;
+SearchCriteraDialog( Set,Position,~0  0  <DialogWidth>  <DialogHeight>~ );

@@ -1,0 +1,374 @@
+Tree( Location,~[STRINGS]~,Name,CategoryChoices,PluckAndFree );
+
+StringList: Name ~CategoryChoices~
+	Fields: String  ~Default~
+Hang:	CategoryChoices	~[STRINGS]~ ;
+
+VOID CreateDialog( GenConAddr )
+{
+	GenCon( NewLayout,Is,~<GenConAddr>~, Permanent );
+	Global( NewLayout);
+
+	if ( GenCon( TheWindow,GetWindow,~ProductsWindow~ ) )
+	{
+		if ( TheWindow(GetActiveViewOfWindow,View) )
+		{
+			View( GetName, Category);
+		}
+	}
+
+
+	NewLayout( Set,Category,~<Category>~ );
+
+	hGap = vGap = 10;		
+	PromptHeight = 20;		PromptWidth = 120;		EditTextWidth = 150;
+	ButtonWidth = 90;		ButtonHeight = 20;		EditTextHeight = 20;
+	LeftX = $hGap;			CurrentY = $vGap;		CurrentRight = 0;
+	ComboBoxWidth = 250;	ComboBoxHeight = 100;	StaticTextWidth = 150;
+	PromptLeft = $hGap;		ValueLeft = $PromptLeft + $StaticTextWidth;
+	SmallComboBoxWidth = 100; SmallEditTextWidth = 75;
+
+	HelpButtonXOffset = 15;	HelpButtonYOffset = 15;
+	HelpButtonWidth = 30;	HelpButtonLength = 20;
+
+	Define: SetupNewDialog Using DDWinDef
+	fields: Position				0 0 400 200
+			Title					~Save As A Style~
+			TypeName				~Dialog~
+			IsCenteredHorizontal	~T~
+			IsCenteredVertical		~T~
+			OActionsText			ACTION Exec ( CancelPressed() )
+			
+	Contains: INLISTORDER
+		{
+
+			Define: ProductIDPrompt Using DDWinCtrlDef AsSymbol ProductIDPrompt
+				fields:	TypeName		StaticText
+						Text			~Style ID:~
+						Position		$PromptLeft, 20 + $vGap,$StaticTextWidth, $EditTextHeight
+
+			Define: ProductIDField Using DDWinCtrlDef AsSymbol ProductIDField
+				fields:	TypeName		MaskedEditText
+						Mask			~<$[DATABASE FieldTypes].ProductID[Mask]>~
+						AllowedChars	~<$[DATABASE FieldTypes].ProductID[AllowedChars]>~
+						DisallowedChars	~<$[DATABASE FieldTypes].ProductID[DisallowedChars]>?*/\:><~  // If you enter the ? and * you can't save in the dialog box
+						PromptChar		~<$[DATABASE FieldTypes].ProductID[PromptChar]>~		
+						Text			~~
+						GenConName		THIS
+						InsertOn T
+						GenConField		~ProductID~
+						Position		$ValueLeft,ProductIDPrompt(GetTop,Position),$EditTextWidth, $EditTextHeight
+
+			Define: ProductNamePrompt Using DDWinCtrlDef AsSymbol ProductNamePrompt
+				fields:	TypeName		StaticText
+						Text			~Description:~
+						Position		$PromptLeft,ProductIDPrompt(GetBottom,Position) + $vGap,$StaticTextWidth, $EditTextHeight
+
+			Define: ProductNameField Using DDWinCtrlDef AsSymbol ProductNameField
+				fields:	TypeName		MaskedEditText
+						Mask			~<$[DATABASE FieldTypes].ProductName[Mask]>~
+						AllowedChars	~<$[DATABASE FieldTypes].ProductName[AllowedChars]>~
+						DisallowedChars	~<$[DATABASE FieldTypes].ProductName[DisallowedChars]>~
+						PromptChar		~<$[DATABASE FieldTypes].ProductName[PromptChar]>~		
+						Text			~~
+						InsertOn T
+						GenConName		THIS
+						GenConField		~ProductName~
+						Position		$ValueLeft,ProductNamePrompt(GetTop,Position),$EditTextWidth, $EditTextHeight ;
+
+			Define: CategoryNamePrompt Using DDWinCtrlDef AsSymbol CategoryNamePrompt
+				fields:	TypeName		StaticText
+						Text			~Category:~
+						Position		$PromptLeft,ProductNamePrompt(GetBottom,Position) + $vGap,$StaticTextWidth, $EditTextHeight;
+
+			Query = ~Select Distinct Category From Products Order By Category~;
+			Define: CategoryNameComboBox Using DDWinCtrlDef AsSymbol CategoryNameComboBox
+			fields: TypeName		ComboBox  
+					Position		$ValueLeft,CategoryNamePrompt(GetTop,Position),$ComboBoxWidth, 200
+					IActionsText	~[UpdateStringList(CategoryChoices "<Query>" Category THIS "Category" -1) GetList(CategoryChoices) Get]~
+					GenConName		THIS
+					Mask			~<$[DATABASE FieldTypes].ProductName[Mask]>~
+					AllowedChars	~<$[DATABASE FieldTypes].ProductName[AllowedChars]>~
+					DisallowedChars	~<$[DATABASE FieldTypes].ProductName[DisallowedChars]>~
+					PromptChar		~<$[DATABASE FieldTypes].ProductName[PromptChar]>~		
+					GenConField		Category;
+
+			CurrentRight = 500;
+
+			Define: CreateButton Using DDWinCtrlDef AsSymbol CreateButton
+				fields:	TypeName		DefaultButton
+						Text			~Create~
+						Position		(($CurrentRight - $PromptLeft) / 2) - $ButtonWidth - $hGap - $hGap,
+										CategoryNamePrompt(GetBottom,Position) + $vGap,
+										$ButtonWidth, $ButtonHeight
+						IActionsText	~[NULL]~
+						DActionsText	ACTION EXEC ( CreateButton() )
+						OActionsText	~[NULL]~
+
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				fields:	TypeName		Button
+						Text			~Cancel~
+						Position		(($CurrentRight - $PromptLeft) / 2) + $hGap,CreateButton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+					IActionsText		~[Get]~
+					DActionsText		ACTION EXEC ( dlg(End) )
+					OActionsText		~[NULL]~
+
+			Define: NewLayoutHelpButton Using DDWinCtrlDef
+			fields:	TypeName		Button
+					Text			~Help~
+					Position		SetupNewDialog(GetLeft,Position) + $HelpButtonXOffset,
+									CancelButton(GetTop,Position),
+									$HelpButtonWidth $HelpButtonLength
+					DActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "NewSetup.htm" ) ;
+		}	
+
+	
+	CurrentY = CreateButton(GetBottom,Position) + $vGap + 40;
+	SetupNewDialog( Set,Position,~400  0  <CurrentRight>  <CurrentY>~ );
+
+	GenDlg( dlg,Definition,SetupNewDialog,Data,NEWLAYOUT,Document,$Doc.This,New,Temporary );
+	Global( dlg );
+
+}
+
+NUMERIC CalcNextSequenceForCategory( &Connection,Table,CategoryField,NewCategory,SequenceField )
+{
+	if ( !Connection( CMD,~Select MAX(<SequenceField>) From <Table> Where <CategoryField> = '<NewCategory>'~,MaxSequence ) )
+	{
+		NextSequence = -1;
+	}
+	else
+	{
+		NextSequence = ~<$rs.MaxSequence[#0]>~ == ~~ ? ~-1~ : ~<$rs.MaxSequence[#0]>~;
+	}
+
+	return $NextSequence + 1;
+}
+
+
+NUMERIC ProductAlreadyExists( ID )
+{
+	Query = STR ( Select * From Products Where ID = '<ID>' );
+
+	if ( !PGenConList( ListOfProducts,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		ListOfProducts( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Database query failed: <Query>. <theErr>~ ) );
+	}
+
+	return  ListOfProducts( NumEntries ) != 0;
+}
+
+
+
+NUMERIC AddANewProduct( ID,Name,Category,ProductType,LayoutPath, SType )
+{
+	Setup = 1;
+	if ( !Ado( dbase,Connect ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	if ( <Setup> )
+	{
+		Query = ~Select Style,ProductLayoutPath from Products Where ID = '<ID>'~;
+
+		if ( dBase( GetValuesFor,~<Query>~,Setup,ProductLayoutPath ) )
+		{
+			if ( !<Setup> )
+			{
+				return Warning( ~Product <ID> already exists and is not a style~ );
+			}
+
+			if ( !IsNull( ~<ProductLayoutPath>~ ) )
+			{
+				if ( !SimilarStr( ~<LayoutPath>~,~<ProductLayoutPath>~ ) )
+				{
+					return Warning( ~Setup <ID> already exists as a setup \nbut the directory is <ProductLayoutPath> rather than <LayoutPath>~ );
+				}
+			}
+
+			return TRUE;
+		}
+	}
+
+	Cmd = ~Delete From Products Where ID = '<ID>'~;
+
+	if ( !dbase( CMD,~<Cmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed <Cmd>. <theErr>~ ) );
+	}
+
+	NextSequence = CalcNextSequenceForCategory( dbase,Products,Category,~<Category>~,Sequence );
+
+	UpdateCmd = ~INSERT INTO  Products(ID,LayoutName,Category,Sequence,ProductType,ProductLayoutPath,Style,StyleType)
+								Values('<ID>','<Name>','<Category>',<NextSequence>,'<ProductType>','<LayoutPath>',<Setup>, <SType>)~;
+
+	if ( !dbase( CMD,~<UpdateCmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		return Warning( ~Database update failed <UpdateCmd>. <theErr>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CreateButton()
+{
+	dlg( GetInput );
+
+	ID = ~<$con.NewLayout[ProductID]>~;
+	Name = ~<$con.NewLayout[ProductName]>~;
+	Category = ~<$con.NewLayout[Category]>~;
+	UnitOfMeasure = ~<$con.NewLayout[HeightUnitOfMeasure]>~;
+	Width = ~<$con.NewLayout[Width]>~;
+	Height = ~<$con.NewLayout[Height]>~;
+	SType = ~<$con.NewLayout[StyleType]>~;
+ 	PassedDocPath = ~<$con.NewLayout[DocumentPath]>~;
+   if (!RenderList(aRenderList,Is,~<$con.NewLayout[Renderlist]>,Permanent~))
+		{ return Warning( Translate( ~Render list not available~ ) ); }
+
+	Global(aRenderList);
+
+	if ( ~<ID>~ == ~~ )
+		{ return Warning( Translate( ~Style ID cannot be blank~ ) ); }
+
+	if ( ~<Name>~ == ~~ )
+		{ return Warning( Translate( ~Description cannot be blank~ ) ); }
+
+	if ( ProductAlreadyExists( ~<ID>~ ) )
+		{ return Warning( Translate( ~A Product already exists with ID '<ID>'~ ) ); }
+
+	if ( ~<Category>~ == ~~ )
+		{ Category = ~New~; }
+
+	LayoutDirectory = ~<$App.ShareDirectory>\Layouts\<Category>~;
+	Directory( Create,~<LayoutDirectory>~ );
+	LayoutFile = ~<LayoutDirectory>\<ID>~;
+
+	if ( !FileDialog( DefaultExt,~txt~,HIDEREADONLY,NOREADONLYRETURN,CREATEPROMPT,
+						Title,~Where do you want to save the Layout for this Product?~,
+							DefaultFile,~<LayoutFile>~,Path,LayoutPath,Save ) )
+	{
+		error = GetLastCommDlgError();
+		if (<error> != 0)
+		{
+			if (<error> == 12290)
+			{
+				return Warning( Translate( ~Could not open the dialog to save the style\nbecause the Category and/or Style ID are invalid.  These\nfields cannot contain the following characters:\n\n \ / : " < > | '\n\nIf these fields contains any of these characters, remove them\nand then select the Create button again to save the style. ~ ) );
+			}
+			else
+			{
+				return Warning( Translate( ~Could not open the dialog to save the style.\n\nThe error code is <error>.~ ) );
+			}
+		}
+		else
+		{
+			return FALSE;
+		}
+
+
+	}
+
+//	dlg( End );
+
+//	Sleep( 5);
+
+	LayoutPath = MakePath(type, unc, ~<LayoutPath>~);
+
+	if ( !AddANewProduct( ~<ID>~,~<Name>~,~<Category>~,~Digital~,~<LayoutPath>~, <SType>) )
+		{ return FALSE; }
+
+	GenCon( DocInfo,New,DDDocumentInfo );
+
+	DocInfo( Set,ProductID,~<ID>~ );
+
+//	if ( !NewLayout( CreateNewLayout,~<LayoutPath>~,DocInfo ) )
+//		{ return Warning( Translate( ~Failed to create Layout~ ),~<LayoutPath>~ ) ); }
+
+	if ( !aRenderList( WriteSetup,~<LayoutPath>~ ) )
+		{ return Warning( ~Failed to write <LayoutPath>~ ); }
+
+//	SeeTheImagesForThisProduct( ~<ID>~ );
+
+	//now handling this directly in LayoutAndJobView.cpp
+//	UpdateTheProductWindow(~<LayoutPath>~);
+	NotifyAffectedDocuments(ProductLayoutPath );
+
+	// SWITCH THE CATEGORY IN THE PRODUCTS WINDOW TO SHOW THE PRODUCT
+
+	Actions = ACTION Doc ( Products "SelectProduct(~<ID>~);" );
+	PerformActions( Actions );
+
+	CloseWindow();
+	OpenStyle(~<ID>~,~<Name>~,~<LayoutPath>~);
+	
+	dlg( End );
+
+	Sleep( 5);
+	Exit();	// EXIT BECAUSE THE DOCUMENT THAT IS THE SCRIPT NEEDS TO GO AWAY
+}
+
+VOID CloseWindow()
+{
+	PassedDocPath = ~<$con.NewLayout[DocumentPath]>~;
+	Index = 0;
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( Window( GETNEXT,aView ) )
+		{
+			aView( GET,ViewType,ViewType );
+
+			if ( ~<ViewType>~ == ~LayoutView~ )
+			{
+				aView( GetDocumentPath,DocumentPath );
+				if (~<DocumentPath>~ == ~<PassedDocPath>~)
+				{
+					Window( CloseWindow );
+				}
+			}
+		}
+	}
+}
+
+VOID SeeTheImagesForThisProduct( ID )
+{
+	Actions = ACTION Doc ( Products "ImagesForThisProduct(~<ID>~);" );
+	PerformActions( Actions );
+}
+
+
+VOID UpdateTheProductWindow( LayoutPath )
+{
+	Actions = ACTION Doc ( Products "UpdateProductPreviewImages(~<LayoutPath>~);" );
+	PerformActions( Actions );
+}
+
+
+VOID CancelPressed()
+{
+	dlg( End );
+	Exit();
+}
+
+
+VOID Init( addr)
+{
+	CreateDialog(<addr>);
+}
+
+VOID OpenStyle(ProductID,LayoutName,LayoutPath)
+{
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( ~Could not create document info for <LayoutPath>~ ); }
+
+	Info( SetValues,ProductID,~<ProductID>~,LayoutName,~<LayoutName>~ );
+
+	if (!Document( aLayout,Open,~<LayoutPath>~,Layout,~~,Info ) )
+		{ Warning( ~Could not open <LayoutPath>~ ); }
+
+}

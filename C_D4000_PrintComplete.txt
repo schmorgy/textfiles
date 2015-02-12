@@ -1,0 +1,501 @@
+//******************************************************************************
+//  FILE:			C_D4000_PrintComplete.txt		
+//                                                                  
+//  DESCRIPTION:		Generate a command file with the following structure and send it to the hot folder
+//			                                            
+//******************************************************************************
+
+ExecC() ;
+
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+char	*NULL ;
+int		 gTesting = FALSE ;
+
+UGenCon	*gRELookAhead ;
+long	 gLogAmount ;
+UList	*gMultiPageProductList = NULL ;
+
+main()
+{
+//	Debug(1) ;
+	gRELookAhead = GetTreeObject(_T("RELookAhead"),_T("[GenCons]")) ;
+	gLogAmount	= gRELookAhead->GetLongValue(_T("RELogLevel")) ;
+}
+
+int Advertize()
+{
+	SessionLogDirect( _T("C_D4000_PrintComplete.Advertize: (V1.0)")) ;
+	return( TRUE ) ;
+}
+
+
+int Init( UGenCon *fSOrder, UGenCon *CompletePrint )
+{
+	TCHAR	 CmdPath[2048] ;
+	TCHAR	 NewOrderID[1024] ;
+	TCHAR	 SortTime[2048] ;
+	TCHAR	 TmpPath[1024] ;
+	long	 PageID = CompletePrint->GetLongValue(_T("JobID")) ;
+	int		 isDirectory ;
+	int		 Count = 0L ;
+	
+	TCHAR	 Msg[1024] ;		//	ERROR HANDLING
+	long	 ErrorType = 4L ;
+
+	TCHAR	*ImagePath	= CompletePrint->GetStringValue(_T("ImagePath")) ;
+	if( ImagePath == NULL )
+	{
+		SessionLogDirect( _T("C_D4000_PrintComplete.Init: No ImagePath for PageID: %ld"), PageID ) ;
+		DumpPage( CompletePrint ) ;
+		return( FALSE ) ;
+	}
+
+	UGenCon	*PrinterSetup	= fSOrder->GetLongValue(_T("PrinterSetup")) ;
+	TCHAR	*ControlFolder	= PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+	
+	gMultiPageProductList	= fSOrder->GetLongValue(_T("MultiPageProductList")) ;
+
+	long	 CurrentPage = CompletePrint->GetLongValue(_T("ProductPageSeqCurrent")) ;
+	long	 LastPage	 = CompletePrint->GetLongValue(_T("ProductPageSeqLast")) ;
+	
+	SessionLogDirect( _T("C_D4000_PrintComplete.Init: PageID: P%09ld, Page: %ld of %ld"), PageID, CurrentPage, LastPage ) ;
+	if(LastPage != 1)
+	{ //really a multipage product (not 1 of 1)
+
+		if( CurrentPage && LastPage )
+		{
+			if( CurrentPage == 1L && gMultiPageProductList )
+			{
+				//	WE HAVE AN ERROR: LAST MULTIPAGE PRODUCT WAS NOT COMPLETED.
+				SessionLogDirect( _T("C_D4000_PrintComplete: ERROR: Last Multi-Page Product was not completed.")) ;
+				DumpMultiPageIDs() ;
+				
+				//	SHOULD WE GENERATE ERROR RESPONSES FOR PAGES THAT SHOWED UP HERE ?
+				UListIterator	*anIter = new UListIterator( gMultiPageProductList ) ;
+				UGenCon			*aPage  = (UGenCon *) anIter->GetFirst() ;
+				while( aPage )
+				{
+					sprintf( Msg, _T("ERROR: Last Multi-Page Product was not completed. JobID: P%09ld"), aPage->GetLongValue(_T("JobID"))) ;
+					aPage->SetLongValue(_T("ResponseCode"), -101L ) ;
+					aPage->SetAttrValue(_T("ResponseText"), Msg ) ;
+					WriteErrorResponseFile( fSOrder, aPage, -101, ErrorType, Msg ) ;
+					ErrorType = 5L ;	//	SAY WE HAVE ALREADY OUTPUT THE MESSAGE.
+					aPage  = (UGenCon *) anIter->GetNext() ;
+				}
+				delete anIter ;
+				
+				CleanMultiPageProductList(fSOrder) ;
+			}
+			
+			if( CurrentPage < LastPage )
+			{
+				if( gMultiPageProductList == NULL )
+				{
+					gMultiPageProductList = new UList ; 
+					fSOrder->SetLongValue(_T("MultiPageProductList"), gMultiPageProductList ) ;
+				}
+				gMultiPageProductList->InsertBack( CompletePrint ) ;
+				
+	SessionLogDirect( _T("C_D4000_PrintComplete.Init: PageID: P%09ld, Page: %ld of %ld, Number of Entries In Queue: %ld"),
+				 PageID, CurrentPage, LastPage, gMultiPageProductList->GetNumEntries() ) ;
+				return( TRUE ) ;
+			}
+			
+	SessionLogDirect( _T("C_D4000_PrintComplete.Init: PageID: P%09ld, Page: %ld of %ld"), PageID, CurrentPage, LastPage ) ;
+
+			if( CurrentPage == LastPage )
+			{
+				if( gMultiPageProductList )
+				{
+					gMultiPageProductList->InsertBack( CompletePrint ) ;
+					
+	SessionLogDirect( _T("C_D4000_PrintComplete.Init: PageID: P%09ld, Page: %ld of %ld, Number of Entries In Queue: %ld"),
+				 PageID, CurrentPage, LastPage, gMultiPageProductList->GetNumEntries() ) ;
+
+					if( gMultiPageProductList->GetNumEntries() != LastPage )
+					{
+						//	WE HAVE AN ERROR NOT ENOUGH PAGES WERE RENDERED.
+						HandleIncompleteError(fSOrder,CompletePrint, _T("Is Missing Page(s)."));
+						return( FALSE ) ;
+					}
+				}
+				else
+				{
+					HandleIncompleteError(fSOrder,CompletePrint, _T("Is Missing First Page.")) ;
+					return( FALSE ) ;
+				}
+			}
+		}
+	} 
+	else
+	{ //null out multipage list, not really multipage (1 of 1)
+		gMultiPageProductList = NULL;
+	}
+
+	GetSortableTimeNow(SortTime);
+	sprintf( TmpPath, _T("%s\\%s"), ControlFolder, SortTime) ;
+
+	strcpy( CmdPath, TmpPath ) ;
+	strcat( CmdPath, _T(".cmd")) ;
+	while( FileOrDirectoryExists( CmdPath, &isDirectory ))
+	{
+		Count++ ;
+		sprintf( CmdPath, _T("%s_%04d.cmd"), TmpPath, Count ) ;
+	}
+			 
+	if( gMultiPageProductList )
+	{
+		SessionLogDirect( _T("C_D4000_PrintComplete.Init (after CmdText): PageID: P%09ld, Page: %ld of %ld, Number of Entries In Queue: %ld"),
+					PageID, CurrentPage, LastPage, gMultiPageProductList->GetNumEntries() ) ;
+
+		char	*fp = fopen( CmdPath, _T("ab")) ;
+		if( fp )
+		{
+			TCHAR	IOBuff[10] ;
+			IOBuff[0] = 0xFEFF ;
+			IOBuff[1] = 0x0000 ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+
+			long			 PageNumber = 1L ;
+			UListIterator	*anIter = new UListIterator( gMultiPageProductList ) ;
+			UGenCon			*aPage  = (UGenCon *) anIter->GetFirst() ;
+			while( aPage )
+			{
+				AddPageToCommandFile(fp, fSOrder, aPage, PageNumber++ ) ;
+				aPage->SetLongValue(_T("CommandSent"), 1L ) ;
+				aPage  = (UGenCon *) anIter->GetNext() ;
+			}
+			delete anIter ;
+			fclose( fp ) ;
+		}
+		else
+		{
+			SessionLogDirect( _T("C_D4000_PrintComplete.Init: Could not create \"%s\"."), CmdPath ) ;
+		}
+
+		CleanMultiPageProductList(fSOrder) ;
+	}
+	else
+	{
+		SessionLogDirect( _T("We have a NULL gMultiPageProductList.")) ;
+		char	*fp = fopen( CmdPath, _T("wb")) ;
+		if( fp )
+		{
+			TCHAR	IOBuff[10] ;
+			IOBuff[0] = 0xFEFF ;
+			IOBuff[1] = 0x0000 ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+				
+			AddPageToCommandFile(fp, fSOrder, CompletePrint, 1L ) ;
+			fclose( fp ) ;
+
+			CompletePrint->SetLongValue(_T("CommandSent"), 1L ) ;
+		}
+	}
+	
+
+	return( TRUE ) ;
+}
+
+
+
+int AddPageToCommandFile(char *fp, UGenCon *fSOrder, UGenCon *CompletePrint, long PageNumber)
+{
+	TCHAR	 NewImgPath[2048] ;
+	TCHAR	*ImagePath	= CompletePrint->GetStringValue(_T("ImagePath")) ;
+	RenameFile( ImagePath, NewImgPath ) ;
+	TCHAR	IOBuff[2048] ;
+
+	SessionLogDirect( _T("C_D4000_PrintComplete: Adding Page %ld."), PageNumber ) ;
+
+	if( PageNumber == 1L )
+	{
+		long	 PageID		= CompletePrint->GetLongValue(_T("JobID")) ;
+		TCHAR	*BatchID	= fSOrder->GetStringValue(_T("BatchID")) ;
+		TCHAR	*OrderID	= fSOrder->GetStringValue(_T("OrderID")) ;
+		long	 GroupID	= CompletePrint->GetLongValue( _T("GroupID")) ;
+		long	 GroupQty	= CompletePrint->GetLongValue(_T("GroupQty")) ;
+		long	 Qty		= CompletePrint->GetLongValue(_T("Quantity")) ;
+		long	 resolution = CompletePrint->GetDoubleValue(_T("Resolution"));
+		long    Surface		= CompletePrint->GetDoubleValue(_T("OemPrinterSurface")) ;
+		long	 Center		= CompletePrint->GetLongValue(_T("Center")) ;
+		long	 DoubleSided	= CompletePrint->GetLongValue(_T("DOUBLESIDED")) ;
+
+		SessionLogDirect( _T("Adding 1st Page %ld: P%09ld, \"%s\"."), PageNumber, PageID, NewImgPath ) ;
+		long	 LastPage	 = CompletePrint->GetLongValue(_T("ProductPageSeqLast")) ;
+		
+		sprintf( IOBuff, _T("ORDER_ID: %s"), OrderID ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("BATCH_ID: %s"), BatchID ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+		
+		sprintf( IOBuff, _T("RESOLUTION: %ld"), resolution ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+				
+		sprintf( IOBuff, _T("DELETEFILE: %s"), _T("TRUE")) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+		
+		if( GroupID )	//	IF WE HAVE A GROUP, THEN USE THE GROUP QUANTITY.
+		{
+			Qty = GroupQty ;
+		}
+		
+		if( Qty == 0)
+		{ Qty = 1; }
+
+		sprintf( IOBuff, _T("COPIES: %ld"), Qty ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+		
+		
+		TCHAR	*CenterText = _T("FALSE") ;
+		if( Center )	{ CenterText = _T("TRUE") ; }
+				
+		sprintf( IOBuff, _T("CENTER: %s"), CenterText ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("SURFACE: %ld"), Surface ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+			
+		TCHAR *doublesidedText = _T("FALSE") ;
+		if (DoubleSided) { 	doublesidedText = _T("TRUE"); } 
+		sprintf( IOBuff, _T("DOUBLESIDED: %s"), doublesidedText ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;			
+		
+		sprintf( IOBuff, _T("\nPAGE_ID: %ld"), PageID ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("FILENAME: %s"), NewImgPath ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+	}
+	else	//	PageNumber > 1L 
+	{	
+		long	 PageID		= CompletePrint->GetLongValue(_T("JobID")) ;
+
+		sprintf( IOBuff, _T("\nPAGE_ID: %ld"), PageID ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("FILENAME: %s"), NewImgPath ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		SessionLogDirect( _T("Adding next Page %ld: P%09ld, \"%s\"."), PageNumber, PageID, NewImgPath ) ;
+	}
+	
+	return( TRUE ) ;
+}
+
+int HandleIncompleteError(UGenCon *fSOrder, UGenCon *CompletePrint, TCHAR *SrcMsg)
+{
+	TCHAR	Msg[1024] ;
+	
+	//	WE HAVE AN ERROR NOT ENOUGH PAGES WERE RENDERED.
+	SessionLogDirect( _T("C_D4000_PrintComplete: ERROR: This Multi-Page Product %s"), SrcMsg ) ;
+	DumpMultiPageIDs() ;
+
+	sprintf( Msg, _T("Multi-Page Product %s: JobID: P%09ld"), SrcMsg,CompletePrint->GetLongValue(_T("JobID"))) ;
+	CompletePrint->SetLongValue(_T("ResponseCode"), -102L ) ;
+	CompletePrint->SetAttrValue(_T("ResponseText"), Msg ) ;
+	
+	//	SHOULD WE GENERATE ERROR RESPONSES FOR PAGES THAT SHOWED UP HERE ?
+	long ErrorType = 4L ;
+	UListIterator	*anIter = new UListIterator( gMultiPageProductList ) ;
+	UGenCon			*aPage  = (UGenCon *) anIter->GetFirst() ;
+	while( aPage )
+	{
+		aPage->SetLongValue(_T("ResponseCode"), -102L ) ;
+		aPage->SetAttrValue(_T("ResponseText"), Msg ) ;
+		WriteErrorResponseFile( fSOrder, aPage, -101, ErrorType, Msg ) ;
+		ErrorType = 5L ;	//	SAY WE HAVE ALREADY OUTPUT THE MESSAGE.
+		aPage  = (UGenCon *) anIter->GetNext() ;
+	}
+	delete anIter ;
+	return( TRUE ) ;
+}
+
+
+int WriteErrorResponseFile( UGenCon *fSOrder, UGenCon *CompletePrint, 
+							long ErrorCode, long ErrorType, TCHAR *ErrorText )
+{
+	int		 Result = FALSE ;
+	TCHAR	 ResponsePath[1024] ;
+	UGenCon	*PrinterSetup	= fSOrder->GetLongValue(_T("PrinterSetup")) ;
+	TCHAR	*ResponseFolder	= PrinterSetup->GetStringValue(_T("ResponseFolder")) ;
+	long	 PageID			= CompletePrint->GetLongValue(_T("JobID")) ;
+	TCHAR	*BatchID	= fSOrder->GetStringValue(_T("BatchID")) ;
+	TCHAR	*OrderID	= fSOrder->GetStringValue(_T("OrderID")) ;
+	
+	sprintf( ResponsePath, _T("%s\\P%09ld.rsp"), ResponseFolder, PageID ) ;
+	
+	TCHAR	theDate[64] ;			
+	GetTimeNow(theDate,  _T("%m/%d/%y %H:%M:%S")) ;
+	
+	char	*fp = fopen( ResponsePath, _T("wb")) ;
+	if( fp )
+	{
+		TCHAR	IOBuff[1024] ;
+		IOBuff[0] = 0xFEFF ;
+		IOBuff[1] = 0x0000 ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("TYPE: RESPONSE\n") ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("PAGE_ID: %ld\n"), PageID ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("ORDER_ID: %s\n"), OrderID ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("BATCH_ID: %s\n"), BatchID ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("ACTION: 0\n") ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("CODE: %ld\n"), ErrorCode ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("ERROR_TYPE: %ld\n"), ErrorType ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("DATE_TIME: %s\n"), theDate ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("MSG: \"C_D4000_PrintComplete: %s\"\n"), ErrorText ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		fclose( fp ) ;
+		Result = TRUE ;
+	}
+	return( Result ) ;
+}
+
+
+int DumpPage( UGenCon *aGC )
+{
+	TCHAR		*AttrName ;
+	TCHAR		 AttrValue[2048] ;
+
+	UDataDict	*theDict = aGC->GetDataDict() ;
+
+	TCHAR		*GCName = aGC->GetName() ;
+	TCHAR		*DDName = theDict->GetName() ;
+
+	SessionLogDirect( _T("Create \"%s\" Using \"%s\"\r\n{\r\n"), GCName, DDName ) ;
+	UListIterator	*anIter = new UListIterator( theDict ) ;
+	UAttribute		*anAttr = (UAttribute *) anIter->GetFirst() ;
+	while( anAttr )
+	{
+		AttrName = anAttr->GetName() ;
+		if( aGC->AttrChanged( AttrName ))
+		{
+			aGC->GetAttrValue( AttrName, AttrValue ) ;
+			SessionLogDirect( _T("\t%s\t\t\"%s\"\r\n"), AttrName, AttrValue ) ;
+		}
+		anAttr = (UAttribute *) anIter->GetNext() ;
+	}
+	SessionLogDirect( _T("\r\n%c ;\r\n"), 0x0x7D) ;
+	delete anIter ;
+	return( TRUE ) ;
+}
+
+int CleanMultiPageProductList(UGenCon *fSOrder)
+{
+	gMultiPageProductList->RemoveAll() ;
+	delete gMultiPageProductList ;
+	gMultiPageProductList = NULL ;
+	fSOrder->SetLongValue(_T("MultiPageProductList"), NULL ) ;
+}
+
+
+int DumpMultiPageIDs()
+{
+	long	 PageID ;
+	UListIterator	*anIter = new UListIterator( gMultiPageProductList ) ;
+	UGenCon			*aPage  = (UGenCon *) anIter->GetFirst() ;
+	while( aPage )
+	{
+		PageID		= aPage->GetLongValue(_T("JobID")) ;
+		SessionLogDirect( _T("\tPageID: P%09ld"), PageID ) ;
+		aPage  = (UGenCon *) anIter->GetNext() ;
+	}
+	delete anIter ;
+	return( TRUE ) ;
+}
+
+WriteUnicodeFile( char *fp, TCHAR *Text )
+{
+	long	Length = strlen( Text ) ;
+	fwrite( Text, 2, Length, fp ) ;
+
+	long	EndOfLine = 0x000A000D ;
+	fwrite( &EndOfLine, 2, 2, fp ) ;
+}
+
+
+TCHAR *RenameFile( TCHAR *ImagePath, TCHAR *NewImgPath )
+{
+	long	SrcPos, DstPos ;
+	SrcPos = 0L ;
+	DstPos = 0L ;
+
+	while( ImagePath[SrcPos] )
+	{
+		if( IsLegalFileChar( ImagePath[SrcPos] ))
+		{
+			NewImgPath[DstPos] = ImagePath[SrcPos] ;
+			DstPos++ ;
+		}
+		SrcPos++ ;
+	}
+
+	if( gLogAmount >= 7 )
+	{
+		SessionLogDirect( _T("Original File: \"%s\""), ImagePath ) ;
+		SessionLogDirect( _T("New File: \"%s\""), NewImgPath ) ;
+	}
+
+	if( stricmp( ImagePath, NewImgPath ) == 0 )
+	{
+		return( NewImgPath ) ;
+	}
+
+	//	SOMETIMES IMA STILL HAS THE FILE.
+	//	SO DO SOME WAITING AND TRY AGAIN.
+	int Result = rename( ImagePath, NewImgPath ) ;
+	long	StartClock = Clock() ;
+	long	EndClock ;
+	while( Result )
+	{
+		Result = rename( ImagePath, NewImgPath ) ;
+		if( gLogAmount >= 5 )
+		{
+			SessionLogDirect( _T("New File: \"%s\" Result = %ld\r\n"), NewImgPath, Result ) ;
+		}
+
+		EndClock = Clock() ;
+		if( EndClock - StartClock > 10000 )
+		{
+			Result = 0 ;
+		}
+		else
+		{
+			Sleep( 500 ) ;
+		}
+	}
+
+	return( NewImgPath ) ;
+}
+
+int IsLegalFileChar( TCHAR aChar )
+{
+	if( aChar >= 'A' && aChar <= 'Z' )	{ return( TRUE ) ; }
+	if( aChar >= 'a' && aChar <= 'z' )	{ return( TRUE ) ; }
+	if( aChar >= '0' && aChar <= '9' )	{ return( TRUE ) ; }
+	if( aChar == '_' || aChar == '.' )	{ return( TRUE ) ; }
+	if( aChar == ':' || aChar == '\\' )	{ return( TRUE ) ; }
+	if( aChar == ' ' || aChar == '-'  )	{ return( TRUE ) ; }
+	return( FALSE ) ;
+}

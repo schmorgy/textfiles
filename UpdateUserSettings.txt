@@ -1,0 +1,334 @@
+
+// calling params:  category is index field into database,
+// options - gencon to update database with
+NUMERIC UpdateUserSettings( Category,&Options )
+{
+	Key = ~UserName = '<$App.UserName>' AND Category = '<Category>'~;
+
+	Query = ~Select * From Settings Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	Field = -1;
+
+	while ( Options( Attribute,<++Field>,Name ) )
+	{
+		List( Filter,~Item = '<Name>'~ );
+
+		if ( List( GetFirst,Setting ) )
+		{
+			Setting( Set,SettingsText,~<$con.Options[<Name>]>~ );
+			List( Update );
+		}
+		else
+		{
+			List( AddNew,Setting );
+			Setting( Set,UserName,~<$App.UserName>~,Category,~<Category>~,Item,~<Name>~,SettingsText,~<$con.Options[<Name>]>~,Enabled,1 );	
+			List( Update );
+		}
+	}	
+
+	Options( NotifyAffectedDocuments,~SettingsText~ );
+
+	return TRUE;
+}
+
+NUMERIC ShowPromptsInOpenLayoutsJobs()
+{
+	Index = 0;
+
+	if (!RunningVersion(5.1))
+	{
+		return TRUE;
+	}
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == JobView )
+		{	
+			aView( ShowPrompts );
+		}
+	}
+	return TRUE;
+}
+
+
+
+NUMERIC Dp2UpdateHelpLanguage( Language )
+{
+	SetSymbolValue( HelpLanguage,~<Language>~ );
+
+	SetSymbolValue( Language,~<Language>~ );
+
+	SetUserSettings( ~Language~,~Help~,~<Language>~,TRUE );
+
+	CloseHelp();
+
+	if ( GenCon( MenuGenCon,GetFrom,HelpMenuObj,~[UI Menus]~ ) )
+	{
+		if ( MenuGenCon( GetByName,HelpWithHelp,HelpWithHelp ) )
+		{
+			HelpWithHelp( Set,IsEnabled,~<Language>~ == ~English~ ? T : F );
+		}
+	}
+
+	Exit();
+}
+
+
+NUMERIC UpdateHelpLanguage( HelpLanguage,Language )
+{
+	SetSymbolValue( HelpLanguage,~<HelpLanguage>~ );
+
+	SetSymbolValue( Language,~<Language>~ );
+	
+	SetSymbolValue( LanguageCode,~<Language>~ );
+
+	SetUserSettings( ~Language~,~Help~,~<Language>~,TRUE );
+	SetUserSettings( ~LanguageCode~,~Help~,~<Language>~,TRUE );
+
+	// Update the setting in the data location file that is used for the startup screens.
+	UpdateDataLocationFile(~<Language>~);
+	
+	CloseHelp();
+
+	if ( GenCon( MenuGenCon,GetFrom,HelpMenuObj,~[UI Menus]~ ) )
+	{
+		if ( MenuGenCon( GetByName,HelpWithHelp,HelpWithHelp ) )
+		{
+			HelpWithHelp( Set,IsEnabled,SimilarStr(~<Language>~,~ENU~) ? T : F );
+		}
+	}
+	
+	if ( Authorized(~DP2~) )
+	{
+		TranslationsOptions( Disable );
+	}
+	
+	ShowMainMenu();
+	
+	Action = ACTION DOC ( NavDoc "LanguageChange()" );
+	PerformActions( Action );
+	
+	Exit();
+}
+
+NUMERIC UpdateDataLocationFile( Language )
+{
+	// See BaseStartup.txt if you want to know what these stand for.
+	WorkstationType = 0;
+	ShareDir = ~<$App.Directory>~;
+	Connection = ~Msde~;
+	SetupType = 1;
+	DontChangeShareDir = 0;
+	AllowJetConnection = 0;
+	IsDatabaseServer = 0;
+	StartupModule = -1;
+
+	DataLocationFile = ~<$App.Directory>\<$App.ExeName>_DataLocation.txt~;
+	Include: ~<DataLocationFile>~;
+
+	if ( !File( DataBaseLocation,UnicodeOutput,Open,~<DataLocationFile>~,Write ) )	
+	{
+		return FALSE;
+	}
+
+	DataBaseLocation( ~// THIS FILE DEFINES WHERE TO LOOK FOR THE DATABASE AND THE SHARED FILES~ );
+	DataBaseLocation( ~// IF YOU DELETE THIS FILE, IT WILL BE RECREATED THE NEXT TIME YOU START THE APPLICATION~ );
+	DataBaseLocation( ~  ~ );
+	DataBaseLocation( ~WorkstationType = <WorkstationType>;~ );
+	DataBaseLocation( ~ShareDir = |<ShareDir>|;~ );
+	DataBaseLocation( ~Connection = |<Connection>|;~ );
+	DataBaseLocation( ~SetupType = <SetupType>;~ );
+	DataBaseLocation( ~DontChangeShareDir = <DontChangeShareDir>;~ );
+	DataBaseLocation( ~AllowJetConnection = <AllowJetConnection>;~ );
+	DataBaseLocation( ~IsDatabaseServer = <IsDatabaseServer>;~ );
+	DataBaseLocation( ~CurrentLanguage = |<Language>|;~ );
+
+	if ( <StartupModule> != -1 )
+	{
+		DataBaseLocation( ~StartupModule = <StartupModule>;~ );
+	}
+	
+	DataBaseLocation( Close );
+
+	return TRUE;
+}
+
+
+VOID UpdateViewPreferences()
+{
+	if ( Gencon(PreviewOptions, GetGenCon, PreviewOptions))
+	{
+		UpdateUserSettings( PreviewOptions, PreviewOptions );
+	}
+
+	Exit();
+}
+
+
+VOID UpdateImagePreferences()
+{
+	if ( Gencon(ImageOptions, GetGenCon, ImageOptions))
+	{
+		UpdateUserSettings( ImageOptions, ImageOptions );
+	}
+
+	Exit();
+}
+
+
+VOID UserSettingUnits(Units)
+{
+	if ( Gencon(PreviewOptions, GetGenCon, PreviewOptions))
+	{
+		PreviewOptions( SetValue, PreferredUnits,~<Units>~);
+
+		if ( Gencon(PreviewOptions, GetGenCon, PreviewOptions))
+		{
+			UpdateUserSettings( PreviewOptions, PreviewOptions );
+		}
+		while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+		{
+			if ( !Window( GetNext,aView ) )
+				continue;
+
+			aView( Get,ViewType,ViewType );
+			aView( Get,PreferredUnits,CurrentUnits );
+
+			if ( (~<ViewType>~ == LayoutView) || (~<ViewType>~ == JobView) )
+			{
+				if (~<CurrentUnits>~ != ~<Units>~)
+				{
+					MessageBox(~Open layouts and jobs must be closed and reopened before <Units> will be used.~,OK);
+					break;
+				}
+			}
+		}
+	}
+}
+
+VOID RectToolParametersUnits(Units)
+{
+	if ( Gencon(RectToolParameters, GetGenCon, RectToolParameters))
+	{
+		RectToolParameters( SetValue, UnitOfMeasure,~<Units>~);
+	}
+
+	Action = ACTION DOC ( RectToolSetupDialog, "SelectUnits();" );
+	PerformActions( Action );
+
+}
+
+VOID OvalToolParametersUnits(Units)
+{
+	if ( Gencon(OvalToolParameters, GetGenCon, OvalToolParameters))
+	{
+		OvalToolParameters( SetValue, UnitOfMeasure,~<Units>~);
+	}
+	Action = ACTION DOC ( OvalToolSetupDialog,  "SelectUnits();" );
+	PerformActions( Action );
+}
+
+// Checks a unit menu item
+VOID CheckAUnitMenuItem(Name,Value)
+{
+	if ( GenCon( MenuGenCon,GetFrom,~<Name>~,~[UI Menus ViewMenuObj ViewSettings ViewSettingsUnits]~ ) )
+	{
+		MenuGenCon( SetValue, IsChecked, ~<Value>~);
+	}
+
+}
+
+// Type can either be ~Job~ or ~~, corresponding to HighestResolutionJob and HighestResolution field
+// in PreviewOptions GenCon
+VOID UserWantsHighRes(Type)
+{
+	if ( GenCon( PreviewGenCon,GetFrom,PreviewOptions, ~[GenCons]~ ) )
+	{
+		PreviewGenCon( SetValue, HighestResolution<Type>, 1);
+		
+		Action = ACTION DOC ( "GreenScreenDoc" "Obj.OnHiResButton(1)" );
+		PerformActions( Action );
+	}
+}
+
+VOID CheckAMenuItem(Name,PathTo,IsChecked)
+{
+	if ( GenCon( MenuGenCon,GetFrom,~<Name>~,~<PathTo>~ ) )
+	{
+		MenuGenCon( SetValue, IsChecked, ~<IsChecked>~);
+	}
+}
+
+VOID UserWantsIntermediateRes(Type)
+{
+	if ( GenCon( PreviewGenCon,GetFrom,PreviewOptions, ~[GenCons]~ ) )
+	{
+		PreviewGenCon( SetValue, HighestResolution<Type>, 2);
+	}
+}
+
+
+VOID UserWantsLowRes(Type)
+{
+	if ( GenCon( PreviewGenCon,GetFrom,PreviewOptions,~[GenCons]~ ) )
+	{
+		PreviewGenCon( SetValue, HighestResolution<Type>, 0);
+		
+		Action = ACTION DOC ( "GreenScreenDoc" "Obj.OnHiResButton(0)" );
+		PerformActions( Action );
+	}
+}
+
+VOID UserWantsCompareNone()
+{
+	if ( GenCon( ImageOptionsGenCon,GetFrom,ImageOptions, ~[GenCons]~ ) )
+	{
+		ImageOptionsGenCon( SetValue, ImageCompare, 0);
+	}
+}
+
+VOID UserWantsCompareRef()
+{
+	if ( GenCon( ImageOptionsGenCon,GetFrom,ImageOptions, ~[GenCons]~ ) )
+	{
+		ImageOptionsGenCon( SetValue, ImageCompare, 1);
+	}
+}
+
+
+VOID UserWantsCompareSaved(Type)
+{
+	if ( GenCon( ImageOptionsGenCon,GetFrom,ImageOptions,~[GenCons]~ ) )
+	{
+		ImageOptionsGenCon( SetValue, ImageCompare, 2);
+	}
+}
+
+VOID CheckBestQualityMenuItem()
+{
+	if ( GenCon( PreviewGenCon,GetFrom,PreviewOptions, ~[GenCons]~ ) )
+	{
+		IsChecked = 0;
+		PreviewGenCon(GetValue,HighestResolution,Value);
+		if (SimilarStr(~<Value>~,T) || SimilarStr(~<Value>~,1))
+		{
+			IsChecked = 1;
+		}
+		CheckAMenuItem(ViewSettingsIHighestResolution, ~[UI Menus ViewMenuObj ViewSettings ViewSettingsIResolutions]~, <IsChecked>);	
+		IsChecked = 1 - <IsChecked>;
+		CheckAMenuItem(ViewSettingsILowestResolution, ~[UI Menus ViewMenuObj ViewSettings ViewSettingsIResolutions]~, <IsChecked>);	
+	}
+}
+
+

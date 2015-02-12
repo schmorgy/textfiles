@@ -1,0 +1,452 @@
+	
+NUMERIC SpawnProgram( Program,File )
+{	
+	if ( ~<Program>~ == ~~ )
+	{
+		Program = ~<$Sys.Directory>\Notepad.exe~;
+	}
+
+	if ( !Files( FileExists,~<Program>~ ) )
+	{
+		return Warning( Translate( ~Could not find <Program>~ ) );
+	}
+
+	if ( !ShellExecute( Open,~<Program>~,~<File>~ ) )
+	{
+		return Warning( Translate( ~Could not open ~<File>~ with <Program>.  <$Func.GetLastErrorMsg()>~ ) );
+	}
+	
+	return TRUE;
+}
+
+
+STR NotePadPlusPath()
+{
+	NotePadPlusKey = ~HKEY_LOCAL_MACHINE[SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad++.exe\""]~;
+		
+	NotePadPlusPath = ~<$Registry.<NotePadPlusKey>>~;
+	
+	return ~<NotePadPlusPath>~;
+}
+
+NUMERIC OpenInNotePadPlus( FilePath,desiredLine )
+{
+	NotePadPlusPath = NotePadPlusPath();
+	
+	if ( IsNull(~<NotePadPlusPath>~) )
+	{
+		return ViewFileInNotepad( ~<FilePath>~ );
+	}
+
+	if ( !IsNULL(~<desiredLine>~) )
+	{
+		desiredLine = MakeNumber(~<desiredLine>~);
+		desiredLine = ~-n<desiredLine>~;
+	}
+	
+	return ShellExecute( Open,~<NotePadPlusPath>~,~ -lKPL <desiredLine> "<FilePath>"~  );
+}
+
+
+NUMERIC ViewFileInNotepad( FilePath )
+{
+	NotePadPlusPath = NotePadPlusPath();
+	
+	if ( !IsNull(~<NotePadPlusPath>~) )
+	{
+		ReturnOnSuccess( ShellExecute( Open,~<NotePadPlusPath>~,~ -lkpl  "<FilePath>"~  ) );
+		err = GetLastError( ErrorString,theErr );
+		Log( Session,~Failed to open "<FilePath>" with  <NotePadPlusPath>.  <err>.  Will try notepad.~ );
+	}
+	
+	ProgramName = ~Notepad.exe~;
+
+	Program = ~<$Sys.Directory>\<ProgramName>~;
+
+	if ( !Files( FileExists,~<Program>~ ) )
+	{
+		return Warning( Translate(~Could not find NotePad.exe at <Program>~) );
+	}
+
+	if ( !ShellExecute( Open,~<Program>~,~<FilePath>~ ) )
+	{
+		err = GetLastError( ErrorString,theErr );
+		return Warning( Translate(~Could not open <FilePath>. Error <err>. <theErr>~) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC DisplayLicenseAgreement()
+{	
+	if ( Authorized( DP1 ) )
+	{
+		if ( !Files( FileExists,~<$App.ExeName>_DataLocation.txt~ ) )
+		{
+			return Warning( TR( Standard, UnableToDisplayLicense) );			
+		}
+
+		Include: ~<$App.ExeName>_DataLocation.txt~;
+		if ( SimilarStr( ~<InstallCountry>~, ~US~ ) )
+		{
+			LicenseAgreement = ~<$App.Directory>\Help\License.txt~;
+		}
+		else
+		{
+			LicenseAgreement = ~<$App.Directory>\Help\License<InstallCountry>.txt~;
+		}
+	}
+	else
+	{
+		LicenseAgreement = ~<$App.Directory>\Help\License.txt~;
+	}
+	
+	if ( !Files( FileExists,~<LicenseAgreement>~ ) )
+	{
+		return Warning( TR( Standard, UnableToDisplayLicense) );
+	}
+
+	ProgramName = ~Notepad.exe~;
+	Program = ~<$Sys.Directory>\<ProgramName>~;
+	if ( !Files( FileExists,~<Program>~ ) )
+	{
+		Warning( TR( Standard, UnableToDisplayLicense) );
+		return FALSE;
+	}
+
+	if ( !ShellExecute( Open,~<Program>~,~<LicenseAgreement>~ ) )
+	{
+		Warning( TR( Standard, UnableToDisplayLicense) );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OpenExplorer( Path )
+{
+	Program = ~<$Sys.WindowsDirectory>\Explorer.exe~;
+
+	if ( !Files( FileExists,~<Program>~ ) )
+	{
+		return Warning( Translate( ~Could not find <Program>~ ) );
+	}
+
+	return ShellExecute( Open,~<Program>~,~<Path>~ );
+}
+
+
+NUMERIC DisplaySessionLog()
+{
+	return ShellExecute( Open,~<$App.SessionLogFile>~);
+}
+
+
+NUMERIC DisplayWorkstationPrefs()
+{
+	return ViewFileInNotepad( ~<$App.Directory>\Workstation.Prf~ );
+}
+
+NUMERIC EditFile( Path )
+{
+	return ShellExecute( Edit,~<Path>~ );
+}
+
+NUMERIC PrintFile( Path )
+{
+	return ShellExecute( Print,~<Path>~ );
+}
+
+NUMERIC OpenFile( Path )
+{
+	return ShellExecute( Open,~<Path>~ );
+}
+
+
+NUMERIC RunFile( Path )
+{
+	return System( ~"<Path>"~ );
+}
+
+
+NUMERIC RunAccunetProgram( Which )
+{
+	Path = ~W:\AccunetProduction\Programs\<Which>~;
+
+	if ( !Files( FileExists,~<Path>~ ) )
+	{
+		return Warning( Translate( ~Accunet program <Which> is not currently available from this workstation~ ) );
+	}
+
+	return ShellExecute( Open,~<Path>~ );
+}
+
+
+NUMERIC SpawnCalibrationApp()
+{
+	StatusBarText( Translate( ~Checking to see if CoreApp.exe is already running~ ) );
+
+	if ( Process( GetInfo,~CoreApp.exe~,ProcessInfo ) )
+	{
+		return Warning( Translate( ~The calibration app is already running~ ) );
+	}
+
+	StatusBarText( Translate( ~Checking to see if DP2 printing is still running~ ) );
+
+	PrintingStillRunning = Process( GetInfo,~Hop2LogicalPrinterU.exe~,ProcessInfo ) ||
+							Process( GetInfo,~Hop2LogicalPrinterUD.exe~,ProcessInfo ) ||
+							Process( GetInfo,~Hop2LogicalPrinterD.exe~,ProcessInfo );
+
+	if ( <PrintingStillRunning> )
+	{
+		Warning( Translate( ~You must shut down printing before starting the Calilbration Application.  We will let you continue ... for now.  Later we will shut it down for you.~ ) );
+	}
+
+	FileFound = ADO( dBase,Connect,GetValuesFor,~Select CalApp From Calibration Where ComputerName = '<$app.ComputerName>'~,CalApp );
+
+	if ( <FileFound> )
+	{
+		FileFound = Files( FileExists,~<CalApp>~ );
+	}
+
+	if ( !<FileFound> || KeyState( RSHIFT ) || KeyState( LSHIFT ) )
+	{
+		StatusBarText( Translate( ~Checking to see if DP2 printing is still running~ ) );
+
+		if ( !FileDialog( Title,Translate( ~Find CoreApp.exe~ ),PATH,CalApp,Open ) )	{ return FALSE; }
+
+		dBase( Cmd,~Delete From Calibration Where ComputerName = '<$app.ComputerName>'~ );									
+		
+		dBase( Cmd,~Insert Into Calibration(ComputerName,CalApp) Values('<$app.ComputerName>','<CalApp>')~ );									
+	}
+
+	StatusBarText( Translate( ~Launching <CalApp>~ ) );
+
+	if ( !ShellExecute( Open,~<CalApp>~ ) )
+	{
+		dBase( Cmd,~Delete From Calibration Where  ComputerName = '<$app.ComputerName>'~ );
+		return Warning( Translate( ~Failed to spawn <CalApp>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SpawnWorkstationApp( theApp,theParameters )
+{
+	theAppName = ~<$Str.$theApp.WithoutExt>~;
+
+	FileFound = FALSE;
+
+	if ( KeyState( SHIFT ) )
+	{
+		if ( !FileDialog( Title,Translate( ~Find <theApp>~ ),PATH,theApp,Open ) )	{ return FALSE; }
+
+		SetWorkStationSettings( ~<theAppName>~,Path,~<theApp>~,TRUE );
+
+		FileFound = TRUE;
+	}
+	else
+	{
+		if ( GetWorkStationSettings( ~<theAppName>~,Path,theApp,Enabled ) )
+		{
+			if ( <Enabled> )
+			{
+				FileFound = !IsNull( ~<theApp>~ );
+			}
+		}
+	}
+
+	if ( !<FileFound> )
+	{
+		if ( !FileDialog( Title,Translate( ~Find <theApp>~ ),PATH,theApp,Open ) )	{ return FALSE; }
+
+		SetWorkStationSettings( ~<theAppName>~,Path,~<theApp>~,TRUE );
+	}
+
+	StatusBarText( Translate( ~Checking to see <theAppName> is already running~ ) );
+
+	if ( Process( GetInfo,~<theApp>~,ProcessInfo ) )
+	{
+		return Warning( Translate( ~<theApp> is already running~ ) );
+	}
+
+	StatusBarText( Translate( ~Launching <theApp>~ ) );
+
+	if ( DefinedAndNotNull( ~<theParameters>~ ) )
+	{
+		success = ShellExecute( Open,~"<theApp>"~,~<theParameters>~ )
+	}
+	else
+	{
+		success = ShellExecute( Open,~"<theApp>"~ );
+	}
+
+	if ( !<success> )
+	{
+		err = GetLastErrorMsg();
+
+		return Warning( Translate( ~Failed to spawn <theApp>.  <err>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC CloseWindows()
+{
+	return CloseAllWindows();
+}
+
+
+NUMERIC NetworkBroadcast( who,msg )
+{
+	// who should be a server name or * for all users on the server
+
+	ShellExecute( Open,~Net~,~Send <who> "<msg>"~,~~,SHOWMINNOACTIVE );
+
+	return TRUE;
+}
+
+
+
+
+
+
+NUMERIC OpenControlPanel( Which )
+{
+	Cmd = ~Rundll32.exe Shell32.dll,Control_RunDLL <Which>~;
+
+	if ( !System( ~<Cmd>~ ) )
+	{
+		return Log( Session,~Failed to spawn <Which>~ );
+	}
+
+	return TRUE;
+
+	//Accessibility: access 
+	//Add/Remove Programs: appwiz 
+	//Display: desk 
+	//Joystick:joy 
+	//Mouse: main 
+	//Multimedia: mmsys 
+	//Modems: modem 
+	//Regional Settings: intl 
+	//System: sysdm 
+	//Time/Date: timedate.cpl 
+}
+
+NUMERIC PurgeSBAImages( NumDays )
+{
+	// Connect to the database
+
+	if ( !DefinedAndNotNull( NumDays ) )
+	{
+		NumDays = 30;
+	}
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		MessageBox( Translate( ~Cannot Connect To Database.  <theErr>~ ) );
+		return TRUE;
+	}
+
+	// Figure out when "<NumDays> days ago" was
+	DateTime( CurrentTime,Now );
+	DateTimeSpan( DaysOld, Set, <NumDays> );	
+	CurrentTime( MinusEqual, DaysOld, Format, AgeCutoff);
+
+	DateQuery = ~Select ID from Orders where OrderDate < <$Date.<AgeCutoff>.SharedDateQuoted>~;
+
+	// First just see how many records will be affected
+	NumAffected1 = dBase( RecordCountFor,~Select * From SBAImages where OrderID in (<DateQuery>)~ );
+	NumAffected2 = dBase( RecordCountFor,~Select * From DSBAImages where OrderID in (<DateQuery>)~ );
+
+	totalAffected = <NumAffected1> + <NumAffected2>;
+	if (<totalAffected> > 0)
+	{
+		Msg = Translate( ~This will delete <totalAffected> records older than <$Date.<AgeCutoff>>  (<NumDays> days ago). Do you want to continue?~ );
+
+		if ( MessageBox( ~<Msg>~,YESNO ) == YES )
+		{
+			WaitCursor( Begin );
+			DeleteCmd1 = ~Delete From SBAImages where OrderID in (<DateQuery>)~;
+
+			if ( !dBase( Cmd,~<DeleteCmd1>~ ) )
+			{
+				WaitCursor( End );
+				dBase( GetErrorDescription,theErr );
+				return Warning( Translate(DBMessages,CmdFailed,~<DeleteCmd1>~,~<theErr>~) );
+			}
+
+			NumDeleted1 = dBase( RecordsAffected );
+
+			DeleteCmd2 = ~Delete From DSBAImages where OrderID in (<DateQuery>)~;
+
+			if ( !dBase( Cmd,~<DeleteCmd2>~ ) )
+			{
+				WaitCursor( End );
+				dBase( GetErrorDescription,theErr );
+				return Warning( Translate(DBMessages,CmdFailed,~<DeleteCmd2>~,~<theErr>~) );
+			}
+
+			NumDeleted2 = dBase( RecordsAffected );
+
+			DeleteCmd3 = ~Delete From CompSbaData where OrderID in (<DateQuery>)~;
+
+			if ( !dBase( Cmd,~<DeleteCmd2>~ ) )
+			{
+				WaitCursor( End );
+				dBase( GetErrorDescription,theErr );
+				return Warning( Translate(DBMessages,CmdFailed,~<DeleteCmd2>~,~<theErr>~) );
+			}
+
+			NumDeleted3 = dBase( RecordsAffected );
+
+			totalDeleted = <NumDeleted1> + <NumDeleted2> + <NumDeleted3>;
+
+			if (<totalDeleted>)
+			{
+				MessageBox( Translate( ~<totalDeleted> SBA record(s) have been deleted.~ ) );
+			}
+
+			WaitCursor( End );
+
+			return TRUE;
+		}
+	} else
+	{
+		MessageBox(Translate(~There are no SBA records more than <NumDays> days old to delete.~));
+		return TRUE;
+	}
+	
+	return TRUE;
+}
+
+NUMERIC	LoadTranslationFile(Path,Category,FileName,IsOptional)
+{
+	ForgetGlobal( ~<Category>~ );
+	
+	XMLPath = ~<$App.Translations>\<Path>\<FileName>.xml~;
+	
+	if ( !xml( <Category>,load,~<XMLPath>~ ) )
+	{
+		if ( Numeric(~<IsOptional>~) )	{ return FALSE; }
+		
+		<Category>(GetReason,theErr);
+
+		ForgetGlobal( ~<Category>~ );
+		
+		return Warning( ~Failed to Load: <XMLPath>.  <theErr>~ );
+	}
+	
+	Global(~<Category>~);
+	
+	return TRUE;
+}
+
+

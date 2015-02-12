@@ -1,0 +1,475 @@
+
+Define:	QueryMessages Using DDSymbol
+	Fields:	Value	~These strings are Query related strings used by the user interface.~
+	Contains:
+	{
+		Define: ReadingRecords		using DDText	Fields: Text ~Reading %1 Queries~
+		Define: ReadRecords			using DDText	Fields: Text ~Read %1 Queries in %2 seconds~
+		Define: RemovingRecordFor	using DDText	Fields: Text ~Are you sure you want to delete the %1 selected Query(s)?~
+		Define:	BlankName			using DDText	Fields: Text ~Unable to save pending changes.  Name cannot be blank.~	
+		Define: MenuNewQuery		using DDText	Fields: Text ~&New Query~
+		Define: ButtonDuplicate		using DDText	Fields: Text ~Duplicate~
+		Define: ToolDuplicate		using DDText	Fields: Text ~Duplicate the selected Query~
+		Define: NoQueryDefined		using DDText	Fields: Text ~There is no query defined~
+	}
+
+
+NUMERIC RefreshListView( Requery )
+{
+	if ( QueryDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	Start = Ticks();
+
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	Count = List( NumEntries );
+
+	if ( FALSE )
+	{
+		if ( MessageBox( Translate(DBMessages,LargeQuery,~<DocumentQuery>~,~<Count>~),YESNO ) != YES )
+		{
+			return TRUE;
+		}
+	}
+
+	QueryDataWindow( StatusBar,Text,Translate( QueryMessages,ReadingRecords,<Count> ) );
+
+	SetDocumentData( List(GetObject) );	
+	QueryDataWindow( RefreshWindow );
+
+	Duration = (Ticks() - <Start>) / 1000;
+
+	return QueryDataWindow( StatusBar,Text,Translate(QueryMessages,ReadRecords,~<Count>~,~<Duration>~) );
+
+	return TRUE;
+}
+
+
+STR GetKey( &Query )
+{
+	Key = STR (	Name = '<$con.Query[Name]>' );
+
+	return ~<Key>~;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !QueryDataView( GetChangedRow,ChangedQuery,OrigQuery,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedQuery[Name]>~ == ~~ )
+		{ return Warning( Translate(QueryMessages,BlankName) ); }
+
+	Key = STR ( Name = '<$con.OrigQuery[Name]>' );
+	
+	Query = ~Select * From Query Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( UpdateFrom,ChangedQuery,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+	}
+
+	QueryDataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !QueryDataView( GetSelectedRows,QueryToDelete ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	count = QueryToDelete( ChildCount );
+
+	if ( MessageBox( Translate(QueryMessages,RemovingRecordFor,~<count>~),YESNO ) != YES )
+		{ return FALSE; }
+
+	StringList( RowsToDelete,New );
+
+	while ( QueryToDelete( GetNext,Query ) )
+	{
+		Key = GetKey( Query );
+		Cmd = ~Delete From Query Where <Key>~;
+
+		if ( !db( CMD,~<Cmd>~ ) )
+		{
+			db( GetErrorDescription,theErr );
+			return Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+		}
+
+		RowsToDelete( AddString,QueryToDelete(GetCurrentPosition) );
+	}
+
+	QueryDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	RowBeingAdded = QueryDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate(UIMessages,AddRowFailed) ); }
+
+	QueryDataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	Global( RowBeingAdded );
+
+	return TRUE;
+}
+
+
+NUMERIC Duplicate()
+{
+	if ( !QueryDataView( GetSelectedRows,QueryToImitate ) )		
+	{
+		return Warning( Translate(UIMessages,NoRecordToDup ) );
+	}
+
+	if ( !QueryToImitate( GetFirst,theQuery ) )
+	{
+		return AddRecord();
+	}
+
+	GenCon( NewRow,IsCopyOf,theQuery );
+
+	NewRow( Set,Name,~~ );
+
+	RowBeingAdded = QueryDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate(UIMessages,AddRowFailed) ); }
+
+	QueryDataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( Translate(UIMessages,NoActiveView) ); }
+
+	ActiveView( DisplayMenu,QueryListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( ~<what> is not implemented yet!~ );
+	return TRUE;
+}
+
+NUMERIC AddAQuery( Title,DocumentQuery,CloseInstructions,TheQuery,TheType )
+{
+	if ( Init( ~<Title>~,~<DocumentQuery>~,~<CloseInstructions>~ ) )
+	{
+		AddRecord();
+
+		QueryDataView( SetCellValue,Current,Query,~<TheQuery>~ );
+		QueryDataView( SetCellValue,Current,Type,~<TheType>~ );
+	}
+
+	return TRUE;
+}
+
+FirstTime = TRUE;
+
+NUMERIC Init( Title,DocumentQuery,CloseInstructions )
+{
+	if ( ~<CloseInstructions>~ == ~~ )
+		{ CloseInstructions = ~StayOpen~; }
+
+	Global( Title,DocumentQuery,CloseInstructions );
+
+	QueryDataWindow( Set,Title,Translate( ~Queries - <Title>~ ) );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{ 
+			List(GetErrorDescription,0,theErr);
+			Error( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+		}
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !QueryDataWindow( CreateWindow,~Query~ ) )
+			{ Error( Translate(UIMessages,CreateWindowFailed,~Query~) ); }
+
+		return QueryDataView( AllowRowColResizing,TRUE );
+	}
+
+	return RefreshListView( TRUE );
+}
+
+
+
+NUMERIC Query()
+{
+	if ( !QueryDataView( GetSelectedRows,SelectedQueries ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	if ( !SelectedQueries( GetFirst,SelectedQuery ) )
+		{ return FALSE; }
+
+	if ( ~<$con.SelectedQuery[Type]>~ == ~KPL~ )		// one or more KPL statements
+	{
+		SelectedQuery( Get,Query,Query );
+		QueueContentsOf( Query );
+		return TRUE;
+	}
+
+	if ( ~<$con.SelectedQuery[Type]>~ == ~Shared~ )		// Query against the shared database
+	{
+		SelectedQuery( Get,Query,Query );
+
+		Action = ACTION DOC ( Test Open EditAnyRecSetDoc "OpenShared( ~<Query>~ );" );	
+		return PerformActions( Action );
+	}
+
+	if ( ~<$con.SelectedQuery[Type]>~ == ~Workstation~ )// Query against the Workstation database
+	{
+		SelectedQuery( Get,Query,Query );
+
+		Action = ACTION DOC ( Test Open EditAnyRecSetDoc "Workstation( ~<Query>~ );" );	
+		return PerformActions( Action );
+	}
+
+	Actions = ACTION DOC ( SearchDoc Open SearchDoc "Search(~<$con.SelectedQuery[Type]>~);" );
+	return PerformActions( Actions );
+
+	// The following doesn't work for all table types yet
+
+	Query = ~<$con.SelectedQuery[Query]>~;
+	
+	if ( ~<Query>~ == ~~ )
+		{ return Warning( Translate(QueryMessages,NoQueryDefined) ); }
+
+	Query = ContentsOf( Query, 1 );	// Parse any macros before doing the query
+
+	Actions = ACTION Doc ( ~Query~ Open <$con.SelectedQuery[Type]>Doc 
+							"Init( ~<$con.SelectedQuery[Name]>~,~<Query>~ );" );
+
+	PerformActions( Actions );
+
+	if ( ~<CloseInstructions>~ != ~StayOpen~ )
+		{ QueryDataWindow( ForceCloseWindow ); }
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseQueryDataView()
+{
+	if ( QueryDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	QueryDataWindow( ForceCloseWindow );
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( QueryDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !QueryDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( Translate(UIMessages,CancelChanges), YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( QueryDataView( PendingChanges ) )
+	{
+		QueryDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+NUMERIC Search()
+{
+	Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( Query );" ) );
+	return PerformActions( Actions );
+}
+
+NUMERIC AllOptions()
+{
+	return QueryDataView( DisplayMenu,QueryListViewMenu,0,0 );
+}
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,QueryListViewMenu,~<KeyString>~ ) )
+	{
+		QueryDataView( DisplayMenu,QueryListViewMenu,0,0  );
+	}
+}
+
+Include: ~ExportSelectedToFile~;
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+if ( !GenCon( QueryTableDefinition,GetFrom,Query,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The Query Table is not properly defined~ ); }
+	
+if ( !ado( db,CONNECT ) )
+	{ 
+		db( GetErrorDescription,theErr );
+		Error( Translate(DBMessages,ConnectionFailed,~Query~,~<theErr>~));
+	}	
+
+
+Define:	QueryListViewMenu Using DDMenuDef AsSymbol QueryListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( QueryMessages,MenuNewQuery )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuSaveChanges)
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuCancelChanges)
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuDelete)
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuRefresh)
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	NULL3 using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+		Define:	Export	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuExport )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ExportSelectedToFile(QueryDataView,Query) )
+	}
+
+Define: QueryDataWindow Using DDWinDef
+	Fields:		Title					~Query~
+				Position				0 50 100 25
+				IsPositionPercent		T
+				EnableStatusBar			F
+				TypeName				SplitterWnd
+				SplitterRows			~2 14 90~
+				SplitterColumns			1
+
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( AdminHelpFile "QueryData.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons(Query) + 10;
+
+					Define: DuplicateButton Using DDWinCtrlDef AsSymbol DuplicateButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( Duplicate() )
+								POSITION		$position + $hGap, $vGap $ButtonWidth $ButtonHeight
+								TEXT			Translate( QueryMessages,ButtonDuplicate )
+								TOOLTIP			Translate( QueryMessages,ToolDuplicate )
+								TYPENAME		BUTTON
+				}
+
+		Define: QueryDataView Using DDViewDef AsSymbol QueryDataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		QueryTableDefinition(GetReferenceTo,Fields)
+					FONTSIZE				10
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					CloseActionsText		ACTION Call ( OnCloseQueryDataView() ) 
+					KeyboardActionsText		ACTION Exec ( OnKeydown() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					HActionsText			ACTION SHOWHELPPAGE ( AdminHelpFile "QueryData.htm" )
+					DoubleClickActionsText	ACTION Exec ( Query() ) ;
+	}
+	
+

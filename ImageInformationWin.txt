@@ -1,0 +1,287 @@
+IncludeClass(BaseHTML);
+
+Class( ImageInfo,Extends,BaseHTML,
+				Member,fOrderID,Str,~~,
+				Member,fRoll,Str,~~,
+				Member,fFrame,Str,~~ );
+
+
+VOID ImageInfo::ImageInfo(WantStatic,OrderID)
+{
+	
+	
+	Static(~<WantStatic>~);
+	
+	WindowLeft = 70;
+	WindowTop = 40;
+	WindowWidth = 30;
+	WindowHeight = 60;
+	
+	//fStatic = FALSE;
+//	fNoBorder = FALSE;
+//	fNoCaption = FALSE;
+//	fNoSizing = FALSE;
+//	fNoWindowPositionAdjust = FALSE;
+
+}
+
+VOID ImageInfo::WindowDefinition()
+{
+	Fields:	NoCloseButton		1
+			WantsMinimizeBox	0
+			NoSystemMenu		1
+
+}
+
+VOID ImageInfo::DefineMessages()
+{
+	BaseHtml::DefineMessages();
+
+	LoadTranslationFile( Utilities,ImageInformation,ImageInformation );
+}
+
+VOID ImageInfo::ViewDefinition()		
+{
+	Fields:	HTMLCloseBox	<fStatic>;
+}
+
+VOID ImageInfo::OnLoadComplete()
+{	
+	PopulateImageInfo();
+}
+
+VOID ImageInfo::PopulateImageInfo()
+{
+
+	if ( !GetViewByName( View ) )
+	{
+		fHtmlView( Execute, ~StatusMessage( 'UpdateStatus', '<$TR.ImageInformation( UnableToGetView )>')~ );
+		return;
+	}
+	
+	if ( !ADO( dBase, connect ) )
+	{
+		return;
+	}
+	
+	Query = ~Select * From Images Where OrderID = '<fOrderID>' AND Roll = '<fRoll>' AND Frame = '<fFrame>'~;
+	
+	if ( !PGenConList( ImagesList,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		return;
+	}
+	
+	ImagesList( GetNext, Image );
+	
+	ImageCorrections( GetCurrentCorrections,~<$pcon.Image[Path]>~,CopiedCorrections );
+	
+	contrast = ~~;
+	density = ~~;
+	red = ~~;
+	green = ~~;
+	blue = ~~;
+	profileMessage = ~~;
+	
+	if ( Defined( CopiedCorrections ) )
+	{
+		fHtmlView( Execute, ~HideElement(GetElement('UpdateStatus') )~ );
+		// Get the contrast value from the image corrections.
+		CopiedCorrections( GetValues, ~orgCONTRAST~, orgCONTRAST, ~contrast~, contrast );
+		contrast = <orgCONTRAST> + <contrast>;
+
+		// Get the density value from the image corrections.
+		CopiedCorrections( GetValues, ~orgDENSITY~, orgDENSITY, ~density~, density );
+		density = <orgDENSITY> + <density>;
+		
+		// Get the red value from the image corrections.
+		CopiedCorrections( GetValues, ~orgRED~, orgRed, ~red~, red );
+		red = <orgRed> + <red>;
+			
+		CopiedCorrections( GetValues, ~orgGREEN~, orgGREEN, ~green~, green );
+		green = <orgGREEN> + <green>;
+			
+		CopiedCorrections( GetValues, ~orgBLUE~, orgBLUE, ~blue~, blue );
+		blue = <orgBLUE> + <blue>;
+	
+		usingEmbedded = 0;
+		GetImageInfo( ~<$pcon.Image[Path]>~, UseEmbedded, usingEmbedded );			
+
+		CopiedCorrections( GetValues, ~ICCProfile~, iccProfile );
+
+		if ( ~<iccProfile>~ != ~~ )
+		{
+			profileMessage = ~<$str.$iccProfile.FileName.WithoutExt>~;
+		}
+		else if ( <usingEmbedded> )
+		{
+			// Display using embedded profile from image.
+			profileMessage = TR( ImageInformation, UsingEmbeddedProfile );
+		}
+		else
+		{
+			// Using either the default input profile or color management is off.
+			app(Application);
+			inputProfileName = ~~;
+			workingSpaceProfile = ~~;
+			Application( GetDefaultInputProfileName,inputProfileName );
+			Application( GetWorkingSpaceProfileName,workingSpaceProfile );
+			
+			if ( IsNull( ~<workingSpaceProfile>~ ) )
+			{
+				profileMessage = TR( ImageInformation, ColorManagementOff );
+			}
+			else
+			{
+				if ( IsNull( ~<inputProfileName>~ ) )
+				{
+					
+					profileMessage = TR( ImageInformation, None, ~<$str.$workingSpaceProfile.WithoutExt>~  );
+				}
+				else
+				{
+					profileMessage = TR( ImageInformation, UseDefaultInput, ~<$str.$inputProfileName.WithoutExt>~ );
+				}
+			}
+			
+		}
+	}			// Corrections exist.
+	else
+	{
+		fHtmlView( Execute, ~StatusMessage( 'UpdateStatus', '<$TR.ImageInformation( UnableToGetImageCorrections )>')~ );
+	}
+		
+	fHtmlView( SetInnerText, ~imagetitle~,0,~<$pcon.Image[Path].FileName>~ );
+	fHtmlView( SetInnerText, ~orderid~,0,~<$pcon.Image[OrderID]>~ );	
+	fHtmlView( SetInnerText, ~roll~,0,~<$pcon.Image[Roll]>~ );	
+	fHtmlView( SetInnerText, ~frame~,0,~<$pcon.Image[Frame]>~ );	
+	fHtmlView( SetInnerText, ~path~,0,~<$pcon.Image[Path]>~ );	
+	fHtmlView( SetInnerText, ~iccprofile~,0,~<profileMessage>~ );
+	fHtmlView( SetInnerText, ~rotation~,0,~<$pcon.Image[RotateFromDisk]>~ );
+	fHtmlView( SetInnerText, ~red~,0,~<red>~ );
+	fHtmlView( SetInnerText, ~green~,0,~<green>~ );
+	fHtmlView( SetInnerText, ~blue~,0,~<blue>~ );
+	fHtmlView( SetInnerText, ~contrast~,0,~<contrast>~ );
+	fHtmlView( SetInnerText, ~density~,0,~<density>~ );
+	fHtmlView( SetInnerText, ~length~,0,~<$pcon.Image[Length]> <$TR.ImageInformation( Pixels )>~ );
+	fHtmlView( SetInnerText, ~width~,0,~<$pcon.Image[Width]> <$TR.ImageInformation( Pixels )>~ );
+	fHtmlView( SetInnerText, ~pLength~,0,~<$pcon.Image[PreviewLength]> <$TR.ImageInformation( Pixels )>~ );
+	fHtmlView( SetInnerText, ~pWidth~,0,~<$pcon.Image[PreviewWidth]> <$TR.ImageInformation( Pixels )>~ );
+	fHtmlView( SetInnerText, ~description~,0,~<$pcon.Image[Description]>~ );
+	
+}
+
+VOID ImageInfo::InitWindow()
+{
+	CreateAndOpen( ~<$App.HTTPServer>/Utilities/ImageInformation.kpl~ );
+}
+
+VOID ImageInfo::SetTitle()
+{
+	SetWindowTitle( TR(ImageInformation,Title) );
+
+	//DataWindow(SetWindowOrder, TOPMOST );
+}
+
+VOID ImageInfo::MakeAGenCon( SelectedImagesRef )
+{
+	ForgetPrivate( SelectedImages );
+	GenCon( SelectedImages,Is,<SelectedImagesRef>,Temporary );
+	Private( SelectedImages );	
+}
+
+VOID ImageInfo::OnCloseWindow()
+{
+	// Call the BaseHTML version
+	OnCloseDataWindow();
+}	
+
+VOID ImageInfo::EditImageInfo()
+{
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	fHtmlView( Get, ~~, 0, currentImage );
+}
+
+VOID ImageInfo::SetOrderRollFrame( OrderID, Roll, Frame )
+{
+	fOrderID = ~<OrderID>~;
+	fRoll = ~<Roll>~;
+	fFrame = ~<Frame>~;
+}
+
+VOID ImageInfo::CreateOrderItemFromImage( Width, Length )
+{
+	// Return for now as the feature isn't completed.
+	return;
+
+	if ( !Document( Job,New,Job,<Width>,<Length> ) )
+	{
+		return Failure( Translate( ~An error occured creating a new empty job~ ) );
+	}
+
+	if ( !Job( GetRenderList,0,RenderList ) )
+	{ 
+		return Failure( Translate( ~There was no render list for <ProductLayoutPath>~ ) );
+	}
+
+	if ( ~<Item>~ == ~~ )
+	{
+		Item = CalcNextForOrderItem( database,~<fOrderID>~,ID );
+	}
+
+	if ( ~<Sequence>~ == ~~ )
+	{
+		Sequence = CalcNextForOrderItem( database,~<fOrderID>~,Sequence );
+	}
+
+	if ( !RenderList( GetMainNode,TheNode ) )
+	{
+
+	}
+
+	theNode( Set,~IFile:~,~<$@Image.PathOfOrderRollFrame['<fOrderID>','<fRoll>','<fFrame>']>~ ); 
+	theNode( FixUp );
+
+	if ( RenderList( GetOutputNode,OutputNode ) )
+	{
+		OutputNode( Set,~Queuename:~,~<BLD205-35Q>~ );
+		LastNodeID = OutputNode(GetNumeric,~IntID:~);
+		ForgetLocal( OutputNode );
+	}
+
+	return;
+}
+VOID CloseWindow()
+{
+	ImageInfoObj.OnCloseWindow();
+}
+
+VOID InitDoc( OrderID, Roll, Frame, WantStatic )
+{
+
+	if ( !ObjectAlreadyExists( ImageInfoObj ) )
+	{
+		ImageInfo( New,ImageInfoObj,~<WantStatic>~ );
+	
+		ImageInfoObj( Global );
+		ImageInfoObj.SetOrderRollFrame( ~<OrderID>~, ~<Roll>~, ~<Frame>~ );
+		ImageInfoObj.InitWindow();
+		
+		// Don't call PopulateImageInfo() yet as the page might not be loaded.
+	}
+	else
+	{
+		ImageInfoObj.SetOrderRollFrame( ~<OrderID>~, ~<Roll>~, ~<Frame>~ );
+		ImageInfoObj.PopulateImageInfo();
+	}
+
+	ImageInfoObj.SetTitle();
+	
+}
+
+// Entry Points from other scripts
+VOID InitStatic( OrderID, Roll, Frame )	{ InitDoc(  ~<OrderID>~,~<Roll>~,~<Frame>~, TRUE ); }
+VOID Init( OrderID, Roll, Frame )			{ InitDoc( ~<OrderID>~,~<Roll>~,~<Frame>~, FALSE ); }

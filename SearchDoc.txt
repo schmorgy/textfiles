@@ -1,0 +1,1177 @@
+
+Include: ~FormattingRoutines~;
+Include: ~Utilities2~;
+
+NUMERIC OnRunOrderItems()
+{
+	BuildQuery();
+
+	if ( IsNULL( ~<Query>~ ) )
+	{
+		return Warning( ~There are no OrderItems to run~ );
+	}
+
+	Query = ~<Query> Order By Sequence,Subsequence~;
+
+	if ( !Ado( dBase,Connect ) )
+	{ 
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~<theErr>~) ); 
+	}
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Failed to query the OrderItems table.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	Count = List( NumEntries );
+
+	if ( !<Count> )
+	{ 
+		return Warning( Translate( ~There are no OrderItems to run~ ) );
+	}
+
+	if ( MessageBox( Translate(~Are you sure you want to run the <Count> selected Order Items?~),YESNO ) != YES )
+	{ 
+		return FALSE;
+	}
+	
+	itemCount = 0;
+
+	if ( !Ado( dbLocal,ConnectLocal,BeginTransaction ) )
+	{ 
+		dbLocal( GetErrorDescription,theErr );
+		return Warning( Translate(~<theErr>~) ); 
+	}
+
+	WaitCursor( Begin );
+
+	BatchID = UniquePrintBatchID();		LastOrderItem = ~~;	 Now = Time();
+
+	while ( List( GetNext,OrderItem ) )
+	{
+		StatusBarText( ~Processing Order <$pcon.OrderItem[OrderID]>   Item <$pcon.OrderItem[ID]>~ );
+
+		if ( ~<$pcon.OrderItem[OrderID]>~ != ~<LastOrderItem>~ )
+		{
+			Priority = 50;  Owner = ~~;
+
+			dBase(GetValuesFor,~Select Owner,Priority From Orders Where ID = '<$pcon.OrderItem[ID]>'~,Owner,Priority );
+
+			if ( IsNull(~<Owner>~) )	
+			{ 
+				Owner = ~<$App.UserName>~;
+			}
+
+			if ( IsNull(~<Priority>~) )	
+			{ 
+				Priority = 50;
+			}
+
+			LastOrderItem = ~<$pcon.OrderItem[OrderID]>~;
+		}
+
+		Fields = STR ( BatchID,OrderID,OrderItemID,Sequence,Priority,Owner,ProductID,Quantity,Status,Printable,
+						JobPath,PreviewPath,SubmitDate,Subsequence );
+		Values = STR ( '<BatchID>','<$pcon.OrderItem[OrderID]>',<$pcon.OrderItem[ID]>,<$pcon.OrderItem[Sequence]>,
+						<Priority>,'<Owner>','<$pcon.OrderItem[ProductID]>',
+						<$pcon.OrderItem[Quantity]>,'<$pcon.OrderItem[Status]>',<$pcon.OrderItem[Printable].numeric>,
+						'<$pcon.OrderItem[JobPath]>','<$pcon.OrderItem[PreviewPath]>','<Now>', <$pcon.OrderItem[Subsequence].numeric>);
+	
+		Cmd = ~Insert Into OrderItemsToQueue(<Fields>) Values(<Values>)~;
+
+		if ( !dbLocal( Cmd,~<Cmd>~ ) )
+		{
+			dbLocal( GetErrorDescription,theErr,RollBackTransaction );
+			WaitCursor( End );
+			return Warning( ~Failed to submit jobs for item <$con.OrderItem[ID]>. <theErr>~ );
+		}
+
+		++itemCount;
+	}
+
+	if ( !dbLocal( CommitTransaction ) )
+	{ 
+		dbLocal( GetErrorDescription,theErr );
+		WaitCursor( End );
+		return Warning( Translate(~Error on commit transaction.  <theErr>~) ); 
+	}
+
+	StatusBarText( ~Processed <itemCount> OrderItems~ );
+
+	Queue( ~ProcessTheOrders()~ );
+
+	return WaitCursor( End );
+}
+
+
+VOID ProcessTheOrders()
+{
+	if ( Defined( BackgroundOrderProcessor ) )
+	{
+		RemoteJobServer( BackgroundOrderProcessor,ProcessOrders,TRUE );
+	}
+}
+
+
+
+
+STR AddCriteria( CriteraCount, Combiner, Criteria )
+{
+	if ( <CriteraCount> != 1 )
+	{
+		Selection = ~ <Combiner> <Criteria> ~;
+	}
+	else
+	{
+		Selection = ~ <Criteria> ~;
+	}
+
+	return ~<Selection>~;
+}
+
+
+OrderID = ~~;
+
+NUMERIC BuildQuery()
+{
+	KillTimer( 337 );
+
+	SearchDialog( GetInput );
+
+	WhereClause = ~~;
+
+	field = -1;
+	count = 0;
+	OrderIDClause = ~~;
+
+	while ( <++field> < <Index> )
+	{
+		data = ~<$con.SearchCriteraData[<FieldName<field>>]>~;
+		MakeSQLSafe( data );
+		operator = ~<$con.SearchCriteraData[Operator<field>]>~;
+
+		if ( SimilarStr( ~<FieldName<field>>~,~OrderID~ ) )
+		{
+			if ( ~<data>~ == ~~ && FALSE )
+			{
+				if ( DefinedAndNotNull(OrderID) )
+				{
+					data = ~<OrderID>~;
+					SearchDialog(SetString,~<OrderID>~,OrderID,0);
+				}
+			}
+			else
+			{
+				OrderID = ~<data>~;
+			}
+		}
+
+		if ( ~<operator>~ == Translate(SQLWords,NULL) )
+		{
+			WhereClause = ~<WhereClause>~ + AddCriteria( <++count>,AND,~<FieldName<field>> IS NULL~ );
+			continue;
+		}
+
+		if ( ~<operator>~ == Translate(SQLWords,NotNULL) )
+		{
+			WhereClause = ~<WhereClause>~ + AddCriteria( <++count>,AND,~<FieldName<field>> IS NOT NULL~ );
+			continue;
+		}
+
+		if ( ~<data>~ == ~~ )
+		{ 
+			continue;
+		}
+
+		if ( ~<operator>~ == Translate(SQLWords,Between) )
+		{
+			if ( !GetTokens( ~<data>~,~,~,First,Last ) )
+			{
+				return Warning( Translate( ~Syntax for Between is\n\n  Value,Value~) );
+			}
+
+			if ( ~<FieldType<field>>~ == ~CHAR~ || ~<FieldType<field>>~ == ~STRING~ || ~<FieldType<field>>~ == ~TEXT~  )
+			{
+				First = ~'<First>'~;
+				Last = ~'<Last>'~;
+			}
+			else if ( ~<FieldType<field>>~ == ~DATE~ )
+			{
+				First = ~<$Date.SharedDateQuote><First><$Date.SharedDateQuote>~;
+				Last = ~<$Date.SharedDateQuote><Last><$Date.SharedDateQuote>~;
+			}
+
+			WhereClause = ~<WhereClause>~ + AddCriteria( <++count>,AND,~<FieldName<field>> BETWEEN <First> AND <Last>~ );
+			continue;
+		}
+
+		if ( ~<operator>~ == Translate(SQLWords,In) )
+		{
+			NumTokens = GetTokens( ~<data>~,~,~ );
+
+			if ( !<NumTokens> )
+			{
+				return Warning( Translate( ~Syntax for In is\n\n  Value,Value,Value,Value  etc.~) );
+			}
+
+			Quotes = (~<FieldType<field>>~ == ~CHAR~ || ~<FieldType<field>>~ == ~STRING~ || ~<FieldType<field>>~ == ~TEXT~) ? ~'~ : ~~;
+			
+			if ( ~<FieldType<field>>~ == ~DATE~ )
+			{
+				Quotes = ~<$Date.SharedDateQuote>~;
+			}
+
+			TokenIndex = 1;  ItemList = ~<Quotes><Token<TokenIndex>><Quotes>~; --NumTokens;
+			
+			while ( <NumTokens--> > 0 )
+			{
+				ItemList = ~<ItemList>,<Quotes><Token<++TokenIndex>><Quotes>~;
+			}
+
+			WhereClause = ~<WhereClause>~ + AddCriteria( <++count>,AND,~<FieldName<field>> IN (<ItemList>)~ );
+			continue;
+		}
+
+		if ( ~<FieldType<field>>~ == ~CHAR~ || ~<FieldType<field>>~ == ~STRING~ || ~<FieldType<field>>~ == ~TEXT~  )
+		{
+			if ( ~<operator>~ == Translate(SQLWords,LIKE) )
+			{
+				WhereClause = ~<WhereClause>~ + AddCriteria( <++count>,AND,~<FieldName<field>> <operator> '<data>%'~ );
+				if ( ~<data>~ == ~<OrderID>~ )
+				{
+					OrderIDClause = ~ <operator> '<data>%'~;
+				}
+			}
+			else if ( ~<operator>~ == Translate(SQLWords,NOTLIKE) )
+			{
+				WhereClause = ~<WhereClause>~ + AddCriteria( <++count>,AND,~<FieldName<field>> <operator> '<data>%'~ );
+				if ( ~<data>~ == ~<OrderID>~ )
+				{
+					OrderIDClause = ~ <operator> '<data>%'~;
+				}
+			}
+
+
+			else
+			{
+				WhereClause = ~<WhereClause>~ + AddCriteria( <++count>,AND,~<FieldName<field>> <operator> '<data>'~ );
+				if ( ~<data>~ == ~<OrderID>~ )
+				{
+					OrderIDClause = ~ <operator> '<data>'~;
+				}
+			}
+		}
+		else if ( ~<FieldType<field>>~ == ~DATE~ )
+		{
+			WhereClause = ~<WhereClause>~ + AddCriteria( <++count>,AND,~<FieldName<field>> <operator> <$Date.SharedDateQuote><data><$Date.SharedDateQuote>~ );
+		}
+		else
+		{
+			WhereClause = ~<WhereClause>~ + AddCriteria( <++count>,AND,~<FieldName<field>> <operator> <data>~ );
+		}
+	}
+
+	Query = ~~;
+
+	if ( String( StringInString,~SELECT~,Upper(~<$con.SearchCriteraData[Other]>~) ) == ~~ )
+	{
+		Query = ~SELECT * FROM <Table>~;
+	
+		if ( ~<WhereClause>~ != ~~ )
+		{
+			Query = ~<Query> Where <WhereClause>~;
+		}
+	}
+
+	if (  ~<$con.SearchCriteraData[Other]>~ != ~~ )
+	{
+		Query = ~<Query> <$con.SearchCriteraData[Other]>~;
+	}
+	
+	// LOOK FOR USER SPECIFIED FIELDS OR SYSTEM SPECIFIED FIELDS
+	
+	if ( !IsNull(~<Table>~) )
+	{
+		SearchFields = ~<$UserSettings.SearchFields[<Table>]>~;				// First check User settings
+
+		if ( IsNull(~<SearchFields>~) )
+		{
+			SearchFields = ~<$WorkstationSettings.SearchFields[<Table>]>~;	// Then Try workstation settings
+		}
+				
+		if ( IsNull(~<SearchFields>~) )
+		{
+			SearchFields = ~<$SystemSettings.SearchFields[<Table>]>~;		// Then Try System settings
+		}
+		
+		if ( !IsNull(~<SearchFields>~) )
+		{
+			if ( String( BeginsWith,~<Query>~,~Select * ~ ) != ~*~ )
+			{
+				Query = String( Replace,~<Query>~,~*~,~<SearchFields>~ );
+			}
+		}
+	}
+
+	Global( Query,WhereClause,OrderIDClause );
+	
+	//ParseDelayed(Query);
+
+	StatusBarText( ~<Query>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OrderUses( ID,&InfoTypeList,OrderIDClause )
+{
+	success = FALSE;
+
+	if ( DefinedAndNotNull( OrderIDClause ) )
+	{
+		FindQuery = ~Select Distinct InfoType From Orders Where ((ID <OrderIDClause> And ShootDescId Is Null) Or (ShootDescID <OrderIDClause> )) And ImagesOrderID Is Null~;
+	}
+	else
+	{
+		FindQuery = ~Select Distinct InfoType From Orders Where ((ID = '<ID>' And ShootDescId Is Null) Or (ShootDescID = '<ID>')) And ImagesOrderID Is Null~;
+	}
+	
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<FindQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<FindQuery>~,~<theErr>~) );
+	}
+
+	Count = List(NumEntries);
+	if (<Count> > 0)
+	{
+		success = List( MakeStringList,InfoTypeList,InfoType );
+	}
+
+	else
+	{
+		// check if ID exists in a ShootDescription table
+		if ( GetTypeListForShootDescID(~<ID>~,DescTypeList,TRUE) )
+		{
+			success = GetInfoTypeListForSubjOrderID(~<ID>~,InfoTypeList,FALSE);
+		}
+	}
+
+	return <Success>;
+}
+
+
+NUMERIC DoACombinationSearch( StayOpen )
+{
+	WaitCursor( Begin );
+
+	BuildQuery();
+	
+	ParseDelayed(Query);
+
+	if ( String( BeginsWith,Upper(~SubjectInfo~),Upper(~<Table>~) ) != ~~ )
+	{
+		if ( !DefinedAndNotNull(OrderID) )
+		{
+			return Warning( Translate( ~You must specify an OrderID for the SubjectInfo you are searching.\n\nThe orderID is either a real Order ID or a ShootDescription ID depending on how you are using the data.~ ) );
+		}
+
+		StringList( InfoTypeList,New );
+		if ( !OrderUses( ~<OrderID>~,InfoTypeList,~<OrderIDClause>~ ) )
+		{
+			return Warning( Translate( ~No Orders reference the ID nor is any SubjectInfo defined for SubjectInfo ID <OrderID>.~ ) );
+		}
+		else
+		{
+			InfoTypeList(GetStringAt,0,InfoType);
+		}
+		
+
+		Trailer = String( Replace,Upper(~<Query>~),~ SUBJECTINFO ~,~ SubjectInfo<InfoType> ~ );
+		Trailer = String( StringInString,Upper(~FROM~),Upper(~<Trailer>~) );
+		
+		// NEED TO REMOVE ORDER BY clause TO DO THE COUNT
+		
+		OrderByClause = String( StringInString,Upper(~Order by~),Upper(~<Trailer>~) );
+		Trailer = String( Replace,Upper(~<Trailer>~),Upper(~<OrderByClause>~),~~ );
+
+		CountQuery = ~SELECT COUNT(*) <Trailer>~;  
+
+		// IF THE QUERY DOES NOT HAVE AN "ORDER BY" CLAUSE, ADD ONE.
+
+		if (String( StringInString,Upper(~Order By~),Upper(~<Query>~) ) == ~~)
+		{
+			Query = ~<Query> Order By OrderID,SubjectID~;
+		}
+	}
+	else if ( String( BeginsWith,Upper(~ShootDescription~),Upper(~<Table>~) ) != ~~ )
+	{
+		DescType = ~~;
+
+		if (0)
+		{
+			if ( !DefinedAndNotNull(???) )
+			{
+				StringList( ShootTypeList,New );
+				if ( GetTypeListForShootDescID(~<???>~,ShootTypeList,FALSE) )
+				{
+					ShootTypeList(GetStringAt,<i>,DescType);
+				}
+			}
+		}
+
+		Trailer = String( StringInString,Upper(~FROM~),Upper(~<Query>~) );
+
+		CountQuery = ~SELECT COUNT(*) <Trailer>~;
+	}
+	else
+	{
+		Trailer = String( StringInString,Upper(~FROM~),Upper(~<Query>~) );
+
+		CountQuery = ~SELECT COUNT(*) <Trailer>~;
+	}
+
+	if ( <OurTable> )
+	{
+		connected = ADO( dBase,Connect );
+	}
+	else
+	{
+		connected = ADO( dBase,User,~<User>~,Password,~<Password>~,Provider,~<Provider>~,Source,~<Source>~,Connect );
+	}
+
+	if ( <connected> ) 
+	{
+		
+		if ( dBase( GetValuesFor,~<CountQuery>~,Count ) )
+		{
+			log( Session,~<CountQuery> returned <Count>~ );
+			
+			if ( (<Count> > 300) || (<Count> == 0) )
+			{
+				if ( MessageBox( Translate(DBMessages,LargeQuery,~<Query>~,~<Count>~),YESNO ) != YES )
+				{
+					return TRUE;
+				}
+			}
+		}
+	}
+
+	theTitle = ~<$con.SearchCriteraData[QueryName]>~;
+
+	theTitle = ~<theTitle>~ == Translate( ~Custom~ ) ? String( StringInString,Upper(~Where~),Upper(~<Query>~) ) : ~<theTitle>~;
+
+	StatusBarText( ~<Query>~ );
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+//	Actions = ACTIONS ( BremsonCustomers Open BremsonCustomersDoc "Init(~Customers~,~Select * From Customers~);" );
+
+	AsImages = Keystate(Control);
+
+	OriginalTableName = ~<Table>~;
+
+	if ( !<OurTable> )
+	{
+		Actions = ACTIONS ( Doc( ~<Table>~ Open EditAnyRecsetDoc "ConnectTo( ~<FilePath>~,~<Provider>~,~<User>~,~<Password>~,~<Table>~,~<Query>~);" ) );
+	}
+	else if ( SimilarStr( ~<Table>~,~Images~ ) )
+	{
+		Actions = ACTIONS ( Doc( ~<Table>~ <OpenMethod> <Table>DataDoc "Init( ~<theTitle>~,<AsImages>,~<Query>~,0);" ) );
+	}
+	else if ( SimilarStr( ~<Table>~,~Products~ ) )
+	{
+		if ( !<AsImages> )
+		{
+			Table = ~<Table>Data~;
+			Actions = ACTIONS ( Doc( ~<Table>~ <OpenMethod> <Table>Doc "Init( ~<theTitle>~,<AsImages>,~<Query>~,0);" ) );
+		}
+		else
+		{
+			Actions = ACTIONS ( Doc( ~ProductsDoc2~ <OpenMethod> ProductsDoc2 "Init( ~<theTitle>~,<AsImages>,~<Query>~,0);" ) );
+		}
+
+	}
+	else if ( String( BeginsWith,Upper(~SubjectInfo~),Upper(~<Table>~) ) != ~~ )
+	{
+		i = 0;
+		while ( InfoTypeList(GetStringAt,<i>,InfoType) )
+		{
+			if ( IsSubjectInfoOpenForOrderID( ~<OrderID>~ ) )
+			{
+				Actions = ACTIONS ( Doc( ~<Table>~ OpenOnce SubjectInfoDoc "Init2( ~<OrderID>~,~<InfoType>~,~<Query>~);" ) );
+			}
+			else
+			{
+				Actions = ACTIONS ( Doc( ~<Table>~ Open SubjectInfoDoc "Init2( ~<OrderID>~,~<InfoType>~,~<Query>~);" ) );
+			}
+
+			log( SessionFrom,Actions );
+			
+			PerformActions( Actions );
+			++i;
+		}
+	}
+	else if ( String( BeginsWith,Upper(~Animoto~),Upper(~<Table>~) ) != ~~ )
+	{
+		Title = ~<Query>~;
+		
+		SearchString = ~SELECT * FROM <Table>~;  NullString = ~~;
+	
+		OnContentsOf( Title,Replace,SearchString,NullString );
+		
+		Title = IsNull(~<Title>~) ? ~All~ : ~<Title>~;
+	
+		Actions = ACTION DOC ( ~<Table>~ Open "<$App.HTMLPages>\Animoto\<Table>Doc.txt" "Init( ~<Title>~,~<Query>~ );" );
+	}
+	else if ( String( BeginsWith,Upper(~ShootDescription~),Upper(~<Table>~) ) != ~~ )
+	{
+		Actions = ACTIONS ( Doc( ~<Table>~ <OpenMethod> ShootDescriptionDoc "Init( ~<theTitle>~,~<Query>~,~<DescType>~);" ) );
+	}
+	else if ( SimilarStr( ~<Table>~,~OrderItems~ ) )
+	{
+		Actions = ACTIONS ( Doc( ~<Table>~ <OpenMethod> <Table>Doc "Init( ~<theTitle>~,~<Query>~,<AsImages>);" ) );
+	}
+	else
+	{
+		Actions = ACTIONS ( Doc( ~<Table>~ <OpenMethod> <Table>Doc "Init( ~<theTitle>~,~<Query>~);" ) );
+	}
+
+	Table = ~<OriginalTableName>~;
+
+	if ( String( BeginsWith,Upper(~SubjectInfo~),Upper(~<Table>~) ) == ~~ )
+	{
+		//log( SessionFrom,Actions );
+		PerformActions( Actions );
+	}
+
+	if ( !<StayOpen> )
+	{
+		 DoCancelButton();
+	}
+
+	return WaitCursor( End );
+}
+
+NUMERIC IsSubjectInfoOpenForOrderID( OrderID )
+{
+	OpenIndex = 0;
+
+	while ( GenCon( Window,GetWindowByIndex,<OpenIndex++> ) )
+	{
+		while ( Window( GetNext,aView ) )
+		{
+			theDoc = aView( GetReferenceTo, Document);
+			if ( <theDoc> )
+			{
+				Document(aDoc,Is,<theDoc>);
+				
+				aDoc( GetDocumentPath,DocumentPath );
+				if ( !SimilarStr( ~<DocumentPath>~, ~SubjectInfoDoc~ ) )
+					continue;
+
+				aDoc( GetGlobalSymbolValue, ~LastOrderID~, lastOrderID );
+				if ( SimilarStr( ~<lastOrderID>~,~<OrderID>~ ) )
+				{
+					return TRUE;
+				}
+			}
+		}
+
+		continue;
+	}
+
+	return FALSE;
+}
+
+NUMERIC OnClearFields()
+{
+	SearchDialog( SelectString,QueryComboBox,Translate( ~Custom~ ) );
+	ClearFields();
+	return 	BuildQuery();
+}
+
+
+NUMERIC ClearFields()
+{
+	field = -1;
+
+	while ( <++field> < <Index> )
+	{
+		SearchDialog( SetString,~~,~<FieldName<field>>~,0 );
+		SearchDialog( SelectString,Operator<field>,~~ );
+	}
+
+	SearchDialog( SetString,~~,~Other~,0 );
+
+	return TRUE;
+}
+
+
+VOID DoCancelButton()
+{
+	SearchDialog( End );
+	Exit();
+}
+
+
+NUMERIC DefineDialog( &List )
+{
+	WaitCursor( Begin );
+
+	DialogWidth = 400;
+	PromptX		= 0;	PromptY		= 10;	PromptWidth	= 105;	PromptHeight = 20;
+	ValueWidth	= 150;	vGap = 5;			hGap = 3;			ButtonWidth	= 80;	ButtonHeight	= 30;
+	OperatorWidth = 70;	RightMostField = 0;	BottomOfColumn1 = 0; SmallButtonWidth = $ButtonWidth * .5;
+
+	AllowableChrs = ~<$[Symbols].AllowableSpecialCharacters[Value]>~;
+	Mask150 = RepeatStr(150,~*~);
+
+	Define: SearchCriteraDialog Using DDWinDef
+		Fields:	POSITION				100, 100, $DialogWidth, 300
+				TITLE					Translate( SearchDocMessages,Title,~<TranslatedTableName>~ )
+				TYPENAME				~Dialog~ 
+				WantsMinimizeBox		TRUE
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "All Searches.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			DataDict( TableDictionary,New );
+
+			MaxFieldsPerColumn = 28;
+
+			FieldCount = List( FieldCount );
+
+			//if ( <FieldCount> < <MaxFieldsPerColumn>*2 )	{ MaxFieldsPerColumn = <FieldCount> / 2 - 1; }
+
+			if ( <MaxFieldsPerColumn> > 28 )	{ MaxFieldsPerColumn = 28; }
+
+			NumColumns = FieldsInThisColumn = 0;
+
+			while ( List( FieldInfo,<++Index>,Name,FieldName<Index>,Length,FieldLength<Index>,Type,FieldType<Index> ) )
+			{
+				FieldDisplayName = TranslateFieldName( ~<Table>~,~<FieldName<Index>>~ );
+
+				FieldToolTip = TranslateFieldName( ~<Table>~,~<FieldName<Index>>~,UserFormat );
+
+				Define: Prompt<Index> Using DDWinCtrlDef AsSymbol Prompt<Index>
+					Fields:	POSITION		$PromptX $PromptY $PromptWidth $PromptHeight
+							TEXT			~<FieldDisplayName>~
+							ToolTip			~<FieldName<Index>>~
+							IsEnabled		T
+							RightJustified	TRUE
+							DActionsText	ACTION EXEC ( CopyFieldName(~<FieldName<Index>>~) )
+							TYPENAME		StaticText ;
+
+				Define: Operator<Index> Using DDWinCtrlDef AsSymbol Operator<Index>
+					Fields:	TypeName		SComboBox
+							Position		Prompt<Index>(GetRight,Position) + $hGap,$PromptY-3 $OperatorWidth, 300
+							GenConName		THIS
+							ISTABSTOP       0
+							DActionsText	ACTIONS ( DialogTimer(337 2000) )
+							GenConField		Operator<Index>
+							IActionsText	ACTIONS ( GETLIST(SQLOperatorsFor<FieldType<Index>>) Get ) ;
+
+				Define: Field<Index> Using DDWinCtrlDef AsSymbol Field<Index>
+					Fields:	DACTIONSTEXT	ACTIONS ( Save )
+							GENCONFIELD		~<FieldName<Index>>~
+							GENCONNAME		THIS
+							ISTABSTOP		TRUE
+							IACTIONSTEXT	ACTIONS ( Get )
+							DActionsText	ACTIONS ( Save DialogTimer(337 2000) )
+							OACTIONSTEXT	ACTIONS ( Save )
+							DISALLOWEDCHARS	STR ( ~ )
+							POSITION		Operator<Index>(GetRight,Position) + $hGap, $PromptY-3, $ValueWidth, $PromptHeight
+							TOOLTIP			Translate( SearchDocMessages,EnterCriteria,~<FieldDisplayName>   <FieldToolTip>~,~<FieldName<Index>>~ )
+							TYPENAME		MaskedEditText
+							Mask			~<Mask150>~ 
+							AllowedChars	~<AllowableChrs>~
+							PromptChar		~ ~ ;
+
+				PromptY = <PromptY> + <PromptHeight> + 0;
+				Global( FieldName<Index>,FieldLength<Index>,FieldType<Index>,Operator<Index> );
+
+				TableDictionary( Add,~<FieldName<Index>>~ );
+				TableDictionary( Add,~Operator<Index>~ );
+
+				if ( <++FieldsInThisColumn> >= <MaxFieldsPerColumn> )
+				{
+					PromptX += Field0(GetWidth,Position) + Operator0(GetWidth,Position) + Field0(GetWidth,Position) - 30;
+					BottomOfColumn1 = $PromptY;
+					PromptY	= 10;
+		
+					FieldsInThisColumn = 0;
+
+					++NumColumns;
+				}
+
+				if ( <NumColumns> > 3 )
+					break;
+
+				RightMostField = <Index>;
+			}
+
+			BottomOfColumn1 = Max( $BottomOfColumn1,$PromptY );
+
+			
+
+			DialogWidth = Field<RightMostField>(GetRight,Position) + $hGap*35;
+			AdvancedDialogWidth = Field<RightMostField>(GetRight,Position) + $hGap*3;
+			DialogWidth = $AdvancedDialogWidth;
+
+			hGap = 3;  xPosition = $hGap;  yPosition = $BottomOfColumn1  + $vGap * 2;
+
+			Define: ClearButton Using DDWinCtrlDef AsSymbol ClearButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnClearFields() )
+						POSITION		$hGap,$yPosition, $SmallButtonWidth, $ButtonHeight
+						TEXT			Translate( SearchDocMessages,~ClearCriteria~ )
+						TYPENAME		Button
+						TOOLTIP			Translate( SearchDocMessages,~ClearCriteriaToolTip~ );
+
+			if ( ~<Table>~ == ~OrderItems~ )
+			{
+				Define: RunButton Using DDWinCtrlDef AsSymbol RunButton
+					Fields:	GENCONNAME		THIS
+							DACTIONSTEXT	ACTION EXEC ( OnRunOrderItems() )
+							POSITION		ClearButton(GetRight,Position) + $hGap,ClearButton(GetTop,Position), $SmallButtonWidth, $ButtonHeight
+
+							TEXT			Translate( SearchDocMessages,~Run~ )
+							TYPENAME		Button
+							TOOLTIP			Translate( SearchDocMessages,~RunButtonToolTip~ ) ;
+			}
+
+
+			xPosition = $DialogWidth/2 - $ButtonWidth+$hGap;
+
+			Define: SearchAndStayOpenButton Using DDWinCtrlDef AsSymbol SearchAndStayOpenButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( DoACombinationSearch(TRUE) )
+						POSITION		$xPosition + $hGap,$yPosition, $ButtonWidth, $ButtonHeight
+						TEXT			Translate( SearchDocMessages,~Search~ )
+						TYPENAME		Button
+						TOOLTIP			Translate( SearchDocMessages,~SearchToolTip~,~<TranslatedTableName>~ )
+
+			Define: SearchButton Using DDWinCtrlDef AsSymbol SearchButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( DoACombinationSearch(FALSE) )
+						POSITION		SearchAndStayOpenButton(GetRight,Position) + $hGap,SearchAndStayOpenButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						TEXT			Translate( SearchDocMessages,~SearchAndClose~ )
+						TOOLTIP			Translate( SearchDocMessages,~SearchAndCloseToolTip~,~<TranslatedTableName>~ )
+						TYPENAME		DefaultButton;
+
+			AdminPrivileges = GetUserPermissions( Admin ) ? ~T~ : ~F~;
+
+			Define: SaveButton Using DDWinCtrlDef AsSymbol SaveButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnSaveButton() )
+						POSITION		$DialogWidth-$hGap*3-$SmallButtonWidth ,ClearButton(GetTop,Position), $SmallButtonWidth, $ButtonHeight
+						TEXT			Translate( SearchDocMessages,~Save~ )
+						TYPENAME		Button
+						ISENABLED		<AdminPrivileges>
+						TOOLTIP			Translate( SearchDocMessages,~SaveButtonToolTip~ );
+
+			PromptY = ClearButton(GetBottom,Position);
+
+			TableDictionary( Add,~QueryName~ );
+
+			if ( HaveCustomQueries() )
+			{
+			  Define: QueryComboBox Using DDWinCtrlDef AsSymbol QueryComboBox 
+						Fields: TypeName		SComboBox  
+								Position		10,$PromptY + $vGap * 2,<DialogWidth> - 10 * 2 - 25 ,300 
+								IActionsText    ~[Get]~
+								DActionsText	ACTION EXEC ( OnSelectAQueryChanged() )
+								DropDownActionsText ACTION CALL ( RefreshQueryComboBox() )
+								OActionsText    ~[Save]~
+								GenConName       THIS
+								GenConField      ~QueryName~
+								Tooltip          ~Select from a list of user defined queries.  Use <$@con.SearchCritera[FieldName]> to pick up values dynamically from above.~ ;
+
+				Define: ViewQueriesButton Using DDWinCtrlDef AsSymbol ViewQueriesButton
+					Fields:	GENCONNAME		THIS
+							DACTIONSTEXT	ACTION EXEC ( OnViewQueries() )
+							POSITION		QueryComboBox(GetRight,Position) + $hGap,QueryComboBox(GetTop,Position), 20, 20
+							TEXT			~?~
+							TYPENAME		Button
+							ISENABLED		<AdminPrivileges>
+							TOOLTIP			Translate( SearchDocMessages,ViewQueriesToolTip ) ;
+
+				PromptY = ViewQueriesButton(GetBottom,Position);
+			}
+
+			TableDictionary( Add,~Other~ );
+		}
+
+
+	ScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+	x = $ScreenWidth / 2;
+	y = - 30;
+
+	RightEdge = <x> + <DialogWidth>;
+
+	if ( <RightEdge> > <ScreenWidth> )
+	{
+		x = <ScreenWidth> - <DialogWidth> - 10;
+	}
+
+	if ( <x> < 0 )
+	{
+		x = 0;
+	}
+
+	DialogHeight = $PromptY + ($vGap * 2) + 30;
+	SearchCriteraDialog( Set,Position,~<x>  <y>  <DialogWidth>  <DialogHeight>~ );
+
+	Global(SearchCriteraDialog,TableDictionary);
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+
+NUMERIC HaveCustomQueries()
+{
+	Query = ~Select count(*) From Query Where Type = '<Table>'~;
+
+	Count = ADO( dBase,Connect,RecordCountFor,~<Query>~ );
+
+	if ( <Count> )
+	{
+		StringList( Queries,New );
+
+		Queries( InAlphaOrder,AddString,Translate( ~Custom~ ) );
+
+		Global( Queries );
+	}
+
+	return <Count>;
+}
+
+
+NUMERIC UpdateQueries()
+{
+	SearchDialog( SetControlFromStringList,QueryComboBox,Queries );
+	return SearchDialog( SelectString,QueryComboBox,Translate( ~Custom~ ) );
+}
+
+
+VOID GetQueries()
+{
+	ForgetGlobal( Queries );
+
+	Query = ~Select Name From Query Where Type = '<Table>' Order By Sequence~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Failed to query the Query table.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		return;
+	}
+
+	List( MakeStringList,Queries,Name,FALSE );
+
+	Queries( InAlphaOrder,AddString,Translate( ~Custom~ ) );
+
+	Global( Queries );
+}
+
+
+VOID RefreshQueryComboBox()
+{
+	GetQueries();
+	UpdateQueries();
+}
+
+
+NUMERIC OnSaveButton()
+{
+	BuildQuery();
+
+	Title = ~Queries - <Table>~;
+
+	Which = ~Select * From Query Where Type = '<Table>' Order By Name~;
+
+	Cmd = STR ( "AddAQuery(~<Title>~,~<Which>~,~~,~<Query>~,~<Table>~);" );
+
+	Action = ACTION DOC ( QueryDoc OpenOnce QueryDoc <Cmd> );
+
+	return PerformActions( Action );
+}
+
+
+NUMERIC OnViewQueries()
+{
+	Title = ~Queries - <Table>~;
+
+	Which = ~Select * From Query Where Type = '<Table>' Order By Name~;
+
+	Cmd = STR ( "Init(~<Title>~,~<Which>~,~~);" );
+
+	Action = ACTION DOC ( QueryDoc OpenOnce QueryDoc <Cmd> );
+
+	return PerformActions( Action );
+}
+
+VOID	BuildANewQuery()
+{
+	SearchDialog( GetInput );
+
+	if ( ~<$con.SearchCriteraData[QueryName]>~ == ~~ )
+	{
+		return;
+	}
+
+	if ( ~<$con.SearchCriteraData[QueryName]>~ == Translate( ~Custom~ ) )
+	{
+		BuildQuery();
+		return;
+	}
+	
+	OnSelectAQuery();
+}
+
+NUMERIC OnSelectAQueryChanged()
+{
+	SearchDialog( GetInput );
+
+	QueryName = ~<$con.SearchCriteraData[QueryName]>~;
+
+	if ( ~<QueryName>~ == ~~ )
+		{ return FALSE; }
+
+	ShowEm =  ~<QueryName>~ == Translate( ~Custom~ );
+
+	i = -1;
+
+	while ( <++i> < <Index> )
+	{
+		SearchDialog(EnableControls,<ShowEm>,Operator<i>);
+	}
+
+	return OnSelectAQuery();
+}
+
+NUMERIC OnSelectAQuery()
+{
+	SearchDialog( GetInput );
+
+	QueryName = ~<$con.SearchCriteraData[QueryName]>~;
+
+	if ( ~<QueryName>~ == ~~ )
+		{ return FALSE; }
+
+	if ( ~<QueryName>~ == Translate( ~Custom~ ) )
+	{ 
+		ClearFields();
+		return BuildQuery();
+	}
+
+	Query = ~Select * From Query Where Name = '<QueryName>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the Query table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	if ( !List( GetFirst,theQuery ) )
+	{
+		return Warning( Translate( ~Could not find a query named <QueryName>~ ) );
+	}
+
+	QueryText = String( ReplaceCRLFWithBlanks,~<$pcon.theQuery[Query]>~ );
+
+	//ParseDelayed(QueryText);
+
+	//ClearFields();
+
+	BuildQuery();
+	
+	return SearchDialog( SetString,~<QueryText>~,Other,0 );
+}
+
+
+NUMERIC CopyFieldName( FieldName )
+{
+	SearchDialog( CopyToClipboard, ~<FieldName>~ );
+
+	return TRUE;
+}
+
+
+VOID DefineValues( Name,Value )
+{
+	if ( ~<Name>~ != ~~ )
+	{
+		<Name> = ~<Value>~;
+		Global( <Name> );
+	}
+}
+
+OurTable = TRUE;
+
+NUMERIC Search( Table,Field1,Value1,Field2,Value2,Field3,Value3 )
+{
+	WaitCursor( Begin );
+
+	DefineValues(~<Field1>~,~<Value1>~);
+	DefineValues(~<Field2>~,~<Value2>~);
+	DefineValues(~<Field3>~,~<Value3>~);
+
+	TranslatedTableName = ~<Table>~; // Translate( TableNames,~<Table>~ );
+
+	Global( Table,TranslatedTableName );
+
+	if ( !ADO( dBase,Connect,MakePrimaryKeyFrom,~<Table>~,Dummy,Key ) )
+	{
+		WaitCursor( End );
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( DBMessages,ConnectionFailed,~<TranslatedTableName>~,~<theErr>~ ) );
+	}
+
+	Query = ~Select * From <Table>~;	// WILL BE A QUERY THAT RETURNS NO RECORDS
+
+	if ( !IsNull(~<Key>~) )
+	{
+		Query = ~<Query> Where <Key>~;
+	}
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+	{
+		WaitCursor( End );
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( DBMessages,QueryFailed,~<TranslatedTableName>~,~<theErr>~ ) );
+	}
+
+	DefineDialog( List );
+
+	GenCon( SearchCriteraData,NewFrom,TableDictionary(GetObject) );
+	Global( SearchCriteraData );
+
+	GenDlg( SearchDialog,Definition,SearchCriteraDialog,Data,SearchCriteraData,Document,$Doc.This,New,Temporary );
+	Global( SearchDialog );
+	
+	//RefreshQueryComboBox();
+
+	if ( Defined( Queries ) )
+	{
+		UpdateQueries();
+	}
+
+	SetTimer( 337,3000 );
+
+	return WaitCursor( End );
+}
+
+
+NUMERIC SearchAccunet( Table )
+{
+	WaitCursor( Begin );
+
+	TranslatedTableName = ~<Table>~; // Translate( TableNames,~<Table>~ );
+
+	Global( Table,TranslatedTableName );
+
+	Define: List Using DDLong;
+
+	Define: Field0 Using DDFieldInfo Permanent
+		Fields: Name		~CustomerID~
+		Fields: Type		~STRING~
+		Fields: Length		32 ;
+
+	List( InsertBack,Field0 );
+
+	DefineDialog( List );
+
+	GenCon( SearchCriteraData,NewFrom,TableDictionary(GetObject) );
+	Global( SearchCriteraData );
+
+	GenDlg( SearchDialog,Definition,SearchCriteraDialog,Data,SearchCriteraData,Document,$Doc.This,New,Temporary );
+	Global( SearchDialog );
+
+	SetTimer( 337,2000 );
+
+	//RefreshQueryComboBox();
+
+	return WaitCursor( End );
+}
+
+
+NUMERIC ConnectAndSearch( FilePath,Provider,User,Password,Table )
+{
+	WaitCursor( Begin );
+
+	Extension = ~<$Str.$FilePath.Ext>~;
+
+	if ( SimilarStr( ~<Extension>~,~UDL~ ) )	// IS THIS REALLY A UDL?
+	{
+		User = ~~;
+		Password = ~~;
+		Provider = ~~;
+		Source = ~File Name=<FilePath>~;
+	}
+	else
+	{
+		Provider = ~Microsoft.Jet.OLEDB.4.0~;
+		Source = ~<FilePath>~;
+	}
+
+	TranslatedTableName = ~<Table>~;
+
+	Global( Table,TranslatedTableName,FilePath,Provider,User,Password );
+
+	OurTable = FALSE;
+
+	if ( !ADO( dBase,User,~<User>~,Password,~<Password>~,Provider,~<Provider>~,Source,~<Source>~,Connect ) ) 
+	{
+		WaitCursor( End );
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( DBMessages,ConnectionFailed,~<TranslatedTableName>~,~<theErr>~ ) );
+	}
+
+	Global( User,Password,Provider,Source );
+
+	if ( !dBase( MakePrimaryKeyFrom,~<Table>~,Dummy,Key ) )
+	{
+		WaitCursor( End );
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( DBMessages,ConnectionFailed,~<TranslatedTableName>~,~<theErr>~ ) );
+	}
+
+	Query = ~Select * From <Table>~; // Where <Key>~;	// WILL BE A QUERY THAT RETURNS NO RECORDS
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+	{
+		WaitCursor( End );
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( DBMessages,QueryFailed,~<TranslatedTableName>~,~<theErr>~ ) );
+	}
+
+	DefineDialog( List );
+
+	GenCon( SearchCriteraData,NewFrom,TableDictionary(GetObject) );
+	Global( SearchCriteraData );
+
+	GenDlg( SearchDialog,Definition,SearchCriteraDialog,Data,SearchCriteraData,Document,$Doc.This,New,Temporary );
+	Global( SearchDialog );
+
+	//RefreshQueryComboBox();
+
+	return WaitCursor( End );
+}
+
+Index = -1;
+
+Timer337_Action = ~BuildANewQuery()~;

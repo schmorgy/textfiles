@@ -1,0 +1,564 @@
+
+Define:	KPLMessages Using DDSymbol
+	Fields:	Value	~These strings are KPL related strings used by the user interface.~
+	Contains:
+	{
+		Define: ReadingRecords		using DDText	Fields: Text ~Reading %1 KPL~
+		Define: ReadRecords			using DDText	Fields: Text ~Read %1 KPL in %2 seconds~
+		Define: RemovingRecordFor	using DDText	Fields: Text ~Are you sure you want to delete the %1 selected KPL(s)?~
+		Define:	BlankSubject		using DDText	Fields: Text ~Unable to save pending changes.  Subject cannot be blank.~	
+		Define:	BlankCategory		using DDText	Fields: Text ~Unable to save pending changes.  Category cannot be blank.~	
+		Define:	BlankItem			using DDText	Fields: Text ~Unable to save pending changes.  Item cannot be blank.~	
+		Define:	BlankSubItem		using DDText	Fields: Text ~Unable to save pending changes.  SubItem cannot be blank.~	
+		Define: NoRow				using DDText	Fields: Text ~No Row Selected~
+		Define: MenuNew				using DDText	Fields: Text ~&New~
+		Define: ButtonDuplicate		using DDText	Fields: Text ~Duplicate~
+		Define: ButtonExecute		using DDText	Fields: Text ~Execute~
+		Define: ButtonFind			using DDText	Fields: Text ~Find~
+		Define: ButtonGoto			using DDText	Fields: Text ~View~
+		Define: ButtonDebug			using DDText	Fields: Text ~Debug~
+		Define: ToolDebug			using DDText	Fields: Text ~Run the sample code in the debugger~
+		Define: ToolDuplicate		using DDText	Fields: Text ~Duplicate the selected KPL~
+		Define: ToolExecute			using DDText	Fields: Text ~Execute the example code~
+		Define: ToolFind			using DDText	Fields: Text ~Invoke the search dialog to find records of a specific criteria~
+		Define: ToolGoto			using DDText	Fields: Text ~View the corresponding item in the Programmers Assistant.  Same as double clicking an item.~
+
+		Define: NoKPLDefined		using DDText	Fields: Text ~There is no KPL defined~
+	}
+
+
+NUMERIC RefreshListView( Requery )
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	Start = Ticks();
+
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	Count = List( NumEntries );
+
+	if ( FALSE )
+	{
+		if ( MessageBox( Translate(DBMessages,LargeQuery,~<DocumentQuery>~,~<Count>~),YESNO ) != YES )
+		{
+			return TRUE;
+		}
+	}
+
+	DataWindow( StatusBar,Text,Translate( KPLMessages,ReadingRecords,<Count> ) );
+
+	SetDocumentData( List(GetObject) );	
+	DataWindow( RefreshWindow );
+
+	Duration = (Ticks() - <Start>) / 1000;
+
+	return DataWindow( StatusBar,Text,Translate(KPLMessages,ReadRecords,~<Count>~,~<Duration>~) );
+
+	return TRUE;
+}
+
+
+STR GetKey( &Item )
+{
+	Key = STR (	Subject = '<$con.Item[Subject]>' AND Category = '<$con.Item[Category]>' AND Item = '<$con.Item[Item]>' AND SubItem = '<$con.Item[SubItem]>');
+
+	return ~<Key>~;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,ChangedItems,OrigItem,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedItems[Subject]>~ == ~~ )
+		{ return Warning( Translate(KPLMessages,Subject) ); }
+
+	if ( ~<$con.ChangedItems[Category]>~ == ~~ )
+		{ return Warning( Translate(KPLMessages,Category) ); }
+
+	if ( ~<$con.ChangedItems[Item]>~ == ~~ )
+		{ return Warning( Translate(KPLMessages,Item) ); }
+
+	if ( ~<$con.ChangedItems[SubItem]>~ == ~~ )
+		{ return Warning( Translate(KPLMessages,SubItem) ); }
+
+	Key = GetKey( OrigItem );
+	
+	Query = ~Select * From KPL Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( UpdateFrom,ChangedItems,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+	}
+
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,ItemToDelete ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	count = ItemToDelete( ChildCount );
+
+	if ( MessageBox( Translate(KPLMessages,RemovingRecordFor,~<count>~),YESNO ) != YES )
+		{ return FALSE; }
+
+	StringList( RowsToDelete,New );
+
+	WaitCursor( Begin );
+
+	while ( ItemToDelete( GetNext,Item ) )
+	{
+		Key = GetKey( Item );
+		Cmd = ~Delete From KPL Where <Key>~;
+
+		if ( !db( CMD,~<Cmd>~ ) )
+		{
+				WaitCursor( End );
+			db( GetErrorDescription,theErr );
+			return Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+		}
+
+		RowsToDelete( AddString,ItemToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate(UIMessages,AddRowFailed) ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	Global( RowBeingAdded );
+
+	return TRUE;
+}
+
+
+NUMERIC Duplicate()
+{
+	if ( !DataView( GetSelectedRows,QueryToImitate ) )		
+	{
+		return Warning( Translate(UIMessages,NoRow ) );
+	}
+
+	if ( !QueryToImitate( GetFirst,theQuery ) )
+	{
+		return AddRecord();
+	}
+
+	GenCon( NewRow,IsCopyOf,theQuery );
+
+	NewRow( Set,Name,~~ );
+
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate(UIMessages,AddRowFailed) ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	return TRUE;
+}
+
+
+NUMERIC ExecuteCode( WantDebug )
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+	{
+		return Warning( Translate(UIMessages,NoRow) );
+	}
+
+	if ( !SelectedRows( GetNext,CodeToExecute ) )
+	{
+		return Warning( Translate(UIMessages,NoRow) );
+	}
+
+	if ( CodeToExecute( GetValues,Executable,ScratchData ) )
+	{
+		Path = ~<$App.Dir>\scripts\ExampleTemp.txt~ ;
+
+		Files( Delete,~<Path>~ );
+
+		if ( !File( ScratchFile,Open,~<Path>~,Create,Write,Close ) )	
+		{
+			return Warning( Translate( ~Failed to create <Path>~ ) );
+		}
+
+		if ( <WantDebug> )
+		{
+			ScratchFile( WriteLine,~;Debug(1);~,CRLF,CRLF );
+		}
+
+		ScratchFile( WriteContentsOf,ScratchData );
+
+		if ( <WantDebug> )
+		{
+			ScratchFile( CRLF,CRLF,WriteLine,~;Debug(1);~,CRLF );
+		}
+
+		ScratchFile( Close );
+
+		Open( Any,~<Path>~ );
+
+		return TRUE;
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( Translate(UIMessages,NoActiveView) ); }
+
+	ActiveView( DisplayMenu,QueryListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( ~<what> is not implemented yet!~ );
+	return TRUE;
+}
+
+
+
+FirstTime = TRUE;
+
+NUMERIC Init( Title,DocumentQuery,CloseInstructions )
+{
+	if ( ~<CloseInstructions>~ == ~~ )
+		{ CloseInstructions = ~StayOpen~; }
+
+	Global( Title,DocumentQuery,CloseInstructions );
+
+	DataWindow( Set,Title,Translate( ~KPL - <Title>~ ) );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{ 
+			List(GetErrorDescription,0,theErr);
+			Error( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+		}
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !DataWindow( CreateWindow,~KPL~ ) )
+			{ Error( Translate(UIMessages,CreateWindowFailed,~Query~) ); }
+
+		return DataView( AllowRowColResizing,TRUE );
+	}
+
+	return RefreshListView( TRUE );
+}
+
+
+NUMERIC OpenSelected()
+{
+	return OnDoubleClick();
+}
+
+
+NUMERIC OnDoubleClick()
+{
+	if ( !DataView( GetSelectedRows,Selected ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	if ( !Selected( GetFirst,Item ) )
+		{ return FALSE; }
+
+	action = ACTION DOC ( ProgramAssistantDoc OpenOnce ProgramAssistantDoc "GotoItem( ~<$con.Item[Subject]>~,~<$con.Item[Category]>~,~<$con.Item[Item]>~,~<$con.Item[SubItem]>~ );" );
+	return PerformActions( action );
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( Translate(UIMessages,CancelChanges), YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+NUMERIC Search()
+{
+	Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( KPL );" ) );
+	return PerformActions( Actions );
+}
+
+NUMERIC AllOptions()
+{
+	return DataView( DisplayMenu,QueryListViewMenu,0,0 );
+}
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,QueryListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,QueryListViewMenu,0,0  );
+	}
+}
+
+Include: ~ChgFldDlg.txt~;	// Options list - Change Field, and [ChangeField] button
+NUMERIC ChangeSelectedColumn()
+{
+	return DisplayChangeFieldDlg(DataView);
+
+}
+
+Include: ~ExportSelectedToFile~;
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 3; vGap = 2;
+
+if ( !GenCon( QueryTableDefinition,GetFrom,KPL,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The KPL Table is not properly defined~ ); }
+	
+if ( !ado( db,CONNECT ) )
+	{ 
+		db( GetErrorDescription,theErr );
+		Error( Translate(DBMessages,ConnectionFailed,~Query~,~<theErr>~));
+	}	
+
+
+Define:	QueryListViewMenu Using DDMenuDef AsSymbol QueryListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( KPLMessages,MenuNew )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	ChangeColValue	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Change Field~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ChangeSelectedColumn() )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuSaveChanges)
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuCancelChanges)
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuDelete)
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuRefresh)
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuRefresh)
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	NULL3 using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+		Define:	Export	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuExport )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ExportSelectedToFile(DataView,KPL) )
+	}
+
+Define: DataWindow Using DDWinDef
+	Fields:		Title					~KPL~
+				Position				0 78 100 22
+				IsPositionPercent		T
+				EnableStatusBar			F
+				TypeName				SplitterWnd
+				SplitterRows			~2 14 90~
+				SplitterColumns			1
+
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( AdminHelpFile "QueryData.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons(KPL) + 10;
+
+					Define: DuplicateButton Using DDWinCtrlDef AsSymbol DuplicateButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( Duplicate() )
+								POSITION		$position + $hGap, $vGap $ButtonWidth $ButtonHeight
+								TEXT			Translate( KPLMessages,ButtonDuplicate )
+								TOOLTIP			Translate( KPLMessages,ToolDuplicate )
+								TYPENAME		BUTTON
+
+					Define: FindButton Using DDWinCtrlDef AsSymbol FindButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( Search() )
+								POSITION		DuplicateButton(GetRight,Position) + $hGap, DuplicateButton(GetTop,Position) $ButtonWidth $ButtonHeight
+								TEXT			Translate( KPLMessages,ButtonFind )
+								TOOLTIP			Translate( KPLMessages,ToolFind )
+								TYPENAME		BUTTON
+
+					Define: GoToButton Using DDWinCtrlDef AsSymbol GoToButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( OnDoubleClick() )
+								POSITION		FindButton(GetRight,Position) + $hGap, FindButton(GetTop,Position) $ButtonWidth $ButtonHeight
+								TEXT			Translate( KPLMessages,ButtonGoto )
+								TOOLTIP			Translate( KPLMessages,ToolGoto )
+								TYPENAME		BUTTON
+
+					Define: ChangeFieldButton Using DDWinCtrlDef AsSymbol ChangeFieldButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( ChangeSelectedColumn() )
+								POSITION		GoToButton(GetRight,Position) + $hGap, $vGap $ButtonWidth*1.5 $ButtonHeight
+								TEXT			Translate( ~ChangeField~ )
+								TOOLTIP			Translate( ~Change all values in column to one value~ )
+								TYPENAME		BUTTON
+
+
+
+					IF 0
+					{
+						Define: ExecuteButton Using DDWinCtrlDef AsSymbol ExecuteButton
+							Fields:	GENCONNAME		This
+									DACTIONSTEXT	ACTION EXEC ( ExecuteCode(FALSE) )
+									POSITION		DuplicateButton(GetRight,Position) + $hGap, DuplicateButton(GetTop,Position) $ButtonWidth $ButtonHeight
+									TEXT			Translate( KPLMessages,ButtonExecute )
+									TOOLTIP			Translate( KPLMessages,ToolDuplicate )
+									TYPENAME		BUTTON
+
+						Define: DebugButton Using DDWinCtrlDef AsSymbol DebugButton
+							Fields:	GENCONNAME		This
+									DACTIONSTEXT	ACTION EXEC ( ExecuteCode(TRUE) )
+									POSITION		ExecuteButton(GetRight,Position) + $hGap, ExecuteButton(GetTop,Position) $ButtonWidth $ButtonHeight
+									TEXT			Translate( KPLMessages,ButtonDebug )
+									TOOLTIP			Translate( KPLMessages,ToolDebug )
+									TYPENAME		BUTTON
+					}
+
+
+				}
+
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		QueryTableDefinition(GetReferenceTo,Fields)
+					FONTSIZE				10
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					CloseActionsText		ACTION Call ( OnCloseDataView() ) 
+					KeyboardActionsText		ACTION Exec ( OnKeydown() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					HActionsText			ACTION SHOWHELPPAGE ( AdminHelpFile "QueryData.htm" )
+					DoubleClickActionsText	ACTION Exec ( OnDoubleClick() ) ;
+	}
+	
+
+// Init( ~KPL~,~Select * From KPL Order By Subject,Category,Item,SubItem~,~~ )

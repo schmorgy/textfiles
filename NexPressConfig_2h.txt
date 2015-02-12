@@ -1,0 +1,1396 @@
+
+//	S:\APPSV2\Apps\Exe\TextFiles\NexPressConfig_2h.txt
+
+TCHAR gResponseFolder[2048];
+TCHAR gControlFolder[2048];
+
+void Get_NexPress_Info()
+{
+	StartThread();
+	ShowHideControl( _T("Get NexPress Info"), FALSE ) ;
+	gDataGC->SetLongValue( _T("Found"), FALSE) ;
+
+	gThread->PostThreadMessage( 0x9003, 0L, 0L ) ;//send xml
+	
+	RemoveDFESetup() ;	//	IF THE NexPressDFESetup.txt file exists, then remove it.
+}
+
+//=============================================================================
+
+void Get_DevCaps_Info()		//	NEW NEW NEW
+{
+	TCHAR	*DevCapsPath = gDataGC->GetStringValue( _T("DevCapsPath")) ;
+	if( DevCapsPath == NULL )
+	{
+		gDataGC->SetAttrValue( _T("Status"), _T("Please select the DFE's Device Capabilities file (devcaps.xml).")) ;
+		DisplayControlValues( gDlg ) ;
+		return ;
+	}
+	
+	if( *DevCapsPath == 0x00 )
+	{
+		gDataGC->SetAttrValue( _T("Status"), _T("Please select the DFE's Device Capabilities file (devcaps.xml).")) ;
+		DisplayControlValues( gDlg ) ;
+		return ;
+	}
+	
+	TCHAR	*TemplatePath = gDataGC->GetStringValue( _T("TemplatePath")) ;
+	if( TemplatePath == NULL )
+	{
+		gDataGC->SetAttrValue( _T("Status"), _T("Please select the Template Folder.")) ;
+		DisplayControlValues( gDlg ) ;
+		return ;
+	}
+	
+	if( *TemplatePath == 0x00 )
+	{
+		gDataGC->SetAttrValue( _T("Status"), _T("Please select the Template Folder.")) ;
+		DisplayControlValues( gDlg ) ;
+		return ;
+	}
+	
+	long AddedInks = 0L ;
+	long AddedMedia = 0L ;
+	
+	
+	TCHAR	*FileText = GetFile( DevCapsPath ) ;
+	if( FileText )
+	{
+		gDataGC->SetAttrValue( _T("Status"), _T("Reading the devcaps.xml file.")) ;
+		ShowHideControl( _T("Get DFE Info"), FALSE ) ;
+		DisplayControlValues( gDlg ) ;
+		
+		XML		*theXMLParser	=	new XML ;
+		UList	*theXMLList		=	theXMLParser->ParseXML( FileText ) ;
+		
+		UList *theMediaList = GetParameterList( theXMLParser, _T("ManufacturingCapabilities MediumList Medium(%ld) Name")) ;
+		
+//		UList *theInkList = GetParameterList( theXMLParser,
+//						_T("ManufacturingCapabilities PrinterList PrinterDefaults Printer FifthColor InstalledFifthColorList FifthColorName(%ld)")) ;
+
+//=============================================================================
+//		AddedInks = AddInks( theInkList ) ;
+//		theInkList->RemoveAll() ;
+//		delete theInkList ;
+//=============================================================================
+//=============================================================================
+		AddedMedia = AddMedia( theMediaList ) ;
+		theMediaList->RemoveAll() ;
+		delete theMediaList ;
+//=============================================================================
+					
+		delete theXMLParser ;
+		free( FileText ) ;
+		
+//=============================================================================
+		long	NewTemplates = PopulateTemplates(_T("NexPress")) ;
+//=============================================================================
+
+		TCHAR	Message[1024] ;
+		sprintf( Message, _T("Added %ld new Inks, %ld new Substrates,\r\nand %ld new Templates."), AddedInks, AddedMedia / 4, NewTemplates ) ;
+		gDataGC->SetAttrValue( _T("Status"), Message ) ;
+		DisplayControlValues( gDlg ) ;
+	}
+	else
+	{
+		gDataGC->SetAttrValue( _T("Status"), _T("Could not read the devcaps.xml file.")) ;
+		DisplayControlValues( gDlg ) ;
+	}
+	
+	SaveDFESetup() ;
+	ShowHideControl( _T("Get DFE Info"), TRUE ) ;
+}
+
+
+//=============================================================================
+
+void Get_C8000_Templates()		//	NEW NEW NEW
+{
+	
+	TCHAR	*TemplatePath = gDataGC->GetStringValue( _T("C8000TemplatePath")) ;
+	if( TemplatePath == NULL )
+	{
+		gDataGC->SetAttrValue( _T("Status"), _T("Please select the Template Folder.")) ;
+		DisplayControlValues( gDlg ) ;
+		return ;
+	}
+	
+	if( *TemplatePath == 0x00 )
+	{
+		gDataGC->SetAttrValue( _T("Status"), _T("Please select the Template Folder.")) ;
+		DisplayControlValues( gDlg ) ;
+		return ;
+	}
+	
+//=============================================================================
+	long	NewTemplates = PopulateTemplates(_T("C8000/Creo")) ;
+//=============================================================================
+
+	TCHAR	Message[1024] ;
+	sprintf( Message, _T("Added %ld new Templates."), NewTemplates ) ;
+	gDataGC->SetAttrValue( _T("Status"), Message ) ;
+	DisplayControlValues( gDlg ) ;
+	
+	SaveDFESetup() ;
+	ShowHideControl( _T("Get DFE Info"), TRUE ) ;
+}
+
+
+
+UList	*GetParameterList( XML *theXMLParser, TCHAR *SrcPath )
+{
+	TCHAR	Path[2048] ;
+
+	long	loop = 0 ;
+
+	UList	*theParamList = new UList ;
+	UList	*theChildren  = NULL ;
+
+	sprintf( Path, SrcPath, loop ) ;
+	UGenCon *aParamGC = theXMLParser->FindParameter( Path ) ;
+
+	while( aParamGC )
+	{
+		theChildren = aParamGC->GetChildren() ;
+		aParamGC = theChildren->GetAt(0) ;	
+
+		theParamList->InsertBack( aParamGC ) ;
+
+		loop++ ;
+		sprintf( Path, SrcPath, loop ) ;
+		aParamGC = theXMLParser->FindParameter( Path ) ;
+	}
+
+	return( theParamList ) ;
+}
+
+RemoveSpecialChars( TCHAR *InkName, TCHAR *SrcName )
+{
+	long	SPos = 0L ;
+	long	DPos = 0L ;
+
+	int		Quote		= 0x22 ;
+	int		GreaterThan	= 0x3E ;
+	int		Slash		= 0x2F ;
+	
+	int		theChar ;
+
+	while( SrcName[SPos] )
+	{
+		theChar = SrcName[SPos] ;
+		if( theChar == Quote || theChar == Slash || theChar == GreaterThan )
+		{
+			SPos++ ;
+		}
+		else
+		{
+			InkName[DPos] = theChar ;
+			DPos++ ;
+			SPos++ ;
+		}
+	}
+	InkName[DPos] = 0x00 ;
+}
+
+//=============================================================================
+int AddMedia( UList *theMediaList )
+{
+	int		Result  = FALSE ;
+	int		addedFields = FALSE ;
+	
+	Debug(0) ;
+	
+	TCHAR	*SelectTemplate = _T("Select * From TemplateOverridesSetup Where OverrideName = '%s' AND OverrideType = '%s' AND DeviceType = 'NexPress'") ;
+	TCHAR	*InsertTemplate = _T("Insert into TemplateOverridesSetup(OverrideName,OverrideType,Enabled,Sequence,DeviceType) Values('%s','%s',1,%ld,'NexPress')") ;
+	
+	long	NumMedia = theMediaList->GetNumEntries() ;
+	if( NumMedia > 0L )
+	{
+		UADO	*theADO = ConnectToADO() ;
+		if( theADO )
+		{
+			UPGenConList	*MediaRecords = new UPGenConList( theADO ) ;
+			if( MediaRecords )
+			{
+				UGenCon	*MediaGC		= NULL ;
+				TCHAR	*MediaNamePtr	= NULL ;
+				TCHAR	 MediaName[1024] ;
+				TCHAR	 SQLStatement[2048] ;
+				long	 MediaNum ;
+				long	 SequenceNumber = 0L ;
+				
+				long	 SubstrateNumber ;
+				TCHAR	*SubstrateNames[4] ;
+				SubstrateNames[0] = _T("body_substrate") ;
+				SubstrateNames[1] = _T("cover_substrate") ;
+				SubstrateNames[2] = _T("separator_substrate") ;
+				SubstrateNames[3] = _T("insert_substrate") ;
+	
+				for( MediaNum = 0 ; MediaNum < NumMedia ; MediaNum++ )
+				{
+					MediaGC	= theMediaList->GetAt( MediaNum ) ;
+					if( MediaGC )
+					{
+						MediaNamePtr = MediaGC->GetStringValue( _T("Value")) ;
+//						MediaNamePtr = MediaGC->GetStringValue( _T("Text")) ;
+						
+						RemoveSpecialChars( MediaName, MediaNamePtr ) ;
+						
+						for( SubstrateNumber = 0L ; SubstrateNumber < 4L ; SubstrateNumber++ )
+						{ 
+							sprintf( SQLStatement, SelectTemplate, MediaName, SubstrateNames[SubstrateNumber] ) ;
+						
+							Result = MediaRecords->Query( SQLStatement, _T("ReadOnly"), _T("Static") ) ;
+							if( Result != 1 )
+							{
+								HandleDBError( theADO ) ;
+							}
+							else
+							{
+								if( MediaRecords->GetNumEntries() == 0 )
+								{	// not already in database, ok to add
+								
+									SequenceNumber = CalcNextSequenceOverrides(theADO, SubstrateNames[SubstrateNumber] );  // Sequence matters 
+									if( SequenceNumber < 0L )
+									{
+										HandleDBError( theADO ) ;
+									}
+									else
+									{
+										sprintf( SQLStatement, InsertTemplate, MediaName, SubstrateNames[SubstrateNumber], SequenceNumber ) ;
+										DoSQL( SQLStatement ) ;
+										addedFields++ ;
+									}
+								}
+							}
+						}
+					}
+				}
+				delete MediaRecords ;
+			}
+			delete theADO ;
+		}
+	}
+	return( addedFields ) ;
+}
+
+int AddInks( UList *theInkList )
+{
+	int		Result  = FALSE ;
+	int		addedFields = FALSE ;
+	
+	Debug(0) ;
+	
+	TCHAR	*InsertTemplate = _T("Insert into Inks(InkName,DeviceType,Enabled) Values('%s','NexPress',1)") ;
+
+	UADO	*theADO = ConnectToADO() ;
+	if( theADO )
+	{
+		UGenCon	*InkGC		= NULL ;
+		TCHAR	*InkNamePtr	= NULL ;
+		TCHAR	 InkName[1024] ;
+		TCHAR	 TranslatedName[1024] ;
+		TCHAR	 SQLStatement[2048] ;
+		long	 InkNum ;
+		
+		DoSQL( _T("Delete From Inks") ) ;
+		
+		sprintf( SQLStatement, InsertTemplate, _T("No Override") ) ;
+		DoSQL( SQLStatement ) ;
+		
+		sprintf( SQLStatement, InsertTemplate, _T("NexPress DryInk clear") ) ;
+		DoSQL( SQLStatement ) ;
+
+		sprintf( SQLStatement, InsertTemplate, _T("NexPress DryInk raised clear") ) ;
+		DoSQL( SQLStatement ) ;
+
+/*		sprintf( SQLStatement, InsertTemplate, _T("NexPress DryInk red") ) ;
+		DoSQL( SQLStatement ) ;
+		
+		sprintf( SQLStatement, InsertTemplate, _T("NexPress DryInk green") ) ;
+		DoSQL( SQLStatement ) ;
+		
+		sprintf( SQLStatement, InsertTemplate, _T("NexPress DryInk blue") ) ;
+		DoSQL( SQLStatement ) ;
+
+		sprintf( SQLStatement, InsertTemplate, _T("NexPress DryInk micr") ) ;
+		DoSQL( SQLStatement ) ;
+*/
+		delete theADO ;
+	}
+
+	return( 3 ) ;
+}
+
+
+/*
+int AddInks( UList *theInkList )
+{
+	int		Result  = FALSE ;
+	int		addedFields = FALSE ;
+	
+	Debug(0) ;
+	
+	TCHAR	*SelectTemplate = _T("Select * From Inks Where InkName = '%s'") ;
+	TCHAR	*InsertTemplate = _T("Insert into Inks(InkName,DeviceType,Enabled) Values('%s','NexPress',1)") ;
+
+	long	NumInks = theInkList->GetNumEntries() ;
+	if( NumInks > 0L )
+	{
+		UADO	*theADO = ConnectToADO() ;
+		if( theADO )
+		{
+			UPGenConList	*InkRecords = new UPGenConList( theADO ) ;
+			if( InkRecords )
+			{
+				UGenCon	*InkGC		= NULL ;
+				TCHAR	*InkNamePtr	= NULL ;
+				TCHAR	 InkName[1024] ;
+				TCHAR	 TranslatedName[1024] ;
+				TCHAR	 SQLStatement[2048] ;
+				long	 InkNum ;
+				
+//=============================================================================
+				//	DO WE NEED TO DELETE THE OTHER INKS FIRST ?
+				sprintf( SQLStatement, SelectTemplate, _T("NexPress DryInk clear") ) ;
+				Result = InkRecords->Query( SQLStatement, _T("ReadOnly"), _T("Static")) ;
+				if( Result != 1 )
+				{
+					HandleDBError( theADO ) ;
+				}
+				if( InkRecords->GetNumEntries() > 0 )
+				{
+					DoSQL( _T("Delete From Inks") ) ;
+				}
+//=============================================================================
+				
+				sprintf( SQLStatement, InsertTemplate, _T("No Override") ) ;
+				DoSQL( SQLStatement ) ;
+				
+				
+
+				for( InkNum = 0 ; InkNum < NumInks ; InkNum++ )
+				{
+					InkGC	= theInkList->GetAt( InkNum ) ;
+					if( InkGC )
+					{
+						InkNamePtr = InkGC->GetStringValue( _T("Value")) ;
+//						InkNamePtr = InkGC->GetStringValue( _T("Text")) ;
+						
+						RemoveSpecialChars( InkName, InkNamePtr ) ;
+						TranslateInkNames( InkName, TranslatedName ) ;
+						
+						sprintf( SQLStatement, SelectTemplate, TranslatedName ) ;
+						
+						Result = InkRecords->Query( SQLStatement, _T("ReadOnly"), _T("Static") ) ;
+						if( Result != 1 )
+						{
+							HandleDBError( theADO ) ;
+						}
+						else
+						{
+							if( InkRecords->GetNumEntries() == 0 )
+							{	// not already in database, ok to add
+								sprintf( SQLStatement, InsertTemplate, TranslatedName ) ;
+								DoSQL( SQLStatement ) ;
+								addedFields++ ;
+							}
+						}
+					}
+				}
+
+				delete InkRecords ;
+			}
+
+			delete theADO ;
+		}
+	}
+
+	return( addedFields ) ;
+}
+
+void TranslateInkNames( TCHAR *SrcInkName, TCHAR *DstInkName )
+{
+	strcpy( DstInkName, SrcInkName ) ;
+	
+	if( stricmp( SrcInkName, _T("Blue")) == 0 )
+	{
+		strcpy( DstInkName, _T("NexPress DryInk blue")) ;
+	}
+	else if( stricmp( SrcInkName, _T("Clear")) == 0 )
+	{
+		strcpy( DstInkName, _T("NexPress DryInk clear")) ;
+	}
+	else if( stricmp( SrcInkName, _T("Dimensional Clear")) == 0 )
+	{
+		strcpy( DstInkName, _T("NexPress DryInk raised clear")) ;
+	}
+	else if( stricmp( SrcInkName, _T("Green")) == 0 )
+	{
+		strcpy( DstInkName, _T("NexPress DryInk green")) ;
+	}
+	else if( stricmp( SrcInkName, _T("MICR")) == 0 )
+	{
+		strcpy( DstInkName, _T("NexPress DryInk micr")) ;
+	}
+	else if( stricmp( SrcInkName, _T("Red")) == 0 )
+	{
+		strcpy( DstInkName, _T("NexPress DryInk red")) ;
+	}
+	else if( stricmp( SrcInkName, _T("XD Clear")) == 0 )
+	{
+		strcpy( DstInkName, _T("NexPress DryInk clear xd")) ;
+	}
+}
+*/
+//=============================================================================
+
+void Cancel()
+{
+	Close() ;
+}
+
+void Browse()
+{
+	TCHAR displayName[2048];
+	TCHAR	*TPtr;
+	int isDirectory;
+
+	Debug(0);
+	UStringList *Dir = GetTreeObject( _T("Dir"), _T("Strings")) ;
+
+	BrowseFolder( _T("Select the Control Folder for NJP2:"), _T(""), displayName,
+		gControlFolder, TRUE, _T("C:") ) ;
+
+	int exists = FileOrDirectoryExists(gControlFolder, &isDirectory);
+	if(exists == 0)
+	{
+		gDataGC->SetAttrValue( _T("Status"), _T("This directory does not exist. You must select a valid folder.")) ;
+		DisplayControlValues( gDlg ) ;
+		return;
+	}
+	StripTrailingSlash( gControlFolder ) ;
+
+	Dir->InsertStringAt(gControlFolder, 0L);
+	StringListToControl( gDlg, _T("Dir"), Dir ) ;
+
+	gDataGC->SetAttrValue( _T("Dir"), gControlFolder ) ;  
+	DisplayControlValues( gDlg ) ;  
+
+	SessionLogDirect( _T("NexPressConfig_2h: Browse: control folder=%s"), gControlFolder ) ; 
+
+	StripLastFolder( gControlFolder );
+	exists = FileOrDirectoryExists(gControlFolder, &isDirectory);
+	if(exists == 0)
+	{
+		gDataGC->SetAttrValue( _T("Status"), _T("This directory does not exist. You must select a valid folder.")) ;
+		DisplayControlValues( gDlg ) ;
+		return;
+	}
+	sprintf(gResponseFolder, _T("%s\\%s"), gControlFolder, _T("DP2"));
+	SessionLogDirect( _T("NexPressConfig_2h: Browse: gResponseFolder=%s"), gResponseFolder ) ; 
+
+	CreateDirectory(gResponseFolder, NULL) ;
+	gDataGC->SetAttrValue( _T("Status"), _T("")) ; //clear display when new folder selected
+	DisplayControlValues( gDlg ) ;
+}
+
+void TemplateBrowse()
+{
+	TCHAR	 Temp[2048] ;
+	TCHAR	 TemplateFolder[2048] ;
+	
+	TCHAR	*ShareDirectory = GetShareDirectory() ;
+	
+	BrowseFolder( _T("Select the Template Folder:"), _T(""), Temp, TemplateFolder, TRUE, ShareDirectory ) ;
+		
+	gDataGC->SetAttrValue( _T("TemplatePath"), TemplateFolder ) ;
+	DisplayControlValues( gDlg ) ;
+}
+
+
+
+void C8000TemplateBrowse()
+{
+	TCHAR	 Temp[2048] ;
+	TCHAR	 TemplateFolder[2048] ;
+	
+	TCHAR	*ShareDirectory = GetShareDirectory() ;
+	
+	BrowseFolder( _T("Select the Template Folder:"), _T(""), Temp, TemplateFolder, TRUE, ShareDirectory ) ;
+		
+	gDataGC->SetAttrValue( _T("C8000TemplatePath"), TemplateFolder ) ;
+	DisplayControlValues( gDlg ) ;
+}
+
+int SaveDFESetup()
+{
+	int		 Result = TRUE ;
+	TCHAR	*TemplatePath = gDataGC->GetStringValue( _T("TemplatePath")) ;
+	
+	TCHAR	*C8000TemplatePath = gDataGC->GetStringValue( _T("C8000TemplatePath")) ;
+	
+	TCHAR	*DevCapsPath = gDataGC->GetStringValue( _T("DevCapsPath")) ;
+	
+	TCHAR	*ShareDirectory = GetShareDirectory() ;
+	
+	TCHAR	 TempPath[2048] ;
+	sprintf( TempPath, _T("%s\\NexPressDFESetup.txt"), ShareDirectory ) ;
+	
+	FILE	*fp = fopen( TempPath, _T("w")) ;
+	if( fp )
+	{
+		fprintf( fp, _T("Interface: DFE\n") ) ;
+		if( TemplatePath )
+		{
+			if( *TemplatePath )
+			{
+				fprintf( fp, _T("TemplatePath: \"%s\"\n"), TemplatePath ) ;
+			}
+		}
+		
+		if( DevCapsPath )
+		{
+			if( *DevCapsPath )
+			{
+				fprintf( fp, _T("DevCapsPath:  \"%s\"\n"), DevCapsPath ) ;
+			}
+		}
+		if( C8000TemplatePath )
+		{
+			if( *C8000TemplatePath )
+			{
+				fprintf( fp, _T("C8000TemplatePath: \"%s\"\n"), C8000TemplatePath ) ;
+			}
+		}
+		
+		fclose( fp ) ;
+	}
+	else
+	{
+		gDataGC->SetAttrValue( _T("Status"), _T("Error: Could not save DFE Setup information.")) ;
+		DisplayControlValues( gDlg ) ;
+		Result = FALSE ;
+	}
+	return( Result ) ;
+}
+
+int	RemoveDFESetup()
+{
+	TCHAR	 TempPath[2048] ;
+	TCHAR	*ShareDirectory = GetShareDirectory() ;
+	
+	sprintf( TempPath, _T("%s\\NexPressDFESetup.txt"), ShareDirectory ) ;
+	
+	int Result = unlink( TempPath ) == 0 ;
+	
+	return( Result ) ;
+}
+
+void DevCapsBrowse()
+{
+	TCHAR	FileName[2048] ;
+	long	Write = FALSE ;
+	int Result = GetFileName( FileName, _T("Select the DFE's Device Capabilities File (devcaps.xml):"), Write ) ;
+	if( Result )
+	{
+		gDataGC->SetAttrValue( _T("DevCapsPath"), FileName ) ;
+		DisplayControlValues( gDlg ) ;
+	}
+}
+
+int PopulateTemplates(TCHAR *Category)
+{
+	TCHAR	 gFilePath[2048] ;
+	TCHAR	 gFileName[ 260] ;
+	TCHAR	 gFileExtn[  32] ;
+	
+	TCHAR	 FileTemplate[2048] ;
+	TCHAR	*FilePath = gDataGC->GetStringValue( _T("TemplatePath")) ;
+	TCHAR	*FileName ;
+	UGenCon	*aFileGC ;
+	
+	long	addedFields = 0L ;
+	
+	if( stricmp( Category, _T("NexPress")) == 0 )
+	{
+		FilePath = gDataGC->GetStringValue( _T("TemplatePath")) ;
+	}
+	
+	if( stricmp( Category, _T("C8000/Creo")) == 0 )
+	{
+		FilePath = gDataGC->GetStringValue( _T("C8000TemplatePath")) ;
+	}
+	
+	
+	sprintf( FileTemplate, _T("%s\\*.jdf"), FilePath ) ;
+	
+	UList	*FileList = GetFileList( FileTemplate ) ;
+	if( FileList )
+	{
+		UADO			*theADO		= ConnectToADO() ;
+		UPGenConList	*RecordList = new UPGenConList( theADO ) ;
+		
+		TCHAR			*SelectTmplt	= _T("Select * From Templates Where TemplateName = '%s'") ;
+		TCHAR			*InsertTmplt	= _T("Insert into Templates(Category,TemplateName,Sequence,DeviceType) Values('%s','%s',%d,'%s')") ;
+		TCHAR			 SQLCmd[2048] ;
+		TCHAR			 DeviceType[512];
+		
+		long	Result ;
+		long	SequenceNumber ;
+		long	NumEntries = FileList->GetNumEntries() ;
+		long	EntryNum ;
+		
+		for( EntryNum = 0L ; EntryNum < NumEntries ; EntryNum++ )
+		{
+			aFileGC = FileList->GetAt( EntryNum ) ;
+			if( aFileGC )
+			{
+				FileName = aFileGC->GetStringValue( _T("FileName")) ;
+				sprintf( FileTemplate, _T("%s\\%s"), FilePath, FileName ) ;
+				GetFilePathNameAndExt( FileTemplate, gFilePath, gFileName, gFileExtn ) ;
+				
+				sprintf( SQLCmd, SelectTmplt, gFileName ) ;
+					
+				if( RecordList )
+				{
+					Result = RecordList->Query( SQLCmd, _T("ReadOnly"), _T("Static") ) ;
+					if( Result != 1 )
+					{
+						HandleDBError( theADO ) ;
+						delete RecordList ;
+						delete theADO ;
+						delete FileList ;
+						return( sts ) ;
+					}
+				}
+				
+				if( RecordList->GetNumEntries() == 0 )
+				{
+					SequenceNumber = CalcNextSequenceTemplates( theADO );  // Sequence matters 
+					if( SequenceNumber < 0L )
+					{
+						HandleDBError( theADO ) ;
+					}
+					else
+					{
+						sprintf( SQLCmd, InsertTmplt, Category, gFileName, SequenceNumber, Category ) ;
+						DoSQL( SQLCmd ) ;
+						addedFields++ ;
+					}
+				}
+			}
+		}
+		delete RecordList ;
+		delete theADO ;
+		delete FileList ;
+	}
+	return( addedFields ) ;
+}
+
+
+int StripLastFolder( TCHAR *Source )
+{
+	long	Len = strlen( Source ) - 1L ;
+	if( Source[Len] == ':' )
+	{
+		return( TRUE );
+	}
+	
+	while(Source[Len] != '\\')
+	{ //go up one directory
+		Len--;
+	}
+	Source[Len] = 0x00;
+
+	return( TRUE ) ;
+}
+
+int StripTrailingSlash( TCHAR *Source )
+{
+	long	Len = strlen( Source ) - 1L ;
+	if( Source[Len] == '\\' )
+	{
+		Source[Len] = 0x00 ;
+	}
+	return( TRUE ) ;
+}
+
+int SendXML()
+{
+//	MessageBox(_T("SendXML"), _T("MB_OK")) ;
+	int isDirectory;
+	int exists;
+	TCHAR	 text[2048] ;
+
+
+	gDataGC->SetAttrValue( _T("Status"), _T("Requesting defined fields from NexPress")) ;
+	DisplayControlValues( gDlg ) ;
+//	SessionLogDirect( _T("SendXML: gControlFolder=%s"), gControlFolder ) ; 
+//	SessionLogDirect( _T("SendXML: gResponseFolder=%s"), gResponseFolder ) ; 
+
+	gDataGC->GetAttrValue( _T("Dir"), gControlFolder ) ;  
+	if( stricmp(gControlFolder,  _T("")) == 0)
+	{
+		gDataGC->SetAttrValue( _T("Status"), _T("You MUST select a NJP2 Control Folder.")) ;
+		DisplayControlValues( gDlg ) ;
+		ShowHideControl( _T("Get NexPress Info"), TRUE ) ; //enable button again 
+		return(0);
+	}
+	exists = FileOrDirectoryExists(gControlFolder, &isDirectory);
+	if(exists == 0)
+	{
+		gDataGC->SetAttrValue( _T("Status"), _T("Your Control Folder does not exist, please select an existing NJP2 Control Folder.")) ;
+		DisplayControlValues( gDlg ) ;
+		ShowHideControl( _T("Get NexPress Info"), TRUE ) ; //enable button again 
+		return(0);
+	}
+
+//	SessionLogDirect( _T("SendXML: gControlFolder=%s"), gControlFolder ) ; 
+//	SessionLogDirect( _T("SendXML: gResponseFolder=%s"), gResponseFolder ) ; 
+	TCHAR CmdPath[1024];
+	sprintf(CmdPath, _T("%s\\requestDefinedFields.xml"), gControlFolder);
+
+	StripLastFolder( gControlFolder );
+	sprintf(gResponseFolder, _T("%s\\%s"), gControlFolder, _T("DP2"));
+	exists = FileOrDirectoryExists(gResponseFolder, &isDirectory);
+	if(exists == 0)
+	{
+		sprintf( text, _T("A required folder does not exist, please create a shared folder named: \r\n%s"), gResponseFolder);
+		gDataGC->SetAttrValue( _T("Status"), text) ;
+		DisplayControlValues( gDlg ) ;
+		ShowHideControl( _T("Get NexPress Info"), TRUE ) ; //enable button again 
+		return(0);
+	}
+
+	char	*fp = fopen( CmdPath, _T("wb")) ;
+	if( fp )
+	{
+		TCHAR	IOBuff[2048] ;
+		IOBuff[0] = 0xFEFF ;
+		IOBuff[1] = 0x0000 ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf(IOBuff, _T("<?xml version=\"1.0\" encoding=\"utf-16\"?>")) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf(IOBuff, _T("<NJP2Request name=\"NJP2DefinedFields\">")) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("<ResponseFolder>%s</ResponseFolder>"), gResponseFolder ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("</NJP2Request>")) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		fclose( fp ) ;
+		return(1);
+	}
+	return(0);
+}
+
+int WaitForXML()
+{
+//	MessageBox(_T("WaitForXML"), _T("MB_OK")) ;
+
+	int		 Result = 0 ;
+	TCHAR	 FilePath[2048] ;
+	TCHAR	 text[2048] ;
+	int		 sts = FALSE;
+	int		addedFields = FALSE;
+
+	sprintf( text, _T("Waiting for reply from NexPress in response folder \r\n%s"), gResponseFolder);
+	gDataGC->SetAttrValue( _T("Status"), text) ;
+	DisplayControlValues( gDlg ) ;
+
+	sprintf( FilePath, _T("%s\\*.xml"), gResponseFolder ) ;
+
+	UList *theFileList = GetFileList(FilePath) ;
+
+	if( theFileList->GetNumEntries() > 0L )
+	{
+		SortBy( theFileList, _T("_NAME_") ) ;
+
+		UGenCon *FileEntry = theFileList->GetAt(0L) ;
+		if( FileEntry == NULL )
+		{
+			delete theFileList ;
+			return( sts ) ;
+		}
+
+		TCHAR	*FileName = FileEntry->GetStringValue(_T("FileName")) ;
+		sprintf( FilePath, _T("%s\\%s"), gResponseFolder, FileName ) ;
+
+		long	Count = 0L ;
+		TCHAR	*FileText = NULL ;
+
+//		SessionLogDirect( _T("xml file= %s, FileName= %s, gResponseFolder=%s"), FilePath, FileName, gResponseFolder ) ; 
+
+		while( FileText == NULL && Count < 5 )
+		{
+			FileText = GetFile(FilePath) ;
+			Count++ ;
+			if( FileText == NULL )
+			{
+				Sleep( 250L ) ;
+			}
+		}
+
+		if( FileText )
+		{
+			int length = strlen(FileText);
+//			SessionLogDirect( _T("XML received length = %ld\n"),length ) ;
+			if(length >= 3000)
+			{
+				SessionLogDirect( _T("XML received from NexPress: too large to log.\n") ) ; 
+//not available here, was in IPS code				LargeSessionLog(FileText);
+			}
+			else
+			{
+				SessionLogDirect( _T("XML received from NexPress: xml file text follows\n\"%s\""), FileText ) ; 
+			}
+			
+			TCHAR	Token[2048] ;
+			int		DefinedFieldsFlag = FALSE;
+			TCHAR	InsertCmd[1024] ;
+			TCHAR	*InsertTemplate;
+			long	sequence;
+			UPGenConList *gOrderItems;
+			int		i;
+			TCHAR	*overType[4];
+			TCHAR	cover[64];
+			TCHAR	body[64];
+			TCHAR	insert[64];
+			TCHAR	separator[64];
+
+			UParser	*theParser = new UParser ;
+			theParser->SetText(FileText) ;
+
+			theParser->GetXMLToken(Token) ;
+			while( *Token )
+			{
+				if( stricmp( Token, _T("<NJP2Response name=\"NJP2DefinedFields\">")) == 0 )
+				{
+					DefinedFieldsFlag = TRUE;
+					break;
+				}
+
+				theParser->GetXMLToken(Token) ;
+			}
+
+			if(DefinedFieldsFlag == TRUE)
+			{	
+				UADO	*theADO = ConnectToADO() ;
+				if( theADO )
+				{
+					theParser->SetText(FileText) ;
+					theParser->GetXMLToken(Token) ;
+					while( *Token )
+					{
+						if( stricmp( Token, _T("<ProductIDs>")) == 0 )
+						{
+							theParser->GetXMLToken(Token);
+							while( stricmp( Token, _T("</ProductIDs>")) != 0)
+							{//get all the product ids
+								if( stricmp( Token, _T("<Item>")) == 0 )
+								{
+									theParser->GetXMLToken(Token);
+//									SessionLogDirect( _T("product ID = %s"), Token ) ;
+
+									InsertTemplate = _T("Select * From Templates Where TemplateName = '%s'") ;
+//									InsertTemplate = _T("Select * From Templates Where Category = 'NexPress' AND TemplateName = '%s'") ;
+									sprintf( InsertCmd, InsertTemplate, Token ) ;
+									
+									gOrderItems = new UPGenConList( theADO ) ;
+									if( gOrderItems )
+									{
+										Result = gOrderItems->Query( InsertCmd, _T("ReadOnly"), _T("Static") ) ;
+										if( Result != 1 )
+										{
+											HandleDBError( theADO ) ;
+											delete gOrderItems ;
+											delete theADO ;
+											return( sts ) ;
+										}
+									}
+									if(gOrderItems->GetNumEntries() == 0)
+									{ //not already in database, ok to add
+										sequence = CalcNextSequenceTemplates(theADO);  // Sequence matters 
+										if (sequence < 0)
+										{
+											HandleDBError(theADO) ;
+										}
+										else
+										{
+											InsertTemplate = _T("Insert into Templates(Category,TemplateName,Sequence,DeviceType) Values('NexPress','%s',%d,'NexPress')") ;
+											sprintf( InsertCmd, InsertTemplate, Token ,sequence) ;
+											DoSQL( InsertCmd ) ;
+											addedFields = TRUE;
+										}
+									}
+									delete gOrderItems ;
+								}
+								theParser->GetXMLToken(Token);
+							}
+						}
+						if( stricmp( Token, _T("<SubstrateOverrides>")) == 0 )
+						{
+							theParser->GetXMLToken(Token);
+							while( stricmp( Token, _T("</SubstrateOverrides>")) != 0)
+							{//get all the substrate overrides
+								if( stricmp( Token, _T("<Item>")) == 0 )
+								{
+									theParser->GetXMLToken(Token);
+		//							SessionLogDirect( _T("substrate = %s"), Token ) ;
+
+									i=0;
+									sprintf(body,_T("body_substrate"));
+									sprintf(cover,_T("cover_substrate"));
+									sprintf(separator,_T("separator_substrate"));
+									sprintf(insert,_T("insert_substrate"));
+
+									overType[0] = body;
+									overType[1] = cover;
+									overType[2] = separator;
+									overType[3] = insert;
+
+									while(i < 4)
+									{//loop for all 4 substrate overrides
+										InsertTemplate = _T("Select * From TemplateOverridesSetup Where OverrideName = '%s' AND OverrideType = '%s' AND DeviceType = 'NexPress'") ;
+										sprintf( InsertCmd, InsertTemplate, Token, overType[i] ) ;
+											
+										gOrderItems = new UPGenConList( theADO ) ;
+										if( gOrderItems )
+										{
+											Result = gOrderItems->Query( InsertCmd, _T("ReadOnly"), _T("Static") ) ;
+											if( Result != 1 )
+											{
+												HandleDBError( theADO ) ;
+												delete gOrderItems ;
+												delete theADO ;
+												return( sts ) ;
+											}
+										}
+										if(gOrderItems->GetNumEntries() == 0)
+										{ //not already in database, ok to add
+											sequence = CalcNextSequenceOverrides(theADO,overType[i]);  // Sequence matters for equal override types
+											if (sequence < 0)
+											{
+												HandleDBError(theADO) ;
+											}
+											else
+											{
+												InsertTemplate = _T("Insert into TemplateOverridesSetup(OverrideName,OverrideType,Enabled,Sequence,DeviceType) Values('%s','%s',1,%ld,'NexPress')") ;
+												sprintf( InsertCmd, InsertTemplate, Token ,overType[i], sequence) ;
+												DoSQL( InsertCmd ) ;
+												addedFields = TRUE;
+
+											}
+										}
+										delete gOrderItems ;
+										i++;
+									}//while done== fALSE
+								}
+								theParser->GetXMLToken(Token);
+							}
+						}
+
+						if( stricmp( Token, _T("<DeviceOverrides>")) == 0 )
+						{
+							theParser->GetXMLToken(Token);
+							while( stricmp( Token, _T("</DeviceOverrides>")) != 0)
+							{//get all the device overrides
+								if( stricmp( Token, _T("<Item>")) == 0 )
+								{
+									theParser->GetXMLToken(Token);
+		//							SessionLogDirect( _T("device = %s"), Token ) ;
+
+									InsertTemplate = _T("Select * From TemplateOverridesSetup Where OverrideName = '%s' AND OverrideType = 'target_device'") ;
+									sprintf( InsertCmd, InsertTemplate, Token ) ;
+									
+									gOrderItems = new UPGenConList( theADO ) ;
+									if( gOrderItems )
+									{
+										Result = gOrderItems->Query( InsertCmd, _T("ReadOnly"), _T("Static") ) ;
+										if( Result != 1 )
+										{
+											HandleDBError( theADO ) ;
+											delete gOrderItems ;
+											delete theADO ;
+											return( sts ) ;
+										}
+									}
+									if(gOrderItems->GetNumEntries() == 0)
+									{ //not already in database, ok to add
+										sequence = CalcNextSequenceOverrides(theADO,_T("target_device"));  // Sequence matters for equal override types
+										if (sequence < 0)
+										{
+											HandleDBError(theADO) ;
+										}
+										else
+										{
+											InsertTemplate = _T("Insert into TemplateOverridesSetup(OverrideName,OverrideType,Enabled,Sequence,DeviceType) Values('%s','target_device',1,%ld,'NexPress')") ;
+											sprintf( InsertCmd, InsertTemplate, Token , sequence) ;
+											DoSQL( InsertCmd ) ;
+											addedFields = TRUE;
+										}
+									}
+
+									delete gOrderItems ;
+								}
+								theParser->GetXMLToken(Token);
+							}
+						}
+
+						theParser->GetXMLToken(Token) ;
+					}	//while Token
+
+					delete theADO ;
+
+				}	//theADO
+
+				ShowHideControl( _T("Get NexPress Info"), TRUE ) ; //enable button again after we get defined fields
+				if(	addedFields == TRUE)
+				{
+					gDataGC->SetAttrValue( _T("Status"), _T("Defined fields received from NexPress.\r\nTables have been updated.")) ;
+
+				}
+				else
+				{
+					gDataGC->SetAttrValue( _T("Status"), _T("Defined fields received from NexPress.\r\nNo table updates were necessary.")) ;
+				}
+				DisplayControlValues( gDlg ) ;
+				unlink( FilePath ) ;
+				sts = TRUE;
+				gDataGC->SetLongValue( _T("Found"), TRUE) ;
+
+			} //if DefinedFieldsFlag
+
+			theParser->SetText(NULL) ;
+			delete theParser ;
+			delete overType[0];
+			delete overType[1];
+			delete overType[2];
+			delete overType[3];
+
+			free( FileText ) ;
+		}	//if FileText
+
+	}	//if numEntries
+
+	delete theFileList ;
+	return(sts);
+}
+
+
+void ShowGridViews()
+{
+	TCHAR	 FuncCall[1024] ;
+
+	sprintf( FuncCall, _T("Init(~All Template Overrides Setups~,~Select * from TemplateOverridesSetup Order By OverrideName,OverrideType,Sequence~);"));
+	OpenADocument( _T("TemplateOverridesSetup.txt"), _T("Script"), FuncCall ) ;
+
+//	sprintf( FuncCall, _T("Init();"));
+//	OpenADocument( _T("EditTemplates.txt"), _T("Script"), FuncCall ) ;
+	//	sprintf( FuncCall, _T("Init();"));
+	
+	OpenADocument( _T("EditTemplates.txt"), _T("Script") ) ;
+	
+	sprintf( FuncCall, _T("Init(~Defined Inks~,~Select * from Inks~);"));
+	OpenADocument( _T("Inks.txt"), _T("Script"), FuncCall ) ;
+
+}
+
+int GetFileName( TCHAR *FileName, TCHAR *Message, long Write )
+{
+	int Result = FileDialog( Write == 0L, NULL, FileName, "", NULL, Message ) ;
+	return( Result ) ;
+}
+
+
+UList *GetFileList(TCHAR *Path)
+{
+	long	*FileHandle ;
+	char	 FileData[2048] ;
+	TCHAR	 FileName[2048] ;
+	TCHAR	 FileDate[1024] ;
+	int		 Result ;
+	long	 FileAttr ;
+	long	 longHandle ;
+	UGenCon	*FileDataGC ;
+
+	UList	*theList = new UList ;
+
+	strcpy( FileName, Path ) ;
+	FileHandle = FindFirstFile( FileName, FileData ) ;
+	longHandle = FileHandle ;
+	if( longHandle != 0xFFFFFFFF )
+	{
+		FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+		Result = FindFileConvToGC( FileData, FileDataGC ) ;
+		FindFileConvTime( FileDataGC, _T("ACCESSED"), FileDate ) ;
+
+		theList->InsertBack(FileDataGC) ;
+
+		FileAttr = FileDataGC->GetLongValue(_T("FileAttributes")) ;
+		while( Result )
+		{
+			Result = FindNextFile( FileHandle, FileData ) ;
+			if( Result )
+			{
+				FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+				FindFileConvToGC( FileData, FileDataGC ) ;
+				theList->InsertBack(FileDataGC) ;
+			}
+		}
+
+		Result = FindClose( FileHandle ) ;
+	}
+	return( theList ) ;
+}
+
+long CalcNextSequenceOverrides( UADO *theADO ,TCHAR *OverrideType )
+{
+	long sequence = 0;
+	TCHAR	msg[1024];
+	sprintf(msg,_T("Select MAX(Sequence) From TemplateOverridesSetup Where OverrideType = \'%s\'"),OverrideType);
+
+	UPGenConList *MaxOrderItem = new UPGenConList( theADO ) ;
+
+	if( MaxOrderItem )
+	{
+		int Result = MaxOrderItem->Query( msg, _T("ReadOnly"), _T("Static") ) ;
+		if (Result != 1)
+		{
+			HandleDBError( theADO ) ;
+			delete MaxOrderItem ;
+			return (-1);
+		}
+	
+		UPGenCon	*pcon = (UGenCon *) MaxOrderItem->GetFirst();
+
+		if ( !pcon )
+		{
+			HandleDBError( theADO ) ;
+			delete MaxOrderItem ;
+			return( -1) ;
+		}
+
+		sequence = pcon->GetLongValue( _T("#0") );
+//		SessionLogDirect( _T("sequence = %ld"), sequence ) ;
+		delete MaxOrderItem;
+	}
+	return sequence+10;
+}
+
+
+long CalcNextSequenceTemplates( UADO *theADO )
+{
+	long sequence = 0;
+	TCHAR	msg[1024];
+	sprintf(msg,_T("Select MAX(Sequence) From Templates Where Category = 'All'"));
+
+	UPGenConList *MaxOrderItem = new UPGenConList( theADO ) ;
+
+	if( MaxOrderItem )
+	{
+		int Result = MaxOrderItem->Query( msg, _T("ReadOnly"), _T("Static") ) ;
+		if (Result != 1)
+		{
+			HandleDBError( theADO ) ;
+			delete MaxOrderItem ;
+			return (-1);
+		}
+	
+		UPGenCon	*pcon = (UGenCon *) MaxOrderItem->GetFirst();
+
+		if ( !pcon )
+		{
+			HandleDBError( theADO ) ;
+			delete MaxOrderItem ;
+			return( -1) ;
+		}
+
+		sequence = pcon->GetLongValue( _T("#0") );
+//		SessionLogDirect( _T("sequence = %ld"), sequence ) ;
+		delete MaxOrderItem;
+	}
+	return sequence+10;
+}
+
+//	CONNECT TO THE ACCESS DATA OBJECT (THE DATABASE)
+UADO *ConnectToADO()
+{
+	int		 result ;
+
+	UADO	*theADO = new UADO ;
+
+	if( theADO == NULL )
+	{
+		return(NULL) ;
+	}
+
+	result = ConnectKPIS( theADO ) ;
+	if( result )
+	{
+		delete theADO ;
+		return(NULL) ;
+	}
+
+	return( theADO ) ;
+}
+
+
+//	GET ENGLISH LANGUAGE TRANSLATION OF DATABASE ERROR
+void HandleDBError(UADO *anADO)
+{
+	long	ErrorCount, ErrorIndex ;
+	TCHAR	ADOErrDesc[2048] ;
+	TCHAR	theMsg[4096] ;
+	long	StopHere = 0 ;
+
+	Debug(StopHere) ;
+
+	ErrorCount = GetErrorCount( anADO ) ;
+	if( ErrorCount == 0L )
+	{
+		SessionLogDirect( _T("Lost Database Connection.") ) ;
+		MessageBox( _T("Lost Database Connection."), _T("MB_OK")) ;
+//		ShowDialog( _T("Lost Database Connection."), 0L ) ;
+	}
+	else
+	{
+		for( ErrorIndex = 0L ; ErrorIndex < ErrorCount ; ErrorIndex++ )
+		{
+			GetErrorDescription( anADO, ErrorIndex, ADOErrDesc ) ;
+			sprintf( theMsg, "Database Error: %s", ADOErrDesc ) ;
+			SessionLogDirect( theMsg ) ;
+			MessageBox( theMsg, _T("MB_OK")) ;
+//			ShowDialog( theMsg, 0L ) ;
+		}
+	}
+}
+
+
+//	HANDLE A SQL STATEMENT
+int DoSQL( TCHAR *theSQLStatement )
+{
+	int		result	= 0x80004005 ;	//	COULD NOT UPDATE BECAUSE LOCKED BY ANOTHER
+	long	count	= 0 ;
+	long	Level ;
+	int		RefreshResult ;
+
+	UADO	*theADO = ConnectToADO() ;
+	if( theADO == NULL )
+	{
+		SessionLogDirect( _T("DoSQL: Could not get ADO for \"%s\"."), theSQLStatement ) ;
+		return( FALSE ) ; 
+	}
+
+	while( result && count < 30 )
+	{
+		result = ADOCommand( theADO, theSQLStatement, "SQL", NULL ) ;
+		count++ ;
+		if( result != 0L )
+		{
+			RefreshResult = theADO->RefreshConnectionCache() ;
+//			Sleep(2000) ;	//	PUT BACK WHEN DONE DEBUGGING !!!! LK
+		}
+
+//		SessionLogDirect( "DoSQL: %s, result = %0lX, Count = %ld [%0lX]",
+//								theSQLStatement, result, count, theADO ) ;
+	}
+
+	if( result != 0 )
+	{
+		HandleDBError(theADO) ;
+	}
+	else
+	{
+		RefreshResult = theADO->RefreshConnectionCache() ;
+//		SessionLogDirect("DoSQL: CommitTransaction result = %0lX", result) ;
+	}
+
+	delete theADO ;
+	return( result == 0 ) ;
+}
+
+WriteUnicodeFile( char *fp, TCHAR *Text )
+{ //xml does not want cr/lf
+	long	Length = strlen( Text ) ;
+	fwrite( Text, 2, Length, fp ) ;
+
+//	long	EndOfLine = 0x000A000D ;
+//	fwrite( &EndOfLine, 2, 2, fp ) ;
+}
+
+//WriteUnicodeFileNoCRLF( char *fp, TCHAR *Text )
+//{
+//	long	Length = strlen( Text ) ;
+//	fwrite( Text, 2, Length, fp ) ;
+//}
+
+//=============================================================================
+
+int ShowHideControl( TCHAR *Field, long Show )
+{
+	int		 Result = 0 ;
+	CWnd	*theCtrl = GetCtrlWindow(Field) ;
+	if( theCtrl )
+	{
+		if( Show )
+		{
+//			SessionLogDirect( _T("REDlg_2.ShowHideControl: Hiding: \"%s\""), Field ) ;
+			Result = theCtrl->EnableWindow( TRUE ) ;
+		}
+		else
+		{
+//			SessionLogDirect( _T("REDlg_2.ShowHideControl: Showing: \"%s\""), Field ) ;
+			Result = theCtrl->EnableWindow( FALSE ) ;
+		}
+	}
+	else
+	{
+		SessionLogDirect( _T("REDlg_2.ShowHideControl: Could not find control for \"%s\""), Field ) ;
+	}
+
+	return( Result ) ;
+}
+
+/*
+void DisplayStatus( TCHAR *Msg )
+{
+	if( Msg )
+	{
+		gDataGC->SetAttrValue(_T("StatusMsg"), Msg ) ;
+
+		CWnd	*theWnd = GetCtrlWindow( _T("StatusMsg")) ;
+		if( theWnd )
+		{
+			theWnd->SetWindowText( Msg ) ;
+		}
+		free( Msg ) ;
+	}
+}
+*/
+
+CWnd *GetCtrlWindow(TCHAR *ControlName)
+{
+	CWnd	 *aWnd		= NULL ;
+	UWinCtrl *aWinCtrl	= NULL ;
+
+	if( gDlg )
+	{
+		UGenCon *aWinCtrlGC = gDlg->GetWinCtrlByName( ControlName ) ;
+		if( aWinCtrlGC )
+		{
+			aWinCtrl = (UWinCtrl *) aWinCtrlGC->GetLongValue(_T("UWinCtrl")) ;
+			if( aWinCtrl )
+			{
+				aWnd = aWinCtrl->GetControl() ;
+			}
+		}
+	}
+	return( aWnd ) ;
+}
+

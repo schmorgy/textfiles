@@ -1,0 +1,2133 @@
+//	CAddPtrWizardActions.cpp
+
+ExecC() ;
+
+//	THIS FILE CONTAINS THE CODE TO CONTROL THE RENDER ENGINE
+
+//	main
+//	SetDialogData( UGenCon *LocalGC, char *Dlg, UGenCon *DlgDef)
+//	term()
+//	Close()
+//	NextScreen()
+//	void AddScreenToList( long Screen )
+//	long GetScreenFromList()
+//	PrevScreen()
+//	void ResetStatus()
+//	long GetNextScreen( long Screen )
+//	long GetNextStateFromScreen1( long Screen )
+//	int AddProfileListToControl( TCHAR *PrinterModel )
+//	int AddDeviceListToControl( TCHAR *PrinterModel )
+//	int Screen1EntriesOK( TCHAR *PrinterName, TCHAR *PrinterModel, TCHAR *QueueName ) 
+//	TCHAR *RemoveTrailingBlanks( TCHAR *Text )
+//	long GetNextStateFromScreen2( long Screen )
+//	long GetNextStateFromScreen3( long Screen )
+//	long GetNextStateFromScreen8( long Screen )
+//	long GetNextStateFromScreen4( long Screen )
+//	long GetNextStateFromScreen5( long Screen )
+//	long GetNextStateFromScreen6( long Screen )
+//	long GetNextStateFromScreen7( long Screen )
+//	long GetNextStateFromScreen9( long Screen )
+//	long GetNextStateFromScreen10( long Screen )
+//	long GetNextStateFromScreen11( long Screen )
+//	long GetNextStateFromScreen12( long Screen )
+//	long GetNextStateFromScreen99( long Screen )
+//	long GetNextStateFromScreen100( long Screen )
+//	long GetNextStateFromScreen110( long Screen )
+//	void OldScreen( long Screen )
+//	void NewScreen( long Screen )
+//	void AddButtons( long Screen )
+//	void AddButton( TCHAR *Name )
+//	void DebugThis()
+//	void Help()
+//	void GetGammaTablePath()
+//	void GetPrintLutPath()
+//	void GetPaperPackPath()
+//	void GetOutputPath()
+//	void GetStartPrintScript()
+//	void GetStartUpScript()
+//	void GetPrintCompleteScript()
+//	void GetOrderCompleteScript()
+//	void GetControlFolder()
+//	void Finish()
+//	int DeleteThePrinter()
+//	int GetDeviceData()
+//	int DoSQL( TCHAR *Cmd )
+//	int UpdatePrinterTable()
+//	int UpdatePrinterResolutionsTable()
+//	int AddResolution( UADO *theADO, TCHAR *Name, TCHAR *Model, long Sequence, double Resolution )
+//	TCHAR *GetString(TCHAR *Name, TCHAR *Buffer)
+//	long GetPackageCut()
+//	double GetPaperWidth(TCHAR *FieldName)
+//	double	GetResolution(TCHAR *FieldName)
+//	long	GetPaperFill()
+//	long	GetOutputFileType()
+//	TCHAR	*GetProfileName( TCHAR *Name, TCHAR *Buffer )
+//	TCHAR	*GetScriptName( TCHAR *FieldName, TCHAR *Buffer )
+//	TCHAR *Translate( TCHAR *Msg )
+//	int DBRecExists( TCHAR *theQuery )
+//	int DBRecordExists( UADO *theADO, UPGenConList *thePGL, TCHAR *theQuery )
+//	UADO *DBConnect()
+//	HandleDBError(UADO *theADO)
+
+
+//	SOME USEFUL GLOBALS
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+
+UGenCon	*gDataGC ;			//	THE DIALOG DATA GENCON
+UGenCon *gDlgDef ;			//	THE DIALOG DEFINITION
+char	*gDlg ;				//	THE POINTER TO THE DIALOG OBJECT
+
+UStack	*gScreenList ;		//	THE SCREENS THE USER HAS WALKED THROUGH
+
+long	 gCRT	=	1L	;	//	THE CRT PRINTER TYPE
+long	 gLFCRT	=	2L	;	//	THE LFCRT PRINTER TYPE
+long	 gKPDM	=	3L	;	//	THE KPDM PRINTER TYPE
+long	 gLED	=	4L	;	//	THE LED PRINTER TYPE
+long	 gDISK	=	5L	;	//	THE DISK TYPE
+long	 gNTPTR	=	6L	;	//	THE NT PRINTER TYPE
+long	 gKPDM2 =	7L	;	//	THE KPDM II PRINTER TYPE
+long	 gRP30  =	8L  ;	//	THE RP30 PRINTER
+
+main()
+{
+	Debug(0) ;
+	printf(_T("main()\r\n")) ;
+}
+
+SetDialogData( UGenCon *LocalGC, char *Dlg, UGenCon *DlgDef)
+{
+	Debug(0) ;
+	gDataGC = LocalGC ;
+	gDlg = Dlg ;
+	gDlgDef = DlgDef ;
+
+	gScreenList = new UList ;
+
+	NewScreen( 1L ) ;
+
+}
+
+term()
+{
+	printf(_T("term()\r\n")) ;
+
+//	if( gDlg )
+//	{
+//		CloseDialog( gDlg ) ;		WE ARE CALLED FROM IT'S DESTRUCTOR
+//		gDlg = delete gDlg ;		DON'T TRY TO DESTROY THE DIALOG
+//	}
+	Debug(0) ;
+
+	if( gDataGC )
+	{
+		gDataGC = delete gDataGC ;
+	}
+
+	if( gScreenList )
+	{
+		delete gScreenList ;
+	}
+
+	UGenCon	*WizardExists = GetTreeObject(_T("AddPtrWizardExists"), _T("[GenCons]")) ;
+	if( WizardExists )
+	{
+		PluckTreeObject(_T("AddPtrWizardExists"), _T("[GenCons]")) ;
+		delete WizardExists ;
+	}
+
+//	if( gDlgDef )				THIS IS NOW DONE IN THE DIALOG
+//	{
+//		gDlgDef = delete gDlgDef ;
+//	}
+}
+
+Close()
+{
+	Debug(0) ;
+	CloseDialog( gDlg ) ;
+}
+
+
+NextScreen()
+{
+	Debug(0) ;
+	long	Screen = gDataGC->GetLongValue(_T("Screen")) ;
+
+	ResetStatus() ;
+
+	OldScreen( Screen ) ;
+
+	AddScreenToList( Screen ) ;
+
+	Screen = GetNextScreen( Screen ) ;
+
+	gDataGC->SetLongValue(_T("Screen"), Screen ) ;
+	printf( _T("New Screen = %ld\r\n"), Screen ) ;
+
+	NewScreen( Screen ) ;
+}
+
+void AddScreenToList( long Screen )
+{
+	UGenCon *aGC = new UGenCon( GetDataDictionary(_T("DDLong"))) ;
+	aGC->SetLongValue(_T("Long"), Screen ) ;
+	gScreenList->Push(aGC) ;
+}
+
+long GetScreenFromList()
+{
+	long Entries = gScreenList->GetNumEntries() ;
+	if( Entries > 0 )
+	{
+		UGenCon *aGC = gScreenList->Pop() ;
+		long Screen = aGC->GetLongValue(_T("Long")) ;
+		delete aGC ;
+		return( Screen ) ;
+	}
+	return( 1L ) ;
+}
+
+
+PrevScreen()
+{
+	Debug(0) ;
+	long	OrigScreen = gDataGC->GetLongValue(_T("Screen")) ;
+
+	ResetStatus() ;
+
+	OldScreen( OrigScreen ) ;
+
+	long Screen = GetScreenFromList() ;
+	while( Screen == OrigScreen )
+	{
+		Screen = GetScreenFromList() ;
+	}
+
+	gDataGC->SetLongValue(_T("Screen"), Screen ) ;
+	printf( _T("New Screen = %ld\r\n"), Screen ) ;
+
+	NewScreen( Screen ) ;
+}
+
+void ResetStatus()
+{
+	gDataGC->SetAttrValue(_T("Status"), _T(" ")) ;
+	DisplayControlValues( gDlg ) ;
+}
+
+long GetNextScreen( long Screen )
+{
+	long	NextState ;
+	switch( Screen )
+	{
+		case	1	:	//	INTRO
+			NextState = GetNextStateFromScreen1( Screen ) ;
+			break ;
+		case	2	:	//	COLOR
+			NextState = GetNextStateFromScreen2( Screen ) ;
+			break ;
+		case	3	:	//	PAPER
+			NextState = GetNextStateFromScreen3( Screen ) ;
+			break ;
+		case	4	:	//	DISK & OEM
+			NextState = GetNextStateFromScreen4( Screen ) ;
+			break ;
+		case	5	:	//	CRT RESOLUTIONS (PAPER WIDTHS)
+			NextState = GetNextStateFromScreen5( Screen ) ;
+			break ;
+		case	6	:	//	NT INFORMATION
+			NextState = GetNextStateFromScreen6( Screen ) ;
+			break ;
+		case	7	:	//	KPDM SPECIFIC INFORMATION
+			NextState = GetNextStateFromScreen7( Screen ) ;
+			break ;
+		case	8	:	//	PAPER CONTINUED
+			NextState = GetNextStateFromScreen8( Screen ) ;
+			break ;
+		case	9	:	//	LED SPECIFIC INFORMATION
+			NextState = GetNextStateFromScreen9( Screen ) ;
+			break ;
+		case   10	:	//	DELETE SCREEN
+			NextState = GetNextStateFromScreen10( Screen ) ;
+			break ;
+		case   11	:	//	RP30
+			NextState = GetNextStateFromScreen11( Screen ) ;
+			break ;
+		case   12	:	//	RP30
+			NextState = GetNextStateFromScreen12( Screen ) ;
+			break ;
+		case   99	:	//	DEBUG FLAGS
+			NextState = GetNextStateFromScreen99( Screen ) ;
+			break ;
+		case  100	:	//	FINAL SCREEN
+			NextState = GetNextStateFromScreen100( Screen ) ;
+			break ;
+		case  110	:	//	CONGRATULATIONS SCREEN
+			NextState = GetNextStateFromScreen110( Screen ) ;
+			break ;
+	}
+	return( NextState ) ;
+}
+
+//	GENERAL SCREEN
+long GetNextStateFromScreen1( long Screen )
+{
+	long	LPM = 0L ;
+	long	NextState = 0L ;
+	int		Result ;
+
+	Debug(0) ;
+
+	TCHAR *PrinterModel = gDataGC->GetStringValue( _T("PrinterModel")) ;
+	printf( _T("Selected Printer Model = %s\r\n"), PrinterModel ) ;
+
+	if( PrinterModel == NULL )
+	{
+		gDataGC->SetAttrValue(_T("PrinterModel"), _T("Kodak CRT")) ;
+		PrinterModel = gDataGC->GetStringValue( _T("PrinterModel")) ;
+	}
+
+	TCHAR	*PrinterName	= gDataGC->GetStringValue( _T("PrinterName")) ;
+	TCHAR	*QueueName		= gDataGC->GetStringValue( _T("QueueName")) ;
+
+	Result = Screen1EntriesOK( PrinterName, PrinterModel, QueueName ) ;
+	if( Result == FALSE )
+	{
+		DisplayControlValues( gDlg ) ;
+		return( 1L ) ;
+	}
+
+	if( Result == -1 )	//	THE PRINTER EXISTS, GO TO THE DELETE SCREEN
+	{
+		return( 10L ) ;
+	}
+
+	//	SET UP SOME DEFAULTS
+	if( stricmp( PrinterModel, _T("Kodak CRT")) == 0 )
+	{
+		LPM = gCRT ;
+		gDataGC->SetDoubleValue(_T("MaxPaperWidth"),   5.0 ) ;
+		gDataGC->SetDoubleValue(_T("MaxPaperAdvance"), 7.0 ) ;
+		gDataGC->SetDoubleValue(_T("PaperAdvance"), 7.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution1"), 5.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution2"), 4.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution3"), 0.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution4"), 0.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution5"), 0.0 ) ;
+		gDataGC->SetAttrValue(_T("Units"), _T("INCH" )) ;
+		gDataGC->SetAttrValue(_T("SpillOverType"), _T("Percent") ) ;
+		gDataGC->SetDoubleValue(_T("SpillOverAmt"), 1.02 ) ;
+
+		UStringList *aSL = (UStringList *) GetTreeObject( _T("PackageBCCut"), _T("STRINGS")) ;
+		Result = StringListToControl( gDlg, _T("PackageCut"), aSL ) ;
+	}
+
+	if( stricmp( PrinterModel, _T("Kodak LFCRT")) == 0 )
+	{
+		LPM = gLFCRT ;
+		gDataGC->SetDoubleValue(_T("MaxPaperWidth"),   11.0 ) ;
+		gDataGC->SetDoubleValue(_T("MaxPaperAdvance"), 14.0 ) ;
+		gDataGC->SetDoubleValue(_T("PaperAdvance"), 14.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution1"), 11.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution2"), 10.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution3"), 8.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution4"), 6.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution5"), 5.0 ) ;
+		gDataGC->SetAttrValue(_T("Units"), _T("INCH" )) ;
+		gDataGC->SetAttrValue(_T("SpillOverType"), _T("Percent") ) ;
+		gDataGC->SetDoubleValue(_T("SpillOverAmt"), 1.02 ) ;
+
+		UStringList *aSL = (UStringList *) GetTreeObject( _T("PackageBCCut"), _T("STRINGS")) ;
+		Result = StringListToControl( gDlg, _T("PackageCut"), aSL ) ;
+	}
+
+	if( stricmp( PrinterModel, _T("KPDM")) == 0 )
+	{
+		LPM = gKPDM ;
+		gDataGC->SetDoubleValue(_T("MaxPaperWidth"),   12.0 ) ;
+		gDataGC->SetDoubleValue(_T("MaxPaperAdvance"), 18.0 ) ;
+		gDataGC->SetDoubleValue(_T("PaperAdvance"), 18.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution1"), 12.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution2"), 11.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution3"), 10.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution4"), 8.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution5"), 5.0 ) ;
+		gDataGC->SetAttrValue(_T("Units"), _T("INCH" )) ;
+		gDataGC->SetAttrValue(_T("SpillOverType"), _T("Percent") ) ;
+		gDataGC->SetDoubleValue(_T("SpillOverAmt"), 1.02 ) ;
+
+		UStringList *aSL = (UStringList *) GetTreeObject( _T("PackageCut"), _T("STRINGS")) ;
+		Result = StringListToControl( gDlg, _T("PackageCut"), aSL ) ;
+	}
+
+	if( stricmp( PrinterModel, _T("KPDM II")) == 0 )
+	{
+		LPM = gKPDM2 ;
+		gDataGC->SetDoubleValue(_T("MaxPaperWidth"),   12.0 ) ;
+		gDataGC->SetDoubleValue(_T("MaxPaperAdvance"), 18.0 ) ;
+		gDataGC->SetDoubleValue(_T("PaperAdvance"), 18.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution1"), 12.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution2"), 11.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution3"), 10.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution4"), 8.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution5"), 5.0 ) ;
+		gDataGC->SetAttrValue(_T("Units"), _T("INCH" )) ;
+		gDataGC->SetAttrValue(_T("SpillOverType"), _T("Percent") ) ;
+		gDataGC->SetDoubleValue(_T("SpillOverAmt"), 1.02 ) ;
+
+		UStringList *aSL = (UStringList *) GetTreeObject( _T("PackageCut"), _T("STRINGS")) ;
+		Result = StringListToControl( gDlg, _T("PackageCut"), aSL ) ;
+	}
+
+	if( stricmp( PrinterModel, _T("Kodak LED")) == 0 )
+	{
+		LPM = gLED ;
+		gDataGC->SetDoubleValue(_T("MaxPaperWidth"),   20.0 ) ;
+		gDataGC->SetDoubleValue(_T("MaxPaperAdvance"), 32.99 ) ;
+		gDataGC->SetDoubleValue(_T("PaperAdvance"), 32.99 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution1"), 250.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution2"), 0.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution3"), 0.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution4"), 0.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution5"), 0.0 ) ;
+		gDataGC->SetAttrValue(_T("Units"), _T("INCH" )) ;
+		gDataGC->SetAttrValue(_T("SpillOverType"), _T("Fixed") ) ;
+		gDataGC->SetDoubleValue(_T("SpillOverAmt"), 0.304 ) ;
+
+		UStringList *aSL = (UStringList *) GetTreeObject( _T("PackageBCCut"), _T("STRINGS")) ;
+		Result = StringListToControl( gDlg, _T("PackageCut"), aSL ) ;
+	}
+
+	if( stricmp( PrinterModel, _T("DISK")) == 0 )
+	{
+		LPM = gDISK ;
+		gDataGC->SetDoubleValue(_T("MaxPaperWidth"),   50.0 ) ;
+		gDataGC->SetDoubleValue(_T("MaxPaperAdvance"), 50.0 ) ;
+		gDataGC->SetDoubleValue(_T("PaperAdvance"), 50.0 ) ;
+		gDataGC->SetAttrValue(_T("Resolution1"), _T("250")) ;
+	}
+
+	if( stricmp( PrinterModel, _T("NT Printer")) == 0 )
+	{
+		LPM = gNTPTR ;
+		gDataGC->SetDoubleValue(_T("MaxPaperWidth"),   30.0 ) ;
+		gDataGC->SetDoubleValue(_T("MaxPaperAdvance"), 30.0 ) ;
+		gDataGC->SetAttrValue(_T("PaperType"), _T("Plain") ) ;
+		gDataGC->SetAttrValue(_T("NTXGamma"), _T("0.7")) ;
+		gDataGC->SetDoubleValue(_T("Resolution1"), 600.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution2"), 300.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution3"), 150.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution4"),  72.0 ) ;
+		gDataGC->SetDoubleValue(_T("Resolution5"),   0.0 ) ;
+	}
+
+	if( stricmp( PrinterModel, _T("Kodak RP30")) == 0 )
+	{
+		TCHAR	 FullPath[2048] ;
+		TCHAR	*ExeDirectory = GetExeDirectory() ;
+
+		LPM = gRP30 ;
+		gDataGC->SetDoubleValue(_T("MaxPaperWidth"),   12.0 ) ;
+		gDataGC->SetDoubleValue(_T("MaxPaperAdvance"), 18.0 ) ;
+		gDataGC->SetDoubleValue(_T("PaperWidth"), 12.0 ) ;
+		gDataGC->SetDoubleValue(_T("PaperAdvance"), 18.0 ) ;
+		gDataGC->SetAttrValue(_T("Resolution1"), _T("250")) ;
+		gDataGC->SetAttrValue(_T("Resolution2"), _T("400")) ;
+		gDataGC->SetAttrValue(_T("SpillOverType"), _T("Percent") ) ;
+		gDataGC->SetDoubleValue(_T("SpillOverAmt"), 1.03 ) ;
+		gDataGC->SetLongValue(_T("BackPrinter"), 1L ) ;
+
+		sprintf( FullPath, _T("%s\\Scripts\\C_RP30_Startup.txt"), ExeDirectory ) ; 
+		gDataGC->SetAttrValue(_T("StartupScript"),  FullPath ) ;
+
+		sprintf( FullPath, _T("%s\\Scripts\\C_RP30_PrintComplete.txt"), ExeDirectory ) ; 
+		gDataGC->SetAttrValue(_T("PrintCmplScrpt"), FullPath ) ;
+
+		sprintf( FullPath, _T("%s\\Scripts\\C_RP30_OrderComplete.txt"), ExeDirectory ) ; 
+		gDataGC->SetAttrValue(_T("OrderCmplScrpt"), FullPath ) ;
+
+		sprintf( FullPath, _T("%s\\Scripts\\C_RP30_Response.txt"), ExeDirectory ) ; 
+		gDataGC->SetAttrValue(_T("ResponseScript"), FullPath ) ;
+
+		sprintf( FullPath, _T("%s\\Scripts\\C_RP30_Shutdown.txt"), ExeDirectory ) ; 
+		gDataGC->SetAttrValue(_T("ShutdownScript"),FullPath ) ;
+
+		gDataGC->SetAttrValue(_T("ApplicationPath"), _T("C:\\RP30\\IA.exe")) ;
+		gDataGC->SetAttrValue(_T("ControlFolder"), _T("C:\\RP30\\Control")) ;
+		gDataGC->SetAttrValue(_T("ResponseFolder"), _T("C:\\RP30\\Response")) ;
+	}
+
+	AddDeviceListToControl( PrinterModel ) ;
+	AddProfileListToControl( PrinterModel ) ;
+
+	NextState = 2L ;
+	gDataGC->SetLongValue( _T("LPrinterModel"), LPM ) ;
+	return( NextState ) ;
+}
+
+
+int AddProfileListToControl( TCHAR *PrinterModel )
+{
+	UStringList *ProfileList = new UStringList ;
+	TCHAR		*Name ;
+	int			 FirstTime = 1 ;
+	TCHAR		 FirstName[64] ;
+	TCHAR		 theFullQuery[2048] ;
+	TCHAR		*theRawQuery ;
+
+	UADO *theADO = DBConnect() ;
+	if( theADO == NULL )	{ return( FALSE ) ; }
+
+	UPGenConList	*thePGL = new UPGenConList( theADO ) ;
+	if( thePGL == NULL )	{ delete theADO ; return( FALSE ) ; }
+
+	if( stricmp( PrinterModel, _T("Disk")) == 0 ||
+		stricmp( PrinterModel, _T("Kodak RP30")) == 0 )
+	{
+		strcpy( theFullQuery,
+			_T("Select * From Profiles Where Type = 'Output' OR Type = 'WorkingSpace'")) ;
+	}
+	else
+	{
+		theRawQuery = _T("Select * From Profiles Where Device = '%s'") ;
+		sprintf( theFullQuery, theRawQuery, PrinterModel ) ;
+	}
+
+	int Result = thePGL->Query( theFullQuery, _T("ReadOnly"),_T("Forward")) ;
+
+	if( Result == 0 )
+	{
+		HandleDBError( theADO ) ;
+		delete thePGL ;
+		delete theADO ;
+		return( FALSE ) ;
+	}
+
+	ProfileList->AddString(Translate(_T("None")), FALSE) ;
+
+	UGenCon *anEntry = (UGenCon *) thePGL->GetFirst() ;
+	while( anEntry )
+	{
+		Name = anEntry->GetStringValue(_T("Name")) ;
+		ProfileList->AddString( Name, FALSE ) ;
+		if( FirstTime )
+		{
+			strcpy( FirstName, Name ) ;
+			FirstTime = 0 ;
+		}
+		anEntry = (UGenCon *) thePGL->GetNext() ;
+	}
+
+	gDataGC->SetAttrValue(_T("ICCProfile"), Translate(_T("None")) ) ;
+//	gDataGC->SetAttrValue(_T("ICCProfile"), FirstName ) ;
+
+	Result = StringListToControl( gDlg, _T("ICCProfile"), ProfileList ) ;
+
+	delete thePGL ;
+	delete theADO ;
+	delete ProfileList ;
+	return( TRUE ) ;
+}
+
+
+int AddDeviceListToControl( TCHAR *PrinterModel )
+{
+	int				 FirstTime = 1 ;
+	TCHAR			 FirstName[2048] ;
+
+	UDP2HopSetup	*DHS		= new UDP2HopSetup ;
+
+	if( stricmp( PrinterModel, _T("Disk")) == 0 ||
+		stricmp( PrinterModel, _T("Kodak RP30")) == 0 )
+		{ return( TRUE ) ; }
+
+	//	SET THE HopConfig LOCATION
+	TCHAR			*ExeName	= GetExeDirectory() ;
+	TCHAR			 ConfigLocation[2048] ;
+	sprintf( ConfigLocation, _T("%s\\HopConfig"), ExeName ) ;
+	DHS->SetConfigLocation( ConfigLocation ) ;
+
+	//	GET THE REQUESTED DEVICES
+	UList			*DeviceList	= DHS->GetDeviceList( PrinterModel ) ;
+
+	//	CREATE THE UStringList
+	TCHAR			*Addr ;
+	UStringList		*Devices = new UStringList ;
+	Devices->SetName(_T("Devices")) ;
+	UListIterator	*anIter = new UListIterator( DeviceList ) ;
+	UGenCon			*aDevice = (UGenCon *) anIter->GetFirst() ;
+	while( aDevice )
+	{
+		Addr = aDevice->GetStringValue(_T("Address")) ;
+		if( Addr )
+		{
+			Devices->AddString( Addr, FALSE ) ;
+			if( FirstTime )
+			{
+				FirstTime = 0 ;
+				strcpy( FirstName, Addr ) ;
+			}
+		}
+		aDevice = (UGenCon *) anIter->GetNext() ;
+	}
+
+	delete anIter ;
+	delete DHS ;
+
+	gDataGC->SetAttrValue( _T("Devices"), FirstName ) ;
+
+	UList *OldDeviceList = gDataGC->GetLongValue(_T("DeviceList")) ;
+	if( OldDeviceList ) { delete OldDeviceList ; }
+
+	gDataGC->SetLongValue( _T("DeviceList"), DeviceList ) ;
+
+	int result = StringListToControl( gDlg, _T("Devices"), Devices ) ;
+	delete Devices ;
+
+	return( TRUE ) ;
+}
+
+
+int Screen1EntriesOK( TCHAR *PrinterName, TCHAR *PrinterModel, TCHAR *QueueName ) 
+{
+	TCHAR	theQuery[2048] ;
+	TCHAR	Buffer[2048] ;
+
+	if( PrinterName == NULL )
+	{
+		MessageBox( Translate(_T("The Printer Name must be specified.\r\n")), _T("MB_OK")) ;
+		return( FALSE ) ;
+	}
+
+	UADO *theADO = DBConnect() ;
+	if( theADO == NULL )	{ return(FALSE) ; }
+
+	UPGenConList	*thePGL = new UPGenConList( theADO ) ;
+	if( thePGL == NULL )	{ delete theADO ; return(FALSE) ; }
+
+	Buffer[0] = 0 ;
+
+	//	CHECK THE PRINTER INFORMATION
+	sprintf( theQuery, _T("SELECT * FROM Printers WHERE PrinterName = '%s'"), PrinterName ) ;
+	if( DBRecordExists( theADO, thePGL, theQuery ) > 0 )
+	{
+		TCHAR	*Msg1 = Translate(_T("Printer \"%s\" is already defined.\r\n")) ;
+		TCHAR	*Msg3 = Translate(_T("Printer \"%s\" is defined on computer \"%s\"\nand cannot be deleted from this machine")) ;
+		UPGenCon *aPG = thePGL->GetFirst() ;
+		int Result = -1 ;
+
+		if( aPG )
+		{
+			TCHAR	*LocalMachineName = gDataGC->GetStringValue(_T("ComputerName")) ;
+			TCHAR	*PrintMachineName = aPG->GetStringValue(_T("ComputerName")) ;
+			printf( _T("Screen1: Local = \"%s\", Print = \"%s\"\n"), LocalMachineName, PrintMachineName ) ;
+			RemoveTrailingBlanks( PrintMachineName ) ;
+			if( stricmp( LocalMachineName, PrintMachineName ) != 0 )
+			{
+				sprintf( Buffer, Msg3, PrinterName, PrintMachineName ) ;
+				Result = 0 ;
+			}
+			else
+			{
+				sprintf( Buffer, Msg1, PrinterName ) ;
+			}
+		}
+		else
+		{
+			sprintf( Buffer, Msg1, PrinterName ) ;
+		}
+
+		MessageBox( Buffer, _T("MB_OK")) ;
+		gDataGC->SetLongValue(_T("PrinterExists"), 1L ) ;
+		delete thePGL ;
+		delete theADO ;
+		return( Result ) ;
+	}
+
+
+	//	CHECK THE QUEUE INFORMATION
+	if( QueueName == NULL )
+	{
+		MessageBox( Translate(_T("The Queue Name must be specified.\r\n")), _T("MB_OK")) ;
+		delete thePGL ;
+		delete theADO ;
+		return( FALSE ) ;
+	}
+
+	sprintf( theQuery, _T("SELECT * FROM QueueDefinition WHERE QueueName = '%s'"), QueueName ) ;
+	if( DBRecordExists( theADO, thePGL, theQuery ) > 0 )
+	{
+		TCHAR	*Msg2 = Translate(_T("Queue \"%s\" is already defined.\r\n")) ;
+		sprintf( Buffer, Msg2, QueueName ) ;
+		MessageBox( Buffer, _T("MB_OK")) ;
+	}
+
+	delete thePGL ;
+	delete theADO ;
+	return( TRUE ) ;
+}
+
+TCHAR *RemoveTrailingBlanks( TCHAR *Text )
+{
+	long	Length = strlen( Text ) - 1L ;
+	
+	while( Text[Length] == 0x20 )
+	{
+		Text[Length] = 0 ;
+		Length-- ;
+	}
+}
+
+//	COLOR SCREEN
+long GetNextStateFromScreen2( long Screen )
+{
+	long	Device = gDataGC->GetLongValue(_T("LPrinterModel")) ;
+	if( Device == gCRT || Device == gLFCRT || Device == gKPDM || Device == gKPDM2 )
+	{
+		TCHAR	*PrintLut = gDataGC->GetStringValue(_T("PrintLut")) ;
+		TCHAR	*PaperPak = gDataGC->GetStringValue(_T("PaperPack")) ;
+		if( PrintLut == NULL || PaperPak == NULL )
+		{
+			MessageBox( _T("Both Print Lut and Paper Pack are required for CRT Printers"),
+						_T("MB_OK")) ;
+			return( 2L ) ;
+		}
+	}
+	return( 3L ) ;
+}
+
+//	PAPER INFO SCREEN
+long GetNextStateFromScreen3( long Screen )
+{
+	long	Device = gDataGC->GetLongValue(_T("LPrinterModel")) ;
+	if( Device == gRP30 )
+	{
+		return( 12L ) ;
+	}
+	return( 8L ) ;
+}
+
+//	PAPER INFO SCREEN CONTINUED
+long GetNextStateFromScreen8( long Screen )
+{
+	long	Device = gDataGC->GetLongValue(_T("LPrinterModel")) ;
+	long	NextState = 2L ;
+
+	if( Device == gCRT || Device == gLFCRT ||
+		Device == gKPDM || Device == gKPDM2 )
+	{
+		double PaperWidth = gDataGC->GetDoubleValue(_T("PaperWidth")) ;
+		double PaperAdvance = gDataGC->GetDoubleValue(_T("PaperAdvance")) ;
+		if( PaperAdvance > PaperWidth * 1.5 )
+		{
+			MessageBox(	_T("Paper Advance cannot be greater than 1.5 times the paper width."),
+						_T("MB_OK")) ;
+			return( 8 ) ;
+		}
+
+		long SpillOverType = gDataGC->GetLongValue(_T("SpillOverType")) ;
+		double SpillOverAmt = gDataGC->GetDoubleValue(_T("SpillOverAmt")) ;
+		if( SpillOverType == 2 || SpillOverAmt > 1.02 )
+		{
+			MessageBox(	_T("Spillover Type for CRT Printers must be either None or Percent.\r\nThe Amount is a multipler so that 2% needs to be 1.02 (the max.)"),
+						_T("MB_OK")) ;
+			return( 8 ) ;
+		}
+	}
+
+	if( Device == gLED )
+	{
+		long SpillOverType = gDataGC->GetLongValue(_T("SpillOverType")) ;
+		double SpillOverAmt = gDataGC->GetDoubleValue(_T("SpillOverAmt")) ;
+		if( SpillOverType == 1 || SpillOverAmt > 0.304 )
+		{
+			MessageBox(	_T("Spillover Type for LED Printers must be either None or Fixed.\r\nThe Amount is an adder and the max value is 0.304."),
+						_T("MB_OK")) ;
+			return( 8 ) ;
+		}
+	}
+
+	switch( Device )
+	{
+		case	gCRT	:	NextState =  5 ;		break ;	//	Kodak CRT
+		case	gLFCRT	:	NextState =  5 ;		break ;	//	Kodak LFCRT
+		case	gKPDM	:	NextState =  5 ;		break ;	//	Kodak KPDM
+		case	gLED	:	NextState =  9 ;		break ;	//	Kodak LED
+		case	gDISK	:	NextState =  4 ;		break ;	//	DISK
+		case	gNTPTR	:	NextState =  6 ;		break ;	//	NT PRINTER
+		case	gKPDM2	:	NextState =  5 ;		break ; //	Kodak KPDM II
+		case	gRP30	:	NextState = 12 ;		break ;	//	Kodak RP30
+	}
+
+	if( NextState == 100 )
+	{
+		if( gDataGC->GetLongValue( _T("Debug")))
+		{
+			NextState = 99 ;
+		}
+	}
+
+	return( NextState ) ;
+}
+
+
+//	DISK & OEM SCREEN
+long GetNextStateFromScreen4( long Screen )
+{
+	long	 PaperFill = GetPaperFill() ;
+
+	if( PaperFill )
+	{
+		TCHAR	 Buffer[4096] ;
+		TCHAR	*OutputPath = GetString(_T("OutputPath"), Buffer) ;
+		if( OutputPath == NULL )
+		{
+			MessageBox( _T("The Output Path must be specified when using Paper Fill."),
+						_T("MB_OK")) ;
+			return( 4 ) ;
+		}
+		else
+		{
+			long	Len = strlen( OutputPath ) ;
+			if( Len <= 5L )
+			{
+				MessageBox( _T("The Output Path must be specified when using Paper Fill."),
+							_T("MB_OK")) ;
+				return( 4 ) ;
+			}
+		}
+	}
+
+	long	Device = gDataGC->GetLongValue(_T("LPrinterModel")) ;
+	if( Device == gRP30 )
+	{
+		return( 11 ) ;
+	}
+
+	return( 100L ) ;
+}
+
+//	CRT RESOLUTIONS
+long GetNextStateFromScreen5( long Screen )
+{
+	long	Device = gDataGC->GetLongValue(_T("LPrinterModel")) ;
+
+	if( Device == gKPDM || Device == gKPDM2 )	{ return( 7L ) ; }
+	
+	if( gDataGC->GetLongValue( _T("Debug")))
+	{
+		return( 99 ) ;
+	}
+	return( 100L ) ;
+}
+
+//	NT INFO
+long GetNextStateFromScreen6( long Screen )
+{
+	if( gDataGC->GetLongValue( _T("Debug")))
+	{
+		return( 99 ) ;
+	}
+	return( 100L ) ;
+}
+
+//	KPDM SPECIFIC
+long GetNextStateFromScreen7( long Screen )
+{
+	if( gDataGC->GetLongValue( _T("Debug")))
+	{
+		return( 99 ) ;
+	}
+	return( 100L ) ;
+}
+
+//	LED SPECIFIC
+long GetNextStateFromScreen9( long Screen )
+{
+	if( gDataGC->GetLongValue( _T("Debug")))
+	{
+		return( 99 ) ;
+	}
+	return( 100L ) ;
+}
+
+long GetNextStateFromScreen10( long Screen )
+{
+	if( gDataGC->GetLongValue( _T("Debug")))
+	{
+		return( 99 ) ;
+	}
+	return( 100L ) ;
+}
+
+//	RP30
+long GetNextStateFromScreen11( long Screen )
+{
+	return( 100L ) ;
+}
+
+//	RP30
+long GetNextStateFromScreen12( long Screen )
+{
+	return( 11L ) ;
+}
+
+//	DEBUG FLAGS
+long GetNextStateFromScreen99( long Screen )
+{
+	return( 100L ) ;
+}
+
+//	FINAL
+long GetNextStateFromScreen100( long Screen )
+{
+	return( 110L ) ;
+}
+
+//	CONGRATULATIONS
+long GetNextStateFromScreen110( long Screen )
+{
+	return( 110L ) ;
+}
+
+
+void OldScreen( long Screen )
+{
+	long			 StartScreen = Screen * 10000L ;
+	long			 EndScreen	 = (Screen + 1L) * 10000L ;
+	double			 Position[4] ;
+	char			*CWind ;
+	int				 X, Y, W, H ;
+	UList			*Controls = gDlgDef->GetChildren() ;
+	UListIterator	*anIter = new UListIterator( Controls ) ;
+	UGenCon			*aCtrl = (UGenCon *) anIter->GetFirst() ;
+	TCHAR			*CtrlName ;
+
+	while( aCtrl )
+	{
+		aCtrl->GetRectValue( _T("Position"), Position ) ;
+		CWind = aCtrl->GetLongValue(_T("Control")) ;
+		X = Position[0] ;	Y = Position[1] ;
+		W = Position[2] ;	H = Position[3] ;
+		MoveWindow( CWind, X, Y, W, H, TRUE ) ;
+
+		aCtrl = (UGenCon *) anIter->GetNext() ;
+	}
+	delete anIter ;
+}
+
+
+
+void NewScreen( long Screen )
+{
+	long			 StartScreen = Screen * 10000L ;
+	long			 EndScreen	 = StartScreen + 5000L ;
+	double			 Position[4] ;
+	char			*CWind ;
+	int				 X, Y, W, H ;
+	long			 Device ;
+	long			 OEMDevice ;
+	UList			*Controls = gDlgDef->GetChildren() ;
+	UListIterator	*anIter = new UListIterator( Controls ) ;
+	UGenCon			*aCtrl = (UGenCon *) anIter->GetFirst() ;
+
+	while( aCtrl )
+	{
+		aCtrl->GetRectValue( _T("Position"), Position ) ;
+		if( Position[1] >= StartScreen && Position[1] < EndScreen )
+		{
+			CWind = aCtrl->GetLongValue(_T("Control")) ;
+			X = Position[0] ;	Y = Position[1] - StartScreen ;
+			W = Position[2] ;	H = Position[3] ;
+			MoveWindow( CWind, X, Y, W, H, TRUE ) ;
+		}
+		else
+		{
+			if( Screen == 2 && Position[1] >= EndScreen && Position[1] < EndScreen + 1000L )
+			{
+				//	WE HAVE A SPECIAL CASE IS IT PAPER PACK ???
+				Device = gDataGC->GetLongValue(_T("LPrinterModel")) ;
+				if( Device == gCRT || Device == gLFCRT || Device == gKPDM || Device == gKPDM2 )
+				{
+					CWind = aCtrl->GetLongValue(_T("Control")) ;
+					X = Position[0] ;	Y = Position[1] - StartScreen - 5000L ;
+					W = Position[2] ;	H = Position[3] ;
+					MoveWindow( CWind, X, Y, W, H, TRUE ) ;
+				}
+			}
+			if( Screen == 3 && Position[1] >= EndScreen && Position[1] < EndScreen + 1000L )
+			{
+				//	WE HAVE A SPECIAL CASE IS IT PACKAGE CUT ???
+				Device = gDataGC->GetLongValue(_T("LPrinterModel")) ;
+				if( Device == gCRT  || Device == gLFCRT ||
+					Device == gKPDM || Device == gKPDM2 || Device == gLED )
+				{
+					CWind = aCtrl->GetLongValue(_T("Control")) ;
+					X = Position[0] ;	Y = Position[1] - StartScreen - 5000L ;
+					W = Position[2] ;	H = Position[3] ;
+					MoveWindow( CWind, X, Y, W, H, TRUE ) ;
+				}
+
+			}
+		}
+
+		aCtrl = (UGenCon *) anIter->GetNext() ;
+	}
+	delete anIter ;
+
+	//	ADD THE APPROPRIATE BUTTONS
+	AddButtons( Screen ) ;
+}
+
+
+void AddButtons( long Screen )
+{
+	switch( Screen )
+	{
+		case	1	:
+			AddButton( _T("Debug") ) ;
+			AddButton( _T("Close") ) ;
+			AddButton( _T("Next") ) ;
+			AddButton( _T("Help") ) ;
+			break ;
+
+		case  100	:
+			AddButton( _T("Debug") ) ;
+			AddButton( _T("Close") ) ;
+			AddButton( _T("Prev") ) ;
+			AddButton( _T("Help") ) ;
+			AddButton( _T("Finish") ) ;
+			break ;
+
+		case  110	:
+			AddButton( _T("Debug") ) ;
+			AddButton( _T("Close") ) ;
+			break ;
+
+		default		:
+			AddButton( _T("Debug") ) ;
+			AddButton( _T("Close") ) ;
+			AddButton( _T("Next") ) ;
+			AddButton( _T("Prev") ) ;
+			AddButton( _T("Help") ) ;
+			break ;
+	}
+}
+	
+void AddButton( TCHAR *Name )
+{
+	UList			*Controls = gDlgDef->GetChildren() ;
+	UListIterator	*anIter = new UListIterator( Controls ) ;
+	UGenCon			*aCtrl = (UGenCon *) anIter->GetFirst() ;
+	double			 Position[4] ;
+	int				 X, Y, W, H ;
+	char			*CWind ;
+	TCHAR			*CtrlName ;
+
+	while( aCtrl )
+	{
+		CtrlName = aCtrl->GetName() ;
+		if( stricmp( CtrlName, Name ) == 0 )
+		{
+			CWind = aCtrl->GetLongValue(_T("Control")) ;
+			aCtrl->GetRectValue( _T("Position"), Position ) ;
+			X = Position[0] ;	Y = Position[1] - 5000L ;
+			W = Position[2] ;	H = Position[3] ;
+			MoveWindow( CWind, X, Y, W, H, TRUE ) ;
+			break ;
+		}
+		aCtrl = (UGenCon *) anIter->GetNext() ;
+	}
+	delete anIter ;
+}
+
+void DebugThis()
+{
+	Debug(1) ;
+}
+
+void Help()
+{
+	Debug(0) ;
+
+	TCHAR	*KPISHelpFile = _T("KPISHelpFile") ;
+	long	Screen = gDataGC->GetLongValue(_T("Screen")) ;
+	switch( Screen )
+	{
+		case	1	:	//	INTRO
+			ShowHelpPage( KPISHelpFile, _T("Name.htm"), NULL ) ;
+			break ;
+		case	2	:	//	COLOR
+			ShowHelpPage( KPISHelpFile, _T("CMI.htm"), NULL ) ;
+			break ;
+		case	3	:	//	PAPER
+			ShowHelpPage( KPISHelpFile, _T("PaperInfo.htm"), NULL ) ;
+			break ;
+		case	4	:	//	DISK & OEM
+			ShowHelpPage( KPISHelpFile, _T("DiskOEMSpec.htm"), NULL ) ;
+			break ;
+		case	5	:	//	CRT RESOLUTIONS (PAPER WIDTHS)
+			ShowHelpPage( KPISHelpFile, _T("PaperWidth.htm"), NULL ) ;
+			break ;
+		case	6	:	//	NT INFORMATION
+			ShowHelpPage( KPISHelpFile, _T("NTPrinterSpec.htm"), NULL ) ;
+			break ;
+		case	7	:	//	KPDM SPECIFIC INFORMATION
+			ShowHelpPage( KPISHelpFile, _T("KPDMSpec.htm"), NULL ) ;
+			break ;
+		case	8	:	//	PAPER CONTINUED
+			ShowHelpPage( KPISHelpFile, _T("PaperFill.htm"), NULL ) ;
+			break ;
+		case	9	:	//	LED SPECIFIC INFORMATION
+			ShowHelpPage( KPISHelpFile, _T("LEDSpec.htm"), NULL ) ;
+			break ;
+		case	10	:	//	DELETE SCREEN
+			ShowHelpPage( KPISHelpFile, _T("Delete.htm"), NULL ) ;
+			break ;
+		case	11	:	//	RP30 FILE SCREEN
+			ShowHelpPage( KPISHelpFile, _T("RP30_Printer.htm"), NULL ) ;
+			break ;
+		case	12	:	//	RP30 Folder and Script SCREEN
+			ShowHelpPage( KPISHelpFile, _T("RP30_Config.htm"), NULL ) ;
+			break ;
+//		case	99	:	//	DEBUG FLAGS
+//			ShowHelpPage( KPISHelpFile, _T("INImage Text.htm"), NULL ) ;
+//			break ;
+		case	100	:	//	FINAL SCREEN
+			ShowHelpPage( KPISHelpFile, _T("ResetValue.htm"), NULL ) ;
+			break ;
+		case	110	:	//	CONGRATULATIONS SCREEN
+			ShowHelpPage( KPISHelpFile, _T("PrinterComplete.htm"), NULL ) ;
+			break ;
+	}
+}
+
+void GetGammaTablePath()
+{
+	TCHAR	ImageName[1024] ;
+	TCHAR	TempName[1024] ;
+	TCHAR	*Prompt = Translate(_T("Select Gamma Table File:")) ;
+	sprintf( ImageName, _T("%s\\Tables\\*.*"), GetExeDirectory()) ;
+	strcpy( TempName, ImageName ) ;
+	if( FileDialog( 1, NULL, ImageName, _T(""), NULL, Prompt ))
+	{
+		if( strcmp( TempName, ImageName ) == 0 )
+			{ gDataGC->SetAttrValue( _T("GammaTable"), _T("") ) ; }
+		else
+			{ gDataGC->SetAttrValue( _T("GammaTable"), ImageName ) ; }
+	}
+
+	DisplayControlValues( gDlg ) ;
+}
+
+
+void GetPrintLutPath()
+{
+	TCHAR	ImageName[1024] ;
+	TCHAR	TempName[1024] ;
+	TCHAR	*Prompt = Translate(_T("Select the Print Lut File:")) ;
+	sprintf( ImageName, _T("")) ;
+	strcpy( TempName, ImageName ) ;
+	if(FileDialog( 1, NULL, ImageName, _T(""), NULL, Prompt ))
+	{
+		if( strcmp( TempName, ImageName ) == 0 )
+			{ gDataGC->SetAttrValue( _T("PrintLut"), _T("") ) ; }
+		else
+			{ gDataGC->SetAttrValue( _T("PrintLut"), ImageName ) ; }
+	}
+	DisplayControlValues( gDlg ) ;
+}
+
+
+void GetPaperPackPath()
+{
+	TCHAR	ImageName[1024] ;
+	TCHAR	TempName[1024] ;
+	TCHAR	*Prompt = Translate(_T("Select the Paper Pack:")) ;
+	sprintf( ImageName, _T("\\*.*")) ;
+	strcpy( TempName, ImageName ) ;
+	if( FileDialog( 1, NULL, ImageName, _T(""), NULL, Prompt ))
+	{
+		if( strcmp( TempName, ImageName ) == 0 )
+			{ gDataGC->SetAttrValue( _T("PaperPack"), _T("") ) ; }
+		else
+			{ gDataGC->SetAttrValue( _T("PaperPack"), ImageName ) ; }
+	}
+	DisplayControlValues( gDlg ) ;
+}
+
+void GetOutputPath()
+{
+	TCHAR	ImageName[1024] ;
+	TCHAR	*Prompt = Translate(_T("Select the Output Path for this File:")) ;
+	TCHAR	*FileType = gDataGC->GetStringValue(_T("SaveFileType")) ;
+	TCHAR	*FileExt = _T(".tif") ;
+	if( stricmp( FileType, _T("TIFF")) != 0 )
+	{
+		FileExt = _T(".jpg") ;
+	}
+
+	sprintf( ImageName, _T("%s\\Output\\[-]%s"), GetExeDirectory(), FileExt ) ;
+	if(FileDialog( 1, NULL, ImageName, _T(""), NULL, Prompt ))
+	{
+		gDataGC->SetAttrValue( _T("OutputPath"), ImageName ) ;
+	}
+	DisplayControlValues( gDlg ) ;
+}
+
+
+
+void GetStartPrintScript()
+{
+	TCHAR	ImageName[1024] ;
+	TCHAR	TempName[1024] ;
+	TCHAR	*Prompt = Translate(_T("Select the Start Print Script:")) ;
+	sprintf( ImageName, _T("%s\\Scripts\\*.txt"), GetExeDirectory()) ;
+	strcpy( TempName, ImageName ) ;
+	if( FileDialog( 1, NULL, ImageName, _T(""), NULL, Prompt ))
+	{
+		if( strcmp( TempName, ImageName ) == 0 )
+			{ gDataGC->SetAttrValue( _T("StartPrntScrpt"), _T("") ) ; }
+		else
+			{ gDataGC->SetAttrValue( _T("StartPrntScrpt"), ImageName ) ; }
+	}
+	DisplayControlValues( gDlg ) ;
+}
+
+void GetPrintCompleteScript()
+{
+	TCHAR	ImageName[1024] ;
+	TCHAR	TempName[1024] ;
+	TCHAR	*Prompt = Translate(_T("Select the Print Complete Script:")) ;
+	sprintf( ImageName, _T("%s\\Scripts\\*.txt"), GetExeDirectory()) ;
+	strcpy( TempName, ImageName ) ;
+	if( FileDialog( 1, NULL, ImageName, _T(""), NULL, Prompt ))
+	{
+		if( strcmp( TempName, ImageName ) == 0 )
+			{ gDataGC->SetAttrValue( _T("PrintCmplScrpt"), _T("") ) ; }
+		else
+			{ gDataGC->SetAttrValue( _T("PrintCmplScrpt"), ImageName ) ; }
+	}
+	DisplayControlValues( gDlg ) ;
+}
+
+void GetOrderCompleteScript()
+{
+	TCHAR	ImageName[1024] ;
+	TCHAR	TempName[1024] ;
+	TCHAR	*Prompt = Translate(_T("Select the Order Complete Script:")) ;
+	sprintf( ImageName, _T("%s\\Scripts\\*.txt"), GetExeDirectory()) ;
+	strcpy( TempName, ImageName ) ;
+	if( FileDialog( 1, NULL, ImageName, _T(""), NULL, Prompt ))
+	{
+		if( strcmp( TempName, ImageName ) == 0 )
+			{ gDataGC->SetAttrValue( _T("OrderCmplScrpt"), _T("") ) ; }
+		else
+			{ gDataGC->SetAttrValue( _T("OrderCmplScrpt"), ImageName ) ; }
+	}
+	DisplayControlValues( gDlg ) ;
+}
+
+
+void GetControlFolder()
+{
+	TCHAR	*dlgTitle  = Translate(_T("Select Folder")) ;
+	TCHAR	*ctrlTitle = Translate(_T("Select OEM Printer Control Folder:")) ;
+	TCHAR	 folderDisplayName[2048] ;
+	TCHAR	 folderPath[2048] ;
+
+	BrowseFolder( dlgTitle, ctrlTitle, folderDisplayName, folderPath ) ;
+
+	gDataGC->SetAttrValue(_T("ControlFolder"), folderPath ) ;
+	DisplayControlValues( gDlg ) ;
+}
+
+void GetResponseFolder()
+{
+	TCHAR	*dlgTitle  = Translate(_T("Select Folder")) ;
+	TCHAR	*ctrlTitle = Translate(_T("Select Printer Response Folder:")) ;
+	TCHAR	 folderDisplayName[2048] ;
+	TCHAR	 folderPath[2048] ;
+
+	BrowseFolder( dlgTitle, ctrlTitle, folderDisplayName, folderPath ) ;
+
+	gDataGC->SetAttrValue(_T("ResponseFolder"), folderPath ) ;
+	DisplayControlValues( gDlg ) ;
+}
+
+void GetApplicationPath()
+{
+	TCHAR	ImageName[1024] ;
+	TCHAR	TempName[1024] ;
+	TCHAR	*Prompt = Translate(_T("Find the Interface Application:")) ;
+	sprintf( ImageName, _T("C:\\*.exe")) ;
+	strcpy( TempName, ImageName ) ;
+	if( FileDialog( 1, NULL, ImageName, _T(""), NULL, Prompt ))
+	{
+		if( strcmp( TempName, ImageName ) == 0 )
+			{ gDataGC->SetAttrValue( _T("ApplicationPath"), _T("") ) ; }
+		else
+			{ gDataGC->SetAttrValue( _T("ApplicationPath"), ImageName ) ; }
+	}
+	DisplayControlValues( gDlg ) ;
+}
+
+void GetStartupScript()
+{
+	TCHAR	ImageName[1024] ;
+	TCHAR	TempName[1024] ;
+	TCHAR	*Prompt = Translate(_T("Get the Startup Script:")) ;
+	sprintf( ImageName, _T("%s\\Scripts\\*.txt"), GetExeDirectory()) ;
+//	sprintf( ImageName, _T("C:\\*.txt")) ;
+	strcpy( TempName, ImageName ) ;
+	if( FileDialog( 1, NULL, ImageName, _T(""), NULL, Prompt ))
+	{
+		if( strcmp( TempName, ImageName ) == 0 )
+			{ gDataGC->SetAttrValue( _T("StartupScript"), _T("") ) ; }
+		else
+			{ gDataGC->SetAttrValue( _T("StartupScript"), ImageName ) ; }
+	}
+	DisplayControlValues( gDlg ) ;
+}
+
+void GetResponseScript()
+{
+	TCHAR	ImageName[1024] ;
+	TCHAR	TempName[1024] ;
+	TCHAR	*Prompt = Translate(_T("Get the Response Script:")) ;
+	sprintf( ImageName, _T("%s\\Scripts\\*.txt"), GetExeDirectory()) ;
+//	sprintf( ImageName, _T("C:\\*.txt")) ;
+	strcpy( TempName, ImageName ) ;
+	if( FileDialog( 1, NULL, ImageName, _T(""), NULL, Prompt ))
+	{
+		if( strcmp( TempName, ImageName ) == 0 )
+			{ gDataGC->SetAttrValue( _T("ResponseScript"), _T("") ) ; }
+		else
+			{ gDataGC->SetAttrValue( _T("ResponseScript"), ImageName ) ; }
+	}
+	DisplayControlValues( gDlg ) ;
+}
+
+void GetShutdownScript()
+{
+	TCHAR	ImageName[1024] ;
+	TCHAR	TempName[1024] ;
+	TCHAR	*Prompt = Translate(_T("Get the Shutdown Script:")) ;
+	sprintf( ImageName, _T("%s\\Scripts\\*.txt"), GetExeDirectory()) ;
+//	sprintf( ImageName, _T("C:\\*.txt")) ;
+	strcpy( TempName, ImageName ) ;
+	if( FileDialog( 1, NULL, ImageName, _T(""), NULL, Prompt ))
+	{
+		if( strcmp( TempName, ImageName ) == 0 )
+			{ gDataGC->SetAttrValue( _T("ShutdownScript"), _T("") ) ; }
+		else
+			{ gDataGC->SetAttrValue( _T("ShutdownScript"), ImageName ) ; }
+	}
+	DisplayControlValues( gDlg ) ;
+}
+
+
+//	THIS ROUTINE WILL UPDATE THE DP2 AND THE HOP STUFF
+void Finish()
+{
+	TCHAR	 ConfigLocation[2048] ;
+	int		 ErrorFlag = FALSE ;
+	int		 Result ;
+
+	printf( _T("Updating the DP2 and Hop Stuff\r\n")) ;
+
+	TCHAR	 Msg[2048] ;
+	TCHAR	 Tmp[2048] ;
+	TCHAR	*Msg1 = Translate(_T("\"%s\" was added successfully.\n")) ;
+	TCHAR	*Msg2 = Translate(_T("To Start Printing: Select \"Printers\" from the task bar \n\
+then right click on button to left of \"%s\" and select \"Run\".")) ;
+
+	sprintf( Msg, Msg1, gDataGC->GetStringValue(_T("PrinterName"))) ;
+	sprintf( Tmp, Msg2, gDataGC->GetStringValue(_T("PrinterName"))) ;
+	strcat( Msg, Tmp ) ;
+
+	long	DeletePrinter = gDataGC->GetLongValue(_T("DeletePrinter")) ;
+	long	PrinterExists = gDataGC->GetLongValue(_T("PrinterExists")) ;
+	TCHAR	*PrinterModel = gDataGC->GetStringValue(_T("PrinterModel")) ;
+
+	if( DeletePrinter == 0L && PrinterExists == 0L )
+	{
+		//	ADD CODE TO CREATE THE HOP PRINTER STUFF
+		//	ONLY IF NOT DISK !
+
+		gDataGC->SetAttrValue( _T("Status"), Translate(_T("Updating Hop Physical & Logical Printers"))) ;
+		DisplayControlValues( gDlg ) ;
+
+		long	Device = gDataGC->GetLongValue(_T("LPrinterModel")) ;
+		if( Device != gDISK && Device != gRP30 )	//	DISK
+		{
+			GetDeviceData() ;
+			UDP2HopSetup *DHS = new UDP2HopSetup ;
+			if( DHS )
+			{
+				//	SET THE HopConfig LOCATION
+				TCHAR	*ExeName = GetExeDirectory() ;
+				sprintf( ConfigLocation, _T("%s\\HopConfig"), ExeName ) ;
+				DHS->SetConfigLocation( ConfigLocation ) ;
+				DHS->SetDeviceSpecifics(gDataGC) ;
+				TCHAR	*ErrMsg = DHS->AddPrinter() ;
+				if( ErrMsg )
+				{
+					Msg1 = Translate(_T("\"%s\" was NOT added successfully.\n\n")) ;
+					sprintf( Msg, Msg1, gDataGC->GetStringValue(_T("PrinterName"))) ;
+					strcat( Msg, ErrMsg ) ;
+					printf( _T("%s\r\n"), ErrMsg ) ;
+					ErrorFlag = TRUE ;
+				}
+				delete DHS ;
+			}
+		}
+
+		if( ErrorFlag == FALSE )
+		{
+			gDataGC->SetAttrValue( _T("Status"), Translate(_T("Updating Printer Table"))) ;
+			DisplayControlValues( gDlg ) ;
+
+			Result = UpdatePrinterTable() ;
+
+			gDataGC->SetAttrValue( _T("Status"), Translate(_T("Updating Queue Definition Table"))) ;
+			DisplayControlValues( gDlg ) ;
+
+			Result = UpdatePrinterQueueTable() ;
+
+			gDataGC->SetAttrValue( _T("Status"), Translate(_T("Updating Resolution Table"))) ;
+			DisplayControlValues( gDlg ) ;
+
+			Result = UpdatePrinterResolutionsTable() ;
+		}
+	}
+	else	//	THE USER WANTS TO DELETE THE PRINTER
+	{
+		if( DeletePrinter == 1L && PrinterExists != 0L )
+		{
+			gDataGC->SetAttrValue( _T("Status"), Translate(_T("Updating Hop Physical & Logical Printers"))) ;
+			DisplayControlValues( gDlg ) ;
+
+			//	IS THE PRINTER A DISK OR A HOP CONTROLLED DEVICE ?
+			if( stricmp( PrinterModel, _T("Disk")) == 0 )
+			{
+				//	WE HAVE A DISK !
+				gDataGC->SetAttrValue( _T("Status"), Translate(_T("Updating Printer Table"))) ;
+				DisplayControlValues( gDlg ) ;
+				Result = DeleteThePrinter() ;
+				if( Result == TRUE )
+				{
+					Msg1 = Translate(_T("\"%s\" was deleted successfully. Queues must be deleted manually.\n")) ;
+					sprintf( Msg, Msg1, gDataGC->GetStringValue(_T("PrinterName"))) ;
+				}
+				else
+				{
+					Msg1 = Translate(_T("\"%s\" Table was not deleted.\n\
+You may have records in the job queue.\n\
+Please delete the job queue records and the\n\
+Printer Table record from the table views.\n")) ;
+					sprintf( Msg, Msg1, gDataGC->GetStringValue(_T("PrinterName"))) ;
+				}
+			}
+			else	//	WE HAVE A HOP TYPE PRINTER
+			{
+				UDP2HopSetup *DHS = new UDP2HopSetup ;
+				if( DHS )
+				{
+					//	SET THE HopConfig LOCATION
+					TCHAR	*ExeName = GetExeDirectory() ;
+					sprintf( ConfigLocation, _T("%s\\HopConfig"), ExeName ) ;
+					DHS->SetConfigLocation( ConfigLocation ) ;
+					DHS->SetDeviceSpecifics(gDataGC) ;
+					Result = DHS->DelPrinter() ;
+					if( Result == TRUE )
+					{
+						gDataGC->SetAttrValue( _T("Status"), Translate(_T("Updating Printer Table"))) ;
+						DisplayControlValues( gDlg ) ;
+						Result = DeleteThePrinter() ;
+						if( Result == TRUE )
+						{
+							Msg1 = Translate(_T("\"%s\" was deleted successfully. Queues must be deleted manually.\n")) ;
+							sprintf( Msg, Msg1, gDataGC->GetStringValue(_T("PrinterName"))) ;
+						}
+						else
+						{
+							Msg1 = Translate(_T("\"%s\" Table was not deleted.\n\
+You may have records in the job queue.\n\
+Please delete the job queue records and the\n\
+Printer Table record from the table views.\n")) ;
+							sprintf( Msg, Msg1, gDataGC->GetStringValue(_T("PrinterName"))) ;
+						}
+					}
+					else
+					{
+						Msg1 = Translate(_T("\"%s\" was not deleted.\n")) ;
+						sprintf( Msg, Msg1, gDataGC->GetStringValue(_T("PrinterName"))) ;
+					}
+					DHS = delete DHS ;
+				}
+			}
+		}
+	}
+
+	NextScreen() ;
+
+	gDataGC->SetAttrValue( _T("Status"), Msg ) ;
+	SessionLogDirect( Msg ) ;
+	DisplayControlValues( gDlg ) ;
+}
+
+/*
+Dictionary:	DDUnconfiguredPrinterInfo
+	Fields:	Name	Address				Type	Text
+	Fields:	Name	Model				Type	Text
+	Fields:	Name	AddresType			Type	Long
+
+Dictionary: DDPtrWizard
+	HopAddress		Text	0	0	0	0	0
+	HopModel		Text	0	0	0	0	0
+	HopAddressType	Long	0	0	0	0	0
+*/
+
+int DeleteThePrinter()
+{
+	TCHAR	*PrinterName = gDataGC->GetStringValue(_T("PrinterName")) ;
+	TCHAR	*PrinterModel = gDataGC->GetStringValue(_T("PrinterModel")) ;
+	TCHAR	*DelPrinter = _T("Delete from Printers where PrinterName = '%s'") ;
+	TCHAR	*DelResolutions = _T("Delete from PrinterRes where PrinterName = '%s'") ;
+	TCHAR	 DelCmd[1024] ;
+
+	sprintf( DelCmd, DelPrinter, PrinterName ) ;
+	int Result = DoSQL( DelCmd ) ;
+	if( Result == TRUE )
+	{
+		if( stricmp( PrinterModel, _T("Disk")) != 0 )
+		{
+			sprintf( DelCmd, DelResolutions, PrinterName ) ;
+			Result = DoSQL( DelCmd ) ;
+		}
+	}
+	return( Result ) ;
+}
+
+int GetDeviceData()
+{
+
+	TCHAR	*DeviceIdentifier	= gDataGC->GetStringValue(_T("Devices")) ;
+	UList	*DeviceList			= (UList *) gDataGC->GetLongValue(_T("DeviceList")) ;
+	TCHAR	*Address ;
+	TCHAR	*Model ;
+	long	 AddressType ;
+
+	UListIterator	*anIter		= new UListIterator( DeviceList ) ;
+	UGenCon			*aDevice	= (UGenCon *) anIter->GetFirst() ;
+	
+	while( aDevice )
+	{
+		Address = aDevice->GetStringValue(_T("Address")) ;
+		if( stricmp( Address, DeviceIdentifier ) == 0 )
+		{
+			Model = aDevice->GetStringValue(_T("Model")) ;
+			AddressType = aDevice->GetLongValue(_T("AddressType")) ;
+			gDataGC->SetLongValue(_T("HopAddressType"), AddressType ) ;
+			gDataGC->SetAttrValue(_T("HopAddress"), Address ) ;
+			gDataGC->SetAttrValue(_T("HopModel"), Model ) ;
+		}
+		aDevice	= (UGenCon *) anIter->GetNext() ;
+	}
+	delete anIter ;
+	return( TRUE ) ;
+}
+
+int DoSQL( TCHAR *Cmd )
+{
+	UADO	*theADO = DBConnect() ;
+	if( theADO == NULL )
+		{ return( FALSE ) ; }
+
+	int		 Result = theADO->ADOCommand( Cmd, _T("SQL"), NULL ) ;
+	if( Result != 0 )
+		{ HandleDBError( theADO ) ; }
+
+	delete theADO ;
+	return( Result == 0 ) ;
+}
+
+
+int UpdatePrinterTable()
+{
+	TCHAR			 theQuery[2048] ;
+	TCHAR			 Buffer[1024] ;
+	UADO			*theADO = DBConnect() ;
+	if( theADO == NULL )	{ return( FALSE ) ; }
+
+	UPGenConList	*thePGL = new UPGenConList( theADO ) ;
+	if( thePGL == NULL )	{ delete theADO ; return(FALSE) ; }
+
+	TCHAR *Name = gDataGC->GetStringValue(_T("PrinterName")) ;
+
+	sprintf( theQuery, _T("Select * From Printers Where PrinterName = '%s'"), Name ) ;
+	if( DBRecordExists( theADO, thePGL, theQuery ) > 0 )
+	{
+		printf( _T("Printer '%s' already exists.\r\n"), Name ) ;
+		delete thePGL ;
+		delete theADO ;
+		return(0) ;
+	}
+
+	long	Device = gDataGC->GetLongValue(_T("LPrinterModel")) ;
+	if( Device == gRP30 )
+	{
+		//	IF WE HAVE AN RP30, THEN CONVERT MODEL TO DISK
+		gDataGC->SetAttrValue(_T("PrinterModel"), _T("Disk")) ;
+	}
+
+	TCHAR	theInsertCmd[2048] ;
+	sprintf( theInsertCmd,
+		_T("Insert into Printers\
+			(PrinterName,PrinterModel,Status,QueueName,RunAttended,ComputerName,\
+			MaxPaperWidth,MaxPaperAdvance,BackPrinter,ForeignDevice,OrderPunch,OutputFileType,\
+			OutputPath,StartPrinting,OnPrintComplete,OnOrderComplete,ControlFolder,\
+			StartUpScript,HFExePath,ResponseScript,ResponseFolder,ShutdownScript)\
+			Values ('%s', '%s', %d, '%s', %d, '%s', %lf, %lf, %ld, %ld, %ld, %ld, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s )"),
+			gDataGC->GetStringValue(_T("PrinterName")),
+			gDataGC->GetStringValue(_T("PrinterModel")),
+			0,	//	STATUS
+			gDataGC->GetStringValue(_T("QueueName")),
+			1,	//	RUN ATTENDED	
+			gDataGC->GetStringValue(_T("ComputerName")),
+			gDataGC->GetDoubleValue(_T("MaxPaperWidth")),
+			gDataGC->GetDoubleValue(_T("MaxPaperAdvance")),
+			gDataGC->GetLongValue(_T("BackPrinter")),
+			gDataGC->GetLongValue(_T("OEMDevice")),
+			1,	//	ORDER PUNCH
+			GetOutputFileType(),
+			GetString(_T("OutputPath"), Buffer),
+			GetScriptName(_T("StartPrntScrpt"), Buffer),
+			GetScriptName(_T("PrintCmplScrpt"), Buffer),
+			GetScriptName(_T("OrderCmplScrpt"), Buffer),
+			GetString(_T("ControlFolder"), Buffer),
+			GetScriptName(_T("StartupScript"), Buffer),
+			GetString(_T("ApplicationPath"), Buffer),
+			GetScriptName(_T("ResponseScript"), Buffer),
+			GetString(_T("ResponseFolder"), Buffer),
+			GetScriptName(_T("ShutdownScript"), Buffer)
+			) ;
+
+	SessionLogDirect( _T("PrinterWizard: Adding Printer: \"%s\""), theInsertCmd ) ;
+	int Result = theADO->ADOCommand( theInsertCmd, "SQL", NULL ) ;
+	if( Result != 0 )
+	{
+		HandleDBError( theADO ) ;
+	}
+
+	delete thePGL ;
+	delete theADO ;
+
+	return( Result == 0 ) ;
+}
+
+//	Define:	AvgProductLength CopyOf PaperWidth			~[Database FieldTypes]~ Fields:	DisplayName	~Avg Product Length~
+//	Define:	AvgPrintSpeed	 CopyOf Interval			~[Database FieldTypes]~ Fields:	DisplayName	~Avg Print Time~
+
+int UpdatePrinterQueueTable()
+{
+	TCHAR			 theQuery[2048] ;
+	TCHAR			 ScriptName[1024] ;
+
+	UADO			*theADO = DBConnect() ;
+	if( theADO == NULL )	{ return( FALSE ) ; }
+
+	UPGenConList	*thePGL = new UPGenConList( theADO ) ;
+	if( thePGL == NULL )	{ delete theADO ; return(FALSE) ; }
+
+	TCHAR *Name = gDataGC->GetStringValue(_T("QueueName")) ;
+
+	sprintf( theQuery, _T("Select * From QueueDefinition Where QueueName = '%s'"), Name ) ;
+	if( DBRecordExists( theADO, thePGL, theQuery ) > 0 )
+	{
+		printf( _T("Queue '%s' already exists.\r\n"), Name ) ;
+		delete thePGL ;
+		delete theADO ;
+		return(0) ;
+	}
+
+	TCHAR	theInsertCmd[2048] ;
+	TCHAR	Buffer[2048] ;
+
+	sprintf( theInsertCmd,
+		_T("Insert into QueueDefinition(QueueName,PrinterModel,PaperType,PaperSurface,\
+PaperOpacity,ICCProfile,PackageCut,PaperWidth,PaperAdvance,Resolution,\
+PaperFill,BreakOnNewImage,SpillOverType,SpillOverAmt,Gamma,PaperPack,CalibrationLUT,\
+AvgProductLength,AvgPrintSpeed)  Values\
+(%s, %s, %s, %s, %s, %s, %ld, %lf, %lf, %lf, %ld, %ld, %ld, %lf, %s, %s, %s, %lf, %ld)"),
+			GetString(_T("QueueName"), Buffer),
+			GetString(_T("PrinterModel"), Buffer),
+			GetString(_T("PaperType"), Buffer),
+			GetString(_T("PaperSurface"), Buffer),
+			GetString(_T("PaperOpacity"), Buffer),
+			GetString(_T("ICCProfile"), Buffer),
+			GetPackageCut(),
+			gDataGC->GetDoubleValue(_T("PaperWidth")),
+			gDataGC->GetDoubleValue(_T("PaperAdvance")),
+			GetResolution(_T("PaperWidth")),
+			GetPaperFill(),
+			gDataGC->GetLongValue(_T("ImageBreak")),
+			GetSpillOverType(),
+			gDataGC->GetDoubleValue(_T("SpillOverAmt")),
+			GetString(_T("GammaTable"), Buffer),
+			GetString(_T("PaperPack"), Buffer),
+			GetString(_T("PrintLut"), Buffer),
+	//		GetOutputFileType(),
+	//		GetString(_T("OutputPath"), Buffer),
+			gDataGC->GetDoubleValue(_T("AvgPaperAdv")),
+			gDataGC->GetLongValue(_T("AvgPrintSpeed"))
+	//		GetScriptName(_T("StartPrntScrpt"), ScriptName),
+	//		GetScriptName(_T("PrintCmplScrpt"), ScriptName),
+	//		GetScriptName(_T("OrderCmplScrpt"), ScriptName),
+	//		GetString(_T("ControlFolder"), Buffer)
+			) ;
+
+
+/*	sprintf( theInsertCmd,
+		_T("Insert into QueueDefinition(QueueName,PrinterModel,PaperType,PaperSurface,\
+PaperOpacity,ICCProfile,PackageCut,PaperWidth,PaperAdvance,Resolution,\
+PaperFill,BreakOnNewImage,SpillOverType,SpillOverAmt,Gamma,PaperPack,CalibrationLUT,OutputFileType,\
+OutputPath,AvgProductLength,AvgPrintSpeed,StartPrinting,OnPrintComplete,\
+OnOrderComplete,ControlFolder)  Values\
+(%s, %s, %s, %s, %s, %s, %ld, %lf, %lf, %lf, %ld, %ld, %ld, %lf, %s, %s, %s, %ld, %s, %lf, %ld, %s, %s, %s, %s)"),
+			GetString(_T("QueueName"), Buffer),
+			GetString(_T("PrinterModel"), Buffer),
+			GetString(_T("PaperType"), Buffer),
+			GetString(_T("PaperSurface"), Buffer),
+			GetString(_T("PaperOpacity"), Buffer),
+			GetString(_T("ICCProfile"), Buffer),
+			GetPackageCut(),
+			gDataGC->GetDoubleValue(_T("PaperWidth")),
+			gDataGC->GetDoubleValue(_T("PaperAdvance")),
+			GetResolution(_T("PaperWidth")),
+			GetPaperFill(),
+			gDataGC->GetLongValue(_T("ImageBreak")),
+			GetSpillOverType(),
+			gDataGC->GetDoubleValue(_T("SpillOverAmt")),
+			GetString(_T("GammaTable"), Buffer),
+			GetString(_T("PaperPack"), Buffer),
+			GetString(_T("PrintLut"), Buffer),
+			GetOutputFileType(),
+			GetString(_T("OutputPath"), Buffer),
+			gDataGC->GetDoubleValue(_T("AvgPaperAdv")),
+			gDataGC->GetLongValue(_T("AvgPrintSpeed")),
+			GetScriptName(_T("StartPrntScrpt"), ScriptName),
+			GetScriptName(_T("PrintCmplScrpt"), ScriptName),
+			GetScriptName(_T("OrderCmplScrpt"), ScriptName),
+			GetString(_T("ControlFolder"), Buffer)) ;
+*/
+	int Result = theADO->ADOCommand( theInsertCmd, "SQL", NULL ) ;
+	if( Result != 0 )
+	{
+		HandleDBError( theADO ) ;
+	}
+
+	delete thePGL ;
+	delete theADO ;
+
+	return( Result == 0 ) ;
+}
+
+
+int UpdatePrinterResolutionsTable()
+{
+	TCHAR			 theQuery[2048] ;
+
+	UADO			*theADO = DBConnect() ;
+	if( theADO == NULL )	{ return( FALSE ) ; }
+
+	UPGenConList	*thePGL = new UPGenConList( theADO ) ;
+	if( thePGL == NULL )	{ delete theADO ; return(FALSE) ; }
+
+	TCHAR *Name = gDataGC->GetStringValue(_T("PrinterName")) ;
+	TCHAR *Model = gDataGC->GetStringValue(_T("PrinterModel")) ;
+	long   Device = gDataGC->GetLongValue(_T("LPrinterModel")) ;
+
+	sprintf( theQuery, _T("Select * From PrinterRes Where PrinterName = '%s'"), Name ) ;
+	if( DBRecordExists( theADO, thePGL, theQuery ) > 0 )
+	{
+		printf( _T("Printer '%s' already exists.\r\n"), Name ) ;
+		delete thePGL ;
+		delete theADO ;
+		return(0) ;
+	}
+
+	switch( Device )
+	{
+		case	gCRT	:	//	4" CRT
+			AddResolution( theADO, Name, Model, 1L, GetResolution(_T("Resolution1"))) ;
+			AddResolution( theADO, Name, Model, 2L, GetResolution(_T("Resolution2"))) ;
+			break ;
+		case	gLFCRT	:	//	LFCRT
+			AddResolution( theADO, Name, Model, 1L, GetResolution(_T("Resolution1"))) ;
+			AddResolution( theADO, Name, Model, 2L, GetResolution(_T("Resolution2"))) ;
+			AddResolution( theADO, Name, Model, 3L, GetResolution(_T("Resolution3"))) ;
+			AddResolution( theADO, Name, Model, 4L, GetResolution(_T("Resolution4"))) ;
+			AddResolution( theADO, Name, Model, 5L, GetResolution(_T("Resolution5"))) ;
+			break ;
+		case	gKPDM	:	//	KPDM
+			AddResolution( theADO, Name, Model, 1L, GetResolution(_T("Resolution1"))) ;
+			AddResolution( theADO, Name, Model, 2L, GetResolution(_T("Resolution2"))) ;
+			AddResolution( theADO, Name, Model, 3L, GetResolution(_T("Resolution3"))) ;
+			AddResolution( theADO, Name, Model, 4L, GetResolution(_T("Resolution4"))) ;
+			AddResolution( theADO, Name, Model, 5L, GetResolution(_T("Resolution5"))) ;
+			break ;
+		case	gLED	:	//	LED
+			AddResolution( theADO, Name, Model, 1L, 250.0 ) ;
+			break ;
+		case	gDISK	:	//	DISK
+			break ;
+		case	gNTPTR	:	//	NT PRINTER
+			AddResolution( theADO, Name, Model, 1L, GetResolution(_T("Resolution1"))) ;
+			AddResolution( theADO, Name, Model, 2L, GetResolution(_T("Resolution2"))) ;
+			AddResolution( theADO, Name, Model, 3L, GetResolution(_T("Resolution3"))) ;
+			AddResolution( theADO, Name, Model, 4L, GetResolution(_T("Resolution4"))) ;
+			AddResolution( theADO, Name, Model, 5L, GetResolution(_T("Resolution5"))) ;
+			break ;
+		case	gKPDM2	:	//	KPDM II
+			AddResolution( theADO, Name, Model, 1L, GetResolution(_T("Resolution1"))) ;
+			AddResolution( theADO, Name, Model, 2L, GetResolution(_T("Resolution2"))) ;
+			AddResolution( theADO, Name, Model, 3L, GetResolution(_T("Resolution3"))) ;
+			AddResolution( theADO, Name, Model, 4L, GetResolution(_T("Resolution4"))) ;
+			AddResolution( theADO, Name, Model, 5L, GetResolution(_T("Resolution5"))) ;
+			break ;
+		case	gRP30	:	//	RP30
+			AddResolution( theADO, Name, Model, 1L, GetResolution(_T("Resolution1"))) ;
+			AddResolution( theADO, Name, Model, 2L, GetResolution(_T("Resolution2"))) ;
+			break ;
+	}
+
+
+	delete thePGL ;
+	delete theADO ;
+
+	return( TRUE ) ;
+}
+
+
+int AddResolution( UADO *theADO, TCHAR *Name, TCHAR *Model, long Sequence, double Resolution )
+{
+	int		Result = FALSE ;
+	TCHAR	theInsertCmd[2048] ;
+
+	if( Resolution > 0.0 )
+	{
+		sprintf( theInsertCmd,
+			_T("Insert into PrinterRes(PrinterModel,PrinterName,Sequence,Resolution) Values ('%s', '%s', %d, %lf)"),
+				Model, Name, Sequence, Resolution ) ;
+
+		Result = theADO->ADOCommand( theInsertCmd, "SQL", NULL ) ;
+		if( Result != 0 )
+		{
+			HandleDBError( theADO ) ;
+		}
+		else
+		{
+			Result = TRUE ;
+		}
+	}
+	return( Result ) ;
+}
+
+TCHAR *GetString(TCHAR *Name, TCHAR *Buffer)
+{
+	TCHAR *Str = gDataGC->GetStringValue(Name) ;
+	if( Str )
+	{
+		sprintf( Buffer, _T(" '%s'"), Str ) ;
+		return( Buffer ) ;
+	}
+	return( _T(" NULL")) ;
+}
+
+long GetPackageCut()
+{
+	long	PackageCut = 0L ;
+	TCHAR	*PkgCut = gDataGC->GetStringValue(_T("PackageCut")) ;
+	if( PkgCut )
+	{
+		if( stricmp( PkgCut, _T("BarCode")) == 0 )
+		{
+			PackageCut = 1L ;
+		}
+		else
+		{
+			if( stricmp( PkgCut, _T("Punch")) == 0 )
+				{ PackageCut = 2L ; }
+		}
+	}
+	return( PackageCut ) ;
+}
+
+
+double GetPaperWidth(TCHAR *FieldName)
+{
+	TCHAR	*Units = gDataGC->GetStringValue(_T("Units")) ;
+	double	 PaperWidth = gDataGC->GetDoubleValue( FieldName ) ;
+
+	if( Units )
+	{
+		if( stricmp( Units, _T("CM")) == 0 )
+		{
+			PaperWidth = PaperWidth / 25.4 ;
+		}
+	}
+	return( PaperWidth ) ;
+}
+
+
+double	GetResolution(TCHAR *FieldName)
+{
+	long	 Device = gDataGC->GetLongValue(_T("LPrinterModel")) ;
+	double	 Resolution = 0.0 ;
+//	Debug(1) ;
+	double	 PaperWidth = GetPaperWidth(FieldName) ;
+
+	switch( Device )
+	{
+		case	gCRT	:	//	4" CRT
+			if( PaperWidth == 4.0 )	{ Resolution = 250.980 ; }
+			if( PaperWidth == 5.0 )	{ Resolution = 200.784 ; }
+			break ;
+		case	gLFCRT	:	//	LFCRT
+		case	gKPDM	:	//	KPDM
+			if( PaperWidth ==  4.0  )	{ Resolution = 501.961 ; }
+			if( PaperWidth ==  5.0  )	{ Resolution = 401.569 ; }
+			if( PaperWidth ==  6.0  )	{ Resolution = 334.641 ; }
+			if( PaperWidth ==  7.0  )	{ Resolution = 286.835 ; }
+			if( PaperWidth ==  8.0  )	{ Resolution = 250.980 ; }
+			if( PaperWidth ==  8.27 )	{ Resolution = 243.375 ; }	//	A4
+			if( PaperWidth ==  9.0  )	{ Resolution = 223.094 ; }
+			if( PaperWidth == 10.0  )	{ Resolution = 200.784 ; }
+			if( PaperWidth == 11.0  )	{ Resolution = 182.531 ; }
+			if( PaperWidth == 12.0  )	{ Resolution = 167.320 ; }
+			break ;
+		case	gLED	:	//	LED
+			Resolution = 250.0 ;
+			break ;
+		case	gDISK	:	//	DISK
+			Resolution = gDataGC->GetDoubleValue(_T("Resolution1")) ;
+			break ;
+		case	gNTPTR	:	//	NT PRINTER
+			Resolution = PaperWidth ;
+			break ;
+		case	gKPDM2	:	//	KPDM II
+			if( PaperWidth ==  4.0  )	{ Resolution =   0.000 ; }
+			if( PaperWidth ==  5.0  )	{ Resolution = 551.060 ; }
+			if( PaperWidth ==  6.0  )	{ Resolution = 459.215 ; }
+			if( PaperWidth ==  7.0  )	{ Resolution = 393.615 ; }
+			if( PaperWidth ==  8.0  )	{ Resolution = 344.415 ; }
+			if( PaperWidth ==  8.27 )	{ Resolution = 333.925 ; }	//	A4
+			if( PaperWidth ==  9.0  )	{ Resolution = 306.100 ; }
+			if( PaperWidth == 10.0  )	{ Resolution = 275.530 ; }
+			if( PaperWidth == 11.0  )	{ Resolution = 250.480 ; }
+			if( PaperWidth == 12.0  )	{ Resolution = 229.610 ; }
+			break ;
+		case	gRP30	:
+			Resolution = gDataGC->GetDoubleValue(_T("Resolution1")) ;
+			break ;
+	}
+	return( Resolution ) ;
+}
+
+long	GetPaperFill()
+{
+	long	Result = 0L ;
+	TCHAR	*PaperFill = gDataGC->GetStringValue(_T("PaperFill")) ;
+
+	if( PaperFill )
+	{
+		if( stricmp( PaperFill, _T("Lucht")) == 0 )
+			{ Result = 1L ; }
+		if( stricmp( PaperFill, _T("Arbitrary")) == 0 )
+			{ Result = 2L ; }
+
+	}
+	return( Result ) ;
+}
+
+long	GetSpillOverType()
+{
+	long	Result = 0L ;
+	TCHAR	*SpillOverType = gDataGC->GetStringValue(_T("SpillOverType")) ;
+
+	if( SpillOverType )
+	{
+		if( stricmp( SpillOverType, _T("Percent")) == 0 )
+			{ Result = 1L ; }
+		if( stricmp( SpillOverType, _T("Fixed")) == 0 )
+			{ Result = 2L ; }
+	}
+	return( Result ) ;
+}
+
+long	GetOutputFileType()
+{
+	long	Result = 0L ;
+	TCHAR	*FileType = gDataGC->GetStringValue(_T("SaveFileType")) ;
+
+	if( FileType )
+	{
+		if( stricmp( FileType, _T("TIFF")) == 0 )
+			{ Result = 0L ; }
+		if( stricmp( FileType, _T("JPEG")) == 0 )
+			{ Result = 1L ; }
+	}
+	return( Result ) ;
+}
+
+TCHAR	*GetProfileName( TCHAR *Name, TCHAR *Buffer )
+{
+	UADO *theADO = DBConnect() ;
+	if( theADO == NULL )	{ return(_T(" NULL")) ; }
+
+	UPGenConList	*thePGL = new UPGenConList( theADO ) ;
+	if( thePGL == NULL )	{ delete theADO ; return(_T(" NULL")) ; }
+
+	TCHAR	*thePath = gDataGC->GetStringValue( Name ) ;
+	TCHAR	*theName = NULL ;
+
+	TCHAR	theQuery[2048] ;
+	sprintf( theQuery, _T("Select * From Profiles Where Path = '%s'"), thePath ) ;
+
+	long Result = thePGL->Query( theQuery, _T("ReadOnly"),_T("Forward")) ;
+
+	if( Result == 0 )
+	{
+		HandleDBError( theADO ) ;
+		delete thePGL ;
+		delete theADO ;
+		return(_T(" NULL")) ;
+	}
+
+	UGenCon *anEntry = (UGenCon *) thePGL->GetFirst() ;
+	if( anEntry )
+	{
+		theName = anEntry->GetStringValue(_T("Name")) ;
+		if( theName[0] == 0 )
+		{
+			strcpy( Buffer, _T(" NULL")) ;
+		}
+		else
+		{
+			sprintf( Buffer, _T(" '%s'"), theName ) ;
+		}
+	}
+
+	delete thePGL ;
+	delete theADO ;
+
+	return( Buffer ) ;
+}
+
+
+TCHAR	*GetScriptName( TCHAR *FieldName, TCHAR *Buffer )
+{
+	TCHAR	Path[2048] ;
+	TCHAR	*Tmp = gDataGC->GetStringValue(FieldName) ;
+
+	strcpy( Buffer, _T(" NULL")) ;
+	if( Tmp )
+	{
+		strcpy( Path, gDataGC->GetStringValue(FieldName)) ;
+
+		TCHAR	*cptr = strrchr( Path, 92 ) ;
+		cptr++ ;
+		sprintf( Buffer, _T(" '%s'"), cptr ) ;
+	}
+	return( Buffer ) ;
+}
+
+
+TCHAR *Translate( TCHAR *Msg )
+{
+	return( Msg ) ;
+}
+
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+
+int DBRecExists( TCHAR *theQuery )
+{
+	UADO *theADO = DBConnect() ;
+	if( theADO == NULL )	{ return(_T(" NULL")) ; }
+
+	UPGenConList	*thePGL = new UPGenConList( theADO ) ;
+	if( thePGL == NULL )	{ delete theADO ; return(_T(" NULL")) ; }
+
+	int Result = DBRecordExists( theADO, thePGL, theQuery ) ;
+
+	delete thePGL ;
+	delete theADO ;
+
+	return( Result ) ;
+}
+
+
+int DBRecordExists( UADO *theADO, UPGenConList *thePGL, TCHAR *theQuery )
+{
+	int Result = thePGL->Query( theQuery, _T("ReadOnly"),_T("Forward")) ;
+	if( Result == 0 )
+	{
+		HandleDBError( theADO ) ;
+		return(-1) ;
+	}
+
+	long	Count = thePGL->GetNumEntries() ;
+	return( Count ) ;
+}
+
+UADO *DBConnect()
+{
+	UADO *theADO = new UADO ;
+	if( theADO == NULL )
+	{
+		return(theADO) ;
+	}
+
+	int Result = theADO->ConnectKPIS() ;
+	if( Result )
+	{
+		sprintf( msg, "Could not get Connection. Error = %d", Result ) ;
+		MessageBox( msg, "MB_OK" ) ;
+		theADO = delete  theADO   ;
+	}
+	return( theADO ) ;
+}
+
+
+HandleDBError(UADO *theADO)
+{
+	long	ErrorCount, ErrorIndex ;
+	TCHAR	ADOErrDesc[2048] ;
+	TCHAR	theMsg[4096] ;
+	long	StopHere = 0 ;
+
+	ErrorCount = GetErrorCount( theADO ) ;
+	for( ErrorIndex = 0L ; ErrorIndex < ErrorCount ; ErrorIndex++ )
+	{
+		GetErrorDescription( theADO, ErrorIndex, ADOErrDesc ) ;
+		SessionLogDirect( _T("Database Error: %s\r\n"), ADOErrDesc ) ;
+
+		sprintf( theMsg, _T("Database Error: %s\r\n"), ADOErrDesc ) ;
+		MessageBox( theMsg, "MB_OK" ) ;
+
+		Debug(StopHere) ;
+	}
+}
+
+

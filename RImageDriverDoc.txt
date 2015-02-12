@@ -1,0 +1,365 @@
+
+Include: ~RimageDriver~;
+
+IncludeClass(BaseDialog);
+
+
+Class( MyDialog,Extends,BaseDialog,
+		Member,fID,Str,~~,
+		Member,fLogLevel,Numeric,0 );
+
+
+VOID	MyDialog::MyDialog( ID )
+{
+	fID = ~<ID>~;
+	Left = 200;
+	Dictionary = ~DDRImageDriverDialog~;
+	Title = RunningVersion(14) ? ~Media Burning Driver - <fID>~ : ~RImage Driver - <fID>~;
+	HelpPage = ~RImageDriver.htm~;
+}
+
+VOID	MyDialog::DefineDictionary()
+{
+	Dictionary: ~<Dictionary>~ 
+		Fields: Name ID				type text
+		Fields: Name CDDirectory	type text
+		Fields: Name Enabled		type long
+		Fields: Name AutoStart		type long;
+		Fields: Name LogLevel		type long;
+}
+
+
+NUMERIC MyDialog::ProcessDraggedFile( &DraggedFile )
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DlgData[CDDirectory]>~) )
+	{
+		return Warning( ~You must specify where to~ );
+	}
+
+	Filename = GetFileName( DraggedFile );
+
+	if ( !CD.AddFiles(~<$con.DlgData[CDDirectory]>~,~<FileName>~,TRUE ) )
+	{
+		StatusBar( 0,~Could not add <Filename>~ );
+		return FALSE;
+	}
+
+	return StatusBar( 0,~You dragged <Filename>~ );
+}
+
+NUMERIC MyDialog::DragComplete( &DraggedFiles )
+{
+	Count = GetDragCount( DraggedFiles );
+	return StatusBar( 0,~You dragged <Count> files~ );
+}
+
+
+NUMERIC	MyDialog::DoCancelButton()
+{
+	if ( aRImageThread.Processing() )
+	{
+		ReturnOnSuccess( MessageBox(~Are you sure you want to stop before processing completes normally?~,YESNO) != YES );
+	}
+	
+	StatusBar( 0,~Stopping...~ );
+	
+	aRImageThread.SetRunning( FALSE );
+
+	aRImageThread.WaitForThreadDeath();
+	BaseDialog::DoCancelButton();
+	
+	StatusBar( 0,~Stopped~ );
+	
+	return TRUE;
+}
+
+VOID MyDialog::WindowDefinition()
+{
+	Fields: 
+		STATUSBAR			 ~2 68 32~;
+}
+
+
+VOID MyDialog::DefineControls()
+{
+	Define: StartButton Using DDWinCtrlDef AsSymbol StartButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Position			<hgap> <vGap> 60 <ButtonHeight>
+				ToolTip				~Start processing CD work~
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnStartButton() )
+				Text				~Start~;
+
+	Define: StopButton Using DDWinCtrlDef AsSymbol StopButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Text				~Stop~
+				IsEnabled			F
+				ToolTip				~Stop RImage writer <fID> from processing CD work~
+				Position			StartButton(GetRight,Position)+$hGap StartButton(GetTop,Position),StartButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnStopButton() )
+
+	Define: ConnectButton Using DDWinCtrlDef AsSymbol ConnectButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Text				~Connect~
+				ToolTip				~Make a network connection to the RImage Computer~
+				Position			StopButton(GetRight,Position)+$hGap+8 StopButton(GetTop,Position),StartButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnContinueButton() )
+
+	Define: ViewJobsButton Using DDWinCtrlDef AsSymbol ViewJobsButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Text				~View Jobs~
+				ToolTip				~View Jobs for RImage writer <fID>~
+				Position			ConnectButton(GetRight,Position)+$hGap*8 ConnectButton(GetTop,Position),StartButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnViewJobsButton() )
+
+	Define: ViewLogButton Using DDWinCtrlDef AsSymbol ViewLogButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				IsEnabled			F
+				Text				~View Log~
+				ToolTip				~View the RImage log for writer <fID>~
+				Position			ViewJobsButton(GetRight,Position)+$hGap ViewJobsButton(GetTop,Position),StartButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnViewLogButton() )
+
+	Define: MinimizeButton Using DDWinCtrlDef AsSymbol MinimizeButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Text				~Minimize~
+				ToolTip				~Minimize this dialog~
+				Position			ViewLogButton(GetRight,Position)+$hGap*8 ViewLogButton(GetTop,Position),StartButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.MinimizeDialog() )
+
+	Define: HideButton Using DDWinCtrlDef AsSymbol HideButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Text				~Hide~
+				ToolTip				~Hide this dialog~
+				Position			MinimizeButton(GetRight,Position)+$hGap ViewJobsButton(GetTop,Position),StartButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.HideDialog() )
+				
+
+	Define: LogLevelPrompt Using DDWinCtrlDef AsSymbol LogLevelPrompt Private
+		Fields:	TYPENAME			StaticText
+				Text				~Log Level~
+				ToolTip				~for detailed logging of progress in the session log~
+				Position			HideButton(GetRight,Position)+$hGap*4 HideButton(GetTop,Position)+3,50 20
+				
+	Define: LogLevel Using DDWinCtrlDef AsSymbol LogLevel 
+		Fields: TypeName			MaskedEditText  
+				Position			LogLevelPrompt(GetRight,Position) LogLevelPrompt(GetTop,Position)-3,20 20
+				IActionsText		ACTIONS ( Get )
+				OActionsText		ACTIONS ( Save )
+				DActionsText		ACTION EXEC ( <THIS>.OnLogLevelChange() )
+				GenConName			THIS
+				GenConField			~LogLevel~
+				Mask				~#~  
+				Tooltip				~Select a logging level.  0 is the least amount of logging.  3 is the most~ ;
+				
+	Define: JobStatus Using DDWinCtrlDef AsSymbol JobStatus Private
+		Fields:	TYPENAME			StaticText
+				Position			<hgap>, <vGap> + 30, 660, <ButtonHeight>;
+}
+
+
+VOID	MyDialog::OnContinueButton()		{ WNet( ConnectionDialog ); }
+
+
+NUMERIC MyDialog::OnStartButton()
+{
+	//aRImageThread.DebugThread();
+
+	ReturnOnFailure( CD.ConnectivityCheck() );
+
+	if ( !aRImageThread.Running() )
+	{
+		aRImageThread.Pausing( FALSE );
+		aRImageThread.New();
+	}
+	else
+	{
+		aRImageThread.Pausing( FALSE );
+		aRImageThread.Post( 1000,2,3 );
+	}
+
+	dlg( EnableControls,FALSE,StartButton );
+	dlg( EnableControls,TRUE,StopButton,ViewLogButton );
+
+	return TRUE;
+}
+
+
+NUMERIC MyDialog::OnStopButton()
+{
+	aRImageThread.Pausing( TRUE );
+	aRImageThread.Post( 1000,2,3 );
+
+	dlg( EnableControls,TRUE,StartButton );
+	dlg( EnableControls,FALSE,StopButton,ViewLogButton );
+
+	return TRUE;
+}
+
+
+VOID	MyDialog::MinimizeDialog()
+{
+	aDialog(Show,MINIMIZE);
+	LeftPosition = App( thisApp,MainWindow,GetClientWidth ) - 160;
+	TopPosition = App( thisApp,MainWindow,GetClientHeight ) - 5;
+
+	dlg( SetWindowPosition,<LeftPosition>,<TopPosition> );
+}
+
+VOID	MyDialog::HideDialog()			{ <THIS>.ShowDialog( FALSE ); }
+
+VOID MyDialog::OnViewJobsButton()
+{
+	Query = ~Select * From RImageOrders Where Writer = '<fID>' Order By Progress, Priority desc,SubmitDate~;
+	Actions = ACTION DOC ( RImageOrdersDoc Open RImageOrdersDoc "Init(~<fID>~,~<Query>~);" );
+	PerformActions( Actions );
+}
+
+
+NUMERIC MyDialog::OpenV7OrGreaterLogs()
+{
+	BasePath = CD.GetRImageSystemFolder();
+	
+	ServerName = CD.GetServerName();
+
+	ViewLog( ~<BasePath>\Logs\<ServerName>_ISLOG.TXT~ );
+	ViewLog( ~<BasePath>\Logs\<ServerName>_PPLOG.TXT~ );
+
+	return TRUE;
+}
+
+
+NUMERIC MyDialog::OnViewLogButton()
+{
+	if ( !CD.UsePowerToolsLib() )
+	{
+		return OpenV7OrGreaterLogs();
+	}
+
+	if ( !Ado( dBase,Connect,GetValuesFor,~Select LogFilePath From RImage Where ID = '<fID>'~,LogFilePath ) )
+	{
+		return Warning( ~Failed to find a writer called <fID>~ );
+	}
+
+	if ( IsNull( ~<LogFilePath>~ ) )
+	{
+		return Warning( ~You have not specified the path to the pwrtool.log file for writer <fID>~ );
+	}
+	
+	return ViewLog( ~<LogFilePath>~ );
+}
+	
+	
+NUMERIC MyDialog::ViewLog(LogFilePath)
+{
+	Program = ~<$Sys.Directory>\Notepad.exe~;
+
+	if ( !ShellExecute( Open,~<LogFilePath>~ ) )
+	{
+		GetLastError( ErrorString,theErr );
+		return Warning( Translate( ~Could not open <LogFilePath>~,~<theErr>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+VOID	MyDialog::ReOpen()
+{
+	ThisDialog.ShowDialog( TRUE );
+	dlg( SetFocus );
+}
+
+
+VOID	MyDialog::OnLogLevelChange()
+{
+	dlg( GetInput );
+	CD.SetLogLevel( DlgData( GetNumeric,LogLevel ) );
+	fLogLevel = DlgData( GetNumeric,LogLevel );
+}
+	
+
+NUMERIC DisplayStatus( msg )
+{ 
+	return thisDialog.StatusBar(0,~<$Date.Time>  <msg>~ );
+}
+
+NUMERIC MyDialog::StatusBar(Pane,Msg)
+{ 
+	if ( <fLogLevel> > 0 )
+	{
+		Log( Session,~RImage StatusBar Pane <Pane>: <msg>~ );
+	}
+	
+	return dlg(SetStatus,<Pane>,~<Msg>~);
+}
+
+
+NUMERIC DisplayStatus1( msg )				
+{
+	return thisDialog.StatusBar(1,~<msg>~ );
+}
+
+
+NUMERIC DisplayProgress( msg )				
+{
+	return ThisDialog.DisplayProgress( ~<msg>~ );
+}
+
+
+NUMERIC MyDialog::DisplayProgress( msg )	
+{ 
+	if ( <fLogLevel> > 0 )
+	{
+		Log( Session,~RImage DisplayProgress: <msg>~ );
+	}
+	
+	return dlg( SetControlValue,JobStatus,~<msg>~ );
+}
+
+NUMERIC DisplayWarning( msg )	
+{ 
+	Invoke( DisplayStatus,~<msg>~ );
+	Invoke( DisplayProgress,~<msg>~ );
+	Log( Session,~<msg>~ );
+	return Warning(~<msg>~);
+}
+
+VOID Init( ID,HideUI,WantAutoStart )
+{
+	if ( Defined( ThisDialog ) )
+	{
+		ThisDialog.ReOpen();
+		return;
+	}
+
+	MyDialog( New,thisDialog,~<ID>~ );	
+
+	ThisDialog.DefineDialog();
+
+	Global( ThisDialog );
+
+	RImage( New,CD,~<ID>~ );
+
+	RImageThread( New,aRImageThread,~<ID>~ );
+		
+	Global( ThisDialog,CD,aRImageThread );
+
+	if ( DefinedAndNotNull( HideUI ) )
+	{
+		ThisDialog.ShowDialog( !<HideUI> );
+	}
+
+	if ( !IsNullOrZero( ~<WantAutoStart>~ ) )
+	{
+		ThisDialog.OnStartButton();
+	}
+}

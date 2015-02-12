@@ -1,0 +1,119 @@
+IncludeClass(BaseGrid);
+
+VOID TreeGrid::TreeGrid()				
+{
+	TableName = ~ProductTree~;
+	DocumentQuery = ~Select * from ProductTree Order By L1,L2,L3,L4,L5,LabelSequence,LabelSubsequence~;
+	Title = ~Product Tree Hierarchy~;
+	WindowTop = 0;
+	WindowWidth = 90;
+	WindowHeight = 50;
+}
+
+
+STR TreeGrid::GetKey( &Item )		{ return ~LabelID = <$con.Item[LabelID]>~; }	// PRIMARY KEY FOR THE TABLE
+
+
+NUMERIC TreeGrid::ChangeRecordAudits( &Changed )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( !EditingPermitted() )
+	{ 
+		RollBackChanges();
+		return False;
+	}
+	
+	if ( IsNULL(~<$Con.Changed[LabelID]>~) )
+		{ return Warning( ~ID cannot be NULL~ ); }
+
+	if ( IsNULL(~<$Con.Changed[L1]>~) )
+		{ return Warning( ~L1 cannot be NULL~ ); }
+		
+	return TRUE;
+}
+
+
+NUMERIC TreeGrid::EditingPermitted()
+{
+	if ( !GetUserPermissions( LayoutEditing ) )
+	{ 
+		return Warning( ~You do not have permission to change the product label hierarchy.~ );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC TreeGrid::AddRecord()
+{
+	ReturnOnFailure( EditingPermitted() );
+	return BaseGrid::AddRecord();
+}
+
+
+NUMERIC TreeGrid::DuplicateRecord()
+{
+	ReturnOnFailure( EditingPermitted() );
+	return BaseGrid::DuplicateRecord();
+}
+
+
+NUMERIC TreeGrid::DeleteRecord()
+{
+	ReturnOnFailure( EditingPermitted() );
+	return BaseGrid::DeleteRecord();
+}
+
+
+NUMERIC TreeGrid::OnDuplicateRecord( &RowToImitate )
+{
+	return RowToImitate( SetValues,LabelID,UniqueProductTreeID() );
+}
+
+
+VOID	TreeGrid::SetTheTitle(&theTitle)
+{
+	if ( DefinedAndNotNull(theTitle) )
+	{
+		Title = ~<theTitle>~;
+	}
+}
+
+
+VOID	TreeGrid::SetTheQuery(&Query)
+{
+	if ( DefinedAndNotNull(Query) )
+	{
+		DocumentQuery = ~<Query>~;
+	}
+}
+
+
+NUMERIC TreeGrid::UniqueProductTreeID()
+{
+	NextID = 0;
+
+	if ( ado( connection,connect,CMD,~Select MAX(LabelID) From ProductTree~,MaxID ) )
+	{ 
+		NextID = ~<$rs.MaxID[#0]>~ == ~~ ? ~0~ : ~<$rs.MaxID[#0]>~; 
+	}
+
+	return <++NextID>;
+}
+
+
+NUMERIC Init(Title,Query)		
+{
+	if ( !Defined( Grid ) )
+	{
+		Class( TreeGrid,Extends,BaseGrid );
+		TreeGrid( New,Grid );
+		Grid.SetTheQuery(Query);
+		Grid.SetTheTitle(Title);
+		Grid.DefineWindow();
+		Grid.Init();
+		return Global( Grid );
+	}
+	
+	Grid.Set(Title,~<Title>~);
+	return Grid.BringToFront();
+}

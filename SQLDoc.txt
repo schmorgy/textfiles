@@ -1,0 +1,1231 @@
+VOID ReOpen()
+{
+}
+
+
+NUMERIC OpenRecordset( Query )
+{
+	dlg( GetInput,GetStrings,Source,Source,Connection,Connection,Table,Table );
+
+	if ( ~<Source>~ == Translate(~Shared Database~) )
+	{
+		Action = ACTION DOC ( EditAnyRecset Open EditAnyRecsetDoc "OpenShared( ~<Query>~ );" );
+		return PerformActions( Action );
+	}
+	else if ( ~<Source>~ == Translate(~Workstation Database~) )
+	{
+		Action = ACTION DOC ( EditAnyRecset Open EditAnyRecsetDoc "OpenWorkstation( ~<Query>~ );" );
+		return PerformActions( Action );
+	}
+	else if ( ~<Source>~ == Translate(~Connection String~) )
+	{
+		Connection = String( Replace,~<Connection>~,~<CR>~,~ ~ );
+		Connection = String( Replace,~<Connection>~,~<LF>~,~ ~ );
+		Connection = String( Replace,~<Connection>~,~<Tab>~,~ ~ );
+
+		Action = ACTION DOC ( EditAnyRecset Open EditAnyRecsetDoc "ConnectByConnectionString(~<Connection>~,~<Query>~);" );
+		return PerformActions( Action );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC DoCancelButton()
+{
+	dlg( End );
+	Exit();
+}
+
+
+NUMERIC OnExecuteButton()
+{
+	if ( !ConnectionDefined() )
+	{
+		return FALSE;
+	}
+
+	dlg( GetInput,GetStrings,Cmd,Cmd );
+
+	if ( ~<Cmd>~ == ~~ )
+	{
+		CurrentResult = ~<++CmdNumber>) No command<CRLF><CurrentResult><CRLF>~;
+		return dlg( SetStrings,Result,~<CurrentResult>~ );
+	}
+
+	CR = Chr(0x0D);  LF = Chr(0x0A);  Tab = Chr(0x09);
+
+	Cmd = String( Replace,~<Cmd>~,~<CR>~,~ ~ );
+	Cmd = String( Replace,~<Cmd>~,~<LF>~,~ ~ );
+	Cmd = String( Replace,~<Cmd>~,~<Tab>~,~ ~ );
+
+	if ( String( BeginsWith,Upper(~select~),Upper(~<Cmd>~) ) != ~~ )	// IS IT A QUERY?
+	{
+		CurrentResult = ~<++CmdNumber>) Query: <Cmd><CRLF><CurrentResult><CRLF>~;
+		dlg( SetStrings,Result,~<CurrentResult>~ );
+
+		return OpenRecordset( ~<Cmd>~ ); 
+	}
+	else if ( String( BeginsWith,Upper(~sp_~),Upper(~<Cmd>~) ) != ~~ )	// IS IT A Built-in Procedure?
+	{
+		CurrentResult = ~<++CmdNumber>) Procedure: <Cmd><CRLF><CurrentResult><CRLF>~;
+		dlg( SetStrings,Result,~<CurrentResult>~ );
+
+		return OpenRecordset( ~<Cmd>~ ); 
+	}
+	else if ( String( BeginsWith,Upper(~DBCC~),Upper(~<Cmd>~) ) != ~~ )	// IS IT A Built-in Procedure?
+	{
+		CurrentResult = ~<++CmdNumber>) Procedure: <Cmd><CRLF><CurrentResult><CRLF>~;
+		dlg( SetStrings,Result,~<CurrentResult>~ );
+
+		return OpenRecordset( ~<Cmd>~ ); 
+	}
+
+	else	// IT IS A COMMAND
+	{
+		if ( MessageBox( ~You are about to update the database.  Continue?~,YESNO ) != YES )
+			{ return FALSE; }
+
+		result = dBase( CMD,~<Cmd>~ );
+	}
+
+	return GetResult( <result>,~<Cmd>~ );
+}
+
+NUMERIC ConnectionDefined()
+{
+	return Defined( dBase );
+}
+
+
+NUMERIC OnBeginTransactionButton()
+{
+	if ( !ConnectionDefined() )
+	{
+		return FALSE;
+	}
+
+	result = dBase( BeginTransaction );
+
+	if ( <result> )
+	{
+		dlg( EnableControls,TRUE,CommitTransactionButton,RollBackTransactionButton );
+		dlg( EnableControls,FALSE,BeginTransactionButton );
+	}
+
+	return GetResult( <result>,Translate( ~Begin Transaction~ ) );
+}
+
+
+NUMERIC OnCommitTransactionButton()
+{
+	if ( !ConnectionDefined() )
+	{
+		return FALSE;
+	}
+
+	result = dBase( CommitTransaction );
+
+	if ( <result> )
+	{
+		dlg( EnableControls,FALSE,CommitTransactionButton,RollBackTransactionButton );
+		dlg( EnableControls,TRUE,BeginTransactionButton );
+	}
+
+	return GetResult( <result>,Translate( ~Commit Transaction~ ) );
+}
+
+
+NUMERIC OnRollBackTransactionButton()
+{
+	result = dBase( RollBackTransaction );
+
+	if ( <result> )
+	{
+		dlg( EnableControls,FALSE,CommitTransactionButton,RollBackTransactionButton );
+		dlg( EnableControls,TRUE,BeginTransactionButton );
+	}
+
+	return GetResult( <result>,Translate( ~RollBack Transaction~ ) );
+}
+
+CR = chr(0x0D);
+LF = chr(0x0A);
+CRLF = ~<CR><LF>~;
+CmdNumber = 0;
+
+CurrentResult = ~~;
+
+NUMERIC GetResult( TheResult,Description )
+{
+	if ( !<TheResult> )
+	{
+		dBase( GetErrorDescription,theErr );
+		CurrentResult = ~<++CmdNumber>) Failed: <Description>.  <theErr><CRLF><CurrentResult><CRLF>~;
+	}
+	else
+	{
+		recordsAffected = dbase( RecordsAffected );
+
+		CurrentResult = ~<++CmdNumber>) Success[<recordsAffected>]: <Description><CRLF><CurrentResult><CRLF>~;
+	}
+
+	dlg( SetStrings,Result,~<CurrentResult>~ );
+
+	return <TheResult>;
+}
+
+
+NUMERIC DefineDialog()
+{
+	if ( !DictionaryExists(DDSQLDialog) )
+	{
+		Dictionary: DDSQLDialog
+			Fields: Name	Source			type text
+			Fields: Name	Cmd				type text
+			Fields: Name	Result			type text
+			Fields: Name	Table			type text
+			Fields: Name	Fields			type text
+			Fields: Name	Connection		type text
+			Fields: Name	PrimaryKey		type text
+			Fields: Name	Status			type text
+			Fields: Name	Query			type text
+			Fields: Name	Category		type text
+
+		StringList:	Name ADOSourceTypes
+			Fields: String	Translate(~Shared Database~)
+			Fields: String	Translate(~Workstation Database~)
+			Fields: String	Translate(~Connection String~)
+		Hang:	ADOSourceTypes	~[STRINGS]~
+
+		StringList:	Name ADOTablesList
+		Hang:	ADOTablesList	~[STRINGS]~
+
+		StringList:	Name ADOFieldsList
+		Hang:	ADOFieldsList	~[STRINGS]~
+
+		StringList:	Name SQLMaintQueryList
+		Hang:	SQLMaintQueryList	~[STRINGS]~
+
+		StringList:	Name SQLMaintTypeList
+		Hang:	SQLMaintTypeList	~[STRINGS]~
+	}
+
+
+	Define:	DialogData Using DDSQLDialog
+		Fields:	Source			Translate(~Workstation Database~ );
+		Fields:	Cmd				~~
+		Fields:	Result			~~ ;
+
+	Top			= 50;	Left = 50;			
+	PromptX		= 10;	PromptY		= 10;	PromptWidth	= 65;	PromptHeight = 20;
+	ValueWidth	= 500;	vGap = 5;			hGap = 5;
+	ButtonWidth	= 120;	ButtonHeight	= 30;
+
+	Define: SqlDialog Using DDWinDef
+		Fields:	POSITION				10, 10, 600, 300
+				TITLE					~SQL Maintenance~
+				TYPENAME				~Dialog~ 
+				StatusBar				~2 80 20~
+				WantsMinimizeBox		TRUE
+				DropActionsText			ACTION Exec ( HandleDrop() )
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				HActionsText			ACTION SHOWHELPPAGE ( AdminHelpFile "Database Info.htm" )
+
+		Contains: INLISTORDER
+		{
+			Define: SourcePrompt Using DDWinCtrlDef AsSymbol SourcePrompt
+				Fields:	POSITION		$PromptX $PromptY $PromptWidth $PromptHeight
+						TEXT			Translate( ~Source~ )
+						RIGHTJUSTIFIED	1
+						TYPENAME		StaticText ;
+
+			Define: SourceComboBox Using DDWinCtrlDef AsSymbol SourceComboBox
+				Fields: TypeName		SComboBox  
+						Position		(SourcePrompt(GetRight,Position) + $hGap),SourcePrompt(GetTop,Position),150, 200
+						IActionsText	~[GetList(ADOSourceTypes) Get]~
+						DActionsText	~[Save Exec("OnSourceChange()")]~
+                        OActionsText    ~[Save]~
+ 						GenConName		THIS
+						Mask			~<$[DATABASE FieldTypes].ProductName[Mask]>~
+						AllowedChars	~<$[DATABASE FieldTypes].ProductName[AllowedChars]>~
+						DisallowedChars	~<$[DATABASE FieldTypes].ProductName[DisallowedChars]>~
+						PromptChar		~<$[DATABASE FieldTypes].ProductName[PromptChar]>~		
+						GenConField		Source;
+
+			Define: CreateJetDatabaseButton Using DDWinCtrlDef AsSymbol CreateJetDatabaseButton
+				Fields:	POSITION		SourceComboBox(Getright,Position) + $hGap SourcePrompt(GetTop,Position) $PromptWidth*2 $PromptHeight
+						TEXT			Translate( ~Create Jet Database~ )
+						DACTIONSTEXT	ACTION EXEC  ( CreateJetDatabase() )
+						TYPENAME		Button ;
+
+			Define: ConnectionPrompt Using DDWinCtrlDef AsSymbol ConnectionPrompt
+				Fields:	POSITION		SourcePrompt(GetLeft,Position) + $hGap SourcePrompt(GetBottom,Position)+$vGap*2 $PromptWidth $PromptHeight
+						TEXT			Translate( ~Connect To~ )
+						DACTIONSTEXT	ACTION EXEC  ( OnConnectButton() )
+						TYPENAME		Button ;
+
+			Define: ConnectionField Using DDWinCtrlDef AsSymbol ConnectionField
+				Fields:	POSITION		ConnectionPrompt(GetRight,Position) + $hGap ConnectionPrompt(GetTop,Position) $ValueWidth-20 $PromptHeight * 4
+						GENCONFIELD		Connection
+						GENCONNAME		THIS
+						NoHorizontalScroll	TRUE 
+						IACTIONSTEXT	ACTIONS ( Get )
+						DACTIONSTEXT	ACTIONS ( Save )
+						OACTIONSTEXT	ACTIONS ( Save )
+						TYPENAME		MLEDITTEXT ;
+
+			Define: UDLPrompt Using DDWinCtrlDef AsSymbol UDLPrompt
+				Fields:	POSITION		ConnectionPrompt(GetLeft,Position) ConnectionPrompt(GetBottom,Position)+$vGap $PromptWidth $PromptHeight
+						TEXT			Translate( ~Use UDL~ )
+						DACTIONSTEXT	ACTION EXEC  ( OnUDLButton() )
+						TYPENAME		Button ;
+
+			Define: NewUDLPrompt Using DDWinCtrlDef AsSymbol NewUDLPrompt
+				Fields:	POSITION		UDLPrompt(GetLeft,Position) UDLPrompt(GetBottom,Position)+$vGap $PromptWidth $PromptHeight
+						TEXT			Translate( ~New UDL~ )
+						DACTIONSTEXT	ACTION EXEC  ( NewUDL() )
+						TYPENAME		Button ;
+
+			Define: TablesPrompt Using DDWinCtrlDef AsSymbol TablesPrompt
+				Fields:	POSITION		$PromptX (ConnectionField(GetBottom,Position) + $vGap*2) $PromptWidth $PromptHeight
+						TEXT			Translate( ~Tables~ )
+						RIGHTJUSTIFIED	1
+						TYPENAME		StaticText ;
+
+			Define: TablesRefreshButton Using DDWinCtrlDef AsSymbol TablesRefreshButton
+				Fields:	POSITION		$PromptX (TablesPrompt(GetBottom,Position) + $vGap) $PromptWidth $ButtonHeight - 9
+						TEXT			Translate( ~Refresh~ )
+						DACTIONSTEXT	ACTION EXEC ( OnSourceChange() )
+						TYPENAME		Button ;
+
+			Define: TablesDropButton Using DDWinCtrlDef AsSymbol TablesDropButton
+				Fields:	POSITION		$PromptX (TablesRefreshButton(GetBottom,Position) + $vGap) $PromptWidth $ButtonHeight/2 + 3
+						TEXT			Translate( ~Delete~ )
+						DACTIONSTEXT	ACTION EXEC ( DeleteExistingTable() )
+						TYPENAME		Button 
+						ToolTip			Translate( ~Delete the selected table and it's User Defined Table Definition if one exists~ );
+
+			Define: TablesCreateButton Using DDWinCtrlDef AsSymbol TablesCreateButton
+				Fields:	POSITION		$PromptX (TablesDropButton(GetBottom,Position) + $vGap) $PromptWidth $ButtonHeight/2 + 3
+						TEXT			Translate( ~Create~ )
+						DACTIONSTEXT	ACTION EXEC ( CreateExistingTable() )
+						TYPENAME		Button 
+						ToolTip			Translate( ~Delete the selected table and it's User Defined Table Definition if one exists~ );
+
+			Define: TablesListBox Using DDWinCtrlDef AsSymbol TablesListBox
+				Fields:	POSITION		(TablesPrompt(GetRight,Position) + $hGap) TablesPrompt(GetTop,Position) 140 $PromptHeight * 5
+						GENCONFIELD		Table
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( GetList(ADOTablesList) Get )
+						DACTIONSTEXT	ACTIONS ( Save "Exec(UpdateFields();)" )
+						OACTIONSTEXT	ACTIONS ( Save )
+						TYPENAME		ListBox ;
+
+			Define: FieldsPrompt Using DDWinCtrlDef AsSymbol FieldsPrompt
+				Fields:	POSITION		TablesListBox(GetRight,Position) + $hGap*2, TablesPrompt(GetTop,Position) 50 $PromptHeight
+						TEXT			Translate( ~Fields~ )
+						RIGHTJUSTIFIED	1
+						TYPENAME		StaticText ;
+
+			Define: FieldsListBox Using DDWinCtrlDef AsSymbol FieldsListBox
+				Fields:	POSITION		(FieldsPrompt(GetRight,Position) + $hGap) FieldsPrompt(GetTop,Position) 280 $PromptHeight * 5
+						GENCONFIELD		Fields
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( GetList(ADOFieldsList) Get )
+						DACTIONSTEXT	ACTIONS ( Save "Exec(AddFieldName())" )
+						OACTIONSTEXT	ACTIONS ( Save )
+						TYPENAME		ListBox ;
+
+			Define: PrimaryKeyPrompt Using DDWinCtrlDef AsSymbol PrimaryKeyPrompt
+				Fields:	POSITION		$PromptX (TablesListBox(GetBottom,Position) + $vGap*2) $PromptWidth $PromptHeight
+						TEXT			Translate( ~Primary Key:~ )
+						RIGHTJUSTIFIED	1
+						TYPENAME		StaticText ;
+
+			Define: PrimaryKeyField Using DDWinCtrlDef AsSymbol PrimaryKeyField
+				Fields:	POSITION		PrimaryKeyPrompt(GetRight,Position)+$hGap PrimaryKeyPrompt(GetTop,Position) 480 $PromptHeight
+						GENCONFIELD		PrimaryKey
+						GENCONNAME		THIS
+						TYPENAME		StaticText ;
+
+			Define: CategoriesPrompt Using DDWinCtrlDef AsSymbol CategoriesPrompt
+				Fields:	POSITION		$PromptX (PrimaryKeyPrompt(GetBottom,Position) + $vGap*2) $PromptWidth $PromptHeight
+						TEXT			Translate( ~Type~ )
+						RightJustified	TRUE
+						TYPENAME		StaticText ;
+
+			Define: CategoriesComboBox Using DDWinCtrlDef AsSymbol CategoriesComboBox
+				Fields: TypeName		ComboBox  
+						Position		(CategoriesPrompt(GetRight,Position) + $hGap),CategoriesPrompt(GetTop,Position)-2,100, 400
+						IActionsText	~[GetList(SQLMaintTypeList) Get]~
+						DActionsText	ACTION EXEC ( RefreshQueriesComboBox(TRUE) )
+                        OActionsText    ~[Save]~
+						IActionsText	ACTIONS ( UpdateList(SQLMaintTypeList "Select Distinct Type From Query  Order By Type" Type) GetList(SQLMaintTypeList) Get )
+						DropDownActionsText ACTIONS ( UpdateList(SQLMaintTypeList "Select Distinct Type From Query Order By Type" Type) GetList(SQLMaintTypeList) Get  )
+ 						GenConName		THIS
+						Mask			~<$[DATABASE FieldTypes].ProductName[Mask]>~
+						AllowedChars	~<$[DATABASE FieldTypes].ProductName[AllowedChars]>~
+						DisallowedChars	~<$[DATABASE FieldTypes].ProductName[DisallowedChars]>~
+						PromptChar		~<$[DATABASE FieldTypes].ProductName[PromptChar]>~		
+						GenConField		Category;
+
+			Define: CmdPrompt Using DDWinCtrlDef AsSymbol CmdPrompt
+				Fields:	POSITION		CategoriesComboBox(GetRight,Position)+$hgap CategoriesPrompt(Gettop,Position) 30 $PromptHeight
+						TEXT			Translate( ~Cmd~ )
+						RightJustified	TRUE
+						TYPENAME		StaticText ;
+
+			Define: QueryComboBox Using DDWinCtrlDef AsSymbol QueryComboBox
+				Fields: TypeName		ComboBox  
+						Position		(CmdPrompt(GetRight,Position) + $hGap),CategoriesPrompt(GetTop,Position)-2,200, 400
+						IActionsText	~[GetList(SQLMaintQueryList) Get]~
+						DActionsText	~[Save]~
+                        OActionsText    ~[Save]~
+						IActionsText	ACTION EXEC ( RefreshQueriesComboBox(TRUE) )
+						DropDownActionsText ACTION EXEC ( RefreshQueriesComboBox(TRUE) )
+ 						GenConName		THIS
+						Mask			~<$[DATABASE FieldTypes].ProductName[Mask]>~
+						AllowedChars	~<$[DATABASE FieldTypes].ProductName[AllowedChars]>~
+						DisallowedChars	~<$[DATABASE FieldTypes].ProductName[DisallowedChars]>~
+						PromptChar		~<$[DATABASE FieldTypes].ProductName[PromptChar]>~		
+						GenConField		Query;
+
+			Define: LoadPrompt Using DDWinCtrlDef AsSymbol LoadPrompt
+				Fields:	POSITION		QueryComboBox(GetRight,Position)+$hgap QueryComboBox(Gettop,Position) $PromptWidth-3 $PromptHeight
+						TEXT			Translate( ~Load~ )
+						DActionsText	ACTION EXEC ( OnLoadButton() )
+						TYPENAME		Button ;
+
+			Define: SavePrompt Using DDWinCtrlDef AsSymbol SavePrompt
+				Fields:	POSITION		LoadPrompt(GetRight,Position) + $hGap, LoadPrompt(GetTop,Position) $PromptWidth-3 $PromptHeight
+						TEXT			Translate( ~Save~ )
+						DActionsText	ACTION EXEC ( OnSaveButton() )
+						TYPENAME		Button ;
+
+			Define: QueriesPrompt Using DDWinCtrlDef AsSymbol QueriesPrompt
+				Fields:	POSITION		SavePrompt(GetRight,Position) + $hGap, SavePrompt(GetTop,Position) 20 $PromptHeight
+						TEXT			Translate( ~?~ )
+						DActionsText	ACTION EXEC ( OnSeeQueriesButton() )
+						TYPENAME		Button ;
+
+			Define: CommandPrompt Using DDWinCtrlDef AsSymbol CommandPrompt
+				Fields:	POSITION		$PromptX (LoadPrompt(GetBottom,Position) + $vGap*3) $PromptWidth $PromptHeight
+						TEXT			Translate( ~Enter SQL:~ )
+						RIGHTJUSTIFIED	1
+						FONTSIZE		12
+						FONTWEIGHT		600
+						TYPENAME		StaticText ;
+
+			Define: CommandField Using DDWinCtrlDef AsSymbol CommandField
+				Fields:	POSITION		(CommandPrompt(GetRight,Position) + $hGap) CommandPrompt(GetTop,Position) $ValueWidth $PromptHeight * 6
+						GENCONFIELD		Cmd
+						GENCONNAME		THIS
+						NOHORIZONTALSCROLL	TRUE 
+						IACTIONSTEXT	ACTIONS ( Get )
+						DACTIONSTEXT	ACTIONS ( Save )
+						OACTIONSTEXT	ACTIONS ( Save )
+						Font			Courier
+						TYPENAME		MLEDITTEXT ;
+
+			Define: ClearSQLButton Using DDWinCtrlDef AsSymbol ClearSQLButton
+				Fields:	POSITION		$PromptX (CommandPrompt(GetBottom,Position) + $vGap) $PromptWidth $ButtonHeight
+						TEXT			Translate( ~Clear~ )
+						DACTIONSTEXT	ACTION EXEC ( ClearSQLArea() )
+						TYPENAME		Button ;
+
+			Define: ResultPrompt Using DDWinCtrlDef AsSymbol ResultPrompt
+				Fields:	POSITION		$PromptX (CommandField(GetBottom,Position) + $vGap*2) $PromptWidth $PromptHeight
+						TEXT			Translate( ~Result~ )
+						RIGHTJUSTIFIED	1
+						TYPENAME		StaticText ;
+
+			Define: ResultField Using DDWinCtrlDef AsSymbol ResultField
+				Fields:	POSITION			(ResultPrompt(GetRight,Position) + $hGap) ResultPrompt(GetTop,Position) $ValueWidth $PromptHeight * 3
+						GENCONFIELD			Result
+						GENCONNAME			THIS
+						NoHorizontalScroll	TRUE 
+						IACTIONSTEXT		ACTIONS ( Get )
+						OACTIONSTEXT		ACTIONS ( Save )
+						TYPENAME			MLEDITTEXT ;
+
+			Define: ClearResultButton Using DDWinCtrlDef AsSymbol ClearResultButton
+				Fields:	POSITION		$PromptX (ResultPrompt(GetBottom,Position) + $vGap) $PromptWidth $ButtonHeight
+						TEXT			Translate( ~Clear~ )
+						DACTIONSTEXT	ACTION EXEC ( ClearResultArea() )
+						TYPENAME		Button ;
+
+			DialogWidth = CommandField(GetRight,Position) + $PromptX + $HGap;
+
+			ButtonStart = ($DialogWidth / 2) - (4 * ($ButtonWidth + $hGap)) / 2;
+
+			Define: BeginTransactionButton Using DDWinCtrlDef AsSymbol BeginTransactionButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnBeginTransactionButton() )
+						POSITION		<ButtonStart>,ResultField(GetBottom,Position) + ($vGap * 2), $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Begin Transaction~ )
+						TOOLTIP			Translate( ~Start a database transaction~ )
+						TYPENAME		BUTTON
+
+			Define: ExecuteButton Using DDWinCtrlDef AsSymbol ExecuteButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnExecuteButton() )
+						POSITION		BeginTransactionButton(GetRight,Position) + $hGap,BeginTransactionButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Execute~ )
+						TOOLTIP			Translate( ~Duplicate the product using the new information~ )
+						TYPENAME		BUTTON
+						FONTWEIGHT		600
+
+			Define: CommitTransactionButton Using DDWinCtrlDef AsSymbol CommitTransactionButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnCommitTransactionButton() )
+						POSITION		ExecuteButton(GetRight,Position) + $hGap,ExecuteButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Commit Transaction~ )
+						TOOLTIP			Translate( ~Start a database transaction~ )
+						ISENABLED		F
+						TYPENAME		BUTTON
+
+			Define: RollBackTransactionButton Using DDWinCtrlDef AsSymbol RollBackTransactionButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnRollBackTransactionButton() )
+						POSITION		CommitTransactionButton(GetRight,Position) + $hGap,CommitTransactionButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~RollBack Transaction~ )
+						TOOLTIP			Translate( ~Rollback the current database transaction~ )
+						ISENABLED		F
+						TYPENAME		BUTTON
+		}
+
+	DialogHeight = RollBackTransactionButton(GetBottom,Position) + 35;
+	SqlDialog( Set,Position,~<Left> <Top>  <DialogWidth>  <DialogHeight>~ );
+	GenDlg( dlg,Definition,SqlDialog,Data,DialogData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DialogData );
+
+	return TRUE;
+}
+
+NUMERIC ClearSQLArea()
+{
+	return dlg( SetStrings,Cmd,~~ );
+}
+
+NUMERIC ClearResultArea()
+{
+	CurrentResult = ~~;
+	return dlg( SetStrings,Result,~<CurrentResult>~ );
+}
+
+NUMERIC OnQueryChange()
+{
+	return TRUE;
+}
+
+
+NUMERIC OnSeeQueriesButton()
+{
+	Action = ACTION DOC ( QueryDoc OpenOnce QueryDoc "Init( ~SQL~,~Select * From Query Order by Type,Sequence~,StayOpen );" );
+	return PerformActions( Action );
+}
+
+
+NUMERIC OnSaveButton()
+{
+	dlg( GetInput,GetStrings,WhichQuery,Query,Category,Category,Cmd,Cmd );
+
+	if ( IsNull(~<WhichQuery>~) )
+	{
+		return Warning( ~Select a Query or a Command~ );
+	}
+
+	if ( IsNull(~<Category>~) )
+	{
+		return Warning( ~Select a Type~ );
+	}
+
+	if ( IsNull(~<Cmd>~) )
+	{
+		return Warning( ~There is no SQL statement to save~ );
+	}
+
+	Query = ~Select * From Query Where Name = '<WhichQuery>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<query>\n\n<theErr>~ ) );
+	}
+
+	if ( List( GetFirst,Record ) )
+	{
+		if ( MessageBox( ~A command or query called '<WhichQuery>' already exists.  Would you like to replace it?~,YESNO ) != YES )
+		{ 
+			return FALSE;
+		}
+	
+		Record( Set,Query,~<Cmd>~ );
+	}
+	else
+	{
+		List( AddNew,Record );
+		Record( Set,Name,~<WhichQuery>~ );
+		Record( Set,Type,~<Category>~ );
+		Record( Set,Sequence,~0~ );
+		Record( Set,Query,~<Cmd>~ );
+	}
+
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Update Failed.\n\n<theErr>~ ) );
+	}
+
+	//RefreshQueriesComboBox(FALSE);
+
+	return TRUE;
+}
+
+
+NUMERIC OnLoadButton()
+{
+	dlg( GetInput,GetStrings,WhichQuery,Query );
+
+	if ( IsNull(~<WhichQuery>~) )
+	{
+		return Warning( ~Select a Query or a Command~ );
+	}
+
+	Query = ~Select Query From Query Where Name = '<WhichQuery>'~;
+
+	if ( !ADO( dbShared,Connect,GetValuesFor,~<Query>~,TheQuery ) )
+	{
+		return Warning( ~There is no command or query called <WhichQuery>~ );
+	}
+
+	if ( !KeyState( Control ) )
+	{
+		ClearSQLArea();
+	}
+
+	PasteIt( ~<TheQuery>~,TRUE );
+
+	return TRUE;
+}
+
+VOID RefreshQueriesComboBox(wantSelection)
+{
+	dlg( GetInput,GetStrings,Category,Category );
+
+	Query = ~Select Name From Query Where Type = '<Category>' Order By Sequence~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Failed to query the Profiles table.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	List( MakeStringList,QueriesList,Name,FALSE );
+
+	dlg( SetControlFromStringList,QueryComboBox,QueriesList,<wantSelection> ? ~Selection~ : ~NoSelection~ );
+}
+
+
+
+NUMERIC OnSourceChange()
+{
+	ForgetGlobal( dBase );
+
+	dlg( GetInput,GetStrings,Source,Source,Connection,Connection );
+
+	if ( Translate( ~<Source>~ ) == Translate( ~Shared Database~ ) )
+	{
+		dlg( ShowControls,FALSE,ConnectionPrompt,ConnectionField,UDLPrompt,NewUDLPrompt );
+
+		if ( !Ado( dBase,Connect ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate( ~Failed to connect to the shared database. <theErr>~ ) );
+		}
+	}
+	else if ( Translate( ~<Source>~ ) == Translate( ~Workstation Database~ ) )
+	{
+		dlg( ShowControls,FALSE,ConnectionPrompt,ConnectionField,UDLPrompt,NewUDLPrompt );
+
+		if ( !Ado( dBase,ConnectLocal ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate( ~Failed to connect to the workstation database. <theErr>~ ) );
+		}
+	}
+	else if ( Translate( ~<Source>~ ) == Translate(~Connection String~) )
+	{
+		dlg( ShowControls,TRUE,ConnectionPrompt,ConnectionField,UDLPrompt,NewUDLPrompt );
+
+		if ( IsNull( ~<Connection>~ ) )
+		{
+			return dlg( SetStatus,0,~Enter a connection string and press Connect To~ );
+		}
+		
+		return OnConnectButton();
+	}
+	else
+	{
+		return Warning( Translate( ~Unknown type~ ) );
+	}
+
+	dlg( SetStatus,0,~Connection Successful~ );
+
+	Global( dBase );
+
+	UpdateTables();
+
+	UpdateFields();
+
+	return TRUE;
+}
+
+
+NUMERIC AddToSQLCommand( s )
+{
+	if ( IsNULL( ~<s>~ ) )
+	{
+		return FALSE;
+	}
+
+	dlg( EditText,CommandField,Paste );
+
+	return TRUE;
+}
+
+
+NUMERIC NewUDL()
+{
+	FileFilter = ~UDL Files|*.udl~;
+
+	if ( !FileDialog( Title,Translate(~Save the UDL file to?~),FILTER,~<FileFilter>~,DefaultExt,~UDL~,Path,UDLPath,Save ) )
+	{
+		return FALSE;
+	}
+
+	if ( !Files( FileExists,~<UDLPath>~ ) )
+	{
+		if ( !File( UDLFile,Open,~<UDLPath>~,Create,Write,Close ) )	
+		{
+			return Warning( Translate( ~Failed to create <UDLPath>~ ) );
+		}
+	}
+
+	Connection = ~<$con.DataParameters[Connection]>~;
+
+	dlg( SetStatus,0,Translate( ~Opening Microsoft Data Link File for <Connection>: <UDLPath>~) );
+
+	Action = STR ( ActivateUDL( ~<UDLPath>~ ) );
+
+	LastUDLPath = ~<UDLPath>~;
+
+	return QueueContentsAfter( Action,60 );
+}
+
+
+
+NUMERIC ActivateUDL( UDLPath )
+{
+	return ShellExecute( Open,~<UDLPath>~ );
+}
+
+
+NUMERIC UpdateUDLText( UDLPath )
+{
+	if ( ~<UDLPath>~ == ~~ )
+	{
+		dlg( SetString,~~,Connection,0 );
+		return TRUE;
+	}
+
+	if ( File( DataFile, OPEN,~<UDLPath>~,READ ) )			// TRY TO OPEN IT
+	{ 
+		DataFile( ReadTextFile,buffer );
+		DataFile( Close );
+
+		CR = chr( 0x0D );
+		LF = chr( 0x0A );
+
+		GetTokens( ~<buffer>~,~<LF>~,Line1,Line2,Line3 );
+
+		dlg( SetString,~<Line3>~,Connection,0 );
+		return TRUE;
+	}
+
+	return FALSE;
+	
+}
+
+
+LastUDLPath = ~~;
+
+NUMERIC OnUDLButton()
+{
+	DefaultDirectory = ~c:\~;
+	DefaultFile = ~~;
+
+	if ( !IsNull(~<LastUDLPath>~) )
+	{
+		DefaultDirectory = ~<$Str.$LastUDLPath.Path>~;
+		DefaultFile = ~<$Str.$LastUDLPath.Filename>~;	
+	}
+
+	FileFilter = ~UDL Files|*.udl||~;
+
+	if ( FileDialog( FILTER,~<FileFilter>~,DefaultDirectory,~<DefaultDirectory>~,DefaultFile,~<DefaultFile>~,DefaultExt,~UDL~,Path,Path,Open) )
+	{
+		LastUDLPath = ~<Path>~;
+		return UpdateUDLText( ~<Path>~ );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC OnConnectButton()
+{
+	ForgetGlobal( dBase );
+
+	dlg( GetInput,GetStrings,Connection,Connection );
+
+	if ( ~<Connection>~ == ~~ )
+	{
+		return dlg( SetStatus,0,~Enter a connection string and press connect~ );
+	}
+
+	if ( !Ado( dBase,Provider,~~,User,~~,Password,~~,Source,~<Connection>~,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Failed to connect to the connection string. <theErr>~ ) );
+	}
+
+	dlg( SetStatus,0,~Connection Successful~ );
+
+	Global( dBase );
+
+	UpdateTables();
+
+	UpdateFields();
+
+	return TRUE;
+}
+
+
+
+NUMERIC UpdateTables()
+{
+	StringList( EmptyTablesList,New );
+	dlg( SetControlFromStringList,TablesListBox,EmptyTablesList );
+	dlg( SetControlFromStringList,FieldsListBox,EmptyTablesList );
+
+	if ( !ConnectionDefined() )
+	{
+		return FALSE;
+	}
+
+	if ( !PGenConList( SchemaList,Connection,dBase,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query Schema of type Tables.  <theErr>~ ) );
+	}
+
+	SchemaList( MakeStringList,TablesList,Table_Name );
+	dlg( SetControlFromStringList,TablesListBox,TablesList );
+
+	return TRUE;
+}
+
+
+NUMERIC HandleDrop()
+{
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+	{ 
+		return FALSE;
+	}
+	
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );	// REMOVE THE DRAG INFO FROM THE TREE
+
+	return ExternalDrop(DragDropInfo);		
+}
+
+
+NUMERIC ExternalDrop( &DragDropInfo )
+{
+	dlg( GetInput );
+
+	if ( !DragDropInfo( GetDraggedFiles,DraggedFileList ) )
+	{ 
+		return Warning( Translate( ~There were no files in the object you dragged~ ) );
+	}
+
+	count = DraggedFileList( ChildCount );
+		
+	if ( $count <= 0 )
+	{ 
+		return Warning( ~There were no files in the object you dragged~; )
+	}
+
+	if ( <count> > 1 )
+	{
+		return Warning( ~One file at a time please!~; )
+	}
+
+	more = DraggedFileList( GetFirst,Path );
+
+	while ( <more> )
+	{
+		if ( !File( fp,OPEN,~<$Con.Path[Text]>~,Read ) ) 
+		{
+			return Warning( Translate( ~Could not open <$Con.Path[Text]>~ ) );
+		}
+
+		if ( !fp( ReadTextfile,Buffer ) ) 
+		{
+			return Warning( Translate( ~<Path> is an empty file~ ) );
+		}
+
+		fp( Close );
+
+		dlg( SetStrings,Cmd,~<Buffer>~ );
+
+		// more = DraggedFileList( GetNext,Path );
+
+		break;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateFields()
+{
+	if ( !ConnectionDefined() )
+	{
+		return FALSE;
+	}
+
+	StringList( FieldsList,New );
+
+	dlg( GetInput );
+
+	DialogData( Get,Table,Table );
+
+	if ( ~<Table>~ != ~~ )
+	{
+		Key = ~~;		PrimaryKey = ~Your database will not respond to a request for the primary key of <Table>~;
+
+		if ( !dBase( MakePrimaryKeyFrom,~<Table>~,Dummy,Key ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			//return Warning( Translate( DBMessages,ConnectionFailed,~<Table>~,~<theErr>~ ) );
+		}
+		else
+		{
+			dBase( MakePrimaryKeyFrom,~<Table>~,NULL,PrimaryKey );
+
+			if ( IsNull( ~<PrimaryKey>~ ) )
+			{
+				PrimaryKey = ~Your database will not respond to a request for the primary key of <Table>~;
+			}
+		}
+
+		dlg( SetStrings,PrimaryKey,~<PrimaryKey>~ );
+
+		Query = ~Select * From <Table>~;	// WILL BE A QUERY THAT RETURNS NO RECORDS
+
+		if ( ~<Key>~ != ~~ )
+		{
+			Query = ~<Query> Where <Key>~;
+		}
+
+		if ( PGenConList( List,Connection,dBase,Cursor,Forward,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+		{
+			Index = -1;
+			Tab = Chr(9);
+
+			while ( List( FieldInfo,<++Index>,Name,FieldName,Length,FieldLength,Type,FieldType ) )
+			{
+				FieldName = FormatString( ~<FieldName>~,~%-31s~ );
+
+				FieldsList( AddString,~<FieldName><Tab><FieldType>(<FieldLength>)~ );
+			
+			}
+		}
+	}
+
+	dlg( SetControlFromStringList,FieldsListBox,FieldsList );
+
+	PasteIt( ~<Table>~,FALSE );
+
+	return TRUE;
+}
+
+
+NUMERIC PasteIt( s,Always )
+{
+	if ( KeyState( Control ) )
+	{
+		return FALSE;
+	}
+
+	DialogData( Get,Cmd,Cmd );		
+
+	s = FixUpCRLF( ~<s>~ );
+
+	if ( !IsNULL(~<s>~) && (!IsNull(~<Cmd>~) || <Always>) )
+	{
+		dlg( CopyToClipboard,String(TrimRight,~<s>~) );
+		dlg( EditText,CommandField,Paste );
+		dlg( EditText,CommandField,GetSel,start,End );
+		dlg( SetControlFocus,CommandField );
+		dlg( EditText,CommandField,SetSel,<end>,<end>,TRUE );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddFieldName()
+{
+	dlg( GetInput );
+
+	DialogData( Get,Fields,FieldName );
+
+	Tab = chr(9);
+
+	GetTokens( ~<FieldName>~,~<Tab>~,Name );
+
+	PasteIt( ~<Name>~,FALSE );
+
+	return TRUE;
+}
+
+NUMERIC CreateJetDatabase()
+{
+	if ( !FileDialog( Title,~Create a Jet Database~,PATH,Path,DefaultExt,~MDB~,Save ) )
+	{
+		return FALSE;
+	}
+
+	return CreateDatabaseOfType(~<Path>~,~Jet~,~Jet~);
+}
+
+
+NUMERIC CreateDatabaseOfType(Path,DBType,Connection)
+{
+	Language = ~<$[Symbols].Language[Value]>~;
+
+	GenCon( DBDef,CopyFrom,~<Connection>~,~[DATABASE Managers]~ );
+
+	DBDef( Set,DefaultDBName,~<$Str.$Path.Filename>~ );
+
+	Language = ~<$[Symbols].Language[Value]>~;
+
+	StatusBarText( Translate( ~Creating <DBType> Database:  <Path>~ ) );
+
+	if ( !CreateDatabase( ~<Path>~,Type,~<DBType>~,Language,~<Language>~,Parameters, DBDef) )
+	{	
+		return Warning( Translate( UIMessages,FailedToCreateDB,~<Path>~ ) );
+	}
+
+	return Warning( ~Created <Path>~ );
+}
+
+
+NUMERIC DeleteExistingTable()
+{
+	if ( !ConnectionDefined() )
+	{
+		return FALSE;
+	}
+
+	dlg( GetInput );
+
+	DialogData( Get,Table,TableName );
+
+	if ( IsNull( ~<TableName>~ ) )
+	{
+		return Warning( ~You must select a table to delete~ );
+	}
+
+	if ( MessageBox( Translate( ~Are you sure you want to delete table <TableName>?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	NumRecords = dBase( RecordCountFor,~Select * From <TableName>~ );
+
+	if ( <NumRecords> > 0 )		// ARE THERE RECORDS IN THE TABLE?
+	{
+		if ( MessageBox( Translate( ~Table <TableName> has <NumRecords> records(s). Is it okay to delete them?~ ),YESNO ) != YES )
+		{
+			return FALSE;
+		}
+
+		WaitCursor( Begin );
+
+		StatusBarText( ~Deleting all records in table <TableName>~ );
+	
+		if ( !dBase( CMD,~Delete From <TableName>~ ) )
+		{
+			WaitCursor( End );
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Could not delete all records from TABLE <TableName>.\n\n[<theErr>]~ );
+		}
+
+		WaitCursor( End );
+	}
+	else
+	{
+		if ( MessageBox( Translate( ~Table <TableName> has no records. Is it okay to drop it?~ ),YESNO ) != YES )
+		{
+			return FALSE;
+		}
+	}
+
+
+	if ( !dBase( CMD,~DROP TABLE <TableName>~ ) )		// DROP THE TABLE
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not drop the TABLE <TableName>.\n\n[<theErr>]~ );
+	}
+
+	OnSourceChange();
+
+	UserTableDefiniton = ~<$App.ShareDirectory>\Scripts\UserTableDefinitions\<TableName>.txt~;
+
+	if ( Files( FileExists,~<UserTableDefiniton>~ ) )
+	{
+		if ( MessageBox( Translate( ~Table <TableName> was a User Defined Table.  Do you want to delete the Table Definition\n\n  <UserTableDefiniton>?~ ),YESNO ) != YES )
+		{
+			return TRUE;
+		}
+
+		Tree( Name,~<TableName>~,Location,~[DATABASE TableDefinitions]~,PluckAndFree );
+
+		if ( !Files( Delete,~<UserTableDefiniton>~ ) )
+		{
+			err = GetLastError( ErrorString,theErr );
+			return Warning( ~Could not delete\n\n<UserTableDefiniton>.\n\nError=<Err>. <theErr>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+IncludeClass( BaseEnterText );
+Class( GetTableName,Extends,BaseEnterText );
+
+VOID CreateExistingTable()
+{
+	ForgetGlobal( EnterText );
+	GetTableName( New,EnterText );
+	EnterText.DefineDialog();			
+	Global( EnterText );
+}
+
+VOID GetTableName::GetTableName()	{ Title = ~Enter a table name~; }
+
+
+VOID GetTableName::OnReturnKey()	
+{ 
+	TableName = GetText();
+
+	if ( IsNull( ~<TableName>~ ) )		
+	{ 
+		return;
+	}
+
+	CreateTheTable( ~<TableName>~ );
+	DoCancelButton();
+}
+
+
+NUMERIC CreateTheTable(TableName)
+{
+	if ( !ConnectionDefined() )
+	{
+		return FALSE;
+	}
+
+	if ( IsNull( ~<TableName>~ ) )
+	{
+		return Warning( ~You must enter a table to create~ );
+	}
+
+	if ( MessageBox( Translate( ~Are you sure you want to create table <TableName>?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	dlg( GetInput,GetStrings,Source,Source );
+
+	if ( ~<Source>~ == Translate(~Shared Database~) )
+	{
+		if ( GenCon( TableDefinition,GetFrom,~<TableName>~,~[Database TableDefinitions]~ ) )
+		{ 
+			return CreateTable( dBase,TableDefinition );	
+		}
+		return Warning( ~<TableName> does not have a TableDefinition.~ );
+	}
+
+	if ( ~<Source>~ == Translate(~Workstation Database~) )
+	{
+		if ( GenCon( TableDefinition,GetFrom,~<TableName>~,~[Database LocalTableDefinitions]~ ) )
+		{ 
+			return CreateTable( dBase,TableDefinition );	
+		}
+		return Warning( ~<TableName> does not have a TableDefinition.~ );
+	}
+
+	return Warning( ~<TableName> does not have a TableDefinition in.~ );
+}
+
+
+NUMERIC CreateTable( &dBase,&TableDefinition )
+{
+	TableDefinition( CreateTableDefinition,Definition,dBase );
+	TableDefinition( Get,TableName,Tablename );
+
+	StatusBarText( Translate( ~Creating Table: <TableName>~ ) );
+
+	WaitCursor( Begin );
+
+	if ( !dBase( Cmd,~CREATE TABLE <Tablename> (<Definition>)~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session,~Error: <Cmd>.  <theErr>~ );
+		WaitCursor( End );
+		return Warning( ~Error Creating table <TableName>.  <theErr>~);
+	}
+
+	if ( GenCon( TableIndexes,Is,TableDefinition(GetNumeric,Indexes) ) )
+	{
+		while ( TableIndexes( GetNext,IndexDefinition ) )
+		{	
+			if ( !dBase( Cmd,~<$Con.IndexDefinition[Text]>~ ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				Log( Session,~Error: <Cmd>.  <theErr>~ );
+				WaitCursor( End );
+				return Warning( ~Error Creating indexes for table <TableName>. <theErr>~);
+			}	
+		}
+	}
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+DefineDialog();
+
+OnSourceChange();
+
+RefreshQueriesComboBox(TRUE);
+

@@ -1,0 +1,285 @@
+//	C_KPDM_cmd.cpp
+
+ExecC() ;
+
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+char	*NULL ;
+int		gTesting = FALSE ;
+
+UGenCon	*gRELookAhead	= NULL ;
+long	 gLogAmount		= 0L ;
+
+main()
+{
+	Debug(0) ;
+	gRELookAhead = GetTreeObject(_T("RELookAhead"),_T("[GenCons]")) ;
+	gLogAmount	= gRELookAhead->GetLongValue(_T("RELogLevel")) ;
+}
+
+int Advertize()
+{
+	SessionLogDirect( _T("C_KPDM_PrintComplete.Advertize: (V1.00)")) ;
+	return( TRUE ) ;
+}
+
+int Init( UGenCon *fSOrder, UGenCon *CompletePrint )
+{
+	TCHAR	CmdPath[2048] ;
+	TCHAR	TmpPath[2048] ;
+	TCHAR	SortTime[2048] ;
+	int		isDirectory ;
+	int		Count = 0L ;
+
+	Debug(0) ;
+
+	UGenCon	*StatusGC		= fSOrder->GetLongValue(_T("StatusGC")) ;
+	UGenCon	*PrinterSetup	= fSOrder->GetLongValue(_T("PrinterSetup")) ;
+	TCHAR	*ControlFolder	= PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+
+	long	 LastPrintTime	= fSOrder->GetLongValue(_T("LastPrintTime")) ;
+
+	TCHAR	*BatchID		= fSOrder->GetStringValue(_T("BatchID")) ;
+	TCHAR	*OrderID		= fSOrder->GetStringValue(_T("OrderID")) ;
+//	long	 OrderItemID	= CompletePrint->GetLongValue(_T("OrderItemID")) ;
+
+	GetSortableTimeNow(SortTime);
+	sprintf( TmpPath, _T("%s\\%s"), ControlFolder, SortTime) ;
+
+	strcpy( CmdPath, TmpPath ) ;
+	strcat( CmdPath, _T(".cmd")) ;
+	while( FileOrDirectoryExists( CmdPath, &isDirectory ))
+	{
+		Count++ ;
+		sprintf( CmdPath, _T("%s_%04d.cmd"), TmpPath, Count ) ;
+	}
+
+	long	 Qty = CompletePrint->GetLongValue(_T("Quantity")) ;
+	long	 PageID = CompletePrint->GetLongValue(_T("JobID")) ;
+	TCHAR	*ImagePath	= CompletePrint->GetStringValue(_T("ImagePath")) ;
+	TCHAR	*PrintLut	= CompletePrint->GetStringValue(_T("CalLutPath")) ;
+	TCHAR	*PaperPack	= CompletePrint->GetStringValue(_T("PaperPackPath")) ;
+
+	double   Res = CompletePrint->GetDoubleValue(_T("Resolution")) ;
+//	if( Res < 10.0 )
+//	{
+//		Res = PrinterSetup->GetDoubleValue(_T("Resolution")) ;
+//	}
+
+	long	 TotalPrints = fSOrder->GetLongValue(_T("TotalPrints")) ;
+	long	 PrintNumber = CompletePrint->GetLongValue(_T("PrintNumber")) ;
+
+	//	0 = NONE, 1 = BARCODE, 2 = MULTIPUNCH
+	long	 PackageType = PrinterSetup->GetLongValue(_T("PackageCut")) ;
+
+	TCHAR	*BarCode	 = CompletePrint->GetStringValue(_T("BarCode")) ;
+	long	 BarCodeType = CompletePrint->GetLongValue(_T("BarCodeType")) ;
+
+	long	 PackageCode = CompletePrint->GetLongValue(_T("PkgCode")) ;
+	long	 tempLong	 = CompletePrint->GetLongValue(_T("Center"));
+
+	TCHAR	*Center = _T("FALSE");
+	if(tempLong == 1) {	Center = _T("TRUE"); }
+
+	TCHAR	*IsEndOfOrder = _T("FALSE") ;
+	if( PrintNumber == TotalPrints )	{	IsEndOfOrder = _T("TRUE") ; }
+
+	if( ImagePath == NULL )
+	{
+		SessionLogDirect( _T("C_KPDM_cmd.Init: No ImagePath for PageID: %ld"), PageID ) ;
+		DumpPage( CompletePrint ) ;
+		return( FALSE ) ;
+	}
+
+	long	tempBorderless = CompletePrint->GetLongValue(_T("Borderless")) ;
+	TCHAR	*Borderless = _T("FALSE");
+	if(tempBorderless == 1) {	Borderless = _T("TRUE"); }
+
+	TCHAR	*CmdText	= malloc( 100 * 1024 ) ;
+	if( CmdText )
+	{
+		CmdText[0] = 0x00 ;
+
+		AddLongLine( CmdText, _T("PAGE_ID: %ld\n"), PageID ) ;
+		AddTextLine( CmdText, _T("ORDER_ID: %s\n"), OrderID ) ;
+		AddTextLine( CmdText, _T("BATCH_ID: %s\n"), BatchID ) ;
+		AddTextLine( CmdText, _T("FILENAME: %s\n"), ImagePath ) ;
+		AddLongLine( CmdText, _T("COPIES: %ld\n"), Qty ) ;
+		AddTextLine( CmdText, _T("EOO: %s\n"), IsEndOfOrder ) ;
+		AddTextLine( CmdText, _T("CENTER: %s\n"), Center) ;
+		AddDoubleLine( CmdText, _T("RESOLUTION: %6.3lf\n"), Res ) ;
+		AddTextLine( CmdText, _T("TONESCALE: %s\n"), _T("FALSE") ) ;
+//		AddTextLine( CmdText, _T("TSFILENAME: %s\n"), PrinterSetup->GetStringValue(_T("GammaTablePath")) ;
+		AddTextLine( CmdText, _T("LUTFILENAME: %s\n"), PrintLut ) ;
+		AddTextLine( CmdText, _T("PAPFILENAME: %s\n"), PaperPack ) ;
+
+		AddTextLine( CmdText, _T("BORDERLESS: %s\n"), Borderless ) ;
+
+		if( PackageType == 2 )
+		{
+			if( PackageCode )
+			{
+				AddTextLine( CmdText, _T("MULTIPUNCH: %s\n"), _T("TRUE") ) ;
+				AddLongLine( CmdText, _T("MULTIPUNCHCODE: %ld\n"), PackageCode ) ;
+			}
+			else
+			{
+				AddTextLine( CmdText, _T("MULTIPUNCH: %s\n"), _T("FALSE") ) ;
+			}
+		}
+
+		if( PackageType == 1 )
+		{
+			if( BarCode )
+			{
+				AddTextLine( CmdText, _T("BARCODE: %s\n"), BarCode ) ;
+				AddTextLine( CmdText, _T("BARCODE_TYPE: %ld\n"), BarCodeType ) ;
+			}
+			else
+			{
+				AddTextLine( CmdText, _T("BARCODE_TYPE: %ld\n"), 0L ) ;
+			}
+		}
+
+		if( PackageType == 0 )
+		{
+			AddTextLine( CmdText, _T("MULTIPUNCH: %s\n"), _T("FALSE") ) ;
+			AddTextLine( CmdText, _T("BARCODE_TYPE: %ld\n"), 0L ) ;
+		}
+
+//		AddTextLine( CmdText, _T("BACKPRINTING: %s\n"), _T("FALSE") ) ;
+//		AddTextLine( CmdText, _T("BACKPRINTER1_1: %s\n"), _T("FALSE") ) ;
+//		AddTextLine( CmdText, _T("BACKPRINTER1_2: %s\n"), _T("FALSE") ) ;
+//		AddTextLine( CmdText, _T("BACKPRINTER2_1: %s\n"), _T("FALSE") ) ;
+//		AddTextLine( CmdText, _T("BACKPRINTER2_2: %s\n"), _T("FALSE") ) ;
+		AddTextLine( CmdText, _T("DELETEFILE: %s\n"), _T("TRUE")) ;
+
+
+		long	TicksNow = Clock() ;
+		if( LastPrintTime + 30000 < TicksNow )
+		{
+			AddTextLine( CmdText, _T("APPLY_LUT: %s\n"), _T("TRUE")) ;
+			AddTextLine( CmdText, _T("APPLY_PAP: %s\n"), _T("TRUE")) ;
+
+//			WriteAction( PrinterSetup, _T("6")) ;	//	RESUME PRINTING
+
+		}
+		else
+		{
+			AddTextLine( CmdText, _T("APPLY_LUT: %s\n"), _T("FALSE")) ;
+			AddTextLine( CmdText, _T("APPLY_PAP: %s\n"), _T("FALSE")) ;
+		}
+
+		if(gTesting == TRUE && PrintNumber == 7 )
+		{
+			AddTextLine( CmdText, _T("DEBUGERRORCODE: %d\n"), 0x00020021 );  //to force errors during Stub mode testing with no printer
+		}
+
+		char	*fp = fopen( CmdPath, _T("w")) ;
+		if( fp )
+		{
+			fprintf( fp, CmdText ) ;
+			fclose( fp ) ;
+		}
+		else
+		{
+			SessionLogDirect( _T("C_KPDM_cmd.Init: Could not create \"%s\"."), CmdPath ) ;
+		}
+
+		if( gLogAmount >= 4 )
+		{
+			SessionLogDirect( _T("C_KPDM_PrintComplete:\n%s"), CmdText ) ;
+		}
+
+
+		fSOrder->SetLongValue(_T("LastPrintTime"), TicksNow ) ;
+		CompletePrint->SetLongValue(_T("CommandSent"), 1L ) ;
+		free( CmdText ) ;
+
+		//	INCREMENT THE NUMBER OF JOBS AT THE PRINTER
+		long	NumPrinterJobs = StatusGC->GetLongValue(_T("NumPrinterJobs")) + 1L ;
+		StatusGC->SetLongValue( _T("NumPrinterJobs"), NumPrinterJobs ) ;
+
+		if( gLogAmount >= 6 )
+		{
+			SessionLogDirect( _T("C_KPDM_PrintComplete.Init: NumPrinterJobs %ld."), NumPrinterJobs ) ;
+		}
+	}
+
+	return( TRUE ) ;
+}
+
+
+TCHAR *AddTextLine( TCHAR *CmdText, TCHAR *Format, TCHAR *Value )
+{
+	TCHAR	Line[1024] ;
+
+	sprintf( Line, Format, Value ) ;
+	strcat( CmdText, Line ) ;
+
+	return( CmdText ) ;
+}
+
+TCHAR *AddLongLine( TCHAR *CmdText, TCHAR *Format, long Value )
+{
+	TCHAR	Line[1024] ;
+
+	sprintf( Line, Format, Value ) ;
+	strcat( CmdText, Line ) ;
+
+	return( CmdText ) ;
+}
+
+TCHAR *AddDoubleLine( TCHAR *CmdText, TCHAR *Format, double Value )
+{
+	TCHAR	Line[1024] ;
+
+	sprintf( Line, Format, Value ) ;
+	strcat( CmdText, Line ) ;
+
+	return( CmdText ) ;
+}
+
+TCHAR	*GetResolution( UGenCon *PrinterSetup )
+{
+	double	Res = PrinterSetup->GetDoubleValue(_T("Resolution")) ;
+	if( Res >= 500.0 && Res <= 502.0 )	{ return(_T("RES4R" )) ; }
+	if( Res >= 400.0 && Res <= 402.0 )	{ return(_T("RES5R" )) ; }
+	if( Res >= 334.0 && Res <= 335.0 )	{ return(_T("RES6R" )) ; }
+	if( Res >= 286.0 && Res <= 287.0 )	{ return(_T("RES7R" )) ; }
+	if( Res >= 250.0 && Res <= 251.0 )	{ return(_T("RES8R" )) ; }
+	if( Res >= 242.0 && Res <= 243.0 )	{ return(_T("RESA4" )) ; }
+	if( Res >= 200.0 && Res <= 201.0 )	{ return(_T("RES10R")) ; }
+	if( Res >= 182.0 && Res <= 183.0 )	{ return(_T("RES11R")) ; }
+	if( Res >= 167.0 && Res <= 168.0 )	{ return(_T("RES12R")) ; }
+	return( _T("RES10R")) ;
+}
+
+
+int DumpPage( UGenCon *aGC )
+{
+	TCHAR		*AttrName ;
+	TCHAR		 AttrValue[2048] ;
+
+	UDataDict	*theDict = aGC->GetDataDict() ;
+
+	TCHAR		*GCName = aGC->GetName() ;
+	TCHAR		*DDName = theDict->GetName() ;
+
+	SessionLogDirect( _T("Create \"%s\" Using \"%s\"\r\n{\r\n"), GCName, DDName ) ;
+	UListIterator	*anIter = new UListIterator( theDict ) ;
+	UAttribute		*anAttr = (UAttribute *) anIter->GetFirst() ;
+	while( anAttr )
+	{
+		AttrName = anAttr->GetName() ;
+		if( aGC->AttrChanged( AttrName ))
+		{
+			aGC->GetAttrValue( AttrName, AttrValue ) ;
+			SessionLogDirect( _T("\t%s\t\t\"%s\"\r\n"), AttrName, AttrValue ) ;
+		}
+		anAttr = (UAttribute *) anIter->GetNext() ;
+	}
+	SessionLogDirect( _T("\r\n%c ;\r\n"), 0x0x7D) ;
+	delete anIter ;
+	return( TRUE ) ;
+}

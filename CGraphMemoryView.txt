@@ -1,0 +1,351 @@
+//	CGraphMemoryView.cpp
+
+//	THIS PROGRAM WILL HANDLE THE GRFXVIEW WHILE IT IS OPEN
+
+ExecC() ;
+
+unsigned char	*NULL ;
+int				 FALSE = 0 ;
+int				 TRUE  = ! FALSE ;
+
+UGraphics		*gGrfx			= NULL ;
+long			 gWidth			= 1000 ;
+long			 gHeight		= 1000 ;
+long			 gDepth			= 3 ;
+double			 gResolution	= 1000.0 ;
+unsigned char	*gView			= NULL ;
+long			 gImaXForm		= 0L ;
+unsigned char	*gFrameBuffer	= NULL ;
+TCHAR			 gFileName[1024] ;
+long			 gRed[260] ;
+long			 gGrn[260] ;
+long			 gBlu[260] ;
+
+int gMouseMoved	= 0 ;
+
+int	MK_LBUTTON	= 0x0001 ;
+int	MK_RBUTTON	= 0x0002 ;
+int MK_SHIFT	= 0x0004 ;
+int MK_CONTROL	= 0x0008 ;
+int MK_MBUTTON	= 0x0010 ;
+int WM_PAINT	= 0x000F ;
+
+UList			*gList = NULL ;
+
+main()
+{
+	Debug(0) ;
+}
+
+term()
+{
+	if( gGrfx ) { gGrfx = delete gGrfx ; }
+	if( gList ) { delete gList ; }
+}
+
+
+OnInitialUpdate(unsigned char *theView)
+{
+	int result = FALSE ;
+	gView = theView ;
+
+	gGrfx = new UGraphics ;
+	result	= gGrfx->Initialize( gWidth, gHeight, gDepth ) ;	
+	
+	result = FileDialog( 1, NULL, gFileName, "", NULL, "Select Session Log File To Graph Memory:" ) ;
+	if( result )
+	{
+		ReadFile() ;
+		ScaleList() ;
+	}
+	return( result ) ;
+}
+
+
+GetDocumentImageSize( double *Width, double *Height )
+{
+	*Width	= gWidth ;
+	*Height = gHeight ;
+}
+
+
+ReadFile()
+{
+	int		 loop ;
+	long	 MemUsed ;
+	long	 theTime ;
+	TCHAR	 theAmount[32] ;
+	TCHAR	*theText = GetFile( gFileName ) ;
+	TCHAR	*cptr = theText ;
+	UGenCon	*aGC ;
+
+	AddDDLongTime() ;
+	
+	if( gList == NULL )
+	{
+		gList = new UList ;
+	}
+
+	if( theText )
+	{
+		while( *cptr )
+		{
+			if( *cptr == ':' )	//	SKIP THE HOURS
+			{
+				cptr++ ; while( *cptr != ':' ) { cptr++ ; }	//	SKIP THE MINUTES
+				cptr++ ;
+				theAmount[0] = *cptr ; cptr++ ;
+				theAmount[1] = *cptr ; cptr++ ;
+				theAmount[2] = 0 ;
+				theTime = atoi( theAmount ) ;	//	SAVE THE SECONDS
+
+			}
+
+			if( *cptr == '[' )
+			{
+				cptr++ ;
+				loop = 0 ;
+				while( *cptr != ',' && loop < 30 )
+				{
+					theAmount[loop] = *cptr ;
+					cptr++ ;
+					loop++ ;
+				}
+
+				MemUsed = atoi( theAmount ) ;	//	SAVE THE MEMORY
+
+				if( MemUsed > 100 )
+				{
+					aGC = new UGenCon( GetDataDictionary( "DDLongTime")) ;
+					aGC->SetLongValue( "Time", theTime ) ;
+					aGC->SetLongValue( "Memory", MemUsed ) ;
+					gList->InsertBack( aGC ) ;
+				}
+
+				//	GET TO THE END OF THE LINE
+				while( *cptr != '\r' && *cptr != '\n' && *cptr != '\0' ) { cptr++ ; }
+			}
+			if( *cptr == '\0' )	{ cptr-- ; }
+			cptr++ ;
+		}
+
+		theText = free( theText ) ;
+	}
+}
+
+AddDDLongTime()
+{
+	char	*theDataDict ;
+	TCHAR	*DataDictText ;
+
+	theDataDict = GetDataDictionary("DDLongTime") ;
+
+	if( theDataDict == NULL )
+	{
+		DataDictText = "Memory	Long	0	0	0	0	0\
+						Time	Long	0	0	0	0	0" ;
+
+		theDataDict = CreateDataDict( DataDictText, 0 ) ;
+
+		if( theDataDict )
+		{
+			SetName( theDataDict, "DDLongTime" ) ;
+			AddDataDictToApp( theDataDict ) ;
+		}
+	}
+	return( theDataDict ) ;
+}
+
+
+OnDraw(UIma *Ima)
+{
+	double	MemUsed ;
+	double	XPos = 0.0 ;
+	double	XInc = 1.0 ;
+	double	LYPos ;
+	long	ImaXForm ;
+	long	Loop ;
+	long	LastTime, theTime ;
+	long	NumListEntries ;
+
+	Debug(0) ;
+
+	char *theCWnd = GetParentFrame( gView ) ;
+	SetWindowText( theCWnd, gFileName ) ;
+
+//	if( gList == NULL ) { return ; }
+
+	SetResolution( gGrfx, gResolution ) ;
+
+	SetLineColor( gGrfx,  200, 200, 0 ) ;
+
+	if( gList )
+	{
+		if( gList->GetNumEntries() > 5 )
+		{
+			UGenCon	*aGC ;
+
+			UListIterator	*anIter = new UListIterator( gList ) ;
+			MoveABS( gGrfx, 0.0, 0.0 ) ;
+
+			aGC = anIter->GetFirst() ;
+			LastTime = aGC->GetLongValue( _T("Time") ) ;
+
+			NumListEntries = gList->GetNumEntries() ;
+			if( NumListEntries > 999 )
+			{
+				aGC = gList->GetAt( NumListEntries - 999 ) ;
+				LastTime = aGC->GetLongValue( _T("Time")) ;
+			}
+			else	//	NumListEntries < 1000
+			{
+				XInc = 1000 / NumListEntries ;
+			}
+
+			Loop = 1 ;
+			while( aGC && Loop < 999 )
+			{
+				MemUsed = aGC->GetDoubleValue( "Memory" ) ;
+				theTime	= aGC->GetLongValue( "Time" ) ;
+
+				if( MemUsed >= 0.0 && MemUsed < 1000.0 )
+				{
+					LineABS( gGrfx, XPos, MemUsed ) ;
+					LYPos = MemUsed ;
+
+					if( theTime != LastTime )
+					{
+						SetLineColor( gGrfx, 64, 64, 64 ) ;
+						MoveABS( gGrfx, XPos, 0.0 ) ;
+						LineABS( gGrfx, XPos, 1000.0 ) ;
+						SetLineColor( gGrfx, 200, 200, 0 ) ;
+						MoveABS( gGrfx, XPos, LYPos ) ;
+						LastTime = theTime ;
+					}
+					XPos += XInc ;
+				}
+				aGC = anIter->GetNext() ;
+				Loop++ ;
+			}
+
+			delete anIter ;
+		}
+	}
+	gGrfx->GrfxRender() ;
+
+	gFrameBuffer = gGrfx->GetFrameBuffer() ;
+	gImaXForm = Ima->ImaMemorySource( gFrameBuffer, "U8",
+				gWidth, gHeight, gDepth, "PIXEL_INTERLEAVED", FALSE ) ;
+
+//	Beep( 440L, 2500L ) ;
+
+	return( gImaXForm ) ;
+}
+
+
+ScaleList()
+{
+	long	Max, Min ;
+	long	Mem ;
+
+	Debug(0) ;
+
+	UListIterator *anIter = new UListIterator( gList ) ;
+	UGenCon	*aGC = anIter->GetFirst() ;
+	aGC = anIter->GetNext() ;
+	Max = Min = aGC->GetLongValue( _T("Memory") ) ;
+	aGC = anIter->GetNext() ;
+
+	while( aGC )
+	{
+		Mem = aGC->GetLongValue( _T("Memory")) ; 
+
+		if( Mem > 0 )
+		{
+			if( Max < Mem )	{ Max = Mem ; }
+			if( Min > Mem )	{ Min = Mem ; }
+		}
+
+		aGC = anIter->GetNext() ;
+	}
+	anIter = delete anIter ;
+
+	//	MAX & MIN HAVE NOW BEEN SET!
+
+	ScaleTheList( Min, Max ) ;
+}
+
+
+ScaleTheList( long Min, long Max )
+{
+	double	dMin = Min ;
+	double	dMax = Max ;
+	double	dMem ;
+	double	Scale = 999.0 / (dMax - dMin)  ;
+
+	UListIterator	*anIter = new UListIterator( gList ) ;
+	UGenCon			*aGC = anIter->GetFirst() ;
+
+	while( aGC )
+	{
+		dMem = aGC->GetDoubleValue( _T("Memory")) ;
+		dMem = (dMem - dMin) * Scale ;
+		aGC->SetDoubleValue( _T("Memory"), dMem ) ;
+		aGC = anIter->GetNext() ;
+	}
+
+	anIter = delete anIter ;
+}	
+
+
+OnMouseMove( long flags, long X, long Y )
+{
+/*	double	 dX, dY ;
+	char	*theCWnd ;
+	int		 result ;
+	int		 Stop = 1 ;
+
+//	Debug(Stop) ;
+
+	if( flags )
+	{
+		switch( flags )
+		{
+			case	MK_LBUTTON	:
+				if( gMouseMoved )
+				{
+					dX = X ;
+					dY = Y ;
+					LineABS( gGrfx, dX, dY ) ;
+				}
+				else
+				{
+					gMouseMoved = 1 ;
+					dX = X ;
+					dY = Y ;
+
+					SetLineColor( gGrfx, 255, 255, 92 ) ;
+
+					MoveABS( gGrfx, dX, dY ) ;
+				}
+				break ;
+		}
+	}
+	else
+	{
+		gMouseMoved = 0 ;
+	}
+*/
+}
+
+OnLButtonDown( long flags, long X, long Y )
+{
+}
+
+
+OnLButtonUp( long flags, long X, long Y )
+{
+//	Invalidate( gView, 0 ) ;
+}
+
+

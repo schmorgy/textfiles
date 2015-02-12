@@ -1,0 +1,777 @@
+
+IncludeClass( BaseRImage );
+IncludeClass( BaseThread );
+
+Include: ~<$App.Macros>\RimageMacros.txt~;
+
+
+NUMERIC DisplayStatus( msg )	{ }		// SHOULD BE OVERRIDDEN	
+NUMERIC DisplayWarning( msg )	{ }		// SHOULD BE OVERRIDDEN	
+
+
+Class( RImageThread,Extends,BaseThread,
+		Member,fID,Str,~~,
+		Member,fDisplayStoppedMsg,Numeric,TRUE,
+		Member,fPollInterval,Numeric,1000 * 10,
+		Member,fMaxBuilds,Numeric,1 );
+
+Class( RImage,Extends,BaseRImage,
+		Member,fID,Str,~~,
+		Member,fBuilding,Numeric,0,
+		Member,fJobPath,Str,~~ );
+
+
+VOID	RImage::RImage( ID )			
+{ 
+	fID = ~<ID>~; 
+}	
+
+VOID	RImage::!RImage( ID )								// Destructor
+{ 
+	ForgetPrivate( fRImage );
+}
+
+NUMERIC RImage::StillBuilding()		{ return <fBuilding>; }
+
+`
+NUMERIC RImage::UpdateProgress( &Connection,ID,Progress )
+{ 
+	Cmd = ~Update RImageOrders Set Progress = <Progress> where ID = '<ID>'~;
+
+	if ( <Progress> == 5 )
+	{
+		//Log( Session,~RImage Writer <fID>, (Job <ID>): Writing~ );
+	}
+
+	return Connection( Cmd,~<Cmd>~ );
+}
+
+
+NUMERIC RImage::UpdateState( &Connection,ID,State,Status )
+{ 
+	Cmd = ~Update RImageOrders Set State = <State>, Status = '<Status>' where ID = '<ID>'~;
+
+	return Connection( Cmd,~<Cmd>~ );
+}
+
+NUMERIC RImage::IndicateFailure( &Connection,ID,Status )	
+{ 
+	UpdateState( Connection,~<ID>~,2,~<Status>~ );
+	
+	return FALSE;
+}
+
+
+
+NUMERIC RImage::RImageFeedback( ID,Condition,State,Status )
+{
+	if ( ~<Condition>~ == ~0~ && ~<State>~ == ~0~ )
+	{
+		Invoke( DisplayProgress,~Job <ID>: <Status>~ );
+		return TRUE;
+	}
+	
+	Log( Session,~RImage Writer <fID>, (Job <ID>): <Condition>, <State>, <Status>~ );
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		Invoke( DisplayWarning,~Failed to connect to the database in RImageFeedback for writer <fID>~ );
+		return FALSE;
+	}
+
+	if ( IsNull( ~<ID>~ ) )
+	{
+		return FALSE;
+	}
+
+	Status = ~<$Str.$Status.notrailingblanks>~;
+	
+	DatabaseStatus = String( Left,~<Status>~,63 );
+	
+	MakeSQLSafe( DatabaseStatus );
+
+	DatabaseState = <State> - 2;
+
+	Cmd = ~Update RImageOrders Set State=<DatabaseState>,Condition=<Condition>,Status='<DatabaseStatus>' where ID = '<ID>'~;
+
+	dBase( Cmd,~<Cmd>~ );
+
+	if ( ~<Condition>~ == ~1~ && ~<State>~ == ~2~ )
+	{
+		fBuilding = FALSE;
+		UpdateProgress( dBase,~<ID>~,5 );
+		//Log( Session,~RImage Writer <fID>, (Job <ID>): Image building complete~ );
+			
+	}
+	else	// WE ARE ALL DONE (WITH OR WITHOUT ERROR)
+	{
+		Log( Session,~RImage Writer <fID>, (Job <ID>): Production complete~ );
+
+		if ( UsePowerToolsLib() )
+		{
+			CleanupFiles( ~<ID>~ );
+		}
+		else if ( (~<Condition>~ == ~2~) && (~<State>~ == ~2~ ||  ~<State>~ == ~4~) )
+		{
+			CleanupFiles( ~<ID>~ );
+			OrderCleanup( ~<ID>~ );
+		}
+
+		UpdateProgress( dBase,~<ID>~,6 );
+		//Log( Session,~RImage Writer <fID>, (Job <ID>):  Production Complete~ );
+	}
+
+	action = ~RefreshOtherViews();~;
+
+	QueueContentsAfter( action,2000 );
+
+	Invoke( DisplayProgress,~Job <ID> <Condition> <State> <Status>~ );
+	
+	return TRUE;
+}
+
+
+VOID RefreshOtherViews()
+{
+	Action = ACTION DOC ( RImageOrdersDoc "Grid.RefreshListView();" );
+
+	PerformActions( Action );
+}
+
+
+NUMERIC RImage::HandleDeleteAfter( ID )
+{
+	if ( !PGenconList( OrderList,Connect,GetExistingRecordFor,~Select * From RImageOrders Where ID = '<ID>'~,Order ) )
+	{
+		Invoke( DisplayWarning,~Failed to find <ID> in the RImage Jobs for Writer <fID>~ );
+		return FALSE;
+	}
+		
+	if ( Order(GetNumeric,FileType) == 1 )	// Parent Directory Job?
+	{
+		FilePath = CD.ResolveDelayed(~<$pcon.Order[FilePath]>~);
+		
+		if ( Order(GetNumeric,DeleteAfter) )
+		{
+			Invoke( DisplayProgress,~Job <ID>: Deleting files at <FilePath>~ );
+			Log( Session,~RImage Job <ID>: Deleting <FilePath>~ );
+			
+			if ( !Directory( DeleteRecursive,~<FilePath>~,~*.*~ ) )
+			{
+				Log( Session,~Failed to removed files from directory <FilePath> for RImage Job <ID>~ );
+			}
+			
+			if ( !Directory( Remove,~<FilePath>~ ) )
+			{
+				Log( Session,~Failed to removed directory <FilePath> for RImage Job <ID>~ );
+			}
+		}
+		else
+		{
+			Log( Session,~RImage Job <ID>: Directory <FilePath> will not be deleted.~ );
+		}
+		
+		return TRUE;
+	}
+	
+	Invoke( DisplayProgress,~Job <ID>: Deleting Edit List files~ );
+
+	Query = ~Select FromPath From RImageEditList Where ID = '<ID>' AND DeleteAfter <> 0~;
+
+	if ( !PGenConList( List,Connect,Query,~<Query>~ ) )
+	{
+		return FALSE;
+	}
+	
+	Log( Session,~RImage Job <ID>: Deleting Editlist files~ );
+
+	while ( List( GetNext,Item ) )
+	{
+		Path = ~<$pcon.Item[FromPath]>~;
+
+		if ( !IsNull( ~<Path>~ ) )
+		{
+			if ( Files( Delete,~<Path>~ ) )
+			{
+				ContinueIf( !RemoveTheDirectory( ~<$str.$Path.Path>~ ) );				// REMOVE THE PARENT DIRECTORY IF EMPTY
+				ContinueIf( !RemoveTheDirectory( ~<$str.$Path.Path.Path>~ ) );			// REMOVE THE GRANDPARENT DIRECTORY IF EMPTY
+				ContinueIf( !RemoveTheDirectory( ~<$str.$Path.Path.Path.Path>~ ) );		// REMOVE THE GREAT GRANDPARENT DIRECTORY IF EMPTY
+				ContinueIf( !RemoveTheDirectory( ~<$str.$Path.Path.Path.Path.Path>~ ) );// REMOVE THE (You get the idea) DIRECTORY IF EMPTY
+				continue;
+			}
+				
+			Log( Session,~<Job <ID>: Failed to delete <path>. <$func.GetLastErrorMsg()>~ );
+		}
+	}
+	
+	Invoke( DisplayProgress,~Job <ID>: Deleted Edit List files~ );
+
+	return TRUE;
+}
+
+NUMERIC	RImage::RemoveTheDirectory( Path )
+{
+	Files( Delete,~<Path>\thumbs.db~ );
+	
+	if ( !Directory( Remove,~<path>~ ) )
+	{
+		Log( Session,~<Error <$func.GetLastErrorMsg()> deleting <Path>~ );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC RImage::CleanupFiles( ID )
+{
+	Path = ~<fJobPath>\<ID>~;
+	
+	Log( Session,~RImage Writer <fID>, (Job <ID>): Deleting files at <Path>~ );
+
+	Invoke( DisplayProgress,~Job <ID>: Deleting files at <Path>~ );
+
+	Directory( DeleteRecursive,~<Path>~,~*.*~ );
+
+	Directory( Remove,~<Path>~ );
+
+	HandleDeleteAfter( ~<ID>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC RImage::ConnectivityCheck()
+{
+	if ( !PGenconList( WriterList,Connect,GetExistingRecordFor,~Select * From RImage Where ID = '<fID>'~,Writer ) )
+	{
+		Invoke( DisplayWarning,~Failed to find a writer called <fID>~ );
+		return FALSE;
+	}
+	
+	if ( IsNull( ~<$pcon.Writer[Server]>~ ) )
+	{
+		Invoke( DisplayWarning,~You have not specified the server for RImage writer <fID>~ );
+		return FALSE;
+	}
+	
+	CD.SetSoftwareVersion( Writer( GetNumeric,SoftwareVersion ) );
+	
+	
+	if ( IsNull( ~<$pcon.Writer[ImagePath]>~ ) )
+	{
+		Invoke( DisplayWarning,~You have not specified an image path to build the CD images for RImage writer <fID>~ );
+		return FALSE;
+	}
+	
+	Invoke( DisplayProgress,~Checking <$pcon.Writer[ImagePath]>~ );
+
+	if ( !Directory( Create,~<$pcon.Writer[ImagePath]>~ ) )
+	{
+		Invoke( DisplayProgress,~<$pcon.Writer[ImagePath]> is not accessable~ );
+		Invoke( DisplayWarning,~Could not connect to <$pcon.Writer[ImagePath]>~ );
+		return FALSE;
+	}
+	
+	Invoke( DisplayProgress,~Connectivity to <$pcon.Writer[ImagePath]> exists~ );
+
+	
+	ReturnOnSuccess( !UsePowerToolsLib() );		// THE REST OF THIS IS NOT NEEDED FOR THE NEWER INTERFACES
+	
+	if ( IsNull( ~<$pcon.Writer[ImagingOrderFile]>~ ) )
+	{
+		Invoke( DisplayWarning,~You have not specified the Imaging Order File for writer <fID>~ );
+		return FALSE;
+	}
+
+	if ( !Files( FileExists,~<$pcon.Writer[ImagingOrderFile]>~ ) )
+	{
+		Invoke( DisplayWarning,~Could not connect to <$pcon.Writer[ImagingOrderFile]>~ );
+		return FALSE;
+	}
+
+	if ( IsNull( ~<$pcon.Writer[ProductionOrderFile]>~ ) )
+	{
+		Invoke( DisplayWarning,~You have not specified the Production Order file for writer <fID>~ );
+		return FALSE;
+	}
+
+	if ( !Files( FileExists,~<$pcon.Writer[ProductionOrderFile]>~ ) )
+	{
+		Invoke( DisplayWarning,~Could not connect to <$pcon.Writer[ProductionOrderFile]>~ );
+		return FALSE;
+	}
+
+	if ( IsNull( ~<$pcon.Writer[LogFilePath]>~ ) )
+	{
+		Invoke( DisplayWarning,~You have not specified the path to the pwrtool.log file for writer <fID>~ );
+		return FALSE;
+	}
+
+	if ( !Files( FileExists,~<$pcon.Writer[LogFilePath]>~ ) )
+	{
+		Invoke( DisplayWarning,~Could not connect to <$pcon.Writer[LogFilePath]>~ );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RImage::Setup()
+{
+	if ( !PGenconList( WriterList,Connect,GetExistingRecordFor,~Select * From RImage Where ID = '<fID>'~,Writer ) )
+	{
+		Invoke( DisplayWarning,~Failed to find a writer called <fID>~ );
+		return FALSE;
+	}
+
+	fJobPath = ~<$pcon.Writer[ImagePath]>~;
+
+	if ( IsNull( ~<fJobPath>~ ) )
+	{
+		Invoke( DisplayWarning,~You have not specified an image path to build the CD images for RImage writer <fID>~ );
+		return FALSE;
+	}
+
+	if ( IsNull( ~<$pcon.Writer[Server]>~ ) )
+	{
+		Invoke( DisplayWarning,~You have not specified the server for RImage writer <fID>~ );
+		return FALSE;
+	}
+	
+	if ( UsePowerToolsLib() )
+	{
+		if ( IsNull( ~<$pcon.Writer[ImagingOrderFile]>~ ) )
+		{
+			Invoke( DisplayWarning,~You have not specified the Imaging Order File for writer <fID>~ );
+			return FALSE;
+		}
+
+		if ( IsNull( ~<$pcon.Writer[ProductionOrderFile]>~ ) )
+		{
+			Invoke( DisplayWarning,~You have not specified the Production Order file for writer <fID>~ );
+			return FALSE;
+		}
+
+		if ( IsNull( ~<$pcon.Writer[LogFilePath]>~ ) )
+		{
+			Invoke( DisplayWarning,~You have not specified the path to the pwrtool.log file for writer <fID>~ );
+			return FALSE;
+		}
+		
+		CD.IOFile( ~<$pcon.Writer[ImagingOrderFile]>~ );
+		CD.POFile( ~<$pcon.Writer[ProductionOrderFile]>~ );
+		CD.OrderPath( ~<$pcon.Writer[LogFilePath].path>~ );
+	}
+	else	//  Using V7 or later of the RImage client api
+	{
+		CD.Setup_ClientAPI( ~<$pcon.Writer[Server]>~ );
+	}
+
+	CD.ImagePath( ~<fJobPath>~ );
+	CD.FeedbackRoutine(~<THIS>.RImageFeedback~);
+
+	MaxBuilds =  IsNull( ~<$pcon.Writer[MaxBuilds]>~ ) ? 1 : MakeNumber(~<$pcon.Writer[MaxBuilds]>~);
+
+	return (<MaxBuilds> > 0) ? <MaxBuilds> : 1;
+}
+
+
+NUMERIC RImage::Process( ID )
+{
+	Invoke( DisplayProgress,~Job <ID> Starting for writer <fID>~ );
+
+	if ( !PGenconList( OrderList,Connect,GetExistingRecordFor,~Select * From RImageOrders Where ID = '<ID>'~,Order ) )
+	{
+		Invoke( DisplayWarning,~Failed to find <ID> in the RImage Jobs for Writer <fID>~ );
+		return FALSE;
+	}
+
+	OrderList( GetConnection,dBase );
+
+	if ( !PGenconList( WriterList,Connection,dBase,GetExistingRecordFor,~Select * From RImage Where ID = '<fID>'~,Writer ) )
+	{
+		Invoke( DisplayWarning,~Failed to find a writer called <fID>~ );
+		return IndicateFailure(dBase,~<ID>~,~No Writer~);
+	}
+
+	UpdateProgress( dBase,~<ID>~,0 );
+
+	ImagePath = CD.ResolveDelayed(~<$pcon.Writer[ImagePath]>~);
+
+	fJobPath = ~<ImagePath>~;
+
+	CD.Reset();
+
+	CD.SetJob(~<ID>~);
+
+	CD.SetOrder(IsNull(~<$pcon.Order[OrderID]>~) ? ~~ : ~<$pcon.Order[OrderID]>~ );
+	CD.File(~<fJobPath>\<ID>\MediaFiles~);
+	CD.Volume(~<$pcon.Order[Volume]>~);
+	
+	CD.Incremental( Order(GetNumeric,RecordingType) );
+	CD.Type( Order(GetNumeric,PowerImage) );
+	CD.PowerSpan( Order(GetNumeric,Span) );
+	CD.AppleExtensions( Order(GetNumeric,AppleExtensions) );
+	
+	if ( UsePowerToolsLib() )
+	{
+		CD.OrderPath( ~<$pcon.Writer[LogFilePath].path>~ );
+	}
+	
+	CD.EditList();
+
+	CD.Copies(~<$pcon.Order[Copies]>~);
+
+	if ( MakeNumber(~<$pcon.Order[FileType]>~) == 1 )	// EditList = 0, Parent = 1
+	{
+		FilePath = CD.ResolveDelayed(~<$pcon.Order[FilePath]>~);
+
+		SrcPath = CD.ResolveDelayed(~<FilePath>\<$pcon.Order[Search]>~);
+
+		DstPath = ~<fJobPath>\<ID>\MediaFiles~;	
+
+		CDPath = ~\~;
+
+		if ( !IsNull( ~<$pcon.Order[CDPath]>~ ) )
+		{
+			DstPath = CD.ResolveDelayed(~<DstPath>\<$pcon.Order[CDPath].RemoveDoubleBackSlashes>~);
+			CDPath = ~<$pcon.Order[CDPath].RemoveDoubleBackSlashes>~;
+			CDPath = ~<$str.$CDPath.NoTrailingBlanks>~;
+			CDPath = ~<$str.$CDPath.Path>~;
+			CDPath = CD.ResolveDelayed(~<CDPath>~);
+		}
+
+		if ( ~<CDPath>~ == ~~ )
+		{
+			CDPath = ~\~;
+		}
+
+		Invoke( DisplayProgress,~Job <ID> Copying <SrcPath> to <$pcon.Writer[Server]>~ );
+
+		UpdateProgress( dBase,~<ID>~,2 );
+
+		Log( Session,~RImage Writer <fID>, (Job <ID>): Copying <SrcPath> to <DstPath>~ );
+
+		DirectoryLevels = GetTokens( ~<SrcPath>~,~\~ ) - 1;
+
+		if ( !CD.CopyFilesRecursively(~<DstPath>~,~<SrcPath>~,TRUE,<DirectoryLevels> ) )
+		{
+			err = GetLastErrorMsg();
+			Invoke( DisplayWarning,~Copy from <SrcPath> to <DstPath> failed. <err>~ );
+			return IndicateFailure(dBase,~<ID>~,~<err>~);
+		}
+
+		CD.Parent();
+	}
+
+	MediaPath = ~<fJobPath>\<ID>\MediaFiles~;
+
+	// Media (CD or DVD)
+	MediaTypeString = ~~;
+	StringList( TheMediaList,New,Is,~<$[DATABASE FieldTypes].RImageMediaType[ChoiceList]>~ );
+	UserSelectedMediaType = MakeNumber( ~<$pcon.Order[MediaType]>~ );
+	TheMediaList(GetStringAt,~<UserSelectedMediaType>~,MediaTypeString);
+	CD.Media(~<MediaTypeString>~);
+
+	// ImageType (ISO9660L1_Relax/NoRelax, or ISO9660L2)
+	ImageTypeString = ~~;
+	StringList( TheImageTypeList,New,Is,~<$[DATABASE FieldTypes].RImageType[ChoiceList]>~ );
+	UserSelectedImageType = MakeNumber( ~<$pcon.Order[ImageType]>~ );
+	TheImageTypeList(GetStringAt,~<UserSelectedImageType>~,ImageTypeString);
+	CD.ImageType(~<ImageTypeString>~);
+
+	// File System Qualifier (None, UDF102, ROCKRIDGE, or JOLIET)
+	FileSystemString = ~~;
+	StringList( TheFileSystemList,New,Is,~<$[DATABASE FieldTypes].RImageFileSystem[ChoiceList]>~ );
+	UserSelectedFileSystem = MakeNumber( ~<$pcon.Order[FileSystem]>~ );
+	TheFileSystemList(GetStringAt,~<UserSelectedFileSystem>~,FileSystemString);
+	CD.FileSystem(~<FileSystemString>~);
+
+	CD.LabelFile(~<$pcon.Order[LabelFile]>~);
+	CD.LabelType(~<$pcon.Order[LabelType]>~);
+	
+	CD.SetXMLGenerator(~<$pcon.Order[XMLGenerator]>~);
+
+	Order( GetValue,MergeData,DataToMerge );
+
+	if ( !IsContentsNULL( DataToMerge ) )
+	{
+		CD.MergeData(DataToMerge);
+	}
+	else if ( !IsNULL( ~<$pcon.Order[MergeFile]>~ ) )
+	{
+		CD.MergeFile(~<$pcon.Order[MergeFile]>~);
+	}
+	
+	CD.NeedMergeFileHeader(~<$pcon.Order[NeedMergeFileHeader].numeric>~);
+
+	Invoke( DisplayProgress,~Job <ID> Submitting job to writer <fID>~ );
+
+	UpdateProgress( dBase,~<ID>~,3 );
+
+	CD.Log( ~<ID>~,~Start~,~<fID>~ );
+
+	Log( Session,~RImage Writer <fID>, (Job <ID>): Starting image build~ );
+
+	success = CD.Publish(~<MediaPath>~);
+
+	if ( !<success> )
+	{		
+		CD( Stop );
+
+		errMsg = ~Error submitting Job <ID> to Writer <fID>~;
+
+		Invoke( DisplayWarning,~<errMsg>~ );
+
+		CleanupFiles( ~<ID>~ );
+
+		CD.Log( ~<ID>~,~Error~,~<fID>~ );
+
+		return IndicateFailure( dBase,~<ID>~,~<errMsg>~ );
+	}
+
+	CD.Log( ~<ID>~,~End~,~<fID>~ );
+
+	UpdateProgress( dBase,~<ID>~,4 );
+
+	fBuilding = UsePowerToolsLib() ? TRUE : FALSE;
+
+	Invoke( DisplayProgress,~Job <ID>  complete <fID>~ );
+	return TRUE;
+}
+
+
+
+
+
+// ------------------- THE FOLLOWING THREAD DOES THE POLLING FOR WORK ---------------------------
+
+VOID RImageThread::RImageThread( ID )		
+{ 
+	fID = ~<ID>~;
+
+	Pause( TRUE );	// START UP PAUSED
+}
+
+NUMERIC RImageThread::HandleStart()	
+{
+	if ( !(fMaxBuilds = CD.Setup()) )
+	{
+		return FALSE;
+	}
+	
+	log( Session,~RImage Processing Thread is starting~ );
+	 
+	CD.Start();
+
+	<THIS>.SetRunning(TRUE);
+	
+	return <THIS>.SetTimer( 4000 );
+}
+
+VOID RImageThread::HandleQuit()
+{
+	log( Session,~RImage Processing Thread is exiting~ );
+}
+
+VOID RImageThread::ThreadDebugLoop()
+{
+	if ( IsDebug() )
+	{
+		while ( !<fAborting> )
+		{
+			HandleMsg( WM_TIMER(),0,0 );
+		}
+	}
+}
+
+NUMERIC RImageThread::Pausing( value )	
+{ 
+	msg = <value> ? ~Stopping....~ : ~Starting....~;
+
+	Invoke( DisplayStatus,~<msg>~ );
+
+	fDisplayStoppedMsg = TRUE;
+
+	Pause( <value> );
+
+	return TRUE;
+}
+
+NUMERIC RImageThread::DisplayCounts( &Count,&PublishingCount )
+{
+	if ( !CD.Started() )
+	{
+		Invoke( DisplayStatus,~Waiting for the RImage to respond...~ );
+		return FALSE;
+	}
+	
+	Count = CD.OrdersInProcess();
+	PublishingCount = CD.CDRPublishingOrders();
+	SentCount = CD.RImageJobsInProgress();
+	
+	if ( <Count> < 0 || <PublishingCount> < 0 )
+	{
+		Log( Session,~Failed to retrieve production counts from the RImage Server~ );
+		Invoke( DisplayStatus1,~Lost Communications with Server~ );
+		return FALSE;
+	}
+	
+	if ( CD.SoftwareVersion() == 0 )
+	{
+		Invoke( DisplayStatus1,~Imaging <Count>   Production <PublishingCount>~ );
+	}
+	else
+	{
+		Invoke( DisplayStatus1,~Pending <SentCount>   Imaging <Count>   Production <PublishingCount>~ );
+	}
+	
+	return TRUE;
+}
+
+	
+NUMERIC RImageThread::FindNextJob( &ID )
+{
+	
+	Invoke( DisplayStatus,~ Looking for work~ );
+	
+	Query = ~Select * From RImageOrders Where (Writer = '<fID>' OR Writer = 'Any') AND Progress = 1 Order By Priority desc,SubmitDate~;
+
+	if ( !PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		Log( Session,~Failed to Query RImage Orders.  <theErr>.  <Query>~ );
+		Invoke( DisplayWarning,~Failed to Query RImage Orders~ );
+		return FALSE;
+	}
+	
+	OrderCount = List( NumEntries );
+
+	if ( !List( GetFirst,Item ) )
+	{
+		Invoke( DisplayStatus,~No jobs ready for imaging~ );
+		return FALSE;
+	}
+
+	if ( !Item( Set,Progress,3  ) )	
+	{ 
+		Invoke( DisplayWarning,~RImage Writer <fID>: <Query> reservervation failed~ );
+		Log( Session,~RImage Writer <fID>: <Query> reservervation failed~ );
+		return FALSE;
+	}
+
+	Item( Set,State,0 );
+	Item( Set,Condition,0 );
+
+	if ( !List( Update ) )			{ Log( Session,~RImage Writer <fID>: <Query> reservation update failed~ ); return FALSE; }
+
+	ID = ~<$pcon.Item[ID]>~;
+
+	Invoke( DisplayStatus,~Selected ID <ID> from <OrderCount> Jobs~ );
+	return Log( Session,~RImage Writer <fID>, (Job <ID>): Selected from <OrderCount> Jobs~ );
+}
+
+
+NUMERIC RImageThread::HandleMsg( Msg,lparam,wparam )
+{ 
+	 <THIS>.KillTimer();
+	 
+	while ( TRUE )
+	{
+		PollInterval = <fPollInterval>;
+		
+		if ( Paused() || !Running() )
+		{
+			if ( <fDisplayStoppedMsg> )
+			{
+				Invoke( DisplayStatus,~Stopped~ );
+				fDisplayStoppedMsg = FALSE;
+			}
+
+			break;
+		}
+
+		fDisplayStoppedMsg = TRUE;
+
+		//if ( CD.StillBuilding() )	
+		//	break;
+			
+		Count = PublishingCount = 0;
+	
+		if ( !DisplayCounts( Count,PublishingCount ) )
+		{
+			Invoke( DisplayStatus,~RImage has not responded yet....~ );
+			break;
+		}
+		
+		fMaxBuilds = ( <fMaxBuilds> < 1 ) ? 1 : <fMaxBuilds>;
+		
+		theMax = Max( Numeric(~<Count>~),Numeric(~<PublishingCount>~) );
+		
+		theMax = Max( ~<theMax>~,CD.RImageJobsInProgress() );
+		
+		if ( <theMax> >= <fMaxBuilds> )
+		{
+			Invoke( DisplayStatus,~Max jobs in progress.~ );
+			break;
+		}
+
+		ID = <THIS>.Dequeue();
+
+		if ( IsNULL( ~<ID>~ ) )
+		{
+			if ( !FindNextJob( ID ) )
+				break;
+		}
+
+		if ( !IsNULL( ~<ID>~ ) )
+		{
+			CD.Process( ~<ID>~ );
+		}
+		
+		RefreshProductionStatus();
+	}
+
+	if ( Running() )	{ <THIS>.SetTimer( <PollInterval> ); }
+
+	return TRUE;
+}
+
+
+NUMERIC RImageThread::RefreshProductionStatus()
+{
+	if ( !CD.Started() )
+	{
+		if ( CD.UsePowerToolsLib() )
+		{
+			Invoke( DisplayStatus,~Waiting to hear from the RImage Server...~ );
+		}
+		
+		return FALSE;
+	}
+	
+	Count = CD.OrdersInProcess();
+	PublishingCount = CD.CDRPublishingOrders();
+	
+	if ( <Count> < 0 || <PublishingCount> < 0 )
+	{
+		Invoke( DisplayStatus,~RImage not responding....~ );
+		return FALSE;
+	}
+		
+	return TRUE;
+
+	CD.GetProductionStatus();
+
+	Order = CD.GetStatus( OrderID );
+	State = CD.GetStatus( State );
+	Percent = CD.GetStatus( Percent );
+	Done = CD.GetStatus( Done );
+
+	Invoke( DisplayStatus,~<OrderID>,<State>,<Percent>,<Done>~ );
+
+	return TRUE;
+}
+
+

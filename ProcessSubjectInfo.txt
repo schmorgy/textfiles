@@ -1,0 +1,1477 @@
+Include: ~Utilities2~;
+
+NUMERIC ReOpen()
+{
+	return TRUE;
+}
+
+
+if ( !DataDict( TheDictionary,Get,DDProcessSubjectInfo ) )
+{
+	Dictionary: DDProcessSubjectInfo
+		Fields: Name EnteredID			Type Text
+		Fields: Name SaveToID			Type Text
+
+		Fields: Name SubjectOrderIDSource	Type Text
+		Fields: Name SubjectOrderIDField	Type Text
+		Fields: Name SubjectOrderID			Type Text
+
+		Fields: Name SubjectID			Type Text
+		Fields: Name SubjectIDSource	Type Text
+		Fields: Name SubjectIDField		Type Text
+
+		Fields: Name InfoType			Type Text
+}
+
+
+
+VOID DefineDialog()
+{
+	Define: DlgData Using DDProcessSubjectInfo 
+		Fields: SubjectOrderIDSource	~ID~
+		Fields: SaveToID				~OrderID~
+		Fields: SubjectIDSource			~ID~;
+
+	Global( DlgData );
+
+    Left = 5; Top = 5; hGap = 5; vGap = 5;
+    TextHeight = 20;        TextWidth = 110;  
+	ButtonHeight = 20;		ButtonWidth = 70;
+	StaticTextWidth = 110;	StaticTextHeight = 20;
+    EditTextWidth = 250;	EditTextHeight = 20;
+	x = $Left;				y = $Top;
+
+    Define: DlgDefinition Using DDWinDef
+            Fields: Position			200 50 $DialogWidth $DialogHeight
+                    Title				Translate( ~Process Subject Info~ )
+                    TypeName			~Dialog~
+					HACTIONSTEXT		ACTION SHOWHELPPAGE ( KPISHelpFile "ProcessSubjectInfo.htm" )
+					StatusBar			~1 100~
+					DropActionsText		ACTION EXEC ( HandleDrop() )
+                    OACTIONSTEXT		ACTION EXEC ( CloseDialog() ) ;
+
+    Contains: InListOrder
+    {
+
+		Define: IDRadioButton Using DDWinCtrlDef AsSymbol IDRadioButton
+			Fields: TypeName			RadioButton  
+					Position			$x,$y,
+										$StaticTextWidth ,$StaticTextHeight
+					IActionsText		ACTIONS ( Get )
+					DActionsText		ACTIONS (
+												UnCheckButton(IDFieldRadioButton) 
+												CheckButton(IDRadioButton)
+												Enable(ViewSubjectInfoButton)
+												Exec( "UseID(TRUE);" )
+												)
+					OActionsText		ACTIONS ( Save )
+					GenConName			THIS
+					GenConField			~SubjectOrderIDSource~
+					RadioTrueValue		~ID~
+					IsTabStop			F
+ 					Text				Translate(~ID~)
+					Tooltip				~Use this ID to determine ID for each SubjectInfo record~;
+
+        Define: IDField Using DDWinCtrlDef AsSymbol IDField 
+            Fields: TypeName			ComboBox  
+                    Position			IDRadioButton(GetRight,Position) + $hGap,IDRadioButton(GetTop,Position),<EditTextWidth> ,<EditTextHeight> * 10
+					IActionsText		ACTIONS ( Get )
+//					KeyboardActionsText	ACTION EXEC ( NewIDSelected() )
+					KillFocusActionsText	ACTION EXEC ( NewIDSelected() )
+					DActionsText		ACTION EXEC ( NewIDSelected() )
+					ReturnKeyActionsText ACTION EXEC ( NewIDSelected() )
+					OActionsText		ACTIONS ( Save )
+					IsTabStop			T
+					DropDownActionsText ACTION CALL ( RefreshIDComboBox() )
+					Mask				~<$[DATABASE FieldTypes].OrderID[Mask]>~
+					PromptChar			~<$[DATABASE FieldTypes].OrderID[PromptChar]>~
+					AllowedChars		~<$[DATABASE FieldTypes].OrderID[AllowedChars]>~
+					DisallowedChars		~<$[DATABASE FieldTypes].OrderID[DisallowedChars]>~
+                    GenConName			 THIS
+                    GenConField			~EnteredID~
+                    Tooltip				~Enter the ID that the data is for and press Enter, or enter the first couple of characters and press the drop down arrow~;
+
+		Define: IDSearch Using DDWinCtrlDef AsSymbol IDSearch 
+            Fields: TypeName			Button  
+					Text				~?~
+                    Position			IDField(GetRight,Position) + $hGap,IDField(GetTop,Position),20 ,<EditTextHeight> 
+					DActionsText		ACTION EXEC ( OnIDButton() )	
+                    Tooltip				~Find all Orders/ShootDescriptions that start with these characters~;
+
+
+		Define: IDFieldRadioButton Using DDWinCtrlDef AsSymbol IDFieldRadioButton
+			Fields: TypeName			RadioButton  
+                    Position			IDRadioButton(GetLeft,Position),IDRadioButton(Getbottom,Position)+$vGap,$StaticTextWidth,$StaticTextHeight 
+					DActionsText		ACTIONS (
+												UnCheckButton(IDRadioButton) 
+												CheckButton(IDFieldRadioButton)
+												Disable(ViewSubjectInfoButton)
+												Exec( "UseID(FALSE);" )
+												)
+					OActionsText		~[Save]~
+					GenConName			THIS
+					GenConField			~SubjectOrderIDSource~
+					RadioTrueValue		~Field~
+					IsTabStop			F
+ 					Text				Translate(~ID Field~)
+					Tooltip				~Select the field that is the ID for each SubjectInfo record~;
+
+		Define: IDFieldComboBox Using DDWinCtrlDef AsSymbol IDFieldComboBox 
+			Fields: TypeName			SComboBox  
+					Position			IDFieldRadioButton(GetRight,Position) + $hGap,IDFieldRadioButton(Gettop,Position),<EditTextWidth> ,180 
+					IActionsText		ACTIONS ( Get )
+					OActionsText		ACTIONS ( Save )
+					GenConName			THIS
+					GenConField			~SubjectOrderIDField~
+					DActionsText		ACTIONS  ( Save )
+					Tooltip				~Select the field which is the ID~;
+
+		Define: SaveOrderRadioButton Using DDWinCtrlDef AsSymbol SaveOrderRadioButton
+			Fields: TypeName			RadioButton  
+					Position			IDSearch(GetRight,Position) + 3*$hGap,
+										IDSearch(GetTop,Position),
+										$StaticTextWidth,$StaticTextHeight 
+					DActionsText		ACTIONS (
+												UnCheckButton(SaveShootRadioButton) 
+												CheckButton(SaveOrderRadioButton)
+												Exec( "SaveToOrder(TRUE);" )
+												)
+					OActionsText		~[Save]~
+					GenConName			THIS
+					GenConField			~SaveToID~
+					RadioTrueValue		~OrderID~
+					IsTabStop			F
+ 					Text				Translate(~Order ID~)
+					Tooltip				~Select the field if the SubjectInfo records are to be saved to the Order ID~;
+
+		Define: SaveShootRadioButton Using DDWinCtrlDef AsSymbol SaveShootRadioButton
+			Fields: TypeName			RadioButton  
+                    Position			SaveOrderRadioButton(GetLeft,Position),SaveOrderRadioButton(Getbottom,Position)+$vGap,$StaticTextWidth,$StaticTextHeight 
+					DActionsText		ACTIONS (
+												UnCheckButton(SaveOrderRadioButton) 
+												CheckButton(SaveShootRadioButton)
+												Exec( "SaveToOrder(FALSE);" )
+												)
+					OActionsText		~[Save]~
+					GenConName			THIS
+					GenConField			~SaveToID~
+					RadioTrueValue		~ShootID~
+					IsTabStop			F
+ 					Text				Translate(~ShootDesc ID~)
+					Tooltip				~Select the field if the SubjectInfo records are to be saved to the Shoot Description ID~;
+
+
+ 		 Define: InfoTypePrompt Using DDWinCtrlDef AsSymbol InfoTypePrompt 
+			Fields: TypeName			StaticText  
+					Position			IDFieldRadioButton(GetLeft,Position),
+										IDFieldRadioButton(GetBottom,Position)+$vGap*4,
+										$StaticTextWidth,$StaticTextHeight
+					RightJustified		TRUE
+					Text				~InfoType~
+
+		 Define: InfoTypeComboBox Using DDWinCtrlDef AsSymbol InfoTypeComboBox 
+			Fields: TypeName			SComboBox  
+					Position			InfoTypePrompt(GetRight,Position) + $hGap,InfoTypePrompt(Gettop,Position)-2,<EditTextWidth> ,$StaticTextHeight*4 
+					OActionsText		ACTIONS ( Save )
+					GenConName			THIS
+					GenConField			~InfoType~
+//					DActionsText		ACTIONS  ( Save )
+					DActionsText		ACTION EXEC ( NewInfoTypeSelected() )
+					IActionsText		ACTION EXEC ( RefreshInfoTypesComboBox(TRUE) )
+					DropDownActionsText ACTION CALL ( RefreshInfoTypesComboBox(TRUE) )
+					Tooltip				~Select the type of Subject Information.~;
+
+		Define: InfoTypeSearch Using DDWinCtrlDef AsSymbol InfoTypeSearch 
+			Fields: TypeName			Button  
+					Text				~?~
+					Position			InfoTypeComboBox(GetRight,Position) + $hGap,InfoTypeComboBox(GetTop,Position),20 ,<EditTextHeight> 
+					DActionsText		ACTION EXEC ( OnInfoTypeButton() )	
+					Tooltip				~See the definition of this infotype~;
+
+        Define: SubjectInfoIDPrompt Using DDWinCtrlDef AsSymbol SubjectInfoIDPrompt 
+            Fields: TypeName			StaticText  
+                    Position			InfoTypePrompt(GetLeft,Position),
+										InfoTypePrompt(GetBottom,Position)+$vGap*4,
+										$StaticTextWidth,$StaticTextHeight
+					RightJustified		TRUE
+					Text				~SubjectInfo ID  ~
+                    Tooltip				~The ID the SubjectInfo data will be save to~;
+
+        Define: SubjectInfoIDField Using DDWinCtrlDef AsSymbol SubjectInfoIDField 
+            Fields: TypeName			StaticText  
+                    Position			SubjectInfoIDPrompt(GetRight,Position) + $hGap,
+										SubjectInfoIDPrompt(GetTop,Position),
+										<EditTextWidth> ,<EditTextHeight>
+					FontWeight			600
+					IActionsText		ACTIONS ( Get )
+					DActionsText		ACTIONS ( Save )
+					OActionsText		ACTIONS ( Save )
+                    GenConName			THIS
+                    GenConField			~SubjectOrderID~
+                    Tooltip				~The ID the SubjectInfo data will be save to~;
+
+
+		Define: SubjectIDRadioButton Using DDWinCtrlDef AsSymbol SubjectIDRadioButton
+			Fields: TypeName			RadioButton  
+                    Position			SubjectInfoIDPrompt(GetLeft,Position),
+										SubjectInfoIDPrompt(Getbottom,Position)+$vGap*2,
+										$StaticTextWidth,$StaticTextHeight 
+					IActionsText		ACTIONS ( Get )
+					DActionsText		ACTIONS (
+												UnCheckButton(SubjectFieldRadioButton) 
+												CheckButton(SubjectIDRadioButton)
+												Exec( "UseSubjectID(TRUE);" )
+												)
+					OActionsText		ACTIONS ( Save )
+					GenConName			THIS
+					GenConField			~SubjectIDSource~
+					RadioTrueValue		~ID~
+					IsTabStop			F
+ 					Text				Translate(~SubjectID~)
+					Tooltip				~Use this SubjectID for each SubjectInfo record~;
+
+		Define: SubjectIDFieldText Using DDWinCtrlDef AsSymbol SubjectIDFieldText 
+			Fields: TypeName			EditText  
+					Position			SubjectIDRadioButton(GetRight,Position) + $hGap,SubjectIDRadioButton(GetTop,Position),<EditTextWidth> ,<EditTextHeight> 
+					IActionsText		ACTIONS ( Get )
+					DActionsText		ACTIONS ( Save )
+					OActionsText		ACTIONS ( Save )
+                    GenConName			THIS
+                    GenConField			~SubjectID~
+                    Tooltip				~Enter the starting SubjectID for the data.  Each successive record will be incremented by one.~;
+
+		Define: NextSubjectIDButton Using DDWinCtrlDef AsSymbol NextSubjectIDButton 
+			Fields: TypeName			Button  
+					Text				~Next~
+					Position			SubjectIDFieldText(GetRight,Position) + $hGap,SubjectIDFieldText(GetTop,Position),35 ,<EditTextHeight> 
+					DActionsText		ACTION EXEC ( OnNextSubjectIDButton() )	
+					Tooltip				~Set the starting Subject ID to one more than the highest ID currently defined~;
+
+
+		DialogWidth = SaveOrderRadioButton(GetRight,Position) + $hGap*2;
+
+		Define: SubjectFieldRadioButton Using DDWinCtrlDef AsSymbol SubjectFieldRadioButton
+			Fields: TypeName			RadioButton  
+                    Position			SubjectIDRadioButton(GetLeft,Position),SubjectIDRadioButton(Getbottom,Position)+$vGap,$StaticTextWidth,$StaticTextHeight 
+					DActionsText		ACTIONS (
+												UnCheckButton(SubjectIDRadioButton) 
+												CheckButton(SubjectFieldRadioButton)
+												Exec( "UseSubjectID(FALSE);" )
+												)
+					OActionsText		~[Save]~
+					GenConName			THIS
+					GenConField			~SubjectIDSource~
+					RadioTrueValue		~Field~
+					IsTabStop			F
+ 					Text				Translate(~SubjectID Field~)
+					Tooltip				~Select the field that is the SubjectID for each SubjectInfo record~;
+
+		Define: SubjectFieldComboBox Using DDWinCtrlDef AsSymbol SubjectFieldComboBox 
+			Fields: TypeName			SComboBox  
+					Position			SubjectFieldRadioButton(GetRight,Position) + $hGap,SubjectFieldRadioButton(Gettop,Position),<EditTextWidth> ,180 
+					OActionsText		ACTIONS ( Save )
+					GenConName			THIS
+					GenConField			~SubjectIDField~
+					DActionsText		ACTIONS  ( Save )
+					IActionsText		ACTIONS ( Get )
+					Tooltip				~Select the field which is the SubjectID~;
+
+
+		Define: ViewSubjectInfoButton Using DDWinCtrlDef AsSymbol ViewSubjectInfoButton 
+			Fields: TypeName			Button
+					Text				Translate( ~View~ )
+					Position			$DialogWidth/2 - ($ButtonWidth+$hgap) * 2,SubjectFieldRadioButton(GetBottom,Position)+$vGap*5,$ButtonWidth, $ButtonHeight
+					DActionsText		ACTION EXEC ( OnViewSubjectInfoButton() ) 
+					IsEnabled			T
+					Tooltip				Translate( ~View the SubjectInfo for the indicated SubjectInfo ID~ );
+
+		Define: DeleteAllButton Using DDWinCtrlDef AsSymbol DeleteAllButton 
+			Fields: TypeName			DefaultButton
+					Text				Translate( ~Delete All~ )
+					Position			ViewSubjectInfoButton(GetRight,Position)+$hGap,ViewSubjectInfoButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+					DActionsText		ACTION EXEC ( OnDeleteAllButton() ) 
+					IsEnabled			T
+					Tooltip				Translate( ~Delete all of the Subject Information for the selected ID~ );
+
+		Define: GoButton Using DDWinCtrlDef AsSymbol GoButton 
+			Fields: TypeName			DefaultButton
+					Text				Translate( ~Go~ )
+					Position			DeleteAllButton(GetRight,Position)+$hGap,DeleteAllButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+					DActionsText		ACTION EXEC ( OnGoButton() ) 
+					IsEnabled			T
+					Tooltip				Translate( ~Start adding the data to the appropriate SubjectInfo table~ );
+
+		Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton 
+			Fields: TypeName			Button
+					Text				Translate( ~Cancel~ )
+					Position			GoButton(GetRight,Position)+$hGap,GoButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+					DActionsText		ACTION EXEC ( CloseDialog() ) 
+					IsEnabled			T
+					Tooltip				Translate( ~Close this dialog~ );
+    };
+
+	ScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+	x = $ScreenWidth / 2;
+	y = 62;
+
+	RightEdge = <x> + <DialogWidth>;
+
+	if ( <RightEdge> > <ScreenWidth> )
+	{
+		x = <ScreenWidth> - <DialogWidth> - 10;
+	}
+
+	DialogHeight = GoButton(GetBottom,Position) + $vGap + 40;
+
+    DlgDefinition( Set,Position,~<x> <y> <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,DlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    Global( dlg );
+}
+
+
+
+// car - I currently disabled this function for V4.1, although doesn't seem to be fully implemented.
+NUMERIC HandleDrop()
+{
+	return Warning(~Dragging and Dropping data to this dialog is not enabled.~);
+
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+	{ 
+		return FALSE;
+	}
+
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck ); // REMOVE THE DRAG INFO FROM THE TREE
+
+	dlg( EnableControls,TRUE,StopButton );
+
+	ExternalDrop(DragDropInfo); 
+
+	dlg( EnableControls,FALSE,StopButton ); 
+
+	return TRUE;
+}
+
+
+NUMERIC ExternalDrop( &DragDropInfo )
+{
+	if ( !DragDropInfo( GetDraggedFiles,DraggedFileList ) )	// Not used
+	{ 
+		return ~There were no files in the object you dragged~;
+	}
+
+	count = DraggedFileList( ChildCount );
+
+	if ( $count <= 0 )
+	{ 
+		return Warning( ~There were no files in the object you dragged~; )
+	}
+
+	count = ProcessDraggedFiles( DraggedFileList );
+
+	return TRUE;
+}
+
+
+NUMERIC ProcessDraggedFiles( &DraggedFileList )
+{
+	more = DraggedFileList( GetFirst,Item );
+
+	if ( <more> )
+	{
+	
+	}
+
+	return TRUE;
+}
+
+
+
+VOID CloseDialog()
+{
+    dlg( END );
+    Exit();
+}
+
+
+NUMERIC OnViewSubjectInfoButton()
+{
+	dlg( GetInput );
+
+	DlgData( GetValues,SubjectOrderID,SubjectOrderID );
+
+	if ( ~<SubjectOrderID>~ == ~~ )
+	{
+		return Warning( Translate( ~You must enter an ID~ ) );
+	}
+
+	StringList( InfoTypeList,New );
+	count = GetInfoTypeListForDefinedID(~<SubjectOrderID>~,InfoTypeList,FALSE);
+
+	if ( <count> < 1 )
+	{
+		return Warning( Translate(~There are no Orders or ShootDescription which use this SubjectInfo.\nNo SubjectInfo to display.~) );
+	}
+
+	Index = 0;
+	success = TRUE;
+	while ( (<Index> < <count>) && <success> )
+	{
+		InfoTypeList(GetStringAt, <Index>,InfoType);
+		Query = ~Select * From SubjectInfo Where OrderID = '<SubjectOrderID>' Order By OrderID,SubjectID~;
+
+		Actions = ACTION DOC ( ~SubjectInfo~ OpenOnce SubjectInfoDoc "Init2( ~<SubjectOrderID>~,~<InfoType>~,~<Query>~ );" );
+		success =  PerformActions( Actions );
+
+		++Index;
+	}
+
+	return <success>;
+}
+
+
+NUMERIC OnDeleteAllButton()
+{
+	dlg( GetInput );
+
+	DlgData( GetValues,SubjectOrderID,SubjectOrderID );
+
+	if ( ~<SubjectOrderID>~ == ~~ )
+	{
+		return Warning( Translate( ~You must specify an SubjectInfo ID~ ) );
+	}
+
+	if ( !ADO(dBase,Connect) )
+	{
+		return Warning( Translate(~Failed to connect to the shared dbase~) );
+	}
+
+	if ( !ADO(localDB,ConnectLocal) )
+	{
+		return Warning( Translate(~Failed to connect to the local dbase~) );
+	}
+
+	// Check if used by any orders and if in use
+	Query = ~Select ID, InfoType From Orders Where ((ID = '<SubjectOrderID>' And ShootDescID Is Null) Or (ShootDescID = '<SubjectOrderID>')) And ImagesOrderID Is Null Order by ID~;
+	if ( !PGenConList( List,Connection,dBase,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the orders table.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	count = List(NumEntries);
+	if (<count> > 0)
+	{
+		if ( MessageBox( Translate(~There are <count> orders using this SubjectInfo ID.\nAre you sure you want to delete it?~),YESNO ) != YES )
+		{	return FALSE;	}
+
+		List(MakeStringList,InfoTypeList,InfoType);
+
+		more = List(GetFirst,theRecord);
+		while ( <more> )
+		{
+			OrderID = ~<$pcon.theRecord[ID]>~;
+
+			JobCount = dBase( RecordCountFor,~Select OrderID From JobQueue Where OrderID = '<OrderID>'~ );
+
+			if ( <JobCount> )
+			{
+				if ( MessageBox( Translate(~Order <OrderID> has <JobCount> jobs waiting to print that might reference the SubjectInfo you are about to delete.\n\n  Are you sure you wish to delete all the records? ~ ),YESNO ) != YES )
+				{
+					return FALSE;
+				}
+			}
+
+			JobCount = localDB( RecordCountFor,~Select OrderID From OrdersToProof Where OrderID = '<OrderID>'~ );
+	
+			if ( <JobCount> )
+			{
+				if ( MessageBox( Translate(~Order <OrderID> has <JobCount> proof jobs waiting to be queued for printing that might reference the SubjectInfo you are about to delete.\n\n  Are you sure you wish to delete all the records? ~ ),YESNO ) != YES )
+				{
+					return FALSE;
+				}
+			}
+
+			JobCount = localDB( RecordCountFor,~Select OrderID From OrderItemsToQueue Where OrderID = '<OrderID>'~ );
+
+			if ( <JobCount> )
+			{
+				if ( MessageBox( Translate(~Order <OrderID> has <JobCount> OrderItems waiting to be queued for printing that might reference the SubjectInfo you are about to delete.\n\n  Are you sure you wish to delete all the records? ~ ),YESNO ) != YES )
+				{
+					return FALSE;
+				}
+			}
+
+			more = List(GetNext,theRecord);
+		}
+		ForgetLocal(localDB);
+	}
+
+	StringList( InfoTypeList,New );
+	count = GetInfoTypeListForSubjOrderID(~<SubjectOrderID>~,InfoTypeList,FALSE);
+	if ( <count> < 1 ) 
+	{
+		return Warning( Translate(~No SubjectInfo Data exist which use this ID~) );
+	}
+
+	Index = -1;
+	success = TRUE;
+	while ( (<++Index> < <count>) && <success> )
+	{
+		InfoTypeList(GetStringAt, <Index>,InfoType);
+		First = ~~;	Last = ~~; SubCount = 0;
+
+		if ( !GetFirstLastSubjectIDForOrder( dBase,~<SubjectOrderID>~,~<InfoType>~,First,Last,SubCount ) )
+		{
+			Warning( ~SubjectInfo ID <SubjectOrderID> of type <InfoType> has no SubjectInfo records~ ) ;
+			Continue;
+		}
+
+		if ( <Count> == 0 )
+		{
+			Warning( ~SubjectInfo ID <SubjectOrderID> of type <InfoType> has no SubjectInfo records~ ) ;
+			Continue;
+		}
+
+		EnteredInfoType = (~<InfoType>~ == ~~) ? ~(Default SubjectInfo)~ : ~<InfoType>~;
+
+		dlg( SelectString,InfoType,~<EnteredInfoType>~ );
+
+		if ( MessageBox( Translate(~SubjectInfo ID <SubjectOrderID> has <SubCount> SubjectInfo records of type '<EnteredInfoType>'.\n\nThe first is <First> and the last is <Last>.\n\n  Are you sure you wish to delete all the records? ~ ),YESNO ) != YES )
+		{
+			Continue;
+		}
+
+		if ( MessageBox( Translate(~Are you really sure?~ ),YESNO ) != YES )
+		{
+			Continue;
+		}
+
+		Cmd = ~Delete From SubjectInfo<InfoType> Where OrderID = '<SubjectOrderID>'~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,,theErr );
+			return Warning( Translate( ~Failed to delete the SubjectInfo ID <SubjectOrderID> of type <InfoType>.\n\n<Cmd>\n\n<theErr>~ ) );
+		}
+
+		Log( Session,~Deleting all subject info: <cmd>~ );
+	
+//		++Index;
+	}
+
+	ForgetLocal( dBase );
+
+	OnNextSubjectIDButton();
+
+	Log( Session,~Delete All SubjectInfo for ID <SubjectOrderID> has Completed.~ );
+
+	return Warning( ~Delete All SubjectInfo for ID <SubjectOrderID> has Completed.~ );
+}
+
+
+NUMERIC OnGoButton()
+{
+	Actions = ACTIONS ( Doc( ~SubjInfoSetupWin~ OpenOnce SubjInfoSetupWin "RegainFocus();" ) );
+	PerformActions( Actions );
+	Sleep( 100 );
+
+	dlg( GetInput );
+	
+	ProcessSelectedRecords();
+
+	return TRUE;
+}
+
+
+
+NUMERIC AddARecord( &dBase,WhichTable,InfoType,AnOrderID,SubjectID,&FieldList,&Item )
+{
+	TableName = ~<WhichTable><InfoType>~;
+
+	Query = ~Select * From <TableName> Where OrderID = '<AnOrderID>' AND SubjectID = '<SubjectID>'~;
+
+	retval = PGenConList( List,Connection,dBase,Cursor,KeySet,GetRecordFor,~<Query>~,Record );
+
+	if ( !<retval> )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Error querying the database. <Query>  <theErr>~ );
+	}
+
+	if ( !Record(UpdateFrom,Item) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Error updating the record with matching fields.  Check the session log for additional information.\n\n<Query>\n\n<theErr>~ );
+	}
+
+//	FieldList( SetPosition, ~BeforeFirst~ );
+//	while ( FieldList( GetNextString,field ) )
+//	{
+//		Item(   Get, ~<field>~, value );
+//		if ( !IsNull( ~<value>~ ) )
+//		{
+//			Record( Set, ~<field>~, ~<value>~ );
+//		}
+//	}
+
+	// Set OrderID and SubjectID regarless if new record or not - as data may have these fields defined that are different than the OrderID/SubjectID assigning	
+	if ( !Record( Set,OrderID,~<AnOrderID>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Error setting SubjectInfo ID to '<AnOrderID>'.\n\n<theErr>~ );
+	}
+
+	if ( !Record( Set,SubjectID,~<SubjectID>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Error setting the SubjectID to '<SubjectID>' for SubjectInfo '<AnOrderID>'.\n\n<theErr>~ );
+	}
+
+
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Error updating SubjectInfo from Query.\n\n<Query>\n\n<theErr>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ProcessSelectedRecords()
+{
+	WaitCursor( Begin );
+
+	if ( !Ado( dbase,Connect ) )
+	{
+		WaitCursor( END );
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the shared database. <theErr>~ ) );
+	}
+
+	DlgData( GetValues,SubjectOrderID,SubjectOrderID,SubjectOrderIDField,SubjectOrderIDField,SubjectOrderIDSource,SubjectOrderIDSource );
+	DlgData( GetValues,SubjectID,SubjectID,SubjectIDField,SubjectIDField,SubjectIDSource,SubjectIDSource );
+	DlgData( GetValues,InfoType,EnteredInfoType,SaveToID,SaveToID );
+	DlgData( GetValues,EnteredID,EnteredID );
+
+	InfoType = (~<EnteredInfoType>~ == ~(Default SubjectInfo)~) ? ~~ : ~<EnteredInfoType>~;
+
+	if ( ~<SubjectOrderIDSource>~ == ~ID~ )
+	{
+		if ( ~<EnteredID>~ == ~~ )
+		{
+			WaitCursor( END );
+			return Warning( Translate( ~ID cannot be blank~ ) );
+		}
+
+		if ( ~<SubjectOrderID>~ == ~~ )
+		{
+// ** Do I need to check this, or is it guarenteed to be set?
+		}
+
+		if ( ~<SaveToID>~ == ~OrderID~ )
+		{
+			OrderID = ~<EnteredID>~;
+			ShootDescID = ~~;
+		}
+		else // SaveToID = ShootID
+		{
+			ShootDescID = ~<EnteredID>~;
+			OrderID = ~~;
+		}
+
+		if (~<OrderID>~ != ~~)
+		{
+			if ( !dbase( GetValuesFor,~Select ID,InfoType,ShootDescID From Orders Where ID = '<OrderID>'~,ID,CurrentInfoType,CurrentShootDescID ) )
+			{
+				MsgText = ~Order '<OrderID>' does not exist.  Would like to add it using an Info Type of '<EnteredInfoType>' and ShootDescID of '<ShootDescID>'?~;
+				
+
+				if ( MessageBox( Translate(~<MsgText>~ ),YESNO ) != YES )
+				{
+					WaitCursor( END );
+					return FALSE;
+				}
+
+				if ( GetTypeListForShootDescID(~<OrderID>~,TypeList,TRUE) )  // ShootDescription exists with same Id as Order
+				{
+					WaitCursor( END );
+					return Warning( Translate(~The Order '<OrderID>' cannot be created.  A ShootDescription record exists with this ID~) );
+				}
+
+				if ( ~<ShootDescID>~ == ~~)
+				{
+					// can't insert field else field won't be NULL (Jet, others?)
+					dBase( Cmd,~Insert Into Orders(ID,InfoType,OrderDate,ShipDate) Values('<OrderID>','<InfoType>',<$Date.DataBaseDate.SharedDateQuoted>,<$Date.DataBaseDate.SharedDateQuoted>)~ );
+				}
+				else 
+				{
+					dBase( Cmd,~Insert Into Orders(ID,InfoType,ShootDescID,OrderDate,ShipDate) Values('<OrderID>','<InfoType>','<ShootDescID>',<$Date.DataBaseDate.SharedDateQuoted>,<$Date.DataBaseDate.SharedDateQuoted>)~ );
+				}
+
+//* no?				dlg( SelectString,InfoTypeComboBox,~<InfoType>~ );
+
+				MsgText = ~Order '<OrderID>' was added using InfoType of '<EnteredInfoType>' and ShootDescID of '<ShootDescID>'.\n\nWould like to edit the order data?~;
+
+				if ( MessageBox( Translate(~<MsgText>~ ),YESNO ) == YES )
+				{
+					Query = ~Select * From Orders Where ID = '<OrderID>'~;
+
+					Actions = ACTIONS ( Doc( ~Orders~ OpenOnce OrdersDoc "Init( ~<OrderID>~,~<Query>~);" ) );
+					WaitCursor( END );
+					return PerformActions( Actions );
+				}
+			}
+			else	// THE ORDER ALREADY EXISTS
+			{
+				if ( ~<CurrentInfoType>~ != ~<InfoType>~ )
+				{
+					DisplayInfoType = (~<CurrentInfoType>~ == ~~) ? ~(Default SubjectInfo)~ : ~<CurrentInfoType>~;
+
+					Msg = ~Order '<OrderID>' exists and uses an info type of '<DisplayInfoType>'. Would you like the Info Type set to <EnteredInfoType>? ~;
+
+					if ( MessageBox( Translate( ~<Msg>~ ),YESNO ) == YES )
+					{
+						Cmd = ~Update Orders Set InfoType = '<InfoType>' Where ID = '<OrderID>'~;
+
+						if ( !dbase( CMD,~<Cmd>~ ) )
+						{
+							WaitCursor( END );
+							dbase( GetErrorDescription,theErr );
+							return Warning( Translate( ~Failed to update the Orders table.\n\n<Cmd>\n\n<theErr>~ ) );
+						}
+					}
+					else
+					{
+						WaitCursor( END );
+//* no?						dlg( SelectString,InfoTypeComboBox,~<InfoType>~ );
+						return FALSE;
+					}
+				}
+			}
+		}
+
+		if (~<ShootDescID>~ != ~~)
+		{
+			if (! GetTypeListForShootDescID(~<ShootDescID>~,TypeList,TRUE))
+			{
+				if ( MessageBox( Translate(~ShootDescription <ShootDescID> does not exist.  Would like to add it? ~ ),YESNO ) != YES )
+				{
+					WaitCursor( END );
+					return FALSE;
+				}
+
+				ShootDescType = ~~;
+				dBase( Cmd,~Insert Into ShootDescription<ShootDescType>(ID) Values('<ShootDescID>')~ );
+
+//* no?				dlg( SelectString,InfoTypeComboBox,~<InfoType>~ );
+
+				if ( MessageBox( Translate(~ShootDescription<ShootDescType> <ShootDescID> was added.\n\nWould like to edit the ShootDescription data? ~ ),YESNO ) == YES )
+				{
+					Query = ~Select * From ShootDescription Where ID = '<ShootDescID>'~;
+
+					Actions = ACTIONS ( Doc( ~ShootDescription~ OpenOnce ShootDescriptionDoc "Init( ~<ShootDescID>~,~<Query>~,~<ShootDescType>~);" ) );
+					WaitCursor( END );
+					return PerformActions( Actions );
+				}
+			}
+		}
+	}
+
+	if ( ~<SubjectIDSource>~ == ~ID~ )
+	{
+		if ( ~<SubjectID>~ == ~~ )
+		{
+			if ( dbase( CMD,~Select MAX(SubjectID) From SubjectInfo<InfoType> Where OrderID = '<SubjectOrderID>'~,MaxSequence ) )
+			{ 
+				SubjectID = ~<$rs.MaxSequence[#0]>~ == ~~ ? ~0~ : ~<$rs.MaxSequence[#0]>~; 
+				SubjectID = Format( MakeNumber(~<SubjectID>~) + 1,~%03ld~ );
+			}
+		}
+
+		if ( !IsNumeric( ~<SubjectID>~ ) )
+		{
+			WaitCursor( END );
+			return Warning( Translate( ~SubjectID must be a number~ ) );
+		}
+	}
+
+	dlg( SetStatus,0,~Checking data~ );
+
+	if ( !GenCon( ActiveWindow,GetActiveWindow ) )
+	{
+		WaitCursor( END );
+		return Warning( ~There is no active window of data to process~ ) ;
+	}
+
+	ActiveWindow( Get,Title,SourceWindowTitle );
+
+	if ( !ActiveWindow( GetLast,DataView,Permanent ) )
+	{
+		WaitCursor( END );
+		return Warning( ~There is no data view in the active window~ ) ;
+	}
+
+	CreateFieldNamesList( DataView );
+
+	if ( !DataView( GETSELECTED,SelectedData ) )
+	{ 
+		WaitCursor( END );
+		return Warning( ~No rows were selected~ );
+	}
+
+	Count = SelectedData( ChildCount );
+
+	ActiveWindow( Get,Title,SourceWindowTitle);
+
+	dlg( SetStatus,0,~<Count> Record(s) selected from: <SourceWindowTitle>~ );
+
+	Count = SelectedData( ChildCount );
+
+	if ( <Count> <= 0 )
+	{ 
+		WaitCursor( END );
+		return Warning( ~There was no data~ );
+	}
+
+	SubjectIDLen = strlen( ~<SubjectID>~ );
+	CountLen     = strlen( ~<Count>~ );
+
+	SubjectIDLen = ( <SubjectIDLen> < <CountLen> ) ? <CountLen> : <SubjectIDLen> ;
+
+	WaitCursor( Begin );
+
+	ThisSubjectOrderID = ~<SubjectOrderID>~;
+	LastDatasID = ~~;
+
+	ProcessSubjectFieldNames( MakeSQLList,TheFieldsList,FALSE );
+
+	if ( MessageBox( Translate(~The Fields are:\n\n<TheFieldsList>\n\nFrom Window <SourceWindowTitle>\n\nAre you ready to add <count> SubjectInfo record(s) of type '<EnteredInfoType>' to SubjectInfo ID <SubjectOrderID>? ~ ),YESNO ) != YES )
+	{
+		WaitCursor( END );
+		return FALSE;
+	}
+
+	more = SelectedData( GetFirst,Item );
+
+	while ( <more> )
+	{
+		if ( ~<SubjectOrderIDSource>~ != ~ID~ )
+		{
+			ThisDatasID = ~<$con.Item[<SubjectOrderIDField>]>~;
+
+			if ( ~<ThisDatasID>~ != ~<LastDatasID>~ ) 
+			{
+				InfoType = (~<EnteredInfoType>~ == ~(Default SubjectInfo)~) ? ~~ : ~<EnteredInfoType>~;
+				ThisSubjectOrderID = ~<ThisDatasID>~;
+
+				if (~<SaveToID>~ == ~OrderID~ )
+				{
+					if ( !dbase( GetValuesFor,~Select InfoType,ShootDescID From Orders Where ID = '<ThisSubjectOrderID>'~,CurrentInfoType,CurrentShootDescID ) )
+					{
+						if ( GetTypeListForShootDescID(~<ThisSubjectOrderID>~,TypeList,TRUE) )  // ShootDescription exists with same Id as Order
+						{
+							WaitCursor( END );
+							return Warning( Translate(~The Order <ThisSubjectOrderID> cannot be created.  A ShootDescription record exists with this ID~) );
+						}
+
+						Now = Time();
+
+//						dBase( Cmd,~Insert Into Orders(ID,InfoType,OrderDate,ShipDate) Values('<ThisSubjectOrderID>','<InfoType>','<Now>',<$Date.DataBaseDate.SharedDateQuoted>,<$Date.DataBaseDate.SharedDateQuoted>)~ );
+						dBase( Cmd,~Insert Into Orders(ID,InfoType,OrderDate,ShipDate) Values('<ThisSubjectOrderID>','<InfoType>',<$Date.DataBaseDate.SharedDateQuoted>,<$Date.DataBaseDate.SharedDateQuoted>)~ );
+					}
+
+					else  // Order already exists
+					{
+						if ( ~<CurrentInfoType>~ != ~<InfoType>~ )
+						{
+							DisplayInfoType = (~<CurrentInfoType>~ == ~~) ? ~(Default SubjectInfo)~ : ~<CurrentInfoType>~;
+							Msg = ~Order '<ThisSubjectOrderID>' exists and uses an info type of '<DisplayInfoType>'.  Would you like the Info Type changed to '<EnteredInfoType>'?  \n\nSelecting "No" will import the data to the Order data's InfoType '<DisplayInfoType>'.~;
+
+							if ( MessageBox( Translate( ~<Msg>~ ),YESNO ) == YES )
+							{
+								Cmd = ~Update Orders Set InfoType = '<InfoType>' Where ID = '<ThisSubjectOrderID>'~;
+
+								if ( !dbase( CMD,~<Cmd>~ ) )
+								{
+									WaitCursor( END );
+									dbase( GetErrorDescription,theErr );
+									return Warning( Translate( ~Failed to update the Orders table.\n\n<Cmd>\n\n<theErr>~ ) );
+								}
+							}
+							else
+							{
+								InfoType = ~<CurrentInfoType>~;
+							}
+						}
+
+						if ( ( ~<CurrentShootDescID>~ != ~~ ) && ( ~<CurrentShootDescID>~ != ~<ThisSubjectOrderID>~ ) )
+						{
+							Msg = ~Order '<ThisSubjectOrderID>' exists with a ShootDescID of '<CurrentShootDescID>'.\nThe SubjectInfo Data will be stored under the ID of the ShootDescID '<CurrentShootDescID>'.\n\nDo you wish to continue?~;
+
+							if ( MessageBox( Translate( ~<Msg>~ ),YESNO ) != YES )
+							{
+								return Warning( Translate( ~Importing of SubjectInfo data has been discontinued.~ ) );
+							}
+
+							ThisSubjectOrderID = ~<CurrentShootDescID>~;
+						}
+
+					}  // else order already exists
+
+				} 
+
+				else  // SaveToID is ShootDescID
+				{
+					if ( !ShootDescExists( ~<ThisSubjectOrderID>~,ShootType ) )
+					{
+						dBase( Cmd,~Insert Into ShootDescription(ID) Values('<ThisSubjectOrderID>')~ );
+					}
+				}
+
+			} // SubjectOrderID changed
+
+			LastDatasID = ~<ThisDatasID>~;
+		}
+
+		if ( ~<SubjectIDSource>~ != ~ID~ )
+		{
+			ThisSubjectID = ~<$con.Item[<SubjectIDField>]>~;
+		}
+		else
+		{
+			ThisSubjectID = Format( ~<SubjectID++>~,~%0<SubjectIDLen>ld~ );
+		}
+
+		dlg( SetStatus,0,~SubjectInfo: <ThisSubjectOrderID>, SubjectID:  <ThisSubjectID>~ );
+
+		if ( !AddARecord( dBase,~SubjectInfo~,~<InfoType>~,~<ThisSubjectOrderID>~,~<ThisSubjectID>~,ProcessSubjectFieldNames,Item ) )
+		{
+			break;
+		}
+
+		more = SelectedData( GetNext,Item );
+	}
+
+	ForgetLocal( dBase );
+
+	OnNextSubjectIDButton();
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC NewInfoTypeSelected()
+{
+	dlg( GetInput );
+
+	OnNextSubjectIDButton();
+
+	return TRUE;
+}
+
+
+NUMERIC RefreshInfoTypesComboBox(wantSelection)
+{
+	if ( !PGenConList( SchemaList,Connect,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query Schema of type Tables.  <theErr>~ ) );
+	}
+
+	SchemaList( Filter,~Table_Name Like 'SubjectInfo%'~ );
+
+	StringList( InfoTypesList,New );
+
+	while ( SchemaList( GetNext,Table ) )
+	{
+		substr( ~<$pcon.Table[TABLE_NAME]>~,strlen(~SubjectInfo~),99,theType);
+
+		if ( !IsNull(~<TheType>~) && !SimilarStr(~<TheType>~,~Columns~) )
+		{
+			InfoTypesList( AddString,~<theType>~ );
+		}
+	}
+
+	InfoTypesList( AddString,~(Default SubjectInfo)~ );
+
+	return dlg( SetControlFromStringList,InfoTypeComboBox,InfoTypesList, (<wantSelection>) ? ~Selection~ : ~NoSelection~);
+
+}
+
+
+NUMERIC GetFirstLastSubjectIDForOrder( &dBase,SubjectOrderID,InfoType,&First,&Last,&Count )
+{
+	First = ~~;	Last = ~~;
+
+	Query = ~Select SubjectID From SubjectInfo<InfoType> Where OrderID = '<SubjectOrderID>' Order By SubjectID~;
+
+	if ( PGenConList( List,Connection,dBase,Cursor,Keyset,Query,~<Query>~ ) )
+	{ 
+		if ( List( GetFirst,Record ) )
+		{
+			First = ~<$pcon.Record[SubjectID]>~;
+		}
+
+		if ( List( GetLast,Record ) )
+		{
+			Last = ~<$pcon.Record[SubjectID]>~;
+		}
+
+		Count = List( NumEntries );
+
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC OnNextSubjectIDButton()
+{
+	dlg( GetInput );
+
+	if ( ~<$con.DlgData[SubjectIDSource]>~ != ~ID~ )
+	{
+		return TRUE;
+	}
+
+// ** is SubjectOrderID guarenteed to have a value if EnteredID does?
+	if ( ~<$con.DlgData[SubjectOrderID]>~ == ~~ )
+	{
+		return Warning( ~You must select an ID first~ );
+	}
+
+	EnteredInfoType = ~<$con.DlgData[InfoType]>~;
+
+	if ( ~<EnteredInfoType>~ == ~~ )
+	{
+		return Warning( ~You must select an Info Type~ );
+	}
+
+	InfoType = (~<EnteredInfoType>~ == ~(Default SubjectInfo)~) ? ~~ : ~<EnteredInfoType>~;
+
+	if ( !ADO( dbase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Error connecting to the shared database: <theErr>~ );
+	}
+
+	First = ~~;	Last = ~~; Count = 0;
+
+	if ( !GetFirstLastSubjectIDForOrder( dBase,~<$con.DlgData[SubjectOrderID]>~,~<InfoType>~,First,Last,Count ) )
+	{
+		dlg( SetStatus,0,~No Record(s) exist for SubjectInfo Type <EnteredInfoType> on ID <$con.DlgData[SubjectOrderID]>~ );
+
+		return dlg( SetStrings,SubjectID,~001~ );
+	}
+
+	len = IsNULL(~<Last>~) ? 3 : strlen( ~<Last>~ );
+
+	NextSubjectID = Format( MakeNumber(~<Last>~) + 1,~%0<len>ld~ );
+
+	dlg( SetStrings,SubjectID,~<NextSubjectID>~ );
+
+	dlg( SetStatus,0,~<Count> Record(s) exist in SubjectInfo Type <EnteredInfoType> for SubjectInfo <$con.DlgData[SubjectOrderID]>~ );
+
+	return TRUE;
+}
+
+
+// Selected ID from EnteredID Combo list
+NUMERIC NewIDSelected()
+{
+	dlg( GetInput );
+	DlgData(GetValues,SaveToID,SaveToID);
+
+	if ( SimilarStr(~<SaveToID>~,~OrderID~) )
+	{
+		NewOrderSelected();
+	}
+	else
+	{
+		NewShootDescSelected();
+	}
+
+	return TRUE;
+}
+
+
+// Selected Order ID When EnteredID is Order ID pull down list.
+NUMERIC NewOrderSelected()
+{
+	OrderID = ~<$con.DlgData[EnteredID]>~;
+//	dlg(GetControlValue,IDField,OrderID);
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		dlg( SetStrings,SubjectOrderID,~~ );
+		return dlg( SetStatus,0,~Order ID is blank~ );
+	}
+
+	InfoType = ~~;
+
+	if ( GetSubjectOrderIDInfoType( ~<OrderID>~, InfoType, SubjectInfoOrderId) )
+	{
+		EnteredInfoType = (~<InfoType>~ == ~~) ? ~(Default SubjectInfo)~ : ~<InfoType>~;
+		dlg( SelectString,InfoTypeComboBox,~<EnteredInfoType>~ );
+
+		dlg( SetStrings,SubjectOrderID,~<SubjectInfoOrderId>~ );
+		OnNextSubjectIDButton();
+	}
+	else
+	{
+		dlg( SetStrings,SubjectOrderID,~<OrderID>~ );
+		dlg( SetStatus,0,~Order <OrderID> does not exist~ );
+		dlg( SetStrings,SubjectID,~001~ );
+	}
+
+	return TRUE;
+
+}
+
+
+// Selected ShootDescription ID When EnteredID is ShootDescription ID pull down list.
+NUMERIC	NewShootDescSelected()
+{
+	ShootDescID = ~<$con.DlgData[EnteredID]>~;
+//	dlg(GetControlValue,IDField,ShootDescID);
+
+	if ( IsNULL(~<ShootDescID>~) )
+	{
+		dlg( SetStrings,SubjectOrderID,~~ );
+		return dlg( SetStatus,0,~ShootDescription ID is blank~ );
+	}
+
+	dlg( SetStrings,SubjectOrderID,~<ShootDescID>~ );
+
+	StringList( InfoTypeList,New );
+	if ( GetInfoTypeListForDefinedID(~<ShootDescID>~,InfoTypeList,FALSE) )
+	{
+		InfoTypeList(GetStringAt, 0,InfoType);  // Use first one if more than one
+		EnteredInfoType = (~<InfoType>~ == ~~) ? ~(Default SubjectInfo)~ : ~<InfoType>~;
+		dlg( SelectString,InfoTypeComboBox,~<EnteredInfoType>~ );
+		OnNextSubjectIDButton();
+	}
+
+	else
+	{
+		dlg( SetStatus,0,~ShootDescription <ShootDescID> does not exist~ );
+		dlg( SetStrings,SubjectID,~001~ );
+	}
+
+	return TRUE;
+}
+
+
+// Generate list for SubjectInfoOrderID Combo list
+NUMERIC RefreshIDComboBox()
+{
+	dlg( GetInput );
+
+	DlgData(GetValues,SaveToID,SaveToID);
+
+	if ( SimilarStr(~<SaveToID>~,~OrderID~) )
+	{
+		RefreshOrdersComboBox();
+	}
+	else
+	{
+		RefreshShootsComboBox();
+	}
+
+	return TRUE;
+}
+
+
+// Generate list for Order ID
+NUMERIC RefreshOrdersComboBox()
+{
+	OrderID = ~<$con.DlgData[EnteredID]>~;
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( ~Enter more characters of the OrderID you are looking for and try again~ );
+	}
+
+	Query = ~Select ID from Orders Where ID Like '<OrderID>%'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the orders table.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	Count = List( NumEntries );
+
+	if ( <Count> == 0 )
+	{
+		//dlg( SetStrings,OrderID,~~ );
+		return Warning( ~No Orders begin with <OrderID>.\n\nTry again.~ );
+	}
+
+	if ( <Count> > 100 )
+	{
+		return Warning( ~<Count> Orders begin with <OrderID>.\n\nGive us a few more characters please.~ );
+	}
+
+	List( MakeStringList,IDList,ID );
+
+	return dlg( SetControlFromStringList,IDField,IDList,~NoSelection~ );
+}
+
+
+
+// Generate List for ShootDescripton ID
+NUMERIC RefreshShootsComboBox()
+{
+	ShootDescID = ~<$con.DlgData[EnteredID]>~;
+
+	if ( IsNULL(~<ShootDescID>~) )
+	{
+		return Warning( ~Enter more characters of the ShootDescription ID you are looking for and try again~ );
+	}
+
+	Query = ~Select ID from ShootDescription Where ID Like '<ShootDescID>%'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{	 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the ShootDescription table.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	Count = List( NumEntries );
+
+	if ( <Count> == 0 )
+	{
+		return Warning( ~No ShootDescription begin with <ShootDescID>.\n\nTry again.~ );
+	}
+
+	if ( <Count> > 100 )
+	{
+		return Warning( ~<Count> ShootDescription begin with <ShootDescID>.\n\nGive us a few more characters please.~ );
+	}
+
+	List( MakeStringList,IDList,ID );
+
+	return dlg( SetControlFromStringList,IDField,IDList,~NoSelection~ );
+}
+
+
+
+NUMERIC CreateFieldNamesList( &DataView )
+{
+	ForgetGlobal( ProcessSubjectFieldNames );
+
+	StringList( ProcessSubjectFieldNames,New );
+
+	col = 0;
+
+	while ( DataView( GetGridFieldName,<col++>,ColumnName ) )
+	{
+		// if ( SimilarStr(~<ColumnName>~,~OrderID~ ) || SimilarStr(~<ColumnName>~,~SubjectID~) )
+		//	continue;
+
+		ProcessSubjectFieldNames( AddString,~<ColumnName>~ );
+	}
+
+	Global( ProcessSubjectFieldNames );
+	
+	return TRUE;
+}
+
+
+NUMERIC RefreshFieldNamesComboBox( WhichControl )
+{
+	dlg( SetControlFromStringList,<WhichControl>,ProcessSubjectFieldNames );
+
+	return TRUE;
+}
+
+
+
+VOID UseID( Value )
+{
+	dlg( EnableControls,!<Value>,IDFieldComboBox );
+	dlg( EnableControls,<Value>,IDField );
+
+	if (<Value>)
+	{
+		NewIDSelected();
+	}
+	else
+	{
+		dlg( SetStrings,SubjectOrderID,~(Set From Data)~ );
+	}
+}
+
+
+VOID SaveToOrder( Value )
+{
+	dlg( GetInput );
+	DlgData(GetValues,SubjectOrderIDSource,SubjectOrderIDSource);
+
+	if ( SimilarStr(~<SubjectOrderIDSource>~,~ID~) )
+	{
+		if (<Value>)
+		{
+			NewOrderSelected();
+		}
+		else
+		{
+			NewShootDescSelected();
+		}
+	}
+}
+
+
+VOID UseSubjectID( Value )
+{
+	dlg( EnableControls,!<Value>,SubjectFieldComboBox );
+	dlg( EnableControls,<Value>,SubjectIDFieldText );
+}
+
+
+
+NUMERIC ProcessSubjectInfo()
+{
+	DefineDialog();
+
+	if ( !GenCon( ActiveWindow,GetActiveWindow ) )
+	{
+		return dlg( SetStatus,0,~You have no open windows of data to process~ );
+	}
+
+	ActiveWindow( Get,Title,SourceWindowTitle);
+
+	if ( !ActiveWindow( GetLast,DataView,Permanent ) )
+	{
+		return dlg( SetStatus,0,~There is no data in <SourceWindowTitle>~ );
+	}
+
+	CreateFieldNamesList( DataView );
+
+	if ( !DataView( GETSELECTED,SelectedData ) )
+	{ 
+		return dlg( SetStatus,0,~No rows have been selected in <SourceWindowTitle>~ );
+	}
+
+	Count = SelectedData( ChildCount );
+
+	dlg( SetStatus,0,~<Count> rows selected from: <SourceWindowTitle>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OnIDButton()
+{
+	dlg( GetInput );
+
+	if ( ~<$con.DlgData[SaveToID]>~ == ~OrderID~)
+	{
+		OnOrderButton();
+	}
+	else  // ShootID
+	{
+		OnShootButton();
+	}
+
+	return TRUE;
+}
+
+
+// For Order ID
+NUMERIC OnOrderButton()
+{
+	if ( ~<$con.DlgData[EnteredID]>~ != ~~ )
+	{
+		Query = ~Select * From Orders Where ID Like '<$con.DlgData[EnteredID]>%' OR ImagesOrderID Like '<$con.DlgData[OrderID]>%' Order By ID~;
+
+		Actions = ACTIONS ( Doc( ~Orders~ OpenOnce OrdersDoc "Init( ~<$con.DlgData[EnteredID]>~,~<Query>~);" ) );
+	}
+	else
+	{
+		Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( Orders );" ) );
+	}
+	
+	return PerformActions( Actions );
+}
+
+
+// For ShootDescription ID
+NUMERIC OnShootButton()
+{
+	ShootDescType = ~~;
+
+	if ( ~<$con.DlgData[EnteredID]>~ != ~~ )
+	{
+		ShootDescExists( ~<$con.DlgData[EnteredID]>~,ShootDescType );
+
+		Query = ~Select * From ShootDescription Where ID Like '<$con.DlgData[EnteredID]>%' Order By ID~;
+
+		Actions = ACTIONS ( Doc( ~ShootDescription~ OpenOnce ShootDescriptionDoc "Init( ~<$con.DlgData[EnteredID]>~,~<Query>~,~<ShootDescType>~);" ) );
+	}
+	else
+	{
+		Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( ShootDescription );" ) );
+	}
+
+	return PerformActions( Actions );
+}
+
+
+NUMERIC OnInfoTypeButton()
+{
+	dlg( GetInput );
+
+	EnteredInfoType = ~<$con.DlgData[InfoType]>~;
+
+	if ( ~<EnteredInfoType>~ == ~~ )
+	{
+		return Warning( ~Specify an info type~ ) ;
+	}
+
+	InfoType = (~<EnteredInfoType>~ == ~(Default SubjectInfo)~) ? ~~ : ~<EnteredInfoType>~;
+
+	Query = ~Select * From TableFormats Where TableName = 'SubjectInfo<InfoType>'~;
+
+	Actions = ACTIONS ( Doc( ~<InfoType>~ OpenOnce TableDefinitionsDoc "Init( ~SubjectInfo<InfoType>~,~<Query>~);" ) );
+	
+	return PerformActions( Actions );
+}
+
+
+
+NUMERIC Init()
+{
+	if ( Defined( dlg ) )
+	{
+		return Warning( ~Process Subject Info is already active~ );
+	}
+
+	WaitCursor( Begin );
+
+	ProcessSubjectInfo();
+
+	dlg( EnableControls,FALSE,IDFieldComboBox,SubjectFieldComboBox );
+
+	RefreshFieldNamesComboBox(IDFieldComboBox);
+	RefreshFieldNamesComboBox(SubjectFieldComboBox);
+
+	RefreshInfoTypesComboBox(TRUE);
+
+	SaveToOrder( TRUE );
+
+	dlg( SetControlFocus,IDField );
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+//Init();

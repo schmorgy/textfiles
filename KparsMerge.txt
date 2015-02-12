@@ -1,0 +1,350 @@
+
+IncludeClass( BaseKpars );
+
+VOID KparsMerge::KparsMerge()					// CONSTRUCTOR
+{
+	KarsType		= ~Merge~;
+	NextProcess		= ~Complete~;
+	BeginState		= ~QueuedFor<KarsType>~;
+	InProcessState	= ~In<KarsType>~;
+	CompleteState	= ~<NextProcess>~;
+	Fields1			= ~*~;
+	Sort			= ~<KarsType>ID Desc,Priority Desc, SubmittedAt,OrderID,Roll,Frame~;
+	BaseKey			= ~RetouchState = '<BeginState>'~;
+	WorkstationClause = ~(MergeID='<$App.ComputerName>.<$App.Instance>' OR MergeID='<$App.ComputerName>')~;
+	localKey		= ~<BaseKey> And <WorkstationClause>~;
+	Key				= ~<localKey>~;
+	Query			= ~SELECT <Fields1> FROM RetouchImages WHERE <localKey> ORDER BY <Sort>~;
+	fExitOnEmptyQueue = TRUE;
+}
+
+
+NUMERIC KparsMerge::SetupOperation()
+{
+	fMergeRunning = TRUE;
+	credits = 0;
+	dongleError = 0;
+	credits = CheckKparsDongle(dongleError);
+	if ( <credits> <= 0 && (<dongleError> == 0 || <dongleError> == <DONGLE_NO_CREDITS> || <dongleError> == <DONGLE_INIT_ERROR> ) )
+	{
+		ShowWarning( ~NoMerge~ );
+		Log( Session, ~The merge queue has stopped due to no retouch credits remaining.~ );
+		fStopPending = TRUE;
+	}
+
+	WorkstationClause = ~(<KarsType>ID='<$App.ComputerName>.<$App.Instance>' OR <KarsType>ID='<$App.ComputerName>')~;
+
+	fExitOnComplete = TRUE;
+	result = BaseKpars::SetupOperation();
+
+	if ( <result> == <ERROR_ON_SETUP> )
+	{
+		return ExitOnError();
+	}
+
+	if ( <result> == <WAIT_ON_SETUP> )
+	{
+		return TRUE;
+	}
+	
+	<KarsType>PreprocessData( SetValues,CompleteNotification,~<THIS>.OnComplete(%d,%ld);~ );
+
+	if ( !RunOperation( ~<Order>~,~<Roll>~,~<Frame>~ ) )
+	{
+		Actions = STR ( <THIS>.SetupOperation(); );
+		QueueContentsAfter( Actions,2000 );
+	}
+
+	return TRUE;
+}
+
+NUMERIC KparsMerge::RunOperation( Order,Roll,Frame )
+{
+	if ( !Defined( Kpars ) )
+	{
+		KparsConnect( ~Batch~ );
+	}
+
+	if ( !Kpars( Initialize,<KarsType>PreprocessData ) )
+	{
+		fExitOnComplete = TRUE;
+		Log( Session, ~<KarsType> Start Error for  <Order>, <Roll>, <Frame>.~ );
+		ShowError( ~KparsStartError~ );
+		return FALSE;
+	}
+
+	GenCon( Control,IsCopyOf,<KarsType>PreprocessData,PERMANENT );
+	if ( !Kpars( ~Run<KarsType>~,Control ) )
+	{
+		fExitOnComplete = TRUE;
+		Log( Session, ~<KarsType> Run Error for  <Order>, <Roll>, <Frame>.~ );
+		ShowError( ~KparsRunError~, ~<KarsType>~ );
+		return FALSE;
+	}
+	return TRUE;	
+}
+
+NUMERIC KparsMerge::OnComplete( Status,ControlAddr )
+{
+	GenCon( ControlInfo, Is, <ControlAddr>, TEMPORARY );
+	ControlInfo( GetValues,OrderID,Order,Roll,Roll,Frame,Frame );
+
+	if ( <Status> )
+	{
+		ShowWarning( ~ProcessingComplete~, ~<KarsType>~,~<Frame>~ );
+		RemakeItemsUsing(~<Order>~,~<Roll>~,~<Frame>~ );
+	}
+	else
+	{
+		ShowError( ~ProcessingFailed~, ~<KarsType>~,~<Frame>~ );
+		Log( Session, ~<KarsType> processing failed for Order=<Order>, Roll=<Roll>, Frame=<Frame>~ );
+	}
+
+	credits = 0;
+	dongleError = 0;
+	credits = CheckKparsDongle(dongleError);
+
+	Actions = ACTION Doc ( Kpars<Caller> OpenOnce Kpars<Caller> "OnMergeComplete(<credits>,~<Order>~,~<Roll>~,~<Frame>~);" );
+	PerformActions( Actions );
+
+	if ( !IsNULL( ~<sysLowCreditSetting>~ ) )
+	{
+		if ( <credits> < atof( ~<sysLowCreditSetting>~ )  && !<fWarnedLowCredits> &&
+		    (<dongleError> == 0 || <dongleError> == <DONGLE_NO_CREDITS> || <dongleError> == <DONGLE_CANT_RUN_LARGE_MEMORY_MODE> ))
+		{
+			if ( <dongleError> == <DONGLE_INIT_ERROR> || <dongleError> == <DONGLE_CHECK_TIMEOUT> )
+			{
+				ShowError( ~MissingDongle~ );
+			}
+			else if ( <dongleError> == <DONGLE_CANT_RUN_LARGE_MEMORY_MODE> )
+			{
+				ShowError( ~CantRunLargeMemoryMode~ );
+			}
+			else
+			{
+				ShowWarning( ~LowCredits~, <credits> );
+			}
+			fWarnedLowCredits = TRUE;
+		}
+		else
+		{
+			Actions = STR ( <THIS>.SetupOperation(); );
+			QueueContentsAfter( Actions,200 );
+			return TRUE;
+		}
+	}
+
+	if ( <credits> > 0 )
+	{
+		Actions = STR ( <THIS>.SetupOperation(); );
+		QueueContentsAfter( Actions,200 );
+		return TRUE;
+	}
+
+	Msg = ~The merge queue has stopped due to no retouch credits remaining.~;
+	Log( Session,~<Msg>~ );
+	fStopped = TRUE;
+	fStopPending = TRUE;
+	fMergeRunning = FALSE;
+	ShowError( ~MergeStoppedNoCredits~ );
+	
+	return FALSE;
+}
+
+
+VOID KparsMerge::DoStopButton()
+{
+	if ( <fStopPending> && <fStopped> )
+	{
+		credits = 0;
+		dongleError = 0;
+		credits = CheckKparsDongle(dongleError);
+
+		if ( <credits> <= 0 && (<dongleError> == 0 || <dongleError> == <DONGLE_NO_CREDITS> || <dongleError> == <DONGLE_CANT_RUN_LARGE_MEMORY_MODE>) )
+		{
+			if ( <dongleError> == <DONGLE_INIT_ERROR> || <dongleError> == <DONGLE_CHECK_TIMEOUT> )
+			{
+				ShowError( ~MissingDongle~ );
+			}
+			else if ( <dongleError> == <DONGLE_CANT_RUN_LARGE_MEMORY_MODE> )
+			{
+				ShowError( ~CantRunLargeMemoryMode~ );
+			}
+			else
+			{
+				ShowWarning( ~LowCredits~, <credits> );
+			}
+			return;
+		}	
+	}
+
+	BaseKpars::DoStopButton();
+}
+
+NUMERIC BaseKpars::ExitOnError()
+{
+	fStopped = TRUE;
+	
+	credits = 0;
+	dongleError = 0;
+	credits = CheckKparsDongle(dongleError);
+
+	Actions = ACTION Doc ( Kpars<Caller> OpenOnce Kpars<Caller> "OnMergeComplete(<credits>,~~,~~,~~);" );
+	PerformActions( Actions );
+
+	return FALSE;
+}
+
+
+VOID KparsMerge::ShowWarning( msg, param1, param2 )
+{
+	if ( DefinedAndNotNull( param2 ) )
+	{
+		Log( Session, ~<Caller> Merge Warning: <msg>, <param1>, <param2>~ );
+		Actions = ACTION Doc ( Kpars<Caller> OpenOnce Kpars<Caller> "ReportMergeWarning(~<msg>~,~<param1>~,~<param2>~);" );
+	}
+	else if ( DefinedAndNotNull( param1 ) )
+	{
+		Log( Session, ~<Caller> Merge Warning: <msg>, <param1>~ );
+		Actions = ACTION Doc ( Kpars<Caller> OpenOnce Kpars<Caller> "ReportMergeWarning(~<msg>~,~<param1>~);" );
+	}
+	else
+	{
+		Log( Session, ~<Caller> Merge Warning: <msg>~ );
+		Actions = ACTION Doc ( Kpars<Caller> OpenOnce Kpars<Caller> "ReportMergeWarning(~<msg>~);" );
+	}
+	PerformActions( Actions );
+}
+
+VOID KparsMerge::ShowError( msg, param1, param2 )
+{
+	if ( DefinedAndNotNull( param2 ) )
+	{
+		Log( Session, ~<Caller> Merge Error: <msg>, <param1>, <param2>~ );
+		Actions = ACTION Doc ( Kpars<Caller> OpenOnce Kpars<Caller> "ReportMergeError(~<msg>~,~<param1>~,~<param2>~);" );
+	}
+	else if ( DefinedAndNotNull( param1 ) )
+	{
+		Log( Session, ~<Caller> Merge Error: <msg>, <param1>~ );
+		Actions = ACTION Doc ( Kpars<Caller> OpenOnce Kpars<Caller> "ReportMergeError(~<msg>~,~<param1>~);" );
+	}
+	else
+	{
+		Log( Session, ~<Caller> Merge Error: <msg>~ );
+		Actions = ACTION Doc ( Kpars<Caller> OpenOnce Kpars<Caller> "ReportMergeError(~<msg>~);" );
+	}
+	PerformActions( Actions );
+}
+
+
+VOID Init(StartNow,Restricted,Caller)
+{
+	AutoStart = FALSE;
+	if ( DefinedAndNotNull( StartNow ) )
+	{
+		AutoStart = <StartNow>;
+	}
+
+	HereOnly = FALSE;
+	if ( DefinedAndNotNull( Restricted ) )
+	{
+		HereOnly = <Restricted>;
+	}
+
+	BaseKey	= ~RetouchState = 'QueuedForMerge'~;
+	Fields1 = ~*~;
+
+	if ( !Defined( KarsMerge ) )
+	{
+		Class( KparsMerge,Extends,BaseKpars,
+						Member,Order,Str,~~,
+						Member,Roll,Str,~~,
+						Member,Frame,Str,~~,
+						Member,Caller,Str,~~ );
+
+		KparsMerge( New,KarsMerge );
+
+		KarsMerge.DefineDictionary();
+		KarsMerge.InitDictionaryData();
+		KarsMerge.Set(Caller,~<Caller>~);
+		KarsMerge.Set(BaseKey,~<BaseKey>~);
+		KarsMerge.Set(Fields1,~<Fields1>~);
+
+		if ( <HereOnly> )
+		{
+			localKey = ~<BaseKey> And (MergeID='<$App.ComputerName>.<$App.Instance>' OR MergeID='<$App.ComputerName>')~;
+		}
+		else
+		{
+			localKey = ~<BaseKey> And (MergeID='<$App.ComputerName>.<$App.Instance>' OR MergeID='<$App.ComputerName>' OR MergeID='' OR MergeID IS NULL)~;
+		}
+		Query = ~SELECT <Fields1> FROM RetouchImages WHERE <localKey> ORDER BY <Sort>~;
+		KarsMerge.Set( Key,~<localKey>~ );
+		KarsMerge.Set( Query,~<Query>~ );
+
+		Global( KarsMerge );
+		if ( <AutoStart> )
+		{
+			KarsMerge.OnGoButton();
+		}
+		return;
+	}
+
+	if ( <HereOnly> )
+	{
+		localKey = ~<BaseKey> And (MergeID='<$App.ComputerName>.<$App.Instance>' OR MergeID='<$App.ComputerName>')~;
+	}
+	else
+	{
+		localKey = ~<BaseKey> And (MergeID='<$App.ComputerName>.<$App.Instance>' OR MergeID='<$App.ComputerName>' OR MergeID='' OR MergeID IS NULL)~;
+	}
+	Query = ~SELECT <Fields1> FROM RetouchImages WHERE <localKey> ORDER BY  <Sort>~;
+	KarsMerge.Set( Key,~<localKey>~ );
+	KarsMerge.Set( Query,~<Query>~ );
+	KarsMerge.Set( Caller,~<Caller>~ );
+	KarsMerge.Set( BaseKey,~<BaseKey>~ );
+	KarsMerge.Set( Fields1,~<Fields1>~ );
+
+	if ( <AutoStart> )
+	{
+		KarsMerge.Set( fExitOnEmptyQueue,TRUE );
+
+		if ( KarsMerge.GetStoppedFlag() )
+		{
+			KarsMerge.OnGoButton();
+		}
+	}
+
+}
+
+VOID StopMergeQueue( Caller )
+{
+	if ( Defined( KarsMerge ) )
+	{
+		KarsMerge.Set(Caller,~<Caller>~);
+		KarsMerge.DoStopButton( TRUE,TRUE );
+	}
+	else
+	{
+		Actions = ACTION Doc ( Kpars<Caller> OpenOnce Kpars<Caller> "OnMergeComplete(<credits>,~~,~~,~~);" );
+		QueueContentsAfter( Actions,200 );
+	}
+}
+
+VOID ExitMergeProcess()
+{
+	if ( Defined( KarsMerge ) )
+	{
+		while ( !KarsMerge.GetStoppedFlag() )
+		{
+			KarsMerge.DoStopButton( TRUE,TRUE );
+			Sleep( 2000 );
+		}
+		ForgetGlobal( KarsMerge );
+	}
+	else
+	{
+		Actions = ACTION Doc ( Kpars<Caller> OpenOnce Kpars<Caller> "OnMergeComplete(<credits>,~~,~~,~~);" );
+		PerformActions( Actions );
+	}
+}

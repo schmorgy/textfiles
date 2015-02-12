@@ -1,0 +1,198 @@
+VOID DefineDialog( WhichOrder,xPosition,yPosition )
+{
+	if ( !DictionaryExists(DDStartImportingDialog) )
+	{
+		Dictionary: DDStartImportingDialog
+			Fields: Name	WhichSource type text
+			Fields:	Name	OrderID		type text
+
+		StringList:	Name StartImportingItems
+			Fields: String	Translate(~Accunet~)
+			Fields: String	Translate(~Shooter Disk~)
+			Fields: String	Translate(~File~)
+		Hang:	StartImportingItems	~[STRINGS]~
+	}
+
+	Define: DlgData Using DDStartImportingDialog
+		Fields:	WhichSource		~Accunet~ 
+		Fields:	OrderID		~<WhichOrder>~ ;
+
+	hGap = vGap = 10;
+	PromptHeight = 20;		PromptWidth = 70;		ValueWidth = 150;
+	ButtonWidth = 90;		ButtonHeight = 20;	
+	LeftX = $hGap;			CurrentY = $vGap;		CurrentRight = 0;
+
+	Define: TheDialog Using DDWinDef
+		Fields:	POSITION				$xPosition, $yPosition, 600,600 
+				TITLE					Translate(~Select where to import from~)
+				TYPENAME				Dialog 
+				OACTIONSTEXT			ACTION EXEC ( CloseDialog() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "Importfrom.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: OrderPrompt Using DDWinCtrlDef AsSymbol OrderPrompt 
+				Fields: TypeName        StaticText 
+						Position		$LeftX,$CurrentY,<PromptWidth>,<PromptHeight> 
+						Text			~Order ID~
+
+
+			Define: OrderField Using DDWinCtrlDef AsSymbol OrderField 
+				Fields: TypeName        EditText 
+						Position		OrderPrompt(GetRight,Position) + $hGap,
+										OrderPrompt(GetTop,Position),$ValueWidth,$ButtonHeight
+						GenConName		THIS
+						GenConField		~OrderID~
+						IActionsText	~[Get]~
+						DActionsText	~[Save]~
+						OActionsText	~[Save]~
+
+
+			Define: AccunetRadioButton Using DDWinCtrlDef AsSymbol AccunetRadioButton
+				fields: TypeName		RadioButton  
+						Position		$LeftX ,OrderPrompt(GetBottom,Position) + $vGap * 4 ,$ValueWidth ,$ButtonHeight
+						IActionsText	~[Get]~
+						DActionsText	~[
+											CheckButton(AccunetRadioButton) 
+											UncheckButton(ShooterRadioButton))
+											UncheckButton(FileRadioButton))
+										 ]~
+						OActionsText	~[Save]~
+						GenConName		THIS
+						GenConField		~WhichSource~
+						RadioTrueValue	~Accunet~
+ 						Text			Translate(~Accunet~)
+						Tooltip			Translate(~Import Frame Data from Accunet~);
+
+			Define: ShooterRadioButton Using DDWinCtrlDef AsSymbol ShooterRadioButton
+				fields: TypeName		RadioButton  
+						Position		$hGap , AccunetRadioButton(GetBottom,Position) + $hGap ,$ValueWidth ,$ButtonHeight
+						IActionsText	~[Get]~
+						DActionsText	~[
+											CheckButton(ShooterRadioButton) 
+											UncheckButton(AccunetRadioButton)
+											UncheckButton(FileRadioButton)
+										 ]~
+						OActionsText	~[Save]~
+						GenConName		THIS
+						GenConField		~WhichSource~
+						RadioTrueValue	~Shooter~
+ 						Text			Translate(~Shooter File~)
+						Tooltip			Translate(~Import Frame Data from a Shooter File~);
+
+			Define: FileRadioButton Using DDWinCtrlDef AsSymbol FileRadioButton
+				fields: TypeName		RadioButton  
+						Position		$hGap , ShooterRadioButton(GetBottom,Position) + $hGap ,$ValueWidth ,$ButtonHeight
+						IActionsText	~[Get]~
+						DActionsText	~[
+											CheckButton(FileRadioButton) 
+											UncheckButton(ShooterRadioButton)
+											UncheckButton(AccunetRadioButton)
+										 ]~
+						OActionsText	~[Save]~
+						GenConName		THIS
+						GenConField		~WhichSource~
+						RadioTrueValue	~File~
+ 						Text			Translate(~File~)
+						Tooltip			Translate(~Import Frame Data from any file~);
+
+			DialogWidth = OrderField(GetRight,Position) + $hGap * 3;
+
+			Define: GoButton Using DDWinCtrlDef AsSymbol GoButton
+				Fields:	GENCONNAME		This
+						IsTabStop		1
+						DACTIONSTEXT	ACTION EXEC ( OnGoButton() )
+						POSITION		($DialogWidth/2) - ($ButtonWidth + $hGap) ,
+										FileRadioButton(GetTop,Position) + $ButtonHeight + $vGap,$ButtonWidth, $ButtonHeight
+						TEXT			~Import~
+						TOOLTIP			~Import from the selected source~
+						TYPENAME		DEFAULTBUTTON
+	
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				Fields:	GENCONNAME		This
+						IsTabStop		1
+						DACTIONSTEXT	ACTION EXEC ( CloseDialog() )
+						POSITION		GoButton(GetRight,Position) + $hGap ,
+										GoButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+						TEXT			~Close~
+						TOOLTIP			~Close this dialog using the current settings~
+						TYPENAME		BUTTON
+		}
+
+	DialogHeight = CancelButton(GetBottom,Position) + $vGap + 25;
+
+	TheDialog( Set,Position,~<xPosition> <yPosition> <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,TheDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+	Global( DlgData,dlg,TheDialog );
+}
+
+
+NUMERIC CloseDialog()
+{
+	dlg( End );
+	Exit();
+}
+
+
+VOID OnGoButton()
+{
+	dlg( GetInput,GetStrings,WhichSource,WhichSource,OrderID,OrderID );
+
+	if ( ~<WhichSource>~ == ~File~ )
+	{
+		action = ACTION DOC ( ImportFromFileDoc OpenOnce ImportFromFileDoc );
+	}
+	else if ( ~<WhichSource>~ == ~Shooter~ ) 
+	{
+		action = ACTION DOC ( ImportFromShooter OpenOnce ImportFromShooter );
+	}
+	else
+	{
+		action = ACTION DOC ( AccunetSyncDoc OpenOnce AccunetSyncDoc "SyncWithOrders(~<OrderID>~);" );
+	}
+
+	PerformActions( action );
+
+	CloseDialog();
+}
+
+
+NUMERIC IsDocAlreadyOpen( WhichDoc )
+{
+	return  Document( Doc,FindByFileName,WhichDoc );
+}
+
+FirstTime = TRUE; // Only open a window the first time
+
+VOID Init( WhichOrder,xPosition,yPosition )		// ENTRY POINT FROM OTHER DOCUMENTS
+{
+	Global( WhichOrder );
+
+	App( thisApp );
+
+	if ( !DefinedAndNotNull(xPosition) )
+	{
+		xPosition = thisApp(MainWindow,GetClientWidth) / 2;
+	}
+
+	if ( !DefinedAndNotNull(yPosition) )
+	{
+		yPosition = thisApp(MainWindow,GetClientHeight) / 2;
+	}
+
+	if ( !Defined(WhichOrder) )
+	{
+		WhichOrder = ~~;
+	}
+
+	if ( <FirstTime> )
+	{
+		DefineDialog( ~<WhichOrder>~,~<xPosition>~,~<yPosition>~ );
+
+		FirstTime = FALSE;
+	}
+
+	TheDialog( SetWindowOrder,Top );
+}
+

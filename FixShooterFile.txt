@@ -1,0 +1,200 @@
+NUMERIC DefineDialog()
+{
+	if ( !DictionaryExists( DDFixShooter ) )
+	{
+        Dictionary: DDFixShooter 
+            Fields: Name	OrderID		type text
+ 	}
+
+	Define: DlgData Using DDFixShooter;
+
+	Left = 100;	Top = 100;	DialogWidth = 300; DialogHeight = 300;
+
+	vGap = 5; hGap = 5; ButtonWidth = 90; ButtonHeight = 20;
+
+	Define: aDialog Using DDWinDef
+		Fields:	POSITION				100,100,$DialogWidth,$DialogHeight 
+				TITLE					~Modify Twin Check~
+				TYPENAME				~Dialog~ 
+				STATUSBAR				~1 100~
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				DropActionsText			ACTION EXEC ( HandleDrop() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "FixShooter.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: OrderIDStaticText Using DDWinCtrlDef AsSymbol OrderIDStaticText 
+					Fields: TypeName		StaticText
+							Text			~Order ID~
+							RightJustified	TRUE
+							Position		10,20,90,20
+
+			Define: OrderIDField Using DDWinCtrlDef AsSymbol OrderIDField 
+					fields: TypeName		MaskedEditText
+							Position		OrderIDStaticText(GetRight,Position) + $hGap,OrderIDStaticText(Gettop,Position),120 20
+							GenConName		THIS
+							GenConField		~OrderID~
+							IActionsText	~[Get]~
+							OActionsText    ~[Save]~
+							IsTabStop		T
+							Tooltip			~Enter the resolution in pixels per inch that would be used by other applications that export postscript~
+							Mask			~#####~
+							PromptChar		~ ~ ;
+
+			}
+
+
+	DialogHeight = aDialog(GetMaxBottom,Position) + $vGap + 130;
+
+	aDialog( Set,Position,~<Left> <Top> <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,aDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DlgData );
+
+	return TRUE;
+}
+
+
+
+NUMERIC HandleDrop()
+{
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+	{ 
+		return FALSE;
+	}
+	
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );	// REMOVE THE DRAG INFO FROM THE TREE
+
+	return ExternalDrop(DragDropInfo);		
+}
+
+
+NUMERIC ExternalDrop( &DragDropInfo )
+{
+	if ( !DragDropInfo( GetDraggedFiles,DraggedFileList ) )
+	{ 
+		return ~There were no files in the object you dragged~;
+	}
+
+	count = DraggedFileList( ChildCount );
+		
+	if ( $count <= 0 )
+		{ return ~There were no files in the object you dragged~; }
+
+
+
+	more = DraggedFileList( GetFirst,FilePath );
+
+
+
+	while ( <more> )
+	{
+		Path = ~<$Con.FilePath[Text]>~;
+
+		if ( SimilarStr(~<$Str.$Path.ext>~ ,~dat~) )
+		{
+			MassageShooterFile( ~<Path>~ );
+		}
+
+		more = DraggedFileList( GetNext,FilePath );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC MassageShooterFile( Path )
+{
+	dlg( GetInput );
+
+	OrderID = Format( ~<$con.DlgData[OrderID]>~,~%06ld~ );
+
+	if ( strlen(~<OrderID>~) != 6 )
+	{
+		return Warning( ~You must five digits~ );
+	}
+
+	if ( MessageBox( ~Are you ready to convert <OrderID>~,YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	outPath = ~<DestinationDirectory>\<OrderID>.dat~;
+
+	if ( !File( OutDataFile,OPEN,~<outPath>~,Write,Create ) )			
+	{ 
+		Invoke( ShowWarning,Translate(~Could not open <outPath>~) );
+		return FALSE;
+	}
+
+
+	if ( !File( InDataFile,OPEN,~<Path>~,Read ) )			
+	{ 
+		Invoke( ShowWarning,Translate(~Could not open <Path>~) );
+		return FALSE;
+	}
+
+	i = 0;
+
+	while ( <++i> <= 100 )
+	{
+		if ( !InDataFile( ReadString,rec ) )
+		{
+			return Warning( ~Shooter file is incomplete~ );
+		}
+
+		OutDataFile( ~<rec>~ );
+	}
+
+	LastTwinCheck = ~~;
+	NextRoll = 0;
+
+	while ( InDataFile( ReadString,rec ) )
+	{
+		substr( ~<rec>~,0,43,Start );
+		substr( ~<rec>~,43,6,TheOrder );
+		substr( ~<rec>~,49,6,TwinCheck );
+		substr( ~<rec>~,55,999,Rest );
+
+		if ( MakeNumber(~<TwinCheck>~) != 0 )
+		{
+			if ( ~<TwinCheck>~ != ~<LastTwinCheck>~ )
+			{
+				NextRoll = Format( <++NextRoll>,~%06ld~ );
+				LastTwinCheck = ~<TwinCheck>~;
+			}
+
+			
+
+			OutDataFile( ~<Start><OrderID><NextRoll><Rest>~ );
+		}
+		else
+		{
+			OutDataFile( ~<rec>~ );
+		}
+	}
+
+	dlg( SetStatus,0,~Done~ );
+
+	return TRUE;
+}
+
+
+NUMERIC GoButton()
+{
+	dlg( SetStatus,0,~You pressed the go button~ );
+	return TRUE;
+}
+
+NUMERIC DoCancelButton()
+{
+	dlg( End );
+	Exit();
+}
+
+DestinationDirectory = ~\\ABC\D-Drive\Data~;
+
+DestinationDirectory = ~c:\atom~;
+
+
+DefineDialog();

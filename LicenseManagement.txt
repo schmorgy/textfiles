@@ -1,0 +1,887 @@
+Include: ~LicenseUtils.txt~ ;
+Include: ~AppFuncs.txt~;
+
+IncludeClass(BaseHTML);
+
+Class( LMWin,Extends,BaseHTML,
+		Member,fFromLogin,Numeric,0,
+		Member,fCalledFromStartup,Numeric,0,
+		Member,fLicenseExpired,Numeric,0,
+		Member,fNumLicenses,Numeric,1,
+		Member,fLicenseDaysLeft,Numeric,1,
+		Member,fMaxSeatsForSeatLicense,Numeric,127,
+		Member,fLicenseLevel,Numeric,0,
+		Member,fSiteCode,Str,~~,
+		Member,fLabUniqueID,Str,~~ );
+
+VOID LMWin::DefineMessages()
+{
+	BaseHtml::DefineMessages();
+	LoadTranslationFile( Administration,LicenseManagementTrans,LicenseManagementTrans);
+}
+
+VOID LMWin::HelpRoutine()	{ OpenHelpPage(~/LicenseManagement/LicenseManagement.kpl~); }
+
+VOID LMWin::OnLoadComplete()
+{
+	if ( !GetViewByName(View) )
+	{
+		return;
+	}
+	
+	if ( Numeric(~<$Sym.UseNewLicensing>~) )
+	{
+		fHtmlView( TableCell,CurrentUsersHdr,0,0,0,SetAttribute,Width,100 );
+		fHtmlView( TableCell,CurrentUsersHdr,0,0,1,SetAttribute,Width,150 );
+		fHtmlView( TableCell,CurrentUsersHdr,0,0,2,SetAttribute,Width,150 );
+		fHtmlView( TableCell,CurrentUsersHdr,0,0,3,SetAttribute,Width,125 );
+		fHtmlView( TableCell,CurrentUsersHdr,0,0,4,SetAttribute,Width,100 );
+		fHtmlView( TableCell,CurrentUsersHdr,0,0,5,SetAttribute,Width,110 );
+		fHtmlView( TableCell,CurrentUsersHdr,0,0,6,SetAttribute,Width,110 );
+	}
+
+	WaitCursor( Begin );
+
+	if ( ado( dBase,Connect ) )
+	{
+		fLabUniqueID = ~~;
+		Query = ~Select LabUniqueID from LabInfo~;
+		if ( dBase( GetValuesFor, ~<Query>~, fLabUniqueID ) )
+		{
+			fHtmlView( SetInnerText,~labID~,0,~<fLabUniqueID>~ );
+		}
+	}
+
+	LicenseLevel = 0;
+	GetKspL(LicenseLevel);
+	fLicenseLevel = <LicenseLevel>;
+
+	licensedMsg = TR(UIMessages, KspL);
+
+	GetModuleInfo();
+
+	if ( GetKspI(~0~,~<fLabUniqueID>~,licenseSiteCode,licenseStartDate,licenseEndDate,licenseDaysAllowed,licenseDaysUsed,numLicenses) )
+	{
+		licenseDaysLeft = <licenseDaysAllowed> - <licenseDaysUsed>;
+		if ( <licenseDaysLeft> < 0 )
+		{
+			licenseDaysLeft = 0;
+		}
+
+		fSiteCode = ~<licenseSiteCode>~;
+		fNumLicenses = ~<numLicenses>~;
+		fLicenseDaysLeft = ~<licenseDaysLeft>~;
+
+		fHtmlView( SetInnerText, ~LicenseSiteCode~,0,~<licenseSiteCode>~ );
+		fHtmlView( SetInnerText, ~LicenseStartDate~,0,~<licenseStartDate>~ );
+		fHtmlView( SetInnerText, ~LicenseEndDate~,0,~<licenseEndDate>~ );
+		fHtmlView( SetInnerText, ~LicenseDaysLeft~,0,~<licenseDaysLeft>~ );
+
+		fHtmlView( SetInnerText, ~NumLicenses~,0,~<numLicenses>~ );
+	}
+
+	fHtmlView( SetInnerText, ~CurrentUsers~,0,~0~ );
+	fHtmlView( SetStyle,~CurrentUsersHdr~,0,display,none );
+	fHtmlView( SetStyle,~CurrentUsersTable~,0,display,none );
+	fHtmlView( SetStyle,~CurrentUsersTable_Div~,0,display,none );
+
+	WorkstationType = ~<$[Symbols].WorkstationType[Value]>~;
+	if ( Numeric(~<$Sym.UseNewLicensing>~) || <WorkstationType> == 1 )
+	{
+		UpdateStatus();
+	}
+
+	SetRequestType();
+
+	WaitCursor( End );
+
+	if (<fCalledFromStartup> && !<fLicenseExpired>)
+	{
+		if ( Authorized( KEXDSS ) )
+		{
+			if ( <WorkstationType> == 0 )
+			{
+				Warning(TR(LicenseManagementTrans, LicenseWarningKEXDSS2));
+			}
+			else
+			{
+				Warning(TR(LicenseManagementTrans, LicenseWarningKEXDSS));
+			}
+		}
+		else
+		{
+			Warning(TR(LicenseManagementTrans, LicenseWarningDP2));
+		}
+	}
+}
+
+VOID LMWin::LMWin( WantStatic )
+{
+	WindowLeft = WindowTop = 0;
+	WindowWidth = 80;
+	WindowHeight = 100;
+	HelpPage = ~LicenseManagement.html~;
+
+	Static(~<WantStatic>~);
+}
+
+VOID LMWin::SaveLicenseSetting()
+{
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	fHtmlView(Get, ~WarningThreshold~, 0, value, WarningThreshold);
+
+	if (!SetSystemSettings(~Ksp~, ~WarningThreshold~, ~<WarningThreshold>~, TRUE))
+	{
+		Warning(TR(LicenseManagementTrans, SaveLicenseSettingFailed));	
+		return;
+	}	
+		
+	Warning(TR(LicenseManagementTrans,SaveLicenseSettingSuccessful,~<$App.Title>~));
+}
+
+VOID LMWin::ProblemReport()
+{
+	LogKsp(0);
+	
+	action = ACTION DOC ( ProblemDoc2 OpenOnce ProblemDoc2" );
+	PerformActions( action );
+}
+
+VOID LMWin::GenerateLicenseRequest()
+{
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+
+	WorkstationType = ~<$[Symbols].WorkstationType[Value]>~;
+
+	numLicenses = <fNumLicenses>;
+	if ( <WorkstationType> != 2 )
+	{
+		if ( Authorized( KEXDSS ) )
+		{
+			fHtmlView(Get,~LicensesForModule~,0,value,numLicenses);
+		}
+	}
+
+	StringList(ModuleList,New);
+
+	requestAddOnLicense = FALSE;
+	numLicensesToRequest = 0;
+	numDaysToRequest = 0;
+	if (<fLicenseExpired>)
+	{
+		ModuleList( AddString,~0~ );
+
+		requestAddOnLicense = FALSE;
+		numLicensesToRequest = <numLicenses>;
+		numDaysToRequest = 365;
+	}
+	else if (<fCalledFromStartup> && !<fLicenseExpired>)
+	{
+		ModuleList(AddString,~0~);
+		requestAddOnLicense = FALSE;
+		numLicensesToRequest = 0;
+		numDaysToRequest = 0;
+	}
+	else
+	{
+		ModuleList( AddString,~0~ );
+
+		requestAddOnLicense = TRUE;
+		numLicensesToRequest = <numLicenses> - <fNumLicenses>;
+		numDaysToRequest = 0;
+	}
+
+	WaitCursor( Begin );
+
+	if (!Ado(dBase,Connect))
+	{
+		Warning(~<$TR.LicenseManagementTrans(LicenseRequestFailed)>~);
+		return;
+	}
+	
+	Query = ~Select * from LabInfo~;
+	if (!PGenConList(List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~))
+	{
+		Warning(~<$TR.LicenseManagementTrans(LicenseRequestFailed)>~);
+		return;
+	}
+	
+	if ( !List( GetNext,LabInfoRecord ) )
+	{
+		Warning(~<$TR.LicenseManagementTrans(LicenseRequestFailed)>~);
+		return;
+	}
+	
+	theLabUniqueID = ~<$pcon.LabInfoRecord[LabUniqueID]>~;
+	theLabName = ~<$pcon.LabInfoRecord[LabName]>~;
+	theContactName = ~<$pcon.LabInfoRecord[ContactName]>~;
+	theAddress1 = ~<$pcon.LabInfoRecord[Address1]>~;
+	theAddress2 = ~<$pcon.LabInfoRecord[Address2]>~;
+	theCity = ~<$pcon.LabInfoRecord[City]>~;
+	theCounty = ~<$pcon.LabInfoRecord[County]>~;
+	theState = ~<$pcon.LabInfoRecord[State]>~;
+	theCountry = ~<$pcon.LabInfoRecord[Country]>~;
+	theZipCode = ~<$pcon.LabInfoRecord[ZipCode]>~;
+	thePhoneNumber = ~<$pcon.LabInfoRecord[Phone]>~;
+	theEMail = ~<$pcon.LabInfoRecord[EMail]>~;
+	theKNumber = ~<$pcon.LabInfoRecord[KNumber]>~;
+
+	DataDict( DDLabInfo, New );
+	DDLabInfo( Add, LabUniqueID, Type, text );
+	DDLabInfo( Add, LabName, Type, text );
+	DDLabInfo( Add, ContactName, Type, text );
+	DDLabInfo( Add, Address1, Type, text );
+	DDLabInfo( Add, Address2, Type, text );
+	DDLabInfo( Add, City, Type, text );
+	DDLabInfo( Add, State, Type, text );
+	DDLabInfo( Add, County, Type, text );
+	DDLabInfo( Add, Country, Type, text );
+	DDLabInfo( Add, ZipCode, Type, text );
+	DDLabInfo( Add, Phone, Type, text );
+	DDLabInfo( Add, Email, Type, text );
+	DDLabInfo( Add, KNumber, Type, text );
+	Global( DDLabInfo );
+
+	GenCon( LabInfoGC,New,DDLabInfo );
+	LabInfoGC( Set, LabUniqueID, ~<theLabUniqueID>~ );
+	LabInfoGC( Set, LabName, ~<theLabName>~ );
+	LabInfoGC( Set, ContactName, ~<theContactName>~ );
+	LabInfoGC( Set, Address1, ~<theAddress1>~ );
+	LabInfoGC( Set, Address2, ~<theAddress2>~ );
+	LabInfoGC( Set, City, ~<theCity>~ );
+	LabInfoGC( Set, State, ~<theState>~ );
+	LabInfoGC( Set, County, ~<theCounty>~ );
+	LabInfoGC( Set, Country, ~<theCountry>~ );
+	LabInfoGC( Set, ZipCode, ~<theZipCode>~ );
+	LabInfoGC( Set, Phone, ~<thePhoneNumber>~ );
+	LabInfoGC( Set, Email, ~<theEMail>~ );
+	LabInfoGC( Set, KNumber, ~<theKNumber>~ );
+
+	getLicResult = GetAutoLicense(ModuleList,LabInfoGC,~<numLicensesToRequest>~,~<numDaysToRequest>~,~<requestAddOnLicense>~);
+	if (<getLicResult> == 1 || <getLicResult> == 2 || <getLicResult> == 3)
+	{
+		fHtmlView(Refresh);
+
+		NewLicenseLevel = 0;
+		GetKspL(NewLicenseLevel);
+
+		licenseChanged = TRUE;
+		if ( GetKspI(~0~,~<fLabUniqueID>~,licenseSiteCode,licenseStartDate,licenseEndDate,licenseDaysAllowed,licenseDaysUsed,numLicenses) )
+		{
+			licenseDaysLeft = <licenseDaysAllowed> - <licenseDaysUsed>;
+
+			if ( <licenseDaysLeft> == <fLicenseDaysLeft> && <numLicenses> == <fNumLicenses> && <NewLicenseLevel> == <fLicenseLevel> )
+			{
+				licenseChanged = FALSE;
+			}
+		}
+
+		if (<licenseChanged>)
+		{
+			Warning(~<$TR.LicenseManagementTrans(SiteKeyHasBeenSavedSuccessfully)>~);
+		}
+		else
+		{
+			if ( Authorized( KEXDSS ) )
+			{
+				Warning(~<$TR.LicenseManagementTrans(LicenseNotChangedKEXDSS)>~);
+			}
+			else
+			{
+				Warning(~<$TR.LicenseManagementTrans(LicenseNotChanged)>~);
+			}
+		}
+
+		fLicenseLevel = <NewLicenseLevel>;
+	}
+	else
+	{
+		if (<getLicResult> == -1)
+		{
+			if ( Authorized( KEXDSS ) )
+			{
+				Warning(~<$TR.LicenseManagementTrans(GetLicenseLockedKEXDSS)>~);
+			}
+			else
+			{
+				Warning(~<$TR.LicenseManagementTrans(GetLicenseLocked)>~);
+			}
+		}
+		else
+		{
+			if ( GetKspLRF(ModuleList,LabInfoGC,~<fSiteCode>~,~<numLicensesToRequest>~,~<numDaysToRequest>~,~<requestAddOnLicense>~,1) )
+			{
+				GetKspFP(LicenseRequestFilePath,1);
+
+				if ( Authorized( KEXDSS ) )
+				{
+					Warning(~<$TR.LicenseManagementTrans(LicenseRequestGeneratedIntoFile,`<LicenseRequestFilePath>`)> <$TR.LicenseManagementTrans(SendKEXDSSFileToKodak)>~);
+				}
+				else if ( Authorized( DP2 ) )
+				{
+					Warning(~<$TR.LicenseManagementTrans(LicenseRequestGeneratedIntoFile,`<LicenseRequestFilePath>`)> <$TR.LicenseManagementTrans(SendDP2FileToKodak)>~);
+				}
+			}
+			else
+			{
+				Warning(~<$TR.LicenseManagementTrans(LicenseRequestFailed)>~);
+			}
+		}
+	}
+
+	WaitCursor( End );
+}
+
+VOID LMWin::SetRequestType()
+{
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+
+	if ( Authorized( KEXDSS ) )
+	{
+		fHtmlView(Set,LicensesForModule,0,disabled,~~);
+	}
+
+	WorkstationType = ~<$[Symbols].WorkstationType[Value]>~;
+
+	if ( Authorized( KEXDSS ) )
+	{
+		if ( <WorkstationType> != 2 )
+		{
+			fHtmlView( SetInnerText, ~LicensesForModule~,0,~<fNumLicenses>~ );
+		}
+	}
+}
+
+VOID LMWin::RefreshUserList()
+{
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+
+	WaitCursor( Begin );
+
+	fHtmlView( SetInnerText, ~CurrentUsers~,0,~0~ );
+	fHtmlView( SetStyle,~CurrentUsersHdr~,0,display,none );
+	fHtmlView( SetStyle,~CurrentUsersTable~,0,display,none );
+	fHtmlView( SetStyle,~CurrentUsersTable_Div~,0,display,none );
+
+	fHtmlView( Table,CurrentUsersTable,0,DeleteAllRows, -1 );
+	UpdateStatus();
+	
+	WaitCursor( End );
+}
+
+VOID LMWin::ViewDefinition()		
+{
+	Fields:	HTMLCloseBox	<fStatic>;
+}
+
+VOID LMWin::SelectFile()
+{
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+
+	FileFilter = ~License File|*.xml|All Files|*.*||~;
+	
+	currentValue = 0;
+	currentModuleText = ~~;
+	currentModule = ~~;
+	isSelected = FALSE;
+	fHtmlView( Get, ~Module~,0,value, currentValue );
+	fHtmlView( GetSelectOption, ~Module~,0,<currentValue>,currentModule, currentModuleText );
+	
+	if ( IsNull( ~<currentModuleText>~ ) )
+	{
+		currentModuleText = ~Digital Printing Software - DP1~;
+	}
+	
+	if ( FileDialog(Title,TR(LicenseManagementTrans, SpecifyLicenseFileToImport),Filter,~<FileFilter>~,DefaultFile,~<currentModuleText>.xml~,Path,Path,Open ) )
+	{
+		Path = MakePath( Type,UNC,~<Path>~);
+	}	
+
+	if (DefinedAndNotNull(Path))
+	{
+		fHtmlView( Set,~LicenseFileToImport~,0,value,~<Path>~ );
+	}	
+}
+
+VOID LMWin::ImportLicenseIntoSystem()
+{
+	WaitCursor( Begin );
+	if ( !GetViewByName( View ) )
+	{
+		WaitCursor( End );
+		return;
+	}
+	fHtmlView(Get, ~LicenseFileToImport~, 0, value, TheLicenseFileToImport);
+
+	if (DoKspI(~<TheLicenseFileToImport>~,~<fLabUniqueID>~))
+	{
+		fHtmlView(Refresh);
+		Warning(~<$TR.LicenseManagementTrans(LicenseHasBeenImportedSuccessfully)>~);
+
+		// Update the information in the data location file.  This is only needed if
+		// the user started with an evaluation setup.  In this case we want to change
+		// their setup type from evaluation to typical.
+		UpdateDataLocationFile();
+	}
+	else
+	{
+		Warning(~<$TR.LicenseManagementTrans(LicenseImportFailed)>~);
+	}
+	
+	WaitCursor( End );
+}
+
+VOID LMWin::UpdateDataLocationFile()
+{
+	StartupModule = -1;
+
+	DataLocationFile = ~<$App.Directory>\<$App.ExeName>_DataLocation.txt~;
+	Include: ~<DataLocationFile>~;
+
+	if ( <SetupType> == 0 )
+	{
+		// Change the setup type from evaluation (0) to typical (1).
+		SetupType = 1;
+
+		if ( File( DataBaseLocation,Open,~<DataLocationFile>~,Create,Write ) )	
+		{
+			DataBaseLocation( ~// THIS FILE DEFINES WHERE TO LOOK FOR THE DATABASE AND THE SHARED FILES~ );
+			DataBaseLocation( ~// IF YOU DELETE THIS FILE, IT WILL BE RECREATED THE NEXT TIME YOU START THE APPLICATION~ );
+			DataBaseLocation( ~  ~ );
+			DataBaseLocation( ~WorkstationType = <WorkstationType>;~ );
+			DataBaseLocation( ~ShareDir = |<ShareDir>|;~ );
+			DataBaseLocation( ~Connection = |<Connection>|;~ );
+			DataBaseLocation( ~SetupType = <SetupType>;~ );
+			DataBaseLocation( ~AllowJetConnection = <AllowJetConnection>;~ );
+			DataBaseLocation( ~IsDatabaseServer = <IsDatabaseServer>;~ );
+			DataBaseLocation( ~DontChangeShareDir = <DontChangeShareDir>;~ );
+			DataBaseLocation( ~CurrentLanguage = |<CurrentLanguage>|;~ );
+			
+			if ( <StartupModule> != -1 )
+			{
+				DataBaseLocation( ~StartupModule = <StartupModule>;~ );
+			}
+	
+			DataBaseLocation( Close );
+		}
+	}
+}
+
+VOID LMWin::SaveSiteKeyToSystem()
+{
+	WaitCursor( Begin );
+
+	if ( !GetViewByName( View ) )
+	{
+		WaitCursor( End );
+		return;
+	}
+	
+	fHtmlView(Get, ~SiteKey~, 0, value, ModuleSiteKey);
+
+	result = SaveKsp(~0~,~<ModuleSiteKey>~,~<fLabUniqueID>~,~~);
+	if (<result> == 1)
+	{
+		Warning(~<$TR.LicenseManagementTrans(SiteKeyHasBeenSavedSuccessfully)>~);
+	}
+	else
+	{
+		Log( Session,~Save license site key failed. Error = <result>~ );
+		Warning(~<$TR.LicenseManagementTrans(SiteKeySaveFailed)>~);
+	}
+
+	fHtmlView(Refresh);
+	WaitCursor( End );
+}
+
+VOID LMWin::ReleaseSeat( ElementName,RowIndexSelected )
+{
+	WaitCursor( Begin );
+
+	if ( !GetViewByName( View ) )
+	{
+		WaitCursor( End );
+		return;
+	}
+
+	computerName = ~~;
+	instanceName = ~~;
+	fHtmlView( TableCell,CurrentUsersTable,0,<RowIndexSelected>,3,GetFromCell,~ComputerName,0,value~,computerName );
+	fHtmlView( TableCell,CurrentUsersTable,0,<RowIndexSelected>,4,GetFromCell,~InstanceName,0,value~,instanceName );
+
+	if ( ReleaseKspS(~0~,~<computerName>~,~<instanceName>~) )
+	{
+		RefreshUserList();
+		WaitCursor( End );
+	}
+	else
+	{
+		WaitCursor( End );
+		Warning(TR(LicenseManagementTrans, UnableToReleaseSeat));
+	}
+
+	WaitCursor( End );
+}
+
+VOID LMWin::CheckOutSeat( ElementName,RowIndexSelected )
+{
+	WaitCursor( Begin );
+
+	if ( !GetViewByName( View ) )
+	{
+		WaitCursor( End );
+		return;
+	}
+
+	numDays = COKspS(~0~,~<fLabUniqueID>~);
+	if ( <numDays> > 1 )
+	{
+		Warning(TR(LicenseManagementTrans,LicenseCheckedOut,<numDays>,~<$App.Title>~));
+		DoReOpen();
+		WaitCursor( End );
+	}
+	else
+	{
+		WaitCursor( End );
+		Warning(TR(LicenseManagementTrans,UnableToCheckOutSeat));
+	}
+}
+
+VOID LMWin::CheckInSeat( ElementName,RowIndexSelected )
+{
+	WaitCursor( Begin );
+
+	if ( !GetViewByName( View ) )
+	{
+		WaitCursor( End );
+		return;
+	}
+
+	result = CIKspS(~0~,~<fLabUniqueID>~);
+	if ( <result> == 1 )
+	{
+		DoReOpen();
+		WaitCursor( End );
+	}
+	else
+	{
+		WaitCursor( End );
+		Warning(TR(LicenseManagementTrans, UnableToCheckInSeat));
+	}
+}
+
+VOID LMWin::WindowDefinition()
+{
+	if ( <fFromLogin> )
+	{
+		Fields:	Position			0 0 100 100
+				NoMenus				T
+	}
+}
+
+VOID LMWin::InitWindow(CalledFromStartup,LicenseExpired)
+{
+	IsCheckedOut = 0;
+
+	if ( Authorized( DP2 ) )
+	{
+		licenseStatus = 1;
+		GetKspSt(~0~,licenseStatus);
+		if ( <licenseStatus> == 2 )
+		{
+			IsCheckedOut = 1;
+		}
+	}
+
+	fCalledFromStartup = <CalledFromStartup>;
+	fLicenseExpired = <LicenseExpired>;
+
+	CreateAndOpen( ~<$App.HTTPServer>/Admin/LicenseManagement.kpl?MaxNumberOfSeats=<fMaxSeatsForSeatLicense>&IsCheckedOut=<IsCheckedOut>~ );
+}
+
+VOID LMWin::SetLoginFlag( FromLogin )
+{
+	fFromLogin = <FromLogin>;
+}
+
+VOID LMWin::GetModuleInfo()
+{
+	DataDict( DDKFunc, New );
+	DDKFunc( Add, Op, Type, long );
+	DDKFunc( Add, P1, Type, text );
+	DDKFunc( Add, Result, Type, long );
+	DDKFunc( Add, RV1, Type, text );
+	Global( DDKFunc );
+
+	GenCon( KFuncGC,New,DDKFunc );
+
+	KFuncGC( Set,Op,6 );
+	KFuncGC( Set,P1,~<moduleName>~ );
+
+	KFunc(KFuncGC);
+	KFuncGC( Get,Result,result );
+
+	if ( <result> == 1 )
+	{
+		KFuncGC( Get,RV1,AddrOfLicModulesGC );
+		if ( GenCon( LicModuleInfo,Is,~<AddrOfLicModulesGC>~,Temporary ) ) 
+		{
+			moduleNum = 0;
+			more = LicModuleInfo(GetFirst,moduleInfoGC);
+			while ( <more> )
+			{
+				moduleInfoGC(GetValue,NM,ModuleName);
+				moduleInfoGC(GetValue,ST,ModuleStatus);
+				moduleInfoGC(GetValue,TX,ModuleStatusText);
+				moduleInfoGC(GetValue,DE,ModuleDescription);
+
+				if ( Authorized( KEXDSS ) )
+				{
+					if ( <moduleNum> == 0 )
+					{
+						fHtmlView( SetInnerText,~CurrentLicenseLevel~,0,~<ModuleName>~ );
+						fHtmlView( SetInnerText,~CurrentLicenseStatus~,0,~<ModuleStatusText>~ );
+						fHtmlView( SetInnerText,~CurrentLicenseDesc~,0,~<ModuleDescription>~ );
+					}
+					else
+					{
+						if ( SimilarStr(~<ModuleStatus>~,~1~) )
+						{
+							fHtmlView( SetInnerText,~CurrentLicenseLevel~,0,~<ModuleName>~ );
+							fHtmlView( SetInnerText,~CurrentLicenseStatus~,0,~<ModuleStatusText>~ );
+							fHtmlView( SetInnerText,~CurrentLicenseDesc~,0,~<ModuleDescription>~ );
+						}
+						else if ( SimilarStr(~<ModuleStatus>~,~-1~) )
+						{
+							fHtmlView( SetInnerText,~CurrentLicenseLevel~,0,~<ModuleName>~ );
+							fHtmlView( SetInnerText,~CurrentLicenseStatus~,0,~<ModuleStatusText>~ );
+							fHtmlView( SetInnerText,~CurrentLicenseDesc~,0,~<ModuleDescription>~ );
+						}
+					}
+				}
+				else
+				{
+					fHtmlView( InsertTableRow,ModulesTable,0,-1 );
+					fHtmlView( Table,ModulesTable,0,GetRows,numRows );
+					rowIndex = <numRows> - 1;
+
+					fHtmlView( InsertTableCell,ModulesTable,0,<rowIndex>,-1,~<span style="width:130;height:18"><ModuleName></span>~ );
+					fHtmlView( InsertTableCell,ModulesTable,0,<rowIndex>,-1,~<span style="width:130;height:18"><ModuleStatusText></span>~ );
+					fHtmlView( InsertTableCell,ModulesTable,0,<rowIndex>,-1,~<span style="width:400;height:18;horizontal-align:left"><ModuleDescription></span>~ );
+				}
+
+				moduleNum = <moduleNum> + 1;
+				more = LicModuleInfo(GetNext,moduleInfoGC);				
+			}
+		}
+	}
+	
+	ForgetLocal( KFuncGC );
+	ForgetGlobal( DDKFunc );	
+}
+
+VOID LMWin::UpdateStatus()
+{
+	ThisInstance = GetAppInstance();
+
+	licenseStatus = 1;
+	GetKspSt(~0~,licenseStatus);
+
+	DataDict( DDKFunc, New );
+	DDKFunc( Add, Op, Type, long );
+	DDKFunc( Add, P1, Type, text );
+	DDKFunc( Add, Result, Type, long );
+	DDKFunc( Add, RV1, Type, text );
+	Global( DDKFunc );
+
+	GenCon( KFuncGC,New,DDKFunc );
+
+	KFuncGC( Set,Op,3 );
+	KFuncGC( Set,P1,~<moduleName>~ );
+
+	KFunc(KFuncGC);
+	KFuncGC( Get,Result,result );
+
+	if ( <result> == 1 )
+	{
+		KFuncGC( Get,RV1,AddrOfLicStatusGC );
+		if ( GenCon( LicStatus,Is,~<AddrOfLicStatusGC>~,Permanent ) ) 
+		{
+			currentUsers = LicStatus( ChildCount );
+			fHtmlView( SetInnerText, ~CurrentUsers~,0,~<currentUsers>~ );
+
+			if ( <currentUsers> == 0 )
+			{
+				fHtmlView( SetStyle,~CurrentUsersHdr~,0,display,none );
+				fHtmlView( SetStyle,~CurrentUsersTable~,0,display,none );
+				fHtmlView( SetStyle,~CurrentUsersTable_Div~,0,display,none );
+			}
+			else
+			{
+				fHtmlView( SetStyle,~CurrentUsersHdr~,0,display,block );
+				fHtmlView( SetStyle,~CurrentUsersTable~,0,display,block );
+				fHtmlView( SetStyle,~CurrentUsersTable_Div~,0,display,block );
+			}
+
+			ThisComputerName = ~<$App.ComputerName>~;
+
+			more = LicStatus(GetFirst,statusGC);
+			while ( <more> )
+			{
+				statusGC(GetValue,SS,Status);
+				statusGC(GetValue,ST,StartTime);
+				statusGC(GetValue,LAT,LastAccessTime);
+				statusGC(GetValue,CN,ComputerName);
+				statusGC(GetValue,UN,UserName);
+				statusGC(GetValue,CI,Instance);
+
+				fHtmlView( InsertTableRow,CurrentUsersTable,0,-1 );
+				fHtmlView( Table,CurrentUsersTable,0,GetRows,numRows );
+				rowIndex = <numRows> - 1;
+
+				if ( Numeric(~<$Sym.UseNewLicensing>~) )
+				{
+					FontWeight = ~normal~;
+					if ( SimilarStr(~<Instance>~,~<ThisInstance>~) && SimilarStr(~<ComputerName>~,~<ThisComputerName>~) )
+					{
+						FontWeight = ~bold~;
+					}
+					
+					fHtmlView( InsertTableCell,CurrentUsersTable,0,<rowIndex>,-1,~<center><span style="width:100;height:18;font-weight:<FontWeight>"><Status></span></center>~ );
+					fHtmlView( InsertTableCell,CurrentUsersTable,0,<rowIndex>,-1,~<center><span style="width:150;height:18;font-weight:<FontWeight>"><StartTime></span></center>~ );
+					fHtmlView( InsertTableCell,CurrentUsersTable,0,<rowIndex>,-1,~<center><span style="width:150;height:18;font-weight:<FontWeight>"><LastAccessTime></span></center>~ );
+					fHtmlView( InsertTableCell,CurrentUsersTable,0,<rowIndex>,-1,~<center><span id="ComputerName" Value=<ComputerName> style="width:125;height:18;font-weight:<FontWeight>"><ComputerName></span></center>~ );
+					fHtmlView( InsertTableCell,CurrentUsersTable,0,<rowIndex>,-1,~<center><span id="InstanceName" Value=<Instance> style="width:100;height:18;font-weight:<FontWeight>"><Instance></span></center>~ );
+
+					if ( SimilarStr(~<Instance>~,~<ThisInstance>~) && SimilarStr(~<ComputerName>~,~<ThisComputerName>~) )
+					{
+						fHtmlView( InsertTableCell,CurrentUsersTable,0,<rowIndex>,-1,~<center><span style="width:110;height:18"><input type=button TheRowIndex=<rowIndex> value="Release" style="font-size:12;width:70" Disabled></span></center>~ );
+					}
+					else
+					{
+						fHtmlView( InsertTableCell,CurrentUsersTable,0,<rowIndex>,-1,~<center><span style="width:110;height:18"><input type=button TheRowIndex=<rowIndex> value="Release" style="font-size:12;width:70" OnClick="OnReleaseLicense(this)"></span></center>~ );
+					}
+
+					WorkstationType = ~<$[Symbols].WorkstationType[Value]>~;
+					if ( Authorized( DP2 ) )
+					{
+						if ( SimilarStr(~<Instance>~,~<ThisInstance>~) && SimilarStr(~<ComputerName>~,~<ThisComputerName>~) && <WorkstationType> == 0 )
+						{
+							if ( <licenseStatus> == 2 )
+							{
+								fHtmlView( InsertTableCell,CurrentUsersTable,0,<rowIndex>,-1,~<center><span style="width:110;height:18"><input type=button TheRowIndex=<rowIndex> value="Check In" style="font-size:12;width:70" OnClick="OnCheckInLicense(this)"></span></center>~ );
+							}
+							else
+							{
+								fHtmlView( InsertTableCell,CurrentUsersTable,0,<rowIndex>,-1,~<center><span style="width:110;height:18"><input type=button TheRowIndex=<rowIndex> value="Check Out" style="font-size:12;width:70" OnClick="OnCheckOutLicense(this)"></span></center>~ );
+							}
+						}
+						else
+						{
+							fHtmlView( InsertTableCell,CurrentUsersTable,0,<rowIndex>,-1,~<center><span style="width:110;height:18"><input type=button TheRowIndex=<rowIndex> value="Check Out" style="font-size:12;width:70" Disabled></span></center>~ );
+						}
+					}
+				}
+				else
+				{
+					fHtmlView( InsertTableCell,CurrentUsersTable,0,<rowIndex>,-1,~<span style="width:130;height:18"><Status></span>~ );
+					fHtmlView( InsertTableCell,CurrentUsersTable,0,<rowIndex>,-1,~<span style="width:130;height:18"><StartTime></span>~ );
+					fHtmlView( InsertTableCell,CurrentUsersTable,0,<rowIndex>,-1,~<span style="width:130;height:18"><UserName></span>~ );
+				}
+
+				more = LicStatus(GetNext,statusGC);				
+			}
+		}
+	}
+
+	ForgetLocal( KFuncGC );
+	ForgetGlobal( DDKFunc );
+}
+
+NUMERIC GetAppInstance()
+{
+	DataDict( DDKFunc, New );
+	DDKFunc( Add, Op, Type, long );
+	DDKFunc( Add, Result, Type, long );
+	DDKFunc( Add, RV1, Type, long );
+	Global( DDKFunc );
+
+	GenCon( KFuncGC,New,DDKFunc );
+
+	KFuncGC( Set,Op,24 );
+
+	KFunc(KFuncGC);
+	KFuncGC( Get,Result,result );
+	KFuncGC( Get,RV1,AppInstance );
+
+	ForgetLocal( KFuncGC );
+	ForgetGlobal( DDKFunc );
+	
+	return <AppInstance>;
+}
+
+VOID DoReOpen()	
+{
+	ReOpen();
+}
+
+VOID ReOpen()
+{
+	IsCheckedOut = 0;
+
+	if ( Authorized( DP2 ) )
+	{
+		licenseStatus = 1;
+		GetKspSt(~0~,licenseStatus);
+		if ( <licenseStatus> == 2 )
+		{
+			IsCheckedOut = 1;
+		}
+	}
+
+	PageObj.ReOpen(); 
+	PageObj.Open(~<$App.HTTPServer>/Admin/LicenseManagement.kpl?MaxNumberOfSeats=<fMaxSeatsForSeatLicense>&IsCheckedOut=<IsCheckedOut>~);
+}
+
+VOID InitDoc( WantStatic,FromLogin,CalledFromStartup,LicenseExpired )
+{
+	if ( !ObjectAlreadyExists( PageObj ) )
+	{
+		LMWin( New,PageObj,~<WantStatic>~ );
+
+		PageObj( Global );
+		PageObj.SetLoginFlag( <FromLogin> );
+		PageObj.InitWindow(<CalledFromStartup>,<LicenseExpired>);
+	}
+	
+	PageObj.SetWindowTitle(TR(LicenseManagementTrans, Title));
+
+}
+
+// Entry Points from other scripts
+
+VOID InitStatic( FromLogin,CalledFromStartup,LicenseExpired )
+{
+	InitDoc( TRUE,<FromLogin>,<CalledFromStartup>,<LicenseExpired> );
+}
+
+VOID Init( FromLogin,CalledFromStartup,LicenseExpired )
+{
+	InitDoc( FALSE,<FromLogin>,<CalledFromStartup>,<LicenseExpired> );
+}

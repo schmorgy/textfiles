@@ -1,0 +1,629 @@
+
+//	ArbitraryPaperFillInclude.cpp
+
+//	THE INTERFACE TO THIS ALGORITHM IS...
+//
+//	CALL THIS ONCE AT START UP
+//		SetArbitraryPageSize( double PaperWidth, double MinAdvance, double MaxAdvance ) ;
+//
+//	FOR EACH PAGE TO BE PAPER FILLED CALL...
+//
+//		int Result = AddArbitraryPage(	UGenCon *RenderPage, TCHAR *ImageID, TCHAR *OrderID,
+//										double Width, double Height, DeleteAfter ) ;
+//
+//	IF THE RESULT IS FALSE THEN THE PAGE COULD NOT BE ADDED TO THE CURRENT PACKAGE SO...
+//		UGenCon *theLayout = GetArbitraryPackage() ;
+//		DO WHAT YOU NEED TO WITH THE LAYOUT AND THEN
+//		SEND THIS PAGE AGAIN.  IF IT FAILS, IT CAN NOT BE PAPER FILLED.
+//		DON'T FORGET TO:
+//			delete theLayout ;
+//
+//	WHEN SUBMITTING THE LAST PAGE, 
+//		UGenCon *theLayout = GetArbitraryPackage() ;
+//		AND DO WHAT MUST BE DONE WITH THIS LAYOUT.
+//		DON'T FORGET TO:
+//			delete theLayout ;
+//
+//=============================================================================
+//=============================================================================
+//========================= ARBITRARY PAPER FILL ==============================
+//=============================================================================
+//=============================================================================
+/*
+	Dictionary:	DDPackagePage
+		Fields:	Name	PackageCode		Type	long
+		Fields:	Name	StringState		Type	long
+		Fields:	Name	BarCodeString	Type	String	Length	  32
+		Fields:	Name	PaperAdvance	Type	double	Precision 15 Scale 8
+		Fields:	Name	PaperWidth		Type	double	Precision 15 Scale 8
+		Fields:	Name	SizeQtys		Type	string	Length	  32
+		Fields:	Name	SizeQtyInUse	Type	string	Length	  32
+		Fields:	Name	AreaInUse		Type	double
+		Fields:	Name	NumImages		Type	long
+		Fields:	Name	Quantity		Type	long
+		Fields:	Name	RenderPageList	Type	long
+		Fields:	Name	BPHead1			Type	long
+		Fields:	Name	BPHead2			Type	long
+	;
+
+	Dictionary:	DDImageSlot
+		Fields:	Name	ImageAdvance		Type	double	Precision 15 Scale 8
+		Fields:	Name	ImageHeight			Type	double	Precision 15 Scale 8
+		Fields:	Name	ImageWidth			Type	double	Precision 15 Scale 8
+		Fields:	Name	ImageLength			Type	double	Precision 15 Scale 8
+		Fields:	Name	AdvancePos			Type	double	Precision 15 Scale 8
+		Fields:	Name	HeightPos			Type	double	Precision 15 Scale 8
+		Fields:	Name	Area				Type	double
+		Fields:	Name	Orientation			Type	long
+		Fields:	Name	InUse				Type	long
+		Fields:	Name	RenderPage			Type	long
+		Fields:	Name	FilePath			Type	text
+		Fields:	Name	PreDefinedPkgCode	Type	long
+		Fields:	Name	ImgGC				Type	long
+		Fields:	Name	DeleteAfter			Type	long
+	;
+*/
+
+int		 PIE_INCHES		= 1 ;
+int		 SIZEOF_SHORT	= 2 ;
+
+double	 gPaperWidth ;
+double	 gMinAdvance ;
+double	 gMaxAdvance ;
+
+UStack	*gRectStack ;
+
+UGenCon	*gCurrentLayout = NULL ;
+
+void SetArbitraryPageSize( double PaperWidth, double MinAdvance, double MaxAdvance )
+{
+	gPaperWidth = PaperWidth ;
+	gMinAdvance = MinAdvance ;
+	gMaxAdvance = MaxAdvance ;
+
+	if( gLogAmount >= 2 )
+	{
+		SessionLogDirect( _T("******\tArbitraryPaperFill.SetArbitraryPageSize: PaperWidth: %lf, MinAdv: %lf, MaxAdv: %lf"),
+						PaperWidth, MinAdvance, MaxAdvance ) ;
+	}
+}
+
+UGenCon	*GetArbitraryPackage()
+{
+	if( gRectStack )
+	{
+		delete gRectStack ;		
+		gRectStack = NULL ; 
+	}
+
+	UGenCon *TmpLayout = gCurrentLayout ;
+	gCurrentLayout = NULL ;
+
+	if( TmpLayout )
+	{
+		UList	*TmpLayoutPages = TmpLayout->GetChildren() ;
+		if( TmpLayoutPages == NULL )
+		{
+			delete TmpLayout ;
+			TmpLayout = NULL ;
+		}
+	}
+
+//	SessionLogDirect( _T("******\tArbitraryPaperFill.GetArbitraryPackage")) ;
+//	LogCurrentPackage() ;
+
+	return( TmpLayout ) ;
+}
+
+
+int AddArbitraryPage( UGenCon *RenderPage, TCHAR *ImageID, TCHAR *OrderID,
+					  double Width, double Height, int DeleteAfter )
+{
+	if( gLogAmount >= 4 )
+	{
+		SessionLogDirect( _T("******\tAddArbitraryPage: Page: 0x%08lX, \"%s\", ImageID: \"%s\" OrderID: \"%s\", Width: %lf, Height: %lf, DeleteAfter: %ld"),
+							RenderPage, RenderPage->GetName(), ImageID, OrderID, Width, Height, DeleteAfter ) ;
+	}
+
+	if( gCurrentLayout == NULL )	{ gCurrentLayout = StartNewLayout() ; }
+	
+	UGenCon *theImage ;
+	PIERect	*theRect ;
+	int		Units ;
+
+	Debug( 0 ) ;
+
+	while( TRUE )
+	{
+		theRect = PopRect() ;
+		if( theRect == NULL )	{ break ; }
+		
+		if( theRect->IsEmpty() == FALSE )	
+		{
+//=============================================================================
+			theImage = AddImageToRect( theRect, Width, Height ) ;
+//=============================================================================
+			if( theImage )
+			{
+				theImage->SetLongValue( _T("RenderPage"), RenderPage ) ;
+				theImage->SetAttrValue( _T("FilePath"), ImageID ) ;
+				theImage->SetLongValue( _T("DeleteAfter"), DeleteAfter ) ;
+
+				double	Area = gCurrentLayout->GetDoubleValue(_T("AreaInUse")) ;
+				Area = Area + Width * Height ;
+				gCurrentLayout->SetDoubleValue(_T("AreaInUse"), Area ) ;
+
+				gCurrentLayout->AddChildBack( theImage ) ;
+				UpdateLayoutSize(gCurrentLayout) ;
+
+				if( gLogAmount >= 5 )
+				{
+					SessionLogDirect(
+						_T("******\tArbitraryPaperFill.AddArbitraryPage: Success: ImageID: %s, OrderID: %s, Width: %lf, Height: %lf, Delete: %ld"),
+							ImageID, OrderID, Width, Height, DeleteAfter ) ;
+				}
+
+				if( gLogAmount >= 8 )
+				{
+					theImage->Dump(_T("ArbitraryPaperFillInclude.AddArbitraryPage: theImage:")) ;
+				}
+
+				delete theRect ;
+
+//				LogCurrentPackage() ;
+				
+				return( TRUE ) ;
+			}
+		}
+
+		delete theRect ;
+	}
+
+	SessionLogDirect( _T("******\tArbitraryPaperFill.AddArbitraryPage: Error: ImageID: %s, OrderID: %s, Width: %lf, Height: %lf, Delete: %ld"),
+						ImageID, OrderID, Width, Height, DeleteAfter ) ;
+
+//	LogCurrentPackage() ;
+
+	return( FALSE ) ;
+}
+
+
+UGenCon *AddImageToRect( PIERect *theRect, double ImgWidth, double ImgHeight )
+{
+	int		Result = FALSE ;
+	double	NewWidth, NewHeight ;
+
+	if( theRect->IsEmpty() )	{ return( NULL ) ; }
+
+	Debug(0) ;
+
+//	PrintRect( theRect, _T("Source    theRect") ) ;
+
+	Result = MultiplesFitOnPage( theRect, ImgWidth, ImgHeight, &NewWidth, &NewHeight ) ;
+
+	if( Result == FALSE )		//	WE COULDN'T FIT THE IMAGE IN THE RECT
+		{ return( NULL ) ; }
+
+	UGenCon	*ImageSlot = new UGenCon( GetDataDictionary( _T("DDImageSlot"))) ;
+	if( ImageSlot )
+	{
+		double	Left, Top, JRight, JBottom ;
+		theRect->GetLTRB( &Left, &Top, &JRight, &JBottom ) ;
+
+		TCHAR	Name[256] ;
+		sprintf( Name, _T("Slot [%4.2lf %4.2lf %4.2lf %4lf]"), Left, Top, JRight, JBottom ) ;
+		ImageSlot->SetName( Name ) ;
+
+		ImageSlot->SetDoubleValue(_T("ImageAdvance"), Left + NewWidth ) ;
+		ImageSlot->SetDoubleValue(_T("ImageHeight"), Top + NewHeight ) ;
+		ImageSlot->SetDoubleValue(_T("AdvancePos"), Left ) ;
+		ImageSlot->SetDoubleValue(_T("HeightPos"), Top ) ;
+		ImageSlot->SetDoubleValue(_T("Area"), NewWidth * NewHeight ) ;
+
+//		PrintRect( theRect, _T("Populated theRect") ) ;
+
+		PIERect	*SouthRect = new PIERect ;
+		PIERect	*EastRect  = new PIERect ;
+
+		GetSouthRect( theRect, NewWidth, NewHeight, SouthRect ) ;
+		GetEastRect( theRect, NewWidth, NewHeight, EastRect ) ;
+
+		PushRect( EastRect ) ;
+		PushRect( SouthRect ) ;
+
+//		DisplayRects( SouthRect, EastRect ) ;
+
+		delete SouthRect ;
+		delete EastRect ;
+	}
+
+	return( ImageSlot ) ;
+}
+
+
+int MultiplesFitOnPage( PIERect *theRect, double ImgWidth, double ImgHeight,
+						double *NewWidth, double *NewHeight )
+{
+//	SessionLogDirect( _T("\n******\tArbPaperFill.MultiplesFitOnPage: Width: %lf, Height: %lf"), ImgWidth, ImgHeight ) ;
+//	PrintRect( theRect, _T("MultiplesFitOnPage Source") ) ;
+
+
+	double	Left, Top, RectWidth, RectAdvance ;
+	theRect->GetLTWH( &Left, &Top, &RectAdvance, &RectWidth ) ;
+
+//	SessionLogDirect( _T("******\tArbPaperFill.MultiplesFitOnPage: Left: %lf, Top: %lf, RectAdvance: %lf, RectWidth: %lf"),
+//				Left, Top, RectAdvance, RectWidth ) ;
+
+	double	dNumAcrossWidth  = RectWidth / ImgWidth ;
+	double	dNumAcrossHeight = RectWidth / ImgHeight ;
+
+	long	lNumAcrossWidth	 = dNumAcrossWidth + 0.0005 ;
+	long	lNumAcrossHeight = dNumAcrossHeight + 0.0005 ;
+
+	double	dNumAdvanceWidth  = RectAdvance / ImgWidth ;
+	double	dNumAdvanceHeight = RectAdvance / ImgHeight ;
+
+	long	lNumAdvanceWidth  = dNumAdvanceWidth + 0.0005 ;
+	long	lNumAdvanceHeight = dNumAdvanceHeight + 0.0005 ;
+
+//	SessionLogDirect( _T("******\tArbPaperFill.MultiplesFitOnPage: lNumAcrossWidth: %ld, lNumAcrossHeight: %ld"),
+//							lNumAcrossWidth, lNumAcrossHeight ) ;
+
+	if( lNumAcrossWidth  == 0L && lNumAcrossHeight  == 0L )	{ return( FALSE ) ; }
+
+//	SessionLogDirect( _T("******\tArbPaperFill.MultiplesFitOnPage: lNumAdvanceWidth: %ld, lNumAdvanceHeight: %ld"),
+//							lNumAdvanceWidth, lNumAdvanceHeight ) ;
+
+	if( lNumAdvanceWidth == 0L && lNumAdvanceHeight == 0L )	{ return( FALSE ) ; }
+
+	//	WE WANT TO FAVOR THE ZERO DECIMAL DIRECTION.
+	long	DecimalWidths = GetDecimals( dNumAcrossWidth ) ;
+	long	DecimalHeight = GetDecimals( dNumAcrossHeight ) ;
+
+//	SessionLogDirect( _T("******\tArbPaperFill.MultiplesFitOnPage: DecimalWidths: %ld, DecimalHeight: %ld"),
+//							DecimalWidths, DecimalHeight ) ;
+
+	double	ResultWidth  = ImgWidth ;
+	double	ResultHeight = ImgHeight ;
+
+	if( DecimalWidths == 0L )	//	WIDTH FITS ACROSS PAGE
+	{
+		ResultWidth  = ImgHeight ;
+		ResultHeight = ImgWidth ;
+	}
+
+	if( CompareDoubles( ResultWidth, RectAdvance ) > 0 ||
+		CompareDoubles( ResultHeight, RectWidth ) > 0  )
+	{
+		double Temp		= ResultWidth ;
+		ResultWidth		= ResultHeight ;
+		ResultHeight	= Temp ;
+	}
+
+//	SessionLogDirect( _T("******\tArbPaperFill.MultiplesFitOnPage: ResultWidth: %lf, ResultHeight: %lf\n"),
+//							ResultWidth, ResultHeight ) ;
+
+	if( CompareDoubles( ResultWidth, RectAdvance ) > 0 ||
+		CompareDoubles( ResultHeight, RectWidth ) > 0  )
+	{
+		return( FALSE ) ; 
+	}
+
+	*NewWidth  = ResultWidth ;
+	*NewHeight = ResultHeight ;
+
+	return( TRUE ) ;
+}
+
+
+UGenCon *StartNewLayout()
+{
+	PIERect	*PageRect = new PIERect ;
+
+	UGenCon *NewLayout = new UGenCon( GetDataDictionary( _T("DDPackagePage"))) ;
+	NewLayout->SetName( _T("New Arb Layout") ) ;
+
+	PageRect->SetLTRB( PIE_INCHES, 0.0, 0.0, gMaxAdvance, gPaperWidth ) ;
+
+	if( gRectStack )	{ delete gRectStack ; }
+
+	gRectStack = new UStack ;
+	gRectStack->SetName( _T("Arb Layout Rect Stack")) ;
+
+	PushRect( PageRect ) ;
+
+	delete PageRect ;
+
+	return( NewLayout ) ;
+}
+
+
+int Optimize( UGenCon *OrigLayout )
+{
+	double	 Left, Top, Width, Height ;
+	int		 Result ;
+	long	 DeleteAfter = FALSE ;		//	TBD:  HOW DO WE KNOW WHEN WE ARE DONE WITH THE IMAGE ??
+
+	Debug(0) ;
+
+	double	 OrigWaste = GetWaste( OrigLayout ) ;
+
+	if( CompareDoubles( OrigWaste, 6.0 ) > 0 )	//	TBD
+	{
+		TCHAR			*ImageID ;
+		TCHAR			*OrderID = NULL ;
+		URenderList		*theRL ;
+		UGenCon			*theRP ;
+
+		UList			*OrigNodes = OrigLayout->GetChildren() ;
+		
+		//	SORT THE LIST OF NODES BY AREA AND FILEPATH
+		UStringList		*theSortList = new UStringList ;
+		theSortList->AddString(_T("-Area"), FALSE) ;
+		theSortList->AddString(_T("FilePath"), FALSE) ;
+		OrigNodes->SortBy( theSortList ) ;
+		delete theSortList ;
+
+		UListIterator	*anIter = new UListIterator( OrigNodes ) ;
+		UGenCon			*aNode = (UGenCon *) anIter->GetFirst() ;
+		while( aNode )
+		{
+			ImageID		= aNode->GetStringValue(_T("FilePath")) ;
+			theRP		= aNode->GetLongValue(_T("RenderPage")) ;
+
+			Left		= aNode->GetDoubleValue(_T("AdvancePos")) ;
+			Top			= aNode->GetDoubleValue(_T("HeightPos")) ;
+			Width		= aNode->GetDoubleValue(_T("ImageAdvance")) ;
+			Height		= aNode->GetDoubleValue(_T("ImageHeight")) ;
+
+			DeleteAfter	= aNode->GetLongValue(_T("DeleteAfter")) ;
+
+//			aNode->Dump(_T("ArbitraryPaperFillInclude.Optimize:")) ;
+
+			Result		= AddArbitraryPage( theRP, ImageID, OrderID, Width - Left, Height - Top, DeleteAfter ) ;
+			if( Result == FALSE )	{ break ; }
+
+			aNode	= (UGenCon *) anIter->GetNext() ;
+		}
+
+		delete anIter ;
+
+		if( Result )
+		{
+			UGenCon *NewLayout = GetArbitraryPackage() ;
+			if( NewLayout )
+			{
+				double NewWaste = GetWaste( NewLayout ) ;
+
+				if( CompareDoubles( NewWaste, OrigWaste ) < 0 )
+				{
+					delete OrigLayout ;
+					OrigLayout = NewLayout ;
+				}
+				else
+				{
+					delete NewLayout ;
+				}
+			}
+		}
+	}
+	return( OrigLayout ) ;
+}
+
+
+double	GetWaste( UGenCon *aLayout )
+{
+	double	Waste = gPaperWidth * gMaxAdvance ;
+	if( aLayout )
+	{
+		double	 PaperAdvance	= aLayout->GetDoubleValue(_T("PaperAdvance")) ;
+		double	 AreaInUse		= aLayout->GetDoubleValue(_T("AreaInUse")) ;
+
+		Waste = (PaperAdvance * gPaperWidth) - AreaInUse ;
+	}
+	return( Waste ) ;
+}
+
+void UpdateLayoutSize(UGenCon *theLayout)
+{
+	double	 PaperWidthSize = 0.0 ;
+	double	 PaperAdvanceSize = 0.0 ;
+	double	 ImgLeft ;
+	double	 ImgTop ;
+	double	 ImgRight ;
+	double	 ImgBottom ;
+
+	UList	*theNodes = theLayout->GetChildren() ;
+	UListIterator	*anIter = new UListIterator( theNodes ) ;
+	UGenCon	*aNode = (UGenCon *) anIter->GetFirst() ;
+	while( aNode )
+	{
+		ImgLeft		= aNode->GetDoubleValue(_T("AdvancePos")) ;
+		ImgTop		= aNode->GetDoubleValue(_T("HeightPos")) ;
+		ImgRight	= aNode->GetDoubleValue(_T("ImageAdvance")) ;
+		ImgBottom	= aNode->GetDoubleValue(_T("ImageHeight")) ;
+
+		if( CompareDoubles( ImgRight, PaperAdvanceSize ) > 0 )
+		{
+			PaperAdvanceSize = ImgRight ;
+		}
+
+		if( CompareDoubles( ImgBottom, PaperWidthSize ) > 0 )
+		{
+			PaperWidthSize = ImgBottom ;
+		}
+
+		aNode = (UGenCon *) anIter->GetNext() ;
+	}
+	delete anIter ;
+
+	//	BE SURE TO TELL THE PRINTER THE FULL SIZE OF THE LAYOUT
+	if( PaperWidthSize < gPaperWidth )
+	{
+		PaperWidthSize = gPaperWidth ;
+	}
+
+	theLayout->SetDoubleValue(_T("PaperWidth"), PaperWidthSize ) ;
+	theLayout->SetDoubleValue(_T("PaperAdvance"), PaperAdvanceSize ) ;
+}
+
+
+PIERect *GetSouthRect( PIERect *StartRect, double Advance, double Height, PIERect *SouthRect )
+{
+	double	Left, Top, Right, Bottom ;
+	StartRect->GetLTRB( &Left, &Top, &Right, &Bottom ) ;
+
+	Top += Height ;
+	Right = Left + Advance ;
+
+	SouthRect->SetLTRB( PIE_INCHES, Left, Top, Right, Bottom ) ;
+
+	return( SouthRect ) ;
+}
+
+PIERect *GetEastRect( PIERect *StartRect, double Advance, double Height, PIERect *EastRect )
+{
+	double	Left, Top, Right, Bottom ;
+
+	StartRect->GetLTRB( &Left, &Top, &Right, &Bottom ) ;
+
+	Left += Advance ;
+
+	EastRect->SetLTRB( PIE_INCHES, Left, Top, Right, Bottom ) ;
+
+	return( EastRect ) ;
+}
+
+
+PIERect *PushRect( PIERect *theRect )
+{
+	UGenCon *theGC = GetRectGenCon( theRect ) ;
+	if( theGC )
+	{
+		gRectStack->Push( theGC ) ;
+	}
+	return( theRect ) ;
+}
+
+UGenCon *GetRectGenCon( PIERect *theRect )
+{
+	UGenCon *theRectGC = new UGenCon( GetDataDictionary(_T("DDRect"))) ;
+	if( theRectGC )
+	{
+		double	Left, Top, Right, Bottom ;
+		theRect->GetLTRB( &Left, &Top, &Right, &Bottom ) ;
+
+		TCHAR	Name[256] ;
+		sprintf( Name, _T("RectGC [%4.2lf %4.2lf %4.2lf %4lf]"), Left, Top, Right, Bottom ) ;
+		theRectGC->SetName( Name ) ;
+
+		theRectGC->SetDoubleValue(_T("Left"),	Left ) ;
+		theRectGC->SetDoubleValue(_T("Top"),	Top ) ;
+		theRectGC->SetDoubleValue(_T("Right"),	Right ) ;
+		theRectGC->SetDoubleValue(_T("Bottom"),	Bottom ) ;
+	}
+	return( theRectGC ) ;
+}
+
+PIERect *PopRect()
+{
+	PIERect	*theRect = NULL ;
+
+	UGenCon *theRectGC = gRectStack->Pop() ;
+	if( theRectGC )
+	{
+		theRect = GetRectFromGC( theRectGC ) ;
+		delete theRectGC ;
+	}
+	return( theRect ) ;
+}
+
+PIERect *GetRectFromGC( UGenCon *aRectGC )
+{
+	PIERect	*theRect = new PIERect ;
+
+	double	Left = aRectGC->GetDoubleValue(_T("Left")) ;
+	double	Top	 = aRectGC->GetDoubleValue(_T("Top")) ;
+	double	Right = aRectGC->GetDoubleValue(_T("Right")) ;
+	double	Bottom = aRectGC->GetDoubleValue(_T("Bottom")) ;
+	theRect->SetLTRB( PIE_INCHES, Left, Top, Right, Bottom ) ;
+	return( theRect ) ;
+}
+
+long GetDecimals( double Value )
+{
+	long	lValue = Value ;
+	Value	= Value - lValue ;
+	lValue	= Value * 100 ;
+	return( lValue ) ;
+}
+
+//	===========================================================================
+//	===========================================================================
+//	===========================================================================
+//	===========================================================================
+//	===========================================================================
+
+
+DisplayRects( PIERect *South, PIERect *East )
+{
+	double	Left, Top, Right, Bottom ;
+	TCHAR	Buffer1[1024] ;
+	TCHAR	Buffer2[1024] ;
+
+	South->GetLTWH( &Left, &Top, &Right, &Bottom ) ;
+
+	sprintf( Buffer1, _T("SouthRect [LTWH]: [%4.2lf,   %4.2lf,   %4.2lf,   %4.2lf]\r\n"), 
+								Left, Top, Right, Bottom ) ;
+
+	East->GetLTWH( &Left, &Top, &Right, &Bottom ) ;
+	sprintf( Buffer2, _T("EastRect [LTWH]: [%4.2lf,   %4.2lf,   %4.2lf,   %4.2lf]\r\n"), 
+								Left, Top, Right, Bottom ) ;
+
+	strcat( Buffer1, Buffer2 ) ;
+
+	gDataGC->SetAttrValue( _T("Layout"), Buffer1 ) ;
+	DisplayControlValues( gDlg ) ;
+}
+
+
+PrintRect( PIERect *aRect, TCHAR *Name )
+{
+	TCHAR	Msg[1024] ;
+	double	Left, Top, Right, Bottom, Width, Height ;
+
+	aRect->GetLTRB( &Left, &Top, &Right, &Bottom ) ;
+	aRect->GetLTWH( &Left, &Top, &Width, &Height ) ;
+
+	sprintf( Msg,  _T("******\tArbitraryPaperFill.PrintRect: %s [LTRBWH]: [L: %-4.2lf, T: %-4.2lf, R: %-4.2lf, B: %-4.2lf, W: %-4.2lf, H: %-4.2lf]\r\n"), 
+								Name, Left, Top, Right, Bottom, Width, Height ) ;
+	SessionLogDirect( Msg ) ;
+}
+
+int LogCurrentPackage()
+{
+	if( gCurrentLayout == NULL )
+	{
+		SessionLogDirect( _T("******\tArbitraryPaperFill.LogCurrentPackage: gCurrentLayout == NULL")) ;
+		return( TRUE ) ;
+	}
+
+	SessionLogDirect( _T("******\tArbitraryPaperFill.LogCurrentPackage:")) ;
+
+	DebugGenCon( gCurrentLayout, 1 ) ;
+
+	UList	*PkgPages = gCurrentLayout->GetChildren() ;
+	if( PkgPages )
+	{
+		UListIterator	*anIter = new UListIterator( PkgPages ) ;
+		UGenCon			*aPage  = (UGenCon *) anIter->GetFirst() ;
+		while( aPage )
+		{
+			DebugGenCon( aPage, 2 ) ;
+			aPage  = (UGenCon *) anIter->GetNext() ;
+		}
+		delete anIter ;
+	}
+	return( TRUE ) ;
+}
+

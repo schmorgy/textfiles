@@ -1,0 +1,706 @@
+
+Include: ~UtilityRoutines~;
+IncludeClass( BaseForm );
+IncludeClass( BaseDialog );
+IncludeClass( BasePattern );
+
+
+VOID PatternEditor::WindowDefinition()
+{
+	Fields:
+		Title 					~Pattern Editor~
+		TypeName				SplitterWnd
+		SplitterRows			1
+		SplitterColumns			~2 20 80~
+		EnableStatusBar			T
+		Position				10 10 60 60
+		DropActionsText	ACTION EXEC ( <THIS>.HandleDrop() )
+		
+}
+
+VOID PatternEditor::ViewDefinitionData()	
+{ 
+	Fields:	BackgroundColor	~0,0,155~			
+}
+
+VOID PatternEditor::AddControlButton(Name,theText)
+{
+	Define: <Name> Using DDWinCtrlDef AsSymbol <Name> Private
+		Fields:	TYPENAME		Button
+				POSITION		$hGap, $ButtonY, 110, 20
+				TEXT			~<TheText>~
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.On<Name>() )	;
+				
+	ButtonY = $ButtonY + $ButtonHeight + $vGap;					
+}
+
+VOID PatternEditor::AddControlsControl()
+{
+	AddControlButton( CreateButton,~Cr&eate~ );
+	AddControlButton( CountableImage,~&Countable Image~ );
+	AddControlButton( TextButton,~&Text~ );
+	AddControlButton( TextNButton,~Text N~ );
+	AddControlButton( ImageButton,~&Image~ );
+	AddControlButton( ImageNButton,~Image N~ );
+	AddControlButton( BlankButton,~&Blank~ );
+	AddControlButton( RemoveButton,~Remove~ );
+	AddControlButton( AddAfterButton,~&Add After~ );
+	AddControlButton( AddBeforeButton,~Add Before~ );
+	AddControlButton( SwapButton,~Swap~ );
+	AddControlButton( ShuffleButton,~Shuffle~ );
+	AddControlButton( SaveButton,~&Save~ );
+	AddControlButton( DuplicateButton,~Duplicate~ );
+	AddControlButton( ClearSelectionButton,~C&lear Selection~ );	
+	AddControlButton( ResequenceButton,~Resequence~ );
+	AddControlButton( ViewAsTextButton,~&View As Text~ );	
+	AddControlButton( ImportKPISPatternButton,~Import KPIS Pattern~ );			
+}
+
+VOID PatternEditor::AddNode(Num)
+{
+	Define: Node<Num> Using DDWinCtrlDef AsSymbol Node<Num> Private
+		Fields:	TYPENAME				StaticText
+				POSITION				$LastCol,$LastRow,$NodeWidth,$NodeWidth
+				TEXT					~<Num>~ 
+				Sunken					TRUE
+				CenterText				TRUE
+				MouseOverActionsText	ACTION EXEC ( <This>.MouseOver(<Num>) )
+				MouseLeaveActionsText	ACTION EXEC ( <This>.MouseLeave(<Num>) )
+				DACTIONSTEXT			ACTION EXEC ( <THIS>.OnNodePressed(<Num>) )	
+				BGColorRed				<CountableColorR> BGColorGreen <CountableColorG> BgColorBlue <CountableColorB>
+				TextBGColorRed			<CountableColorR> TextBGColorGreen <CountableColorG> TextBgColorBlue <CountableColorB>;
+
+	LastCol = $LastCol + $NodeWidth + $hGap;
+}
+
+VOID PatternEditor::NewRow()
+{
+	LastCol = 5;
+	LastRow = $LastRow + $NodeWidth + $vGap;
+}
+
+
+VOID PatternEditor::MouseOver(Num)
+{
+	if ( KeyState( Control ) && <NewMouseOver> )
+	{
+		OnNodePressed(<Num>);
+		NewMouseOver = FALSE;
+	}
+}
+
+VOID PatternEditor::MouseLeave(Num)	{ NewMouseOver = TRUE; }
+
+
+VOID PatternEditor::ClearSelection(Num)
+{
+	ViewData( SetControlColor,Node<Num>,BgColor,<CountableColorR>,<CountableColorG>,<CountableColorB> );
+	ViewData( ControlSelected,Set,FALSE,Node<Num> );
+}
+
+VOID PatternEditor::SetSelection(Num)
+{
+	ViewData( SetControlColor,Node<Num>,BgColor,<SelectedColorR>,<SelectedColorG>,<SelectedColorB> );
+	ViewData( ControlSelected,Set,TRUE,Node<Num> );
+}
+
+
+VOID PatternEditor::OnNodePressed(Num)
+{
+	if ( !ViewData( ControlSelected,Get,Node<Num> ) )
+	{
+		SetSelection( <Num> );
+	}
+	else
+	{
+		ClearSelection( <Num> );
+	}
+}
+
+VOID PatternEditor::OnRemoveButton()
+{
+	while ( <++Num> <= <Rows> * <Cols> )
+	{
+		if ( ViewData( ControlSelected,Get,Node<Num> ) && ViewData( IsControlVisible,Node<Num> ) )
+		{
+			ViewData( ShowControls,FALSE,Node<Num> );
+			//RepositionRow( <Num> );
+			ClearSelection( <Num> );
+		}
+	}
+
+	OnResequenceButton();
+}
+
+VOID PatternEditor::OnAddAfterButton()
+{
+	while ( <++Num> <= <Rows> * <Cols> )
+	{
+		if ( ViewData( ControlSelected,Get,Node<Num> ) && ViewData( IsControlVisible,Node<Num> ) )
+			break;
+	}
+
+	while ( <Num> <= <Rows> * <Cols> )
+	{
+		if ( !ViewData( IsControlVisible,Node<Num> ) )
+		{
+			ViewData( ShowControls,TRUE,Node<Num> );
+			break;
+		}
+
+		++Num;
+	}
+
+	OnResequenceButton();
+}
+
+VOID PatternEditor::OnAddBeforeButton()
+{
+	Num = (<Rows> * <Cols>) + 1;
+
+	while ( <--Num> > 0 )
+	{
+		if ( ViewData( ControlSelected,Get,Node<Num> ) && ViewData( IsControlVisible,Node<Num> ) )
+			break;
+	}
+
+	while ( <--Num> > 0 )
+	{
+		if ( !ViewData( IsControlVisible,Node<Num> ) )
+		{
+			ViewData( ShowControls,TRUE,Node<Num> );
+			break;
+		}
+	}
+
+	OnResequenceButton();
+}
+
+VOID PatternEditor::OnSwapButton()
+{
+	First = Second = 0;
+
+	while ( <++num> <= <Rows> * <Cols> )
+	{
+		if ( ViewData( ControlSelected,Get,Node<Num> ) && ViewData( IsControlVisible,Node<Num> ) )
+		{
+			if ( <First> )	{ Second = <Num>; }
+			else { First = <Num>; }
+		}
+	}
+
+	if ( <First> && <Second> )
+	{
+		ViewData( GetControlValue,Node<First>,TheFirst );
+		ViewData( GetControlValue,Node<Second>,TheSecond );
+
+		ViewData( SetControlValue,Node<First>,~<TheSecond>~ );
+		ViewData( SetControlValue,Node<Second>,~<TheFirst>~ );
+
+		ClearSelection( <First> );
+		ClearSelection( <Second> );
+
+		return;
+	}
+
+	Warning( ~You must select two nodes~ );
+}
+
+VOID PatternEditor::OnShuffleButton()
+{
+	First = Second = 0;
+
+	while ( <++num> <= <Rows> * <Cols> )
+	{
+		if ( ViewData( ControlSelected,Get,Node<Num> ) && ViewData( IsControlVisible,Node<Num> ) )
+		{
+			if ( <First> )	{ Second = <Num>; }
+			else { First = <Num>; }
+		}
+	}
+
+	if ( <First> && <Second> )
+	{
+		ViewData( GetControlValue,Node<First>,TheFirst );
+		ViewData( GetControlValue,Node<Second>,TheSecond );
+
+		ViewData( SetControlValue,Node<First>,~<TheSecond>~ );
+		ViewData( SetControlValue,Node<Second>,~<TheFirst>~ );
+
+		ClearSelection( <First> );
+		ClearSelection( <Second> );
+	}
+	else
+	{
+		Warning( ~You must select two nodes~ );
+	}
+}
+
+VOID PatternEditor::OnClearSelectionButton()
+{
+	while ( <++num> <= <Rows> * <Cols> )
+	{
+		ClearSelection( <num> );
+	}
+}
+
+VOID PatternEditor::AddControlsData()
+{
+	Row = 0;  
+
+	while ( <++Row> <= <Rows> )
+	{
+		Col = 0;
+		while ( <++Col> <= <Cols> )
+		{
+			AddNode(<++Num>);
+		}
+
+		NewRow();
+	}			
+}
+
+VOID PatternEditor::OnCountableImageButton()
+{
+	while ( <++Num> <= <Rows> * <Cols> )
+	{
+		if ( ViewData( ControlSelected,Get,Node<Num> ) && ViewData( IsControlVisible,Node<Num> ) )
+		{
+			ViewData( SetControlTitle,Node<Num>,~0~ );
+			ClearSelection( <Num> );
+		}
+	}
+
+	OnResequenceButton();
+}
+
+VOID PatternEditor::OnTextButton()
+{
+	while ( <++Num> <= <Rows> * <Cols> )
+	{
+		if ( ViewData( ControlSelected,Get,Node<Num> ) && ViewData( IsControlVisible,Node<Num> ) )
+		{
+			ViewData( SetControlTitle,Node<Num>,~Text~ );
+			ClearSelection( <Num> );
+		}
+	}
+
+	OnResequenceButton();
+}
+
+VOID PatternEditor::OnImageButton()
+{
+	while ( <++Num> <= <Rows> * <Cols> )
+	{
+		if ( ViewData( ControlSelected,Get,Node<Num> ) && ViewData( IsControlVisible,Node<Num> ) )
+		{
+			ViewData( SetControlTitle,Node<Num>,~Image~ );
+			ClearSelection( <Num> );
+		}
+	}
+
+	OnResequenceButton();
+}
+
+VOID PatternEditor::OnBlankButton()
+{
+	while ( <++Num> <= <Rows> * <Cols> )
+	{
+		if ( ViewData( ControlSelected,Get,Node<Num> ) && ViewData( IsControlVisible,Node<Num> ) )
+		{
+			ViewData( SetControlTitle,Node<Num>,~~ );
+			ClearSelection( <Num> );
+		}
+	}
+
+	OnResequenceButton();
+}
+
+VOID PatternEditor::OnResequenceButton()
+{
+	WaitCursor( Begin );
+
+	CountableNodes = 0;
+
+	while ( <++Num> <= <Rows> * <Cols> )
+	{
+		ViewData( GetControlValue,Node<Num>,Value );
+
+		if ( !IsNull( ~<Value>~ ) && IsNumeric( ~<Value>~ ) && ViewData( IsControlVisible,Node<Num> ) )
+		{
+			ViewData( SetControlValue,Node<Num>,<++CountableNodes> );
+		}
+
+	}
+
+	DataWindow( StatusBar,Text,~<CountableNodes> Countable Image Nodes~ );
+
+	WaitCursor( End );
+}
+
+NUMERIC WidestRow()
+{
+	count = 0;
+
+	while ( <++Num> <= <Rows> * <Cols> )
+	{
+		ViewData( GetControlValue,Node<Num>,Value );
+
+		if ( ViewData( IsControlVisible,Node<Num> ) )
+		{
+			ViewData( ControlRect,GetPosition,Node<Num>,X,Y,W,L );
+		}
+	}
+}
+
+VOID PatternEditor::RepositionRow(ThisNum)
+{
+	ViewData( ControlRect,GetPosition,Node<ThisNum>,X,Top,W,L );
+
+	Num = <ThisNum>;
+
+	while ( <--Num>  )
+	{
+		ViewData( ControlRect,GetPosition,Node<Num>,X,Y,W,L );
+
+		if ( <Y> != <Top> )
+			break;
+	}
+
+	++Num;	// FIRST POSITION IN THE ROW
+
+	while ( TRUE )
+	{
+		if ( !IsNull( ~<Value>~ ) && IsNumeric( ~<Value>~ ) && ViewData( IsControlVisible,Node<Num> ) )
+		{
+			ViewData( SetControlValue,Node<Num>,<++Count> );
+		}
+	}
+
+	DataWindow( StatusBar,Text,~<Count> Countable Image Nodes~ );
+}
+
+NUMERIC PatternEditor::NumCountableNodes()
+{
+	CountableNodes = 0;
+
+	while ( <++Num> <= <Rows> * <Cols> )
+	{
+		ViewData( GetControlValue,Node<Num>,Value );
+
+		if ( !IsNull( ~<Value>~ ) && IsNumeric( ~<Value>~ ) && ViewData( IsControlVisible,Node<Num> ) )
+		{
+			++CountableNodes;
+		}
+	}
+
+	return <CountableNodes>;
+}
+
+NUMERIC PatternEditor::BrowseForOutputDirectory()	
+{
+	Title = Translate( ~Find the directory for the patterns~ );
+
+	if ( FileDialog( Title,~<title>~,PATH,Path,DefaultFile,~Any File~,Save ) )
+	{
+		fDirectory = ~<$Str.$Path.Path>~;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC PatternEditor::BrowseForInputDirectory()	
+{
+	Title = Translate( ~Find a pattern file~ );
+
+	if ( FileDialog( Title,~<title>~,PATH,Path,Open ) )
+	{
+		fDirectory = ~<$Str.$Path.Path>~;
+		fPatternFile = ~<$Str.$Path.FileName>~;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC PatternEditor::WritePattern()
+{
+	if ( !File( OutFile,Open,~<fPatternPath>~,Create,Write ) )	
+	{
+		return Warning( Translate( ~Failed to create <fPatternPath>.  <$Func.GetLastErrorMsg()>~ ) );
+	}
+
+	OutFile( WriteString,~R<++CurrentRow> = |~ );
+
+	ViewData( ControlRect,Node1,GetPosition,X,Top,W,L );
+
+	ColumnCount = 0;
+
+	while ( <++Num> <= <Rows> * <Cols> )
+	{
+		if ( !ViewData( IsControlVisible,Node<Num> ) )
+			continue;
+
+		ViewData( ControlRect,Node<Num>,GetPosition,X,Y,W,L );
+
+		if ( <Y> != <Top> )			// STARTING NEW ROW?
+		{
+			OutFile( WriteLine,~|;~ );
+			OutFile( WriteString,~R<++CurrentRow> = |~ );
+			Top = <Y>;
+			ColumnCount = 0;
+		}
+
+		ViewData( GetControlValue,Node<Num>,Value );
+
+		if ( <ColumnCount++> )						{ OutFile( WriteString,~ ~ ); }
+
+		if		( IsNumeric( ~<Value>~ ) )			{ OutFile( WriteString,~<$Str.$Value.%02ld>~ ); }
+		else if ( SimilarStr( ~<Value>~,~Text~ ) )	{ OutFile( WriteString,~TT~ ); }
+		else if ( SimilarStr( ~<Value>~,~Image~ ) )	{ OutFile( WriteString,~I1~ ); }
+		else if ( IsNull( ~<Value>~ ) )				{ OutFile( WriteString,~BB~ ); }
+	}
+
+	OutFile( WriteLine,~|;~ );
+
+	return TRUE;
+}
+
+NUMERIC PatternEditor::OnSaveButton()
+{
+	if ( IsNull( ~<fDirectory>~ ) )
+	{
+		if ( !BrowseForOutputDirectory() )
+		{
+			return FALSE;
+		}
+	}
+
+	NumNodes = NumCountableNodes();
+
+	fPatternPath = ~<fDirectory>\Pattern.<$str.$NumNodes.%04ld>~;
+
+	WaitCursor( Begin );
+	success = WritePattern();
+	WaitCursor( End );
+
+	return <Success>;
+}
+
+NUMERIC PatternEditor::OnViewAsTextButton()
+{
+	if ( IsNull( ~<fPatternPath>~ ) )
+	{
+		return Warning( ~You must save the pattern first~ );
+	}
+
+	ViewFileInNotepad( ~<fPatternPath>~ ); 
+
+	return TRUE;
+}
+
+// ******************* Dialog to Prompt For Rows and Columns ***********************
+
+VOID CreatePatternDialog::CreatePatternDialog()
+{
+	Title = ~Specify...~;
+	Left = 200;
+	Dictionary = ~DDCreatePatternDialog~;
+	ExitScriptOnClose = FALSE;
+	HelpPage = ~PatternEditor.htm~;
+}
+
+
+VOID CreatePatternDialog::DefineDictionary()
+{
+	Dictionary: ~<Dictionary>~ 
+		Fields: Name Rows		type long;
+		Fields:	Name Cols		type long;
+}
+
+NUMERIC	CreatePatternDialog::CreateButton()
+{
+	if ( IsNull( ~<$con.DlgData[Rows]>~ ) )
+	{
+		return Warning( ~You must enter the number of rows~ );
+	}
+
+	if ( IsNull( ~<$con.DlgData[Cols]>~ ) )
+	{
+		return Warning( ~You must enter the number of rows~ );
+	}
+
+	if ( Defined( Editor ) )
+	{
+		Editor.EnableTheWindow( TRUE );
+		Action = ACTION DOC ( PatternEditorDoc Open PatternEditorDoc2 "Init(~<$con.DlgData[Rows]>~,~<$con.DlgData[cols]>~);" );
+		PerformActions( Action );
+	}
+	else
+	{
+		Init( ~<$con.DlgData[Rows]>~,~<$con.DlgData[cols]>~ );
+	}
+
+	DoCancelButton();
+
+	return TRUE;
+}
+
+VOID CreatePatternDialog::OnDialogEnd()
+{
+	if ( Defined( Editor ) )
+	{
+		Editor.EnableTheWindow( TRUE );
+	}
+}
+
+VOID CreatePatternDialog::DefineControls()
+{
+	Define: RowsPrompt Using DDWinCtrlDef AsSymbol RowsPrompt Private
+			Fields:	TYPENAME				STATICTEXT
+						GENCONNAME			THIS
+						Position			<hgap> <vGap> 40 <ButtonHeight>
+						Text				~Rows~;
+
+	Define: RowsField Using DDWinCtrlDef AsSymbol RowsField Private
+			Fields:	TYPENAME				EDITTEXT
+						GENCONNAME			THIS
+						GENCONFIELD			Rows
+						IACTIONSTEXT		ACTIONS ( Get )
+						DACTIONSTEXT		ACTIONS ( Save )
+						OACTIONSTEXT		ACTIONS ( Save )
+						Position			RowsPrompt(GetRight,Position)+$hGap RowsPrompt(GetTop,Position) 
+											50 <ButtonHeight>
+						Text				~~;
+
+	Define: ColsPrompt Using DDWinCtrlDef AsSymbol ColsPrompt Private
+			Fields:	TYPENAME				STATICTEXT
+						GENCONNAME			THIS
+						Position			RowsPrompt(GetLeft,Position) RowsPrompt(GetBottom,Position) +$vGap
+											RowsPrompt(GetWidth,Position) <ButtonHeight>
+						Text				~Cols~;
+
+	Define: ColsField Using DDWinCtrlDef AsSymbol ColsField Private
+			Fields:	TYPENAME				EDITTEXT
+						GENCONNAME			THIS
+						GENCONFIELD			Cols
+						IACTIONSTEXT		ACTIONS ( Get )
+						DACTIONSTEXT		ACTIONS ( Save )
+						OACTIONSTEXT		ACTIONS ( Save )
+						Position			ColsPrompt(GetRight,Position)+$hGap ColsPrompt(GetTop,Position) 
+											RowsField(GetWidth,Position) <ButtonHeight>
+						Text				~~;
+
+	Define: CreateButton Using DDWinCtrlDef AsSymbol CreateButton Private
+			Fields:	TYPENAME				DefaultButton
+						GENCONNAME			THIS
+						Position			GetDialogCenter()-<ButtonWidth>/2 ColsPrompt(GetBottom,Position)+$vGap,
+											<ButtonWidth> <ButtonHeight>
+						DACTIONSTEXT		ACTION EXEC ( <THIS>.CreateButton() )
+						Text				~Create~;
+}
+
+// ******************* End Dialog to Prompt For Rows and Columns ***********************
+
+
+
+VOID PatternEditor::OnCreateButton() 
+{
+	EnableTheWindow( FALSE );
+
+	Class( CreatePatternDialog,Extends,BaseDialog );
+
+	CreatePatternDialog( New,CreateDlg );
+
+	CreateDlg.DefineDialog();
+
+	Global( CreateDlg );
+}
+
+
+VOID PatternEditor::OnOpenButton() 
+{
+	if ( !BrowseForInputDirectory() )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+
+VOID PatternEditor::OnImportKPISPatternButton() 
+{
+	Action = ACTION DOC ( ImportKPISPatternDoc OpenOnce ImportKPISPatternDoc );
+	PerformActions( Action );
+}
+
+
+
+VOID PatternEditor::DefineViews()	
+{ 
+	DefineView(Control);
+	DefineView(Data);
+}	
+
+Class( PatternEditor,Extends,BaseForm,
+		Member,ButtonY,Numeric,10,
+		Member,Rows,Numeric,10,
+		Member,Cols,Numeric,10,
+		Member,NodeWidth,Numeric,35,
+		Member,LastRow,Numeric,5,
+		Member,LastCol,Numeric,5,
+		Member,CountableColorR,Numeric,0,
+		Member,CountableColorG,Numeric,230,
+		Member,CountableColorB,Numeric,230,
+		Member,SelectedColorR,Numeric,255,
+		Member,SelectedColorG,Numeric,255,
+		Member,SelectedColorB,Numeric,0,
+		Member,NewMouseOver,Numeric,TRUE,
+		Member,CountableNodes,Numeric,0 ,
+		Member,RowList,Object,StringList,
+		Member,fDirectory,Str,~~,
+		Member,fPatternPath,Str,~~,
+		Memeber,fPatternFile,Str,~~
+	 );
+
+VOID PatternEditor::PatternEditor( nRows,nCols )
+{ 
+	Rows = ~<nRows>~;
+	Cols = ~<nCols>~;
+	SystemParametersInfo( SetMouseHoverTime,100 );
+}
+
+VOID OpenPattern( Path )
+{
+	Positions = ~<$Str.$Path.ext>~;
+
+
+	Init( 5,5 );
+}
+
+
+
+VOID Init( nRows,nCols )
+{
+	if ( IsNull(~<nRows>~) || IsNull(~<nCols>~) )
+	{
+		Class( CreatePatternDialog,Extends,BaseDialog );
+		CreatePatternDialog( New,CreateDlg );
+		CreateDlg.DefineDialog();
+		Global( CreateDlg );
+	}
+	else
+	{
+		WaitCursor( Begin );
+		PatternEditor( New,Editor,~<nRows>~,~<nCols>~ );
+		Global( Editor );
+		Editor.DefineWindow();
+		Editor.Init();
+		WaitCursor( End );
+	}
+}

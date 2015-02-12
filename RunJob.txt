@@ -1,0 +1,629 @@
+
+//Include: ~FormattingRoutines~;
+Include: ~GetFullLayout~;
+
+Define:	OrderItemsMessages Using DDSymbol
+	Fields:	Value	~These strings are OrderItems related strings used by the user interface.~
+	Contains:
+	{
+		Define: ReadRecords			using DDText	Fields: Text ~Read %1 Order Items~
+		Define: Querying			using DDText	Fields: Text ~Querying~
+		Define: NoOrderItem			using DDText	Fields: Text ~Could not find OrderItem %1 for Order = %2~
+		Define: RemovingFor			using DDText	Fields: Text ~Are you sure you want to delete the %1 selected Order Items(s)?~
+		Define: DuplicateFor		using DDText	Fields: Text ~Are you sure you want to duplicate the selected Order Items?~
+		Define: NoItemsSelected		using DDText	Fields: Text ~There were no Order Items selected~ 
+		Define: NoOrderItems		using DDText	Fields: Text ~There are no Order Items.~
+		Define: NoImagesSelected	using DDText	Fields: Text ~There were no images selected~ 
+		Define: NoOrderID			using DDText	Fields: Text ~There is no Order ID~
+		Define: SetQuantityNoneSelected using DDText Fields: Text ~If you want to set the quantity for one of these items you must select one or more items first.  Type F1 if you need help~
+		Define: NoFindNotepad		using DDText	Fields: Text ~Could not find NotePad.exe at %1~
+		Define: CantOpenFile		using DDText	Fields: Text ~Could not open %1. %2~
+	}
+
+// Extracting strings from text NOT Complete.
+
+
+
+
+NUMERIC RunOrderItems()
+{
+	ForgetGlobal( SelectedOrderItemsToRun );
+
+	if ( !( GenCon(View,GETACTIVEVIEW ) && GenCon(Window,GETACTIVEWINDOW) ) )
+		{ return Warning( ~There was no active view of OrdersItems~ ); }
+
+	if ( !View( GetSelected,SelectedOrderItemsToRun ) )		
+		{ return Warning( Translate(OrderItemsMessages,NoOrderItems) ); }
+
+	Count = SelectedOrderItemsToRun( ChildCount );
+
+	if ( <Count> == 0 )  // Run all order items
+	{ 
+		return RunOrder();
+		return Warning( Translate( ~There were no Orders Items selected.  Ctrl-A will select them all~ ) );
+	}
+
+	Global( SelectedOrderItemsToRun );
+
+	InitRunPropertiesDialog( ~Run the <Count> selected OrderItems~,FALSE,~~ );
+
+	return TRUE;
+}
+
+
+NUMERIC RunOrder()
+{
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return Warning( Translate(UIMessages,NoActiveView)); }
+
+	View( GetName,OrderID );
+	
+	if ( IsNull( ~<OrderID>~ ) )
+	{
+		return Warning( Translate( OrderItemsMessages,NoOrderID ) );
+	}		
+
+	InitRunPropertiesDialog( ~Print all items for order <OrderID>~,TRUE,~<OrderID>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC RunOrderNow( OrderID )
+{
+	if ( !Ado( dbLocal,ConnectLocal,BeginTransaction ) )
+	{
+		dbLocal( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	WaitCursor( Begin );
+
+	Owner = ~~;  Priority = 50;
+	ADO( dBase,Connect,GetValuesFor,~Select Owner,Priority From Orders Where ID = '<OrderID>'~,Owner,Priority );
+
+	if ( IsNull(~<Priority>~) ) { Priority = 50; }
+	
+	BatchID = UniquePrintBatchID();
+
+	if ( IsNull(~<Owner>~) )	
+		{ Owner = ~<$App.UserName>~; }
+
+	QueueName = ~~;  PrinterName = ~~; PrintStatus = -1;
+
+	GetUserOverrides( PrintStatus,Priority,QueueName,PrinterName );
+
+	Now = Time();
+
+	Fields = STR ( BatchID,OrderID,OrderItemID,Sequence,Priority,Owner,SubmitDate,QueueName,PrinterName,PrintStatus );
+	Values = STR ( '<BatchID>','<OrderID>',0,0,<Priority>,'<Owner>','<Now>','<QueueName>','<PrinterName>',<PrintStatus> );
+
+	Cmd = STR ( Insert Into OrderItemsToQueue(<Fields>) Values(<Values>) );
+
+	if ( !dbLocal( CMD,~<Cmd>~ ) )
+	{
+		dbLocal( GetErrorDescription,theErr,RollBackTransaction );
+		WaitCursor( End );
+		return Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+	}
+
+	dbLocal( CommitTransaction );
+
+	Queue( ~ProcessTheOrders()~ );
+
+	WaitCursor( End );
+
+//	OrderItemsDataWindow( StatusBar,Text,~Order Items for Order <OrderID> will be submitted for printing~ );
+	return TRUE;
+}
+
+
+NUMERIC RunOrderItemsNow( OrderID )
+{
+	if ( !Defined( SelectedOrderItemsToRun ) )
+	{
+		return Warning( ~Internal error - No OrderItems list to run~ ) ;
+	}
+
+	WaitCursor( Begin );
+
+	itemCount = 0;
+
+	if ( !Ado( dbLocal,ConnectLocal,BeginTransaction ) )
+	{ 
+		ForgetGlobal( SelectedOrderItemsToRun );
+		dbLocal( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) ); 
+	}
+
+	BatchID = UniquePrintBatchID();
+
+	Priority = 50;  Owner = ~~;
+	ADO( dBase,Connect,GetValuesFor,~Select Owner,Priority From Orders Where ID = '<OrderID>'~,Owner,Priority );
+
+	if ( IsNull(~<Owner>~) )	
+	{ 
+		Owner = ~<$App.UserName>~;
+	}
+
+	if ( IsNull(~<Priority>~) )	
+	{ 
+		Priority = 50;
+	}
+
+	QueueName = ~~;  PrinterName = ~~; PrintStatus = -1;
+
+	GetUserOverrides( PrintStatus,Priority,QueueName,PrinterName );
+
+	Now = Time();
+
+	while ( SelectedOrderItemsToRun( GetNext,OrderItem ) )
+	{
+		OrderItem(GetValue,OrderID,OrderID);
+		OrderItem(GetValue,ID,ID);
+		OrderItem(GetValue,Sequence,Sequence);
+		OrderItem(GetValue,Subsequence,Subsequence);
+		OrderItem(GetValue,ProductID,ProductID);
+		OrderItem(GetValue,Quantity,Quantity);
+		OrderItem(GetValue,Status,Status);
+		OrderItem(GetValue,Printable,Printable);
+		OrderItem(GetValue,JobPath,JobPath);
+		OrderItem(GetValue,PreviewPath,PreviewPath);
+		OrderItem(GetValue,JobPath,JobPath);
+
+		StatusBarText( ~Processing Order <OrderID> Item <ID>~ );
+
+
+		Fields = STR ( BatchID,OrderID,OrderItemID,Sequence,Priority,Owner,ProductID,Quantity,Status,Printable,
+						JobPath,PreviewPath,SubmitDate,QueueName,PrinterName,PrintStatus,Subsequence );
+		Values = STR ( '<BatchID>','<OrderID>',<ID>,<Sequence>,
+						<Priority>,'<Owner>','<ProductID>',
+						<Quantity>,'<Status>',<Printable>,
+						'<JobPath>','<PreviewPath>','<Now>',
+						'<QueueName>','<PrinterName>',<PrintStatus>,<Subsequence> );
+	
+		Cmd = ~Insert Into OrderItemsToQueue(<Fields>) Values(<Values>)~;
+
+		if ( !dbLocal( Cmd,~<Cmd>~ ) )
+		{
+			ForgetGlobal( SelectedOrderItemsToRun );
+			dbLocal( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Failed to submit jobs for item <ID>. <theErr>~ );
+		}
+
+		++itemCount;
+	}
+
+	ForgetGlobal( SelectedOrderItemsToRun );
+
+	if ( !dbLocal( CommitTransaction ) )
+	{ 
+		dbLocal( GetErrorDescription,theErr );
+		return Warning( Translate(~Error on commit transaction.  <theErr>~) ); 
+	}
+
+	StatusBarText( ~Processed <itemCount> OrderItems~ );
+
+	Queue( ~ProcessTheOrders()~ );
+
+	return WaitCursor( End );
+}
+
+
+VOID GetUserOverrides( &PrintStatus,&Priority,&QueueName,&PrinterName )
+{
+	if ( RunPropertiesData( GetNumeric,AlterStatus ) )
+	{
+		RunPropertiesData(Get,Status,Status);
+
+		PrintStatus = ~<Status>~ == Translate(~Ready~) ? ~1~ : ~0~;
+	}
+
+	if ( RunPropertiesData( GetNumeric,AlterPriority ) )
+	{
+		Priority = RunPropertiesData(GetNumeric,Priority);
+	}
+
+	if ( RunPropertiesData( GetNumeric,AlterQueue ) )
+	{
+		RunPropertiesData(Get,QueueName,QueueName);
+	}
+
+	if ( RunPropertiesData( GetNumeric,AlterPrinter ) )
+	{
+		RunPropertiesData(Get,PrinterName,PrinterName);
+	}
+}
+
+
+VOID ProcessTheOrders()
+{
+	if ( Defined( BackgroundOrderProcessor ) )
+	{
+		RemoteJobServer( BackgroundOrderProcessor,ProcessOrders,TRUE );
+	}
+}
+
+
+Define: RunPropertiesData Using DDRunPropertiesDialog;
+
+RunInstructions = ~Press Run to queue the selected OrderItems for normal printing.
+If you wish to change the way the items are queued select one
+or more of the following options:~;
+
+
+VOID DefineRunPropertiesDialog( Title )
+{
+
+    Left = 5; Top = 5;		hGap = 5; vGap = 5;
+	StaticTextWidth = 150;	StaticTextHeight = 20;
+	ComboBoxWidth = 100;
+    ListBoxWidth = 150;		
+	ButtonWidth = 90;		ButtonHeight = 20;
+
+
+    Define: RunOrderItemsDefinition Using DDWinDef
+            Fields: Position		180 300 600 600
+                    Title			~<Title>~
+                    TypeName		~Dialog~
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "RunSelected.htm" )
+                    OACTIONSTEXT	ACTION EXEC ( CloseRunDialog(TRUE) ) ;
+
+    Contains: InListOrder
+    {
+		Define: Instructions Using DDWinCtrlDef AsSymbol Instructions 
+			Fields: TypeName		StaticText
+					Text			~<RunInstructions>~
+					FontWeight		200
+					Position		$Left,$Top,400,$StaticTextHeight * 2
+
+		Define: StatusPrompt Using DDWinCtrlDef AsSymbol StatusPrompt 
+			Fields: TypeName		CheckBox
+					Text			~Change Status~
+					FontWeight		600
+					GenConName       THIS
+					GenConField		~AlterStatus~
+					DActionsText	ACTIONS ( Save "Exec(ToggleStatus())" )
+					Position		$Left,Instructions(GetBottom,Position)+$vGap,$StaticTextWidth,$StaticTextHeight
+
+		Define: StatusComboBox Using DDWinCtrlDef AsSymbol StatusComboBox 
+			Fields: TypeName		ComboBox  
+					Position		StatusPrompt(GetRight,Position) + $hGap,StatusPrompt(GetTop,Position),$ComboBoxWidth,$StaticTextHeight*5
+					IActionsText	ACTIONS ( GetList(PrinterStatusList) Get )
+					OActionsText	ACTIONS ( Save )
+					GenConName       THIS
+					GenConField		~Status~
+					IsHidden		T
+					IsTabStop		T
+					Tooltip         ~Select a status for the jobs as they are placed in queue~;
+
+		Define: PriorityPrompt Using DDWinCtrlDef AsSymbol PriorityPrompt 
+			Fields: TypeName		CheckBox
+					Text			~Change Priority~
+					FontWeight		600
+					GenConName       THIS
+					DActionsText	ACTIONS ( Save "Exec(TogglePriority())" )
+					GenConField		~AlterPriority~
+					Position		StatusPrompt(GetLeft,Position),StatusPrompt(GetBottom,Position)+$vgap,$StaticTextWidth,$StaticTextHeight
+
+		Define: PriorityField Using DDWinCtrlDef AsSymbol PriorityField 
+			Fields: TypeName		MaskedEditText  
+					Position		PriorityPrompt(GetRight,Position) + $hGap,PriorityPrompt(GetTop,Position),$ComboBoxWidth,$StaticTextHeight 
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName       THIS
+					GenConField		~Priority~
+					Mask			~###~
+					PromptChar		~ ~
+					IsHidden		T
+					Tooltip         ~Select a priority between 1 and 100~;
+
+		Define: ModelPrompt Using DDWinCtrlDef AsSymbol ModelPrompt 
+			Fields: TypeName		StaticText
+					Text			~Model~
+					IsHidden		T
+					RightJustified	TRUE
+					FONTWEIGHT		600
+					Position		PriorityPrompt(GetLeft,Position),PriorityPrompt(GetBottom,Position)+$vgap,$StaticTextWidth,$StaticTextHeight
+
+		Define: ModelComboBox Using DDWinCtrlDef AsSymbol ModelComboBox 
+			Fields: TypeName		ComboBox  
+					Position		ModelPrompt(GetRight,Position) + $hGap,ModelPrompt(GetTop,Position),$ComboBoxWidth,$StaticTextHeight*8
+					IActionsText	ACTIONS ( GetList(PrinterModelList) Get )
+					DActionsText	ACTIONS ( Save "Exec(OnModelChange())" )
+					OActionsText	ACTIONS ( Save )
+					GenConName       THIS
+					GenConField		~Model~
+					IsHidden		T
+					IsTabStop		T
+					Tooltip         ~Select the printer model~;
+
+		Define: QueuePrompt Using DDWinCtrlDef AsSymbol QueuePrompt 
+			Fields: TypeName		Checkbox
+					Text			~Change Queue~
+					FontWeight		600
+					GenConName       THIS
+					GenConField		~AlterQueue~
+					DActionsText	ACTIONS ( Save "Exec(ToggleQueue())" )
+					Position		ModelPrompt(GetLeft,Position),ModelPrompt(GetBottom,Position)+$vgap,$StaticTextWidth,$StaticTextHeight
+
+		Define: QueueListBox Using DDWinCtrlDef AsSymbol QueueListBox
+			Fields:	POSITION		QueuePrompt(GetLeft,Position) QueuePrompt(GetBottom,Position)+$vGap,$ListBoxWidth,$StaticTextHeight*5
+					GENCONNAME		THIS
+					GENCONFIELD		~QueueName~
+					DACTIONSTEXT	ACTIONS ( Save "Exec(OnQueueSelected();)"  )
+					OACTIONSTEXT	ACTIONS ( Save )
+					IsHidden		T
+					TYPENAME		ListBox ;
+
+		Define: PrinterPrompt Using DDWinCtrlDef AsSymbol PrinterPrompt 
+			Fields: TypeName		Checkbox
+					Text			~Specific Printer~
+					FontWeight		600
+					GenConName       THIS
+					GenConField		~AlterPrinter~
+					DActionsText	ACTIONS ( Save "Exec(TogglePrinter())" )
+					POSITION		QueueListBox(GetRight,Position)+$hGap QueuePrompt(GetTop,Position),$StaticTextWidth,$StaticTextHeight
+
+		Define: PrinterListBox Using DDWinCtrlDef AsSymbol PrinterListBox
+			Fields:	POSITION		PrinterPrompt(GetLeft,Position) PrinterPrompt(GetBottom,Position)+$vGap,$ListBoxWidth,$StaticTextHeight*5
+					GENCONNAME		THIS
+					GENCONFIELD		~PrinterName~
+					DACTIONSTEXT	ACTIONS ( Save "Exec(OnPrinterSelected();)"  )
+					OACTIONSTEXT	ACTIONS ( Save )
+					IsHidden		T
+					TYPENAME		ListBox ;
+
+		DialogWidth = PrinterListBox(GetRight,Position) + $hGap ;
+
+	
+		Define: RunButton Using DDWinCtrlDef AsSymbol RunButton 
+			Fields: TypeName		DefaultButton
+					Text			~Run~
+					DActionsText	ACTION EXEC ( OnRunButton() )
+					POSITION		$DialogWidth/2 - $ButtonWidth - $hGap/2 PrinterListBox(GetBottom,Position)+$vGap,$ButtonWidth,$ButtonHeight
+
+		Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton 
+			Fields: TypeName		Button
+					Text			~Cancel~
+					DActionsText	ACTION EXEC ( OnCancelButton() )
+					POSITION		RunButton(GetRight,Position)+$hGap RunButton(GetTop,Position),$ButtonWidth,$ButtonHeight
+    };
+
+	DialogWidth = PrinterListBox(GetRight,Position) + $hGap * 3;
+	DialogHeight = RunButton(GetBottom,Position) + 30;
+
+	Cursor( GetPosition,x,y );
+
+	x = $x - ($DialogWidth / 2);
+	y = $y - ($DialogHeight / 2 + 30);
+
+	PinOnScreen( 10,x,y,$DialogWidth,$DialogHeight+40 );
+
+	RunOrderItemsDefinition( Set,Position,~<x> <y>  <DialogWidth>  <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,RunOrderItemsDefinition,Data,RunPropertiesData,Document,$Doc.This,New,Temporary );
+
+    Global( dlg,RunPropertiesData );
+}
+
+
+NUMERIC OnQueueSelected()
+{
+	StatusBarText( ~You selected <$con.RunPropertiesData[QueueName]>~ );
+	return TRUE;
+}
+
+
+NUMERIC OnPrinterSelected()
+{
+	StatusBarText( ~You selected <$con.RunPropertiesData[PrinterName]>~ );
+	return TRUE;
+}
+
+
+
+NUMERIC OnRunButton()
+{
+	dlg( GetInput );
+
+	if ( RunPropertiesData( GetNumeric,AlterPriority ) )
+	{
+		Priority = RunPropertiesData( GetNumeric,Priority );
+
+		if ( <Priority> < 1 || <Priority> > 100 )
+		{
+			return Warning( Translate( ~Priority must be between 1 and 100.  Larger is higher.~ ) );
+		}
+	}
+
+	if ( RunPropertiesData( GetNumeric,AlterQueue ) )
+	{
+		if ( IsNull( ~<$con.RunPropertiesData[QueueName]>~ ) )
+		{
+			return Warning( Translate( ~Queue can't be null if you have elected not to use the default queue for each OrderItem~ ) );
+		}
+	}
+
+	if ( RunPropertiesData( GetNumeric,AlterPrinter ) )
+	{
+		if ( IsNull( ~<$con.RunPropertiesData[PrinterName]>~ ) )
+		{
+			return Warning( Translate( ~Printer can't be null if you have elected not to use the default printer for each OrderItem~ ) );
+		}
+	}
+
+	if ( RunPropertiesData(GetNumeric,RunOrder) )
+	{
+		RunOrderNow( ~<$con.RunPropertiesData[OrderID]>~ );
+	}
+	else
+	{
+		RunOrderItemsNow(~<$con.RunPropertiesData[OrderID]>~);
+	}
+
+	CloseRunDialog(TRUE);
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnCancelButton()
+{
+	CloseRunDialog(TRUE);
+	return TRUE;
+}
+
+
+NUMERIC ToggleStatus()
+{
+	return dlg( ShowControls,RunPropertiesData(GetNumeric,alterStatus),StatusComboBox );
+}
+
+NUMERIC TogglePriority()
+{
+	return dlg( ShowControls,RunPropertiesData(GetNumeric,alterPriority),PriorityField );
+}
+
+NUMERIC ToggleQueue()
+{
+	if ( RunPropertiesData(GetNumeric,alterQueue) )
+	{
+		UpdateQueueListBox();
+	}
+
+	ShowModelChoices();
+
+	return dlg( ShowControls,RunPropertiesData(GetNumeric,alterQueue),QueueListBox );
+}
+
+
+NUMERIC TogglePrinter()
+{
+	if ( RunPropertiesData(GetNumeric,alterPrinter) )
+	{
+		UpdatePrinterListBox();
+	}
+
+	ShowModelChoices();
+
+	return dlg( ShowControls,RunPropertiesData(GetNumeric,alterPrinter),PrinterListBox );
+}
+
+
+NUMERIC ShowModelChoices()
+{
+	Show = RunPropertiesData(GetNumeric,alterPrinter) || RunPropertiesData(GetNumeric,alterQueue);
+
+	return dlg( ShowControls,<Show>,ModelPrompt,ModelComboBox );
+}
+
+
+NUMERIC UpdateModelBox()
+{
+	Query = ~Select Model From PrinterModels Order By Model~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	List( MakeStringList,ModelsList,Model );
+
+	return dlg( SetControlFromStringList,ModelComboBox,ModelsList );
+}
+
+
+VOID OnModelChange()
+{
+	UpdatePrinterListBox();
+	UpdateQueueListBox();
+}
+
+
+NUMERIC UpdatePrinterListBox()
+{
+	dlg( GetInput );
+
+	Model = ~<$con.RunPropertiesData[Model]>~;
+
+	if ( IsNull( ~<Model>~ ) )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select PrinterName From Printers Where PrinterModel = '<Model>' Order By PrinterName~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	List( MakeStringList,PrintersList,PrinterName );
+
+	return dlg( SetControlFromStringList,PrinterListBox,PrintersList );
+}
+
+
+NUMERIC UpdateQueueListBox()
+{
+	dlg( GetInput );
+
+	Model = ~<$con.RunPropertiesData[Model]>~;
+
+	if ( IsNull( ~<Model>~ ) )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select QueueName From QueueDefinition Where PrinterModel = '<Model>' Order By QueueName~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	List( MakeStringList,QueueList,QueueName );
+
+	return dlg( SetControlFromStringList,QueueListBox,QueueList );
+}
+
+
+VOID CloseRunDialog( Reenable )
+{
+    if ( Defined( dlg ) )
+	{
+		ForgetGlobal( dlg );
+
+		if ( <Reenable> )
+		{
+//			OrderItemsDataWindow( EnableWindow,TRUE );
+//			OrderItemsWindow( EnableWindow,TRUE );
+		}
+	}
+
+	ForgetGlobal( SelectedOrderItemsToRun );
+}
+
+
+NUMERIC InitRunPropertiesDialog( Title,RunningWholeOrder,OrderID )
+{
+	RunPropertiesData( SetValues,AlterStatus,0,AlterPriority,0,AlterQueue,0,AlterPrinter,0,
+						RunOrder,~<RunningWholeOrder>~,OrderID,~<OrderID>~ );
+
+//	OrderItemsDataWindow( EnableWindow,FALSE );
+//	OrderItemsWindow( EnableWindow,FALSE );
+
+	DefineRunPropertiesDialog( ~<Title>~ );
+
+	UpdateModelBox();
+
+	return TRUE;
+}
+
+

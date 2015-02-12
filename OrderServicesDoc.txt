@@ -1,0 +1,146 @@
+Include: ~FormattingRoutines~;
+
+IncludeClass( BaseGrid );
+
+VOID	OrderServices::OrderServices()						// CONSTRUCTOR
+{
+	TableName = ~OrderServices~;
+	DocumentQuery = ~Select * from <TableName> Order By OrderID,ServiceID~;
+	Title = ~Order Services~;
+	WindowTop = 25;
+	WindowWidth = 90;
+	WindowHeight = 25;
+	HelpPage = ~OrderServices.htm~;
+	SplitterRows = ~2 7 93~;
+}
+
+STR		OrderServices::GetKey( &Item )					// PRIMARY KEY FOR THE TABLE
+{
+	return ~OrderID='<$con.Item[OrderID]>' AND ServicesID=<$con.Item[ServicesID]>~;
+}
+
+NUMERIC OrderServices::ChangeRecordAudits( &Changed )		// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[OrderID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  OrderID cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[ServicesID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  ServicesID cannot be blank.~ ) ); }
+
+	return TRUE;
+}
+
+NUMERIC OrderServices::OnAddRecord( &NewRow )
+{
+	return NewRow( Set,OrderID,~<fOrderID>~ );
+}
+
+NUMERIC OrderServices::AddControls( xPosition )
+{
+	Define: ImageServicesButton Using DDWinCtrlDef AsSymbol ImageServicesButton
+	Fields:	GENCONNAME		This
+			DACTIONSTEXT	ACTION EXEC ( <THIS>.ShowServices( ~Images~ ) )
+			POSITION		$xPosition+ 10, $vGap $StdButtonWidth + 5, $ButtonHeight
+			TEXT			Translate( ~&Image~ )
+			TOOLTIP			Translate( ~Show Services for Images in this Order.~ )
+			TYPENAME		BUTTON ;
+
+	Define: CropServicesButton Using DDWinCtrlDef AsSymbol CropServicesButton
+	Fields:	GENCONNAME		This
+			DACTIONSTEXT	ACTION EXEC ( <THIS>.ShowServices( ~Crop~ ) )
+			POSITION		ImageServicesButton(GetRight,Position), $vGap $StdButtonWidth + 5, $ButtonHeight
+			TEXT			Translate( ~&Crop~ )
+			TOOLTIP			Translate( ~Show Crop Services specified for this Order.~ )
+			TYPENAME		BUTTON ;
+
+	Define: OrderItemServicesButton Using DDWinCtrlDef AsSymbol OrderItemServicesButton
+	Fields:	GENCONNAME		This
+			DACTIONSTEXT	ACTION EXEC ( <THIS>.ShowServices( ~OrderItems~ ) )
+			POSITION		CropServicesButton(GetRight,Position), $vGap $StdButtonWidth + 5, $ButtonHeight
+			TEXT			Translate( ~&OrderItem~ )
+			TOOLTIP			Translate( ~Show Order Item Services specified for this Order.~ )
+			TYPENAME		BUTTON ;
+
+	return TRUE;
+}
+
+VOID OrderServices::ShowServices( service )
+{
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~ProcessOrders:Database Connection Failed. <theErr>~) );
+	}
+
+	if ( SimilarStr( ~<service>~, ~Images~ ) )
+	{
+		Cmd = ~Select Count(*) From ImagesServices Where OrderID = '<fOrderID>' AND ServicesID != 0 AND ( Code IS NULL OR Code = '' )~;
+		numRecs = dBase( RecordCountFor,~<Cmd>~ );
+	
+		if (<numRecs> == 0)
+		{
+			Query = STR ( Select ImagesServices.OrderID,ImagesServices.Roll,ImagesServices.Frame,ImagesServices.Code,NegativeServices.Label,ImagesServices.Description,ImagesServices.ServicesID From ImagesServices Left Outer Join NegativeServices On (NegativeServices.Code = ImagesServices.Code) Where OrderID = '<fOrderID>'  Order By ImagesServices.Roll, ImagesServices.Frame, ImagesServices.ServicesID );
+		}
+		else
+		{
+			Query = STR ( Select ImagesServices.*,NegativeServices.Label,NegativeServices.Code From ImagesServices Left Outer Join NegativeServices On (NegativeServices.ID = ImagesServices.ServicesID) Where OrderID = '<fOrderID>'  Order By ImagesServices.Roll, ImagesServices.Frame, ImagesServices.ServicesID );
+		}
+	}
+	else if ( SimilarStr( ~<service>~, ~Crop~ ) )
+	{
+		Cmd = ~Select Count(*) From CropServices Where OrderID = '<fOrderID>' AND ServicesID != 0 AND ( Code IS NULL OR Code = '' )~;
+		numRecs = dBase( RecordCountFor,~<Cmd>~ );
+	
+		if (<numRecs> == 0)
+		{
+			Query = STR ( Select CropServices.OrderID,CropServices.Roll,CropServices.Frame,CropServices.OrderItemID,CropServices.ProductID,CropServices.Crop,CropServices.Code,CropServiceCodes.Label,CropServices.Description,CropServices.ServicesID From CropServices Left Outer Join CropServiceCodes On (CropServiceCodes.Code = CropServices.Code) Where OrderID = '<fOrderID>'  Order By CropServices.OrderItemID, CropServices.ServicesID );
+		}
+		else
+		{
+			Query = STR ( Select CropServices.*,CropServiceCodes.Label,CropServiceCodes.Code From CropServices Left Outer Join CropServiceCodes On (CropServiceCodes.ID = CropServices.ServicesID) Where OrderID = '<fOrderID>'  Order By CropServices.OrderItemID, CropServices.ServicesID );
+		}
+	}
+	else if ( SimilarStr( ~<service>~, ~OrderItems~ ) )
+	{
+
+		Cmd = ~Select Count(*) From OrderItemsServices Where OrderID = '<fOrderID>' AND ( Code IS NULL OR Code = '' )~;
+		numRecs = dBase( RecordCountFor,~<Cmd>~ );
+	
+		if (<numRecs> == 0)
+		{
+			Query = STR ( Select OrderItemsServices.OrderID,OrderItemsServices.OrderItemID,OrderItemsServices.ProductID,OrderItemsServices.Code,PrintServices.Label,OrderItemsServices.ServicesID From OrderItemsServices Left Outer Join PrintServices ON (PrintServices.Code = OrderItemsServices.Code) Where OrderID = '<fOrderID>'  Order By OrderItemsServices.OrderItemID );
+		}
+		else
+		{
+			Query = STR ( Select OrderItemsServices.*,PrintServices.Label,PrintServices.Code From OrderItemsServices Left Outer Join PrintServices ON (PrintServices.ID = OrderItemsServices.ServicesID) Where OrderID = '<fOrderID>'  Order By OrderItemsServices.OrderItemID,OrderItemsServices.ServicesID );
+		}
+	}
+
+	Actions = ACTION Doc ( <service>ServicesDoc OpenOnce <service>ServicesDoc "Init( ~<fOrderID>~, ~<Query>~ )" );
+	PerformActions( Actions );
+
+}
+NUMERIC Init( Which,Query )
+{
+	Title = ~Order Services - <Which>~;
+
+	if ( Defined( Grid ) )
+	{
+		Grid.Set( fOrderID,~<Which>~ );
+		Grid.OnReQuery(~<Title>~,~<Query>~);
+		return TRUE;
+	}
+	else
+	{
+		Class( OrderServices,Extends,BaseGrid,
+				Member,fOrderID,Str,~<Which>~ );
+
+		OrderServices( New,Grid );
+		Grid.Set( DocumentQuery,~<Query>~ );
+		Grid.DefineWindow();
+		Grid.Init();
+		Grid.SetTitle( ~<Title>~ );
+		return Global( Grid );
+	}
+}

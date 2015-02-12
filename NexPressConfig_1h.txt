@@ -1,0 +1,195 @@
+
+//	S:\APPSV2\Apps\Exe\TextFiles\NexPressConfig_1h.txt.
+
+void SetDefaults()
+{
+	TCHAR	*ShareDirectory = GetShareDirectory() ;
+	TCHAR	 Temp[2048] ;
+	
+	sprintf( Temp, _T("%s\\NexPressDFESetup.txt"), ShareDirectory ) ;
+	TCHAR	*Text = GetFile( Temp ) ;
+	if( Text )
+	{
+		UParser	*theParser = new UParser ;
+		theParser->SetText( Text ) ;
+
+		TCHAR	Token[2048] ;
+		theParser->GetToken( Token ) ;
+		while( *Token )
+		{
+			if( stricmp( Token, _T("TemplatePath:") ) == 0 )
+			{
+				theParser->GetToken( Token ) ;
+				gDlgData->SetAttrValue( _T("TemplatePath"), Token ) ;
+			}
+			
+			if( stricmp( Token, _T("DevCapsPath:") ) == 0 )
+			{
+				theParser->GetToken( Token ) ;
+				gDlgData->SetAttrValue( _T("DevCapsPath"), Token ) ;
+			}
+			
+			if( stricmp( Token, _T("C8000TemplatePath:") ) == 0 )
+			{
+				theParser->GetToken( Token ) ;
+				gDlgData->SetAttrValue( _T("C8000TemplatePath"), Token ) ;
+			}
+
+			theParser->GetToken( Token ) ;
+		}
+		theParser->SetText( NULL ) ;
+		delete theParser ;
+		free( Text ) ;
+	}
+}
+
+void GetDialogLists()
+{
+
+//	TBD: SETUP ANY LISTS SPECIFIC TO THIS DIALOG HERE.
+
+//	Example:
+//	UStringList	*aSL ;
+//	aSL = (UStringList *) GetTreeObject(_T("CharacterSets"),_T("Strings")) ;
+//	if( aSL == NULL )
+//	{
+//		aSL = new UStringList ;
+//		aSL->SetName(_T("CharacterSets") ;
+//		aSL->AddString(_T("Western"), FALSE) ;
+//		aSL->AddString(_T("Japanese"), FALSE) ;
+//		aSL->AddString(_T("Symbol"), FALSE) ;
+//		HangTreeObject( aSL, _T("STRINGS")) ;
+//	}
+
+
+}
+
+void GetDirList()
+{
+	int inListFlag;
+
+	UStringList *Dir = GetTreeObject( _T("Dir"), _T("Strings")) ;
+
+	if( Dir )
+	{
+		PluckTreeObject( _T("Dir"), _T("Strings") ) ;
+		delete Dir ;
+		Dir = NULL ;
+	}
+
+	UADO	*theADO = ConnectToADO() ;
+	if( theADO == NULL )
+	{
+		return( HandleFatalError( _T("NexPressConfig Error: Could not connect to database."))) ;
+	}
+
+	UPGenConList	*thePGCList = new UPGenConList( theADO ) ;
+	if( thePGCList == NULL )
+	{
+		delete theADO ;
+		return( HandleFatalError( _T("NexPressConfig Error: Could not get recordset."))) ;
+	}
+
+	TCHAR	theQuery[1024] ;
+	TCHAR		 DirName[1024] ;
+	UPGenCon	*thePGC;
+	Dir = new UStringList ;
+	if( Dir == NULL )
+	{
+		delete thePGCList ;
+		delete theADO ;
+		return( HandleFatalError( _T("NexPressConfig Error: Could not get control folder list."))) ;
+	}
+Debug(0);
+	Dir->SetName( _T("Dir")) ;
+	sprintf( theQuery, _T("SELECT ControlFolder from QueueDefinition WHERE PrinterModel = 'NexPress'") ) ;
+	int x = 0;
+	int Result;
+	while(x<2)
+	{
+		Result = Query( thePGCList, theQuery, _T("ReadOnly"), _T("Static") ) ;
+
+		if( Result != 1 )
+		{
+			delete thePGCList ;
+			delete theADO ;
+			return( HandleFatalError( _T("NexPressConfig Error: Queue query failed."))) ;
+		}
+
+		thePGC = GetFirst( thePGCList ) ;
+		while( thePGC )
+		{
+			thePGC->GetAttrValue( _T("ControlFolder"), DirName ) ;
+
+			inListFlag = Dir->IsStringInStringList( DirName, FALSE ); //don't insert duplicates
+			if(!inListFlag)
+			{
+				if( DirName[0] == 0x5c)
+				{//put network paths at top of list
+					Dir->InsertStringAt( DirName, 0L); 
+				}
+				else
+				{
+					if( DirName[0] != 0)
+					{
+						Dir->AddString( DirName, FALSE ) ;
+					}
+				}
+			}
+			thePGC = GetNext( thePGCList ) ;
+		}
+	
+		x++;
+		sprintf( theQuery, _T("SELECT ControlFolder from Printers WHERE PrinterModel = 'NexPress'") ) ;
+	} //while(x<2)
+
+	delete thePGCList ;
+	delete theADO ;
+	
+	if( Dir->GetNumEntries() == 0)
+	{
+		Dir->AddString( _T("None"), FALSE ) ;
+	}
+	else
+	{
+		gDlgData->SetAttrValue( _T("Dir"), Dir->GetString() ) ;  
+	}
+
+	HangTreeObject( Dir, _T("Strings") ) ;
+
+	if( gDlg )
+	{
+		Result = StringListToControl( gDlg, _T("Dir"), Dir ) ;
+	}
+
+}
+
+
+TCHAR *HandleFatalError( TCHAR *ErrMsg )
+{
+	SessionLogDirect( ErrMsg ) ;
+	ReportError( ErrMsg, 0, 0 ) ;
+	return( NULL ) ;
+}
+
+
+UADO *ConnectToADO()
+{
+	int		 result ;
+
+	UADO	*theADO = new UADO ;
+
+	if( theADO == NULL )
+	{
+		return(NULL) ;
+	}
+
+	result = ConnectKPIS( theADO ) ;
+	if( result )
+	{
+		delete theADO ;
+		return(NULL) ;
+	}
+
+	return( theADO ) ;
+}

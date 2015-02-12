@@ -1,0 +1,1096 @@
+
+Include: ~KparsUtilities.txt~;
+
+IncludeClass( BaseDialog );
+
+
+VOID BatchConfig::BatchConfig()					// CONSTRUCTOR
+{
+	//HelpPage = ~KarsBatchConfig.htm~;
+	Dictionary = ~DDRetouchBatchConfig~;
+	GoButtonText = ~Apply to Selected~;
+	GoButtonToolTip = ~Apply the configuration settings to the selected images for Auto-Retouching~;
+	CancelButtonText = ~Exit~;
+	CancelButtonToolTip = ~Close the dialog.~;
+	GoButtonToolTip = Translate( ~Setup up images for Auto-Retouch batch processing~ );
+	Title = Translate( ~Auto-Retouching Batch Configuration - <Order>~ );
+	HelpPage = ~Kars_BatchConfiguration.htm~;
+}
+
+
+VOID BatchConfig::DefineDictionary()
+{
+	if ( !Tree( Name,BatchCompleteTypes,Location,~[STRINGS]~,Exists ) )
+	{
+		StringList:	Name ~BatchCompleteTypes~
+			Fields: String	~REVIEW~
+			Fields: String	~NO_REVIEW~
+		Hang:	BatchCompleteTypes	~[STRINGS]~ ;
+	}
+
+	if ( !Tree( Name,RetouchStateTypes,Location,~[STRINGS]~,Exists ) )
+	{
+		StringList:	Name ~RetouchStateTypes~
+			Fields: String	~QueuedForBatch~
+			Fields: String	~QueuedForReview~
+			Fields: String	~QueuedForMerge~
+		Hang:	RetouchStateTypes	~[STRINGS]~ ;
+	}
+
+	Dictionary: ~DDRetouchBatchConfig~ 
+		Fields: Name BatchSetup			type text
+		Fields: Name BatchComplete		type text
+		Fields: Name Priority			type long LowValue 0	HighValue 100
+		Fields: Name DataPath			type text
+		Fields: Name OverwriteOriginal	type long
+		Fields:	Name OriginalPrefix		type text
+		Fields:	Name OriginalSuffix		type text
+		Fields:	Name OriginalPath		type text
+		Fields: Name RetouchState		type text
+		Fields: Name SingleFace			type long
+		Fields: Name AutoBatch			type long
+		Fields: Name BatchWS			type text
+		Fields: Name BatchHere			type long
+		Fields: Name ReviewWS			type text
+		Fields: Name ReviewHere			type long
+		Fields: Name MergeWS			type text
+		Fields: Name MergeHere			type long
+}
+
+
+VOID BatchConfig::InitDialogData()
+{
+	batchSetup = ~~;
+	priority = 0;
+	GetOrderBatchSetup(batchSetup,priority);
+
+	StartingDirectory = ~<$App.ShareDirectory>\KparsData~;
+	StartingDirectory = MakePath( Type, UNC, ~<StartingDirectory>~);
+	if ( GetSystemSettings( ~AutoRetouching~,~EnhancementDataFolder~,DefaultPath,Enabled ) )
+	{
+		if ( !IsNULL( ~<DefaultPath>~ ) )
+		{
+			StartingDirectory = ~<DefaultPath>~;
+		}
+	}
+
+	DefaultBatchComplete = ~REVIEW~;
+	GetSystemSettings( ~AutoRetouching~,~BatchCompleteProcessing~,DefaultComplete,Enabled );
+	if ( !IsNULL( ~<DefaultComplete>~ ) && <Enabled> )
+	{
+		DefaultBatchComplete = ~<DefaultComplete>~;
+	}
+
+	DefaultOverwrite = FALSE;
+	GetSystemSettings( ~AutoRetouching~,~OverwriteOriginal~,OverWrite,Enabled );
+	if ( !IsNULL( ~<OverWrite>~ ))
+	{
+		DefaultOverwrite = <OverWrite>;
+	}
+
+	GetSystemSettings( ~AutoRetouching~,~OriginalPrefix~,DefaultPrefix,Enabled );
+
+	GetSystemSettings( ~AutoRetouching~,~OriginalSuffix~,DefaultSuffix,Enabled );
+
+	GetSystemSettings( ~AutoRetouching~,~OriginalPath~,DefaultPath,Enabled );
+
+	DefaultAutoBatch = FALSE;
+	GetSystemSettings( ~AutoRetouching~,~AutoBatch~,AutoBatch,Enabled );
+	if ( !IsNULL( ~<AutoBatch>~ ))
+	{
+		DefaultAutoBatch = <AutoBatch>;
+	}
+
+	DefaultSingleFace = FALSE;
+	GetSystemSettings( ~AutoRetouching~,~SingleFace~,SingleFace,Enabled );
+	if ( !IsNULL( ~<SingleFace>~ ))
+	{
+		DefaultSingleFace = <SingleFace>;
+	}
+
+	DlgData( SetValues,BatchSetup,~<batchSetup>~,BatchComplete,~<DefaultBatchComplete>~,
+						DataPath,~<StartingDirectory>~,OverwriteOriginal,~<DefaultOverwrite>~,
+						OriginalPrefix,~<DefaultPrefix>~,OriginalSuffix,~<DefaultSuffix>~,
+						OriginalPath,~<DefaultPath>~,RetouchState,~QueuedForBatch~,
+						Priority,<priority>,AutoBatch,<AutoBatch>,SingleFace,<SingleFace> );
+
+	Private( DlgData );
+}
+
+
+NUMERIC BatchConfig::DefineControls()
+{
+    TextHeight = 20;        TextWidth = 100;  
+	StaticTextWidth = 150;	StaticTextHeight = 18;
+    EditTextWidth = 60;		EditTextHeight = 20;
+    ComboBoxWidth = 120;	ComboBoxHeight = 160;
+
+	Define: BatchSetupLabel Using DDWinCtrlDef AsSymbol BatchSetupLabel Private
+		Fields:	TYPENAME			StaticText
+				POSITION			<hgap> <vGap> $StaticTextWidth $StaticTextHeight
+				TEXT				~Batch Setup~
+				LEFTJUSTIFIED		TRUE;
+				
+	Define: BatchSetupCombo Using DDWinCtrlDef AsSymbol BatchSetupCombo Private
+		Fields:	TYPENAME			ComboBox
+				POSITION			BatchSetupLabel(GetRight,Position)+<hgap> <vGap> <ComboBoxWidth> <ComboBoxHeight>
+				IActionsText		ACTION EXEC ( <THIS>.UpdateBatchSetupComboBox(TRUE) )
+				DActionsText		~[Save]~	
+				OActionsText		~[Save]~
+				DropDownActionsText ACTION CALL ( <THIS>.UpdateBatchSetupComboBox(FALSE) )
+				GENCONNAME			THIS
+				GENCONFIELD			~BatchSetup~
+				TOOLTIP				Translate( ~The batch setup to apply to the selected images.~ );
+				
+	Define: BatchSetupButton Using DDWinCtrlDef AsSymbol BatchSetupButton 
+		Fields: TypeName			Button
+				Text				Translate(~?~)
+				Position			BatchSetupCombo(GetRight,Position) + $hGap,BatchSetupCombo(GetTop,Position), 20,<ButtonHeight>
+				DActionsText		ACTION EXEC ( <THIS>.OnViewBatchSetups() )
+				Tooltip				Translate(~View the Retouch Batch Setups table.~ );
+
+   Define: AutoBatchCheckBox Using DDWinCtrlDef AsSymbol AutoBatchCheckBox 
+        Fields: TypeName	       CheckBox
+                Text			    Translate(~Auto Batch~)
+				IsEnabled			T
+                Position	        $hGap+10, BatchSetupLabel(GetBottom,Position)+$vgap,<StaticTextWidth>,<StaticTextHeight>
+				GenConName			THIS
+				GenConField			~AutoBatch~
+				IActionsText	    ACTIONS ( Get )
+				DActionsText		ACTIONS ( Save )
+				OActionsText		ACTIONS ( Save )
+				Tooltip				Translate(~If checked, the batch settings will be determined based on the initial image analysis. The batch setup types must be defined for this feature.~);
+	
+	Define: SingleFaceCheckBox Using DDWinCtrlDef AsSymbol SingleFaceCheckBox Private
+        Fields: TypeName	       CheckBox
+                Text			    Translate(~Single Face~)
+				IsEnabled			T
+                Position	        AutoBatchCheckBox(GetRight,Position) +$hGap, AutoBatchCheckBox(GetTop,Position),<StaticTextWidth>,<StaticTextHeight>
+				GenConName			THIS
+				GenConField			~SingleFace~
+				IActionsText	    ACTIONS ( Get )
+				DActionsText		ACTIONS ( Save )
+				OActionsText		ACTIONS ( Save )
+				Tooltip				Translate(~If checked, the Auto Batch analysis and settings will be applied to only one face in the image.~);
+				
+	Define: BatchCompleteLabel Using DDWinCtrlDef AsSymbol BatchCompleteLabel Private
+		Fields:	TYPENAME			StaticText
+				POSITION			<hgap> AutoBatchCheckBox(GetBottom,Position) + <vGap> * 2 $StaticTextWidth $StaticTextHeight
+				TEXT				~Batch Complete Processing~
+				LEFTJUSTIFIED		TRUE;
+				
+	Define: BatchCompleteCombo Using DDWinCtrlDef AsSymbol BatchCompleteCombo Private
+		Fields:	TYPENAME			ComboBox
+				POSITION			BatchCompleteLabel(GetRight,Position)+<hgap> BatchCompleteLabel(GetTop,Position) <ComboBoxWidth> <ComboBoxHeight>
+                IActionsText		~[GetList(BatchCompleteTypes) Get]~
+				DActionsText		~[Save]~	
+				OActionsText		~[Save]~
+				GENCONNAME			THIS
+				GENCONFIELD			~BatchComplete~
+				TOOLTIP				Translate( ~The next retouch action after batch completes.~ );
+				
+	Define: RetouchStateLabel Using DDWinCtrlDef AsSymbol RetouchStateLabel Private
+		Fields:	TYPENAME			StaticText
+				POSITION			<hgap> BatchCompleteLabel(GetBottom,Position) + <vGap> * 2 $StaticTextWidth $StaticTextHeight
+				TEXT				~Retouch State~
+				LEFTJUSTIFIED		TRUE;
+				
+	Define: RetouchStateCombo Using DDWinCtrlDef AsSymbol RetouchStateCombo Private
+		Fields:	TYPENAME			ComboBox
+				POSITION			RetouchStateLabel(GetRight,Position)+<hgap> RetouchStateLabel(GetTop,Position) <ComboBoxWidth> <ComboBoxHeight>
+                IActionsText		~[GetList(RetouchStateTypes) Get]~
+				DActionsText		~[Save]~	
+				OActionsText		~[Save]~
+				GENCONNAME			THIS
+				GENCONFIELD			~RetouchState~
+				TOOLTIP				Translate( ~The retouch queue to which the image is assigned.~ );
+				
+	Define: PriorityLabel Using DDWinCtrlDef AsSymbol PriorityLabel Private
+		Fields:	TYPENAME			StaticText
+				POSITION			<hgap> RetouchStateLabel(GetBottom,Position) + <vGap> * 2 $StaticTextWidth $StaticTextHeight
+				TEXT				~Priority~
+				LEFTJUSTIFIED		TRUE;
+				
+	Define: PriorityText Using DDWinCtrlDef AsSymbol PriorityText Private
+		Fields:	TYPENAME			MaskedEditText
+				Mask				~####~
+				POSITION			PriorityLabel(GetRight,Position)+<hgap> PriorityLabel(GetTop,Position) <TextWidth> <TextHeight>
+ 				IACTIONSTEXT		ACTIONS ( Get )
+				OACTIONSTEXT		ACTIONS ( Save )
+				GENCONNAME			THIS
+				GENCONFIELD			~Priority~
+				TEXT				~~
+				PromptChar			~ ~ 
+				TOOLTIP				Translate( ~The priority for batch and review retouch processing.~ );
+				
+	Define: DataPathText Using DDWinCtrlDef AsSymbol DataPathText 
+		Fields: TypeName			StaticText
+				Text				Translate(~Temporary Retouch Data Path~)
+				LeftJustified		TRUE
+				Position			PriorityLabel(GetLeft,Position),PriorityLabel(GetBottom,Position)+$vGap*2,$StaticTextWidth,<StaticTextHeight>;
+
+	Define: DataPathEditText Using DDWinCtrlDef AsSymbol DataPathEditText 
+		Fields: TypeName			EditText  
+				Position			DataPathText(GetLeft,Position)+ 30,DataPathText(GetBottom,Position),<TextWidth>+140 ,<TextHeight>
+                 IActionsText		~[Get]~
+                OActionsText		~[Save]~
+				GenConName			THIS
+				GenConField			~DataPath~
+				Tooltip				Translate(~The directory where intermediate retouching data will be temporarily stored.~ );
+
+	Define: DataPathBrowseButton Using DDWinCtrlDef AsSymbol DataPathBrowseButton 
+		Fields: TypeName			Button
+				Text				Translate(~?~)
+				Position			DataPathEditText(GetRight,Position) + $hGap,DataPathEditText(GetTop,Position), 20,<ButtonHeight>
+				DActionsText		ACTION EXEC ( <THIS>.BrowseForDataPath() )
+				Tooltip				Translate(~Select the directory where intermediate retouching data will be temporarily stored.~ );
+
+   Define: OverwriteCheckBox Using DDWinCtrlDef AsSymbol OverwriteCheckBox 
+        Fields: TypeName	       CheckBox
+                Text			    Translate(~Overwrite Original Image~)
+				IsEnabled			T
+                Position	        $hGap+10, DataPathEditText(GetBottom,Position)+30,<StaticTextWidth>,<StaticTextHeight>
+				GenConName			THIS
+				GenConField			~OverwriteOriginal~
+				IActionsText	    ACTIONS ( Get )
+				DActionsText		ACTIONS ( Save )
+				OActionsText		ACTIONS ( Save )
+				Tooltip				Translate(~If checked, the original image will be overwritten by the retouched image.~);
+	
+
+	Define: PrefixText Using DDWinCtrlDef AsSymbol PrefixText 
+		Fields: TypeName			StaticText
+				Text				Translate(~Prefix for Original~)
+				LeftJustified		TRUE
+				Position			OverwriteCheckBox(GetLeft,Position),OverwriteCheckBox(GetBottom,Position)+$vGap*2,$TextWidth,<StaticTextHeight>;
+
+	Define: PrefixEditText Using DDWinCtrlDef AsSymbol PrefixEditText 
+		Fields: TypeName			EditText  
+				Position			PrefixText(GetRight,Position)+$hGap,PrefixText(GetTop,Position)-2,<StaticTextWidth> ,<TextHeight>
+                 IActionsText		~[Get]~
+                OActionsText		~[Save]~
+				GenConName			THIS
+				GenConField			~OriginalPrefix~
+				Mask				RepeatStr(10,~%~)
+				Tooltip				Translate(~The prefix to be added to the original image name.~ );
+
+	Define: SuffixText Using DDWinCtrlDef AsSymbol SuffixText 
+		Fields: TypeName			StaticText
+				Text				Translate(~Suffix for Original~)
+				LeftJustified		TRUE
+				Position			PrefixText(GetLeft,Position),PrefixText(GetBottom,Position)+$vGap*2,$TextWidth,<StaticTextHeight>;
+
+	Define: SuffixEditText Using DDWinCtrlDef AsSymbol SuffixEditText 
+		Fields: TypeName			EditText  
+				Position			SuffixText(GetRight,Position)+$hGap,SuffixText(GetTop,Position)-2,<StaticTextWidth> ,<TextHeight>
+                 IActionsText		~[Get]~
+                OActionsText		~[Save]~
+				GenConName			THIS
+				GenConField			~OriginalSuffix~
+				Mask				RepeatStr(10,~%~)
+				Tooltip				Translate(~The suffix to be added to the original image name.~ );
+
+	Define: OriginalPathText Using DDWinCtrlDef AsSymbol OriginalPathText 
+		Fields: TypeName			StaticText
+				Text				Translate(~New Path for Original~)
+				LeftJustified		TRUE
+				Position			SuffixText(GetLeft,Position),SuffixText(GetBottom,Position)+$vGap*2,$TextWidth,<StaticTextHeight>;
+
+	Define: OriginalPathEditText Using DDWinCtrlDef AsSymbol OriginalPathEditText 
+		Fields: TypeName			EditText  
+				Position			OriginalPathText(GetRight,Position)+$hGap,OriginalPathText(GetTop,Position)-2,<StaticTextWidth> ,<TextHeight>
+                 IActionsText		~[Get]~
+                OActionsText		~[Save]~
+				GenConName			THIS
+				GenConField			~OriginalPath~
+				Tooltip				Translate(~The directory where original image will be moved prior to saving the retouched image.~ );
+
+	Define: OrigPathBrowseButton Using DDWinCtrlDef AsSymbol OrigPathBrowseButton 
+		Fields: TypeName			Button
+				Text				Translate(~?~)
+				Position			OriginalPathEditText(GetRight,Position) + $hGap,OriginalPathEditText(GetTop,Position), 20,  <ButtonHeight>
+				DActionsText		ACTION EXEC ( <THIS>.BrowseForOrigPath() )
+				Tooltip				Translate(~Select the directory where original image will be moved prior to saving the retouched image.~ );
+
+	DialogWidth = aDialog(GetMaxRight,Position) + $hGap * 2;
+	y = DataPathEditText(GetBottom,Position);
+
+	Define: OriginalImageGroupBox Using DDWinCtrlDef
+		Fields: TypeName			GroupBox
+				Text				Translate(~Original Image Settings~)
+				Position			$hGap, $y + $vGap,$DialogWidth - $hGap,OrigPathBrowseButton(GetBottom,Position) - $y + 10;
+
+	Define: BatchWSText Using DDWinCtrlDef AsSymbol BatchWSText 
+		Fields: TypeName			StaticText
+				Text				Translate(~Batch Workstation ID~)
+				LeftJustified		TRUE
+				Position			OriginalPathText(GetLeft,Position),OriginalPathEditText(GetBottom,Position)+$vGap*5,$TextWidth + 10,<StaticTextHeight>;
+
+	Define: BatchWSEditText Using DDWinCtrlDef AsSymbol BatchWSEditText 
+		Fields: TypeName			MaskedEditText  
+				Position			BatchWSText(GetRight,Position)+$hGap,BatchWSText(GetTop,Position)-2,<StaticTextWidth>,<TextHeight>
+                IActionsText		~[Get]~
+				WantReturnKey		T
+				ReturnKeyActionsText ACTION Call ( <THIS>.OnWSChange( ~Batch~ ) )
+                OActionsText		~[ Save ]~
+				GenConName			THIS
+				GenConField			~BatchWS~
+				Mask				RepeatStr(32,~%~)
+				Tooltip				Translate(~The workstation name where the image will be processed in batch.~ );
+
+	Define: BatchHereCheckbox Using DDWinCtrlDef AsSymbol BatchHereCheckbox 
+		Fields: TypeName			CheckBox  
+				Text				Translate(~Here~)
+				Position			BatchWSEditText(GetRight,Position)+$hGap,BatchWSEditText(GetTop,Position),50,<TextHeight>
+				IsEnabled			T
+				IActionsText	    ACTIONS ( Get )
+				DActionsText		ACTION EXEC ( <THIS>.OnProcessHere( ~Batch~ ) )
+				OActionsText		ACTIONS ( Save )
+				GenConName			THIS
+				GenConField			~BatchHere~
+				Tooltip				Translate(~If checked, the image(s) will be processed in batch on this workstation.~ );
+
+	Define: ReviewWSText Using DDWinCtrlDef AsSymbol ReviewWSText 
+		Fields: TypeName			StaticText
+				Text				Translate(~Review Workstation ID~)
+				LeftJustified		TRUE
+				Position			BatchWSText(GetLeft,Position),BatchWSEditText(GetBottom,Position)+$vGap,$TextWidth + 10,<StaticTextHeight>;
+
+	Define: ReviewWSEditText Using DDWinCtrlDef AsSymbol ReviewWSEditText 
+		Fields: TypeName			MaskedEditText  
+				Position			ReviewWSText(GetRight,Position)+$hGap,ReviewWSText(GetTop,Position)-2,<StaticTextWidth>,<TextHeight>
+                IActionsText		~[Get]~
+                OActionsText		~[Save]~
+				GenConName			THIS
+				GenConField			~ReviewWS~
+				WantReturnKey		T
+				ReturnKeyActionsText ACTION Call ( <THIS>.OnWSChange( ~Review~ ) )
+				Mask				RepeatStr(32,~%~)
+				Tooltip				Translate(~The workstation name where the image will be reviewed.~ );
+
+	Define: ReviewHereCheckbox Using DDWinCtrlDef AsSymbol ReviewHereCheckbox 
+		Fields: TypeName			CheckBox  
+				Text				Translate(~Here~)
+				Position			ReviewWSEditText(GetRight,Position)+$hGap,ReviewWSEditText(GetTop,Position),50,<TextHeight>
+				IsEnabled			T
+				IActionsText	    ACTIONS ( Get )
+				DActionsText		ACTION EXEC ( <THIS>.OnProcessHere( ~Review~ ) )
+				OActionsText		ACTIONS ( Save )
+				GenConName			THIS
+				GenConField			~ReviewHere~
+				Tooltip				Translate(~If checked, the image(s) will be reviewd on this workstation.~ );
+
+	Define: MergeWSText Using DDWinCtrlDef AsSymbol MergeWSText 
+		Fields: TypeName			StaticText
+				Text				Translate(~Merge Workstation ID~)
+				LeftJustified		TRUE
+				Position			ReviewWSText(GetLeft,Position),ReviewWSEditText(GetBottom,Position)+$vGap,$TextWidth + 10,<StaticTextHeight>;
+
+	Define: MergeWSEditText Using DDWinCtrlDef AsSymbol MergeWSEditText 
+		Fields: TypeName			MaskedEditText  
+				Position			MergeWSText(GetRight,Position)+$hGap,MergeWSText(GetTop,Position)-2,<StaticTextWidth>,<TextHeight>
+                IActionsText		~[Get]~
+                OActionsText		~[Save]~
+				GenConName			THIS
+				GenConField			~MergeWS~
+				WantReturnKey		T
+				ReturnKeyActionsText ACTION Call ( <THIS>.OnWSChange( ~Merge~ ) )
+				Mask				RepeatStr(32,~%~)
+				Tooltip				Translate(~The workstation name where the image will be merged.~ );
+
+	Define: MergeHereCheckbox Using DDWinCtrlDef AsSymbol MergeHereCheckbox 
+		Fields: TypeName			CheckBox  
+				Text				Translate(~Here~)
+				Position			MergeWSEditText(GetRight,Position)+$hGap,MergeWSEditText(GetTop,Position),50,<TextHeight>
+				IsEnabled			T
+				IActionsText	    ACTIONS ( Get )
+				DActionsText		ACTION EXEC ( <THIS>.OnProcessHere( ~Merge~ ) )
+				OActionsText		ACTIONS ( Save )
+				GenConName			THIS
+				GenConField			~MergeHere~
+				Tooltip				Translate(~If checked, the image(s) will be merged on this workstation.~ );
+
+	y = MergeWSEditText(GetBottom,Position);
+
+	Define: GoButton Using DDWinCtrlDef AsSymbol GoButton
+		Fields:	GENCONNAME			THIS
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnApplyButton() )
+				POSITION			($DialogWidth/3) - ($ButtonWidth + 3),MergeWSText(GetBottom,Position)+$vGap*2, $ButtonWidth+4, $ButtonHeight
+				TEXT				Translate( ~<GoButtonText>~ )
+				TOOLTIP				Translate( ~<GoButtonToolTip>~ )
+				TYPENAME			BUTTON
+				ISTABSTOP			TRUE;
+
+	Define: ApplyAllButton Using DDWinCtrlDef AsSymbol ApplyAllButton
+		Fields:	GENCONNAME			THIS
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnApplyAllButton() )
+				POSITION			GoButton(GetRight,Position) + $hGap,GoButton(GetTop,Position), $ButtonWidth+4, $ButtonHeight
+				TEXT				Translate( ~Apply To All~ )
+				TOOLTIP				Translate( ~Apply the configuration settings to all of the images for Auto-Retouching~ )
+				TYPENAME			BUTTON
+				ISTABSTOP			TRUE;
+
+	Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+		Fields:	GENCONNAME			THIS
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.DoCancelButton(); )
+				POSITION			ApplyAllButton(GetRight,Position) + $hGap,GoButton(GetTop,Position),
+										$ButtonWidth+4, $ButtonHeight
+				TEXT				Translate( ~<CancelButtonText>~ )
+				TOOLTIP				Translate( ~<CancelButtonToolTip>~ )
+				TYPENAME			BUTTON
+				ISTABSTOP			TRUE;
+
+	Define: OrderLabel Using DDWinCtrlDef AsSymbol OrderLabel Private
+		Fields:	TYPENAME			StaticText
+				POSITION			$hgap*2 GoButton(GetBottom,Position) + $vGap + 20 $EditTextWidth $StaticTextHeight
+				TEXT				~Order ID~
+				LEFTJUSTIFIED		TRUE;
+
+	Define: OrderText Using DDWinCtrlDef AsSymbol OrderText Private
+		Fields:	TYPENAME			EditText
+				POSITION			OrderLabel(GetLeft,Position)+$hgap OrderLabel(GetBottom,Position)+$vGap/2 <TextWidth> <TextHeight>
+				IsEnabled			F
+				TOOLTIP				Translate( ~Current Order ID.~ );
+				
+	Define: FrameListBox Using DDWinCtrlDef AsSymbol FrameListBox Private
+			Fields:	TypeName				List
+					ListViewType			Report
+					Position				OrderText(GetRight,Position) + $hGap*2, GoButton(GetBottom,Position) + $vGap + 20,
+											170 + $hGap, 200 
+					GenConField				~Frames~
+					IActionsText			ACTIONS ( Get )
+					DActionsText			ACTIONS ( Save )
+					OActionsText			ACTIONS ( Save )
+					AllowMultipleSelection	TRUE
+					GridLines				TRUE
+					FullRowSelect			TRUE
+					NoSortHeader			TRUE
+					Border					TRUE
+					ClientEdge				TRUE
+					ShowSelAlways			TRUE
+					InfoTip					TRUE
+					Tooltip					Translate( ~Roll/Frame list of images that need auto retouching~ )
+					ReturnKeyActionsText	ACTIONS ( Save );
+
+	y = GoButton( GetBottom, Position);
+
+	Define: RollFrameGroupBox Using DDWinCtrlDef
+		Fields: TypeName			GroupBox
+				Text				Translate(~~)
+				Position			$hGap, $y + $vGap,$DialogWidth - $hGap,FrameListBox(GetBottom,Position) - $y + 10;
+
+	y = FrameListBox( GetBottom, Position);
+
+	DialogHeight = <y>;
+	
+	DialogSetupComplete = TRUE;
+	return TRUE;
+}
+
+
+/* ***************************************************************** */
+/*   Batch Setup methods                                            */
+
+NUMERIC BatchConfig::OnViewBatchSetups()
+{
+	Action = ACTION DOC ( RetouchBatchSetupsDoc OpenOnce RetouchBatchSetupsDoc "Init();" );
+	return PerformActions( Action );
+}
+
+NUMERIC BatchConfig::UpdateBatchSetupComboBox( WantSelection )
+{
+	Query = ~Select Name From RetouchBatchSetup Order By Name~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	List( MakeStringList,SetupsList,Name );
+
+	if (<WantSelection> == 0)
+	{
+		return dlg( SetControlFromStringList,BatchSetupCombo,SetupsList,NoSelection );
+	}
+	else
+	{
+		return dlg( SetControlFromStringList,BatchSetupCombo,SetupsList );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC BatchConfig::GetOrderBatchSetup( &batchSetup,&priority )
+{
+	OrderSetup = ~~;
+	OrderPriority = 0;
+
+	Fields = ~RetouchBatchSetup~;
+	
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not access the shared database. <theErr>~ ) );
+	}
+
+	Query = ~Select RetouchBatchSetup,Priority From Orders Where ID = '<Order>'~;
+	dBase( GetValuesFor,~<Query>~,OrderSetup,OrderPriority );
+
+	else if ( ~<OrderSetup>~ != ~~ )
+	{
+		batchSetup = ~<OrderSetup>~;
+	}
+
+	if ( ~<OrderPriority>~ != ~~ && IsNumeric( ~<OrderPriority>~ ) )
+	{
+		oPriority = atof(~<OrderPriority>~);
+		if (<oPriority> > 0)
+		{
+			priority = <oPriority>;
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC BatchConfig::GetRollBatchSetup( Roll,&batchSetup )
+{
+	RollSetup = ~~;
+
+	Fields = ~RetouchBatchSetup~;
+	
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not access the shared database. <theErr>~ ) );
+	}
+
+	Query = ~Select RetouchBatchSetup From Rolls Where ID = '<Order>' and Roll = '<Roll>'~;
+	dBase( GetValuesFor,~<Query>~,OrderSetup,OrderPriority );
+
+	else if ( ~<RollSetup>~ != ~~ )
+	{
+		batchSetup = ~<RollSetup>~;
+	}
+
+	return TRUE;
+}
+
+VOID BatchConfig::BrowseForDataPath()
+{
+	StartingDirectory = ~<$App.ShareDirectory>\KparsData~;
+	StartingDirectory = MakePath( Type, UNC, ~<StartingDirectory>~);
+	if ( GetSystemSettings( ~AutoRetouching~,~EnhancementDataFolder~,DefaultPath,Enabled ) )
+	{
+		if ( !IsNULL( ~<DefaultPath>~ ) )
+		{
+			StartingDirectory = ~<DefaultPath>~;
+		}
+	}
+
+	dlg( GetInput,GetStrings,DataPath,DataPath );
+	if ( ~<DataPath>~ != ~~)
+	{
+		StartingDirectory = ~<DataPath>~;
+	}
+
+	Title = ~Find the directory to store temporary retouch data~;
+
+	if ( FileDialog( Title,~<Title>~,DefaultDirectory,~<StartingDirectory>~,DefaultFile,Translate(~In this directory~),Path,Path,Save) )
+	{
+		TheDirectory = ~<$Str.$Path.Path>~;
+
+		dlg( SetString,~<TheDirectory>~,DataPath,0 );
+		dlg( GetInput,GetStrings,DataPath,DataPath );
+		if ( ~<TheDirectory>~ != ~<DataPath>~ )
+		{
+			Warning( Translate(~The path name that you have selected contains invalid characters.\n\nThese invalid characters have been removed before placing the path name in the dialog.~) );
+		}
+	}
+}
+
+/* ***************************************************************** */
+/*   Original Image methods                                            */
+
+VOID BatchConfig::BrowseForOrigPath()
+{
+	StartingDirectory = ~<$App.Directory>\KparsData~;
+	GetSystemSettings( ~AutoRetouching~,~OriginalPath~,DefaultPath,Enabled );
+	if ( IsNULL( ~<DefaultPath>~ ) )
+	{
+		StartingDirectory = ~<DefaultPath>~;
+	}
+
+	dlg( GetInput,GetStrings,OriginalPath,OriginalPath );
+	if ( ~<OriginalPath>~ != ~~)
+	{
+		StartingDirectory = ~<OriginalPath>~;
+	}
+
+	Title = ~Find the directory to store temporary retouch data~;
+
+	if ( FileDialog( Title,~<Title>~,DefaultDirectory,~<StartingDirectory>~,DefaultFile,Translate(~In this directory~),Path,Path,Save) )
+	{
+		TheDirectory = ~<$Str.$Path.Path>~;
+
+		dlg( SetString,~<TheDirectory>~,OriginalPath,0 );
+		dlg( GetInput,GetStrings,OriginalPath,OriginalPath );
+		if ( ~<TheDirectory>~ != ~<OriginalPath>~ )
+		{
+			Warning( Translate(~The path name that you have selected contains invalid characters.\n\nThese invalid characters have been removed before placing the path name in the dialog.~) );
+		}
+	}
+}
+
+/* ***************************************************************** */
+/*   FrameListBox methods                                            */
+VOID BatchConfig::PopulateFrameListBox()
+{
+	Count = 0;
+
+	dlg( List, FrameListBox, ResetContent );
+	dlg( SetControlValue,OrderText,~<Order>~ );
+
+	Query = ~Select OrderID,Roll,Frame From <TableName> Where OrderID = '<Order>' Order by Roll,Frame~;
+
+	if ( PGenConList( List, Connection, gDP2DBLocal, Cursor, Forward, QUERY, ~<Query>~ ) )
+	{
+		while ( List( GetNext, Record ) )
+		{
+			ItemNum = dlg( List, FrameListBox, InsertItem, <Count>, ~<$pcon.Record[OrderID]>~ );
+			dlg( List, FrameListBox, SetItemText, <ItemNum>, 0, ~<$pcon.Record[Roll]> ~ );
+			dlg( List, FrameListBox, SetItemText, <ItemNum>, 1, ~<$pcon.Record[Frame]> ~ );
+			++Count;
+		}
+	}
+	dlg( List, FrameListBox, Select, 0 );
+}
+
+VOID BatchConfig::SetupList()
+{
+	dlg( SetControlValue,OrderText,~<Order>~ );
+
+	// Insert columns
+	dlg( List, FrameListBox, InsertColumn, 0, ~Roll~, Right, 85, 0 );
+	dlg( List, FrameListBox, InsertColumn, 1, ~Frame~, Left, 85, 0 );
+}
+
+NUMERIC BatchConfig::OnRefreshButton()
+{
+	// Refresh 'Orders to Analyze' list
+	PopulateFrameListBox();
+
+	return TRUE;
+}
+
+NUMERIC BatchConfig::OnRowSelected()
+{
+	// Retrieve selected item and populate Roll field
+	Item = dlg( List, FrameListBox, GetSelectedItemByIndex, 0 );
+	dlg( List, FrameListBox, GetItemText, <Item>, 0, Roll);
+	dlg( List, FrameListBox, GetItemText, <Item>, 1, Frame);
+
+	return TRUE;	
+}
+
+/* ***************************************************************** */
+/*   Action Button methods                                            */
+
+NUMERIC BatchConfig::OnProcessHere( Operation )
+{
+	dlg( GetInput );
+	DlgData( GetValues,~<Operation>Here~,DoHere,~<Operation>WS~,WSName );
+	stationID = ~<$App.ComputerName>~;
+
+	if ( <DoHere>  && ~<stationID>~ != ~<WSName>~ )
+	{
+		DlgData( SetValues,<Operation>WS,~<stationID>~ );
+		dlg( Update );
+	}
+	else if (~<stationID>~ == ~<WSName>~ )
+	{
+		DlgData( SetValues,<Operation>WS,~~ );
+		dlg( Update );
+	}
+
+	return TRUE;
+}
+
+NUMERIC BatchConfig::OnWSChange( Operation )
+{
+	dlg( GetControlValue,~<Operation>WSEditText~,WSName );
+	DlgData( GetValues,~<Operation>Here~,DoHere );
+	stationID = ~<$App.ComputerName>~;
+
+	if ( <DoHere> && ~<WSName>~ != ~<stationID>~ )
+	{
+		DoHere = FALSE;
+		dlg( SetCheck,<DoHere>,<Operation>HereCheckbox );
+		dlg( GetInput );
+	}
+
+	
+	return TRUE;
+}
+
+
+NUMERIC BatchConfig::OnApplyButton()
+{
+	dlg( GetInput );
+	DlgData( GetValues,BatchSetup,batchSetup,BatchComplete,BatchComplete,
+						DataPath,DataPath,OverwriteOriginal,OverWrite,
+						OriginalPrefix,Prefix,OriginalSuffix,Suffix,
+						OriginalPath,ImgPath,RetouchState,State,
+						Priority,Priority,AutoBatch,AutoBatch,SingleFace,SingleFace,
+						BatchWS,BatchWS,ReviewWS,ReviewWS,MergeWS,MergeWS);
+
+	if ( ~<batchSetup>~ == ~~ && ~<State>~ == ~QueuedForBatch~ )
+	{
+		msg = ~You must select a batch setup for the selected images.~;
+		return Warning( Translate( ~<msg>~ ) );
+	}
+
+	if ( strlen( ~<Prefix>~ ) > 10 )
+	{
+		msg = ~The Original Prefix must be 10 characters or less.~;
+		return Warning( Translate( ~<msg>~ ) );
+	}
+
+	if ( strlen( ~<Suffix>~ ) > 10 )
+	{
+		msg = ~The Original Suffix must be 10 characters or less.~;
+		return Warning( Translate( ~<msg>~ ) );
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	if ( <AutoBatch> )
+	{
+		if ( !CheckAutoBatchDB( dBase ) )
+		{
+			txtMsg = ~Auto Batch is selected, but all of the setting types have not been defined.\n Select Yes to assign each of the settings to a batch setup (DarkSkinHighBlemish, DarkSkinLowBlemish, LightSkinHighBlemish, LightSkinLowBlemish) and select a Default Setting.\n Select NO to turn off AutoBatch.~;
+			if ( MessageBox( Translate( ~<txtMsg>~ ),YESNO ) == YES )
+			{
+				Action = ACTION DOC ( RetouchBatchSetupsDoc OpenOnce RetouchBatchSetupsDoc "Init();" );
+				return PerformActions( Action );
+			}
+			else
+			{
+				AutoBatch = 0;
+				DlgData( SetValues,AutoBatch,0 );
+				dlg( Update );
+			}
+		}
+	}
+
+	WaitCursor( Begin );
+
+	Fields = ~BatchSetup,Priority,RetouchState,OverwriteOriginal,OriginalPrefix,OriginalSuffix,OriginalPath,IntermediateDataPath,JPEGQuality,FileResolution,BatchCompleteProcessing,SubmittedAt,AutoBatch,SingleFace,BatchID,ReviewID,MergeID~;
+	Values = ~'<batchSetup>',<priority>,'<State>',<OverWrite>,'<Prefix>','<Suffix>','<ImgPath>','<DataPath>',100,250,'<BatchComplete>','<$Date.SortableDateTime>',<AutoBatch>,<SingleFace>,'<BatchWS>','<ReviewWS>','<MergeWS>'~;
+
+	UpdateFields = ~BatchSetup='<batchSetup>',Priority=<priority>,RetouchState='<State>',OverwriteOriginal=<OverWrite>,OriginalPrefix='<Prefix>',OriginalSuffix='<Suffix>',OriginalPath='<ImgPath>',IntermediateDataPath='<DataPath>',JPEGQuality=100,FileResolution=250,BatchCompleteProcessing='<BatchComplete>',AutoBatch=<AutoBatch>,SingleFace=<SingleFace>,BatchID='<BatchWS>',ReviewID='<ReviewWS>',MergeID='<MergeWS>'~;
+
+	TotalSelected = dlg( List, FrameListBox, GetSelectedCount);
+	count = 0;
+
+	while ( <count> < <TotalSelected> )
+	{
+		Item = dlg( List, FrameListBox, GetSelectedItemByIndex, <count> );
+		dlg( List, FrameListBox, GetItemText, <Item>, 0, Roll);
+		dlg( List, FrameListBox, GetItemText, <Item>, 1, Frame);
+
+		if ( ~<Order>~ == ~~ )
+			{ return Warning( Translate(~There is no OrderID~) ) };
+
+		Query = ~Select RetouchState From RetouchImages Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+		Exists = dBase( RecordCountFor,~<Query>~ );
+		dBase( GetValuesFor,~<Query>~,retouchState );
+
+		if ( !<Exists> )
+		{
+			Fields2 = ~OrderID,Roll,Frame,<Fields>~;
+			Values2 = ~'<Order>','<Roll>','<Frame>',<Values>~;
+
+			Cmd = ~Insert Into RetouchImages(<Fields2>) Values(<Values2>)~;
+
+			if ( !dbase( CMD,~<Cmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				WaitCursor( End );
+				return Warning( Translate( ~Database update failed. <theErr>~ ) );
+			}
+
+			Cmd2 = ~Delete from <TableName> Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+			if ( !gDP2DBLocal( CMD,~<Cmd2>~ ) )
+			{
+				gDP2DBLocal( GetErrorDescription,theErr );
+				WaitCursor( End );
+				return Warning( Translate( ~Database update failed. <theErr>~ ) );
+			}
+
+		}
+		else
+		{
+			if ( ~<retouchState>~ != ~InBatch~ && ~<retouchState>~ != ~InReview~ && ~<retouchState>~ != ~InMerge~ && ~<retouchState>~ != ~InInteractive~ )
+			{
+				Cmd = ~Update RetouchImages Set <UpdateFields> WHERE OrderID = '<Order>' And Roll = '<Roll>' And Frame = '<Frame>'~;
+
+				if ( !dbase( CMD,~<Cmd>~ ) )
+				{
+					dbase( GetErrorDescription,theErr );
+					WaitCursor( End );
+					return Warning( Translate( ~Database update failed. <theErr>~ ) );
+				}
+			}
+			else
+			{
+				return Warning( Translate( ~The image is currently being retouched.~ ) );
+			}
+		}
+		<++count>;
+	}
+
+	dlg( List, FrameListBox, DeleteSelected );
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC BatchConfig::OnApplyAllButton()
+{
+	TotalCount = dlg( List, FrameListBox, GetItemCount);
+	count = 0;
+	dlg( List, FrameListBox,SetItemState,0,<TotalCount>,SELECTED,SELECTED );
+
+	return OnApplyButton();
+}
+
+
+NUMERIC BatchConfig::DoCancelButton()
+{
+	DeleteTempTable();
+	return BaseDialog::DoCancelButton();
+}
+
+
+/* ***************************************************************** */
+/*   Transient RetouchOrder table methods                            */
+NUMERIC BatchConfig::SetupConnection()
+{
+	ForgetGlobal( gDP2DBLocal );
+	if ( !Ado( gDP2DBLocal,ConnectLocal ) )
+	{
+		gDP2DBLocal( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	Global( gDP2DBLocal );
+
+	return TRUE;
+}
+
+
+NUMERIC BatchConfig::CheckExistingOrder( OrderID )
+{
+	if ( ~<OrderID>~ != ~<Order>~ )
+	{
+		Cmd = ~Delete from <TableName> Where OrderID = '<OrderID>'~;
+		if (!gDP2DBLocal( Cmd, ~<Cmd>~))
+		{
+			gDP2DBLocal( GetErrorDescription, theErr );
+			return Warning( Translate(~Cmd Failed <Cmd>. <theErr>~) );
+		}
+		dlg( List, FrameListBox, ResetContent );
+	}
+	
+	Order = ~<OrderID>~;
+	return TRUE;
+}
+
+NUMERIC BatchConfig::DeleteTempTable()
+{
+	// Delete the contents of the temporary table
+	
+		Cmd2 = ~Delete from <TableName>~;
+		if ( !gDP2DBLocal( CMD,~<Cmd2>~ ) )
+		{
+			gDP2DBLocal( GetErrorDescription,theErr );
+			WaitCursor( End );
+			return Warning( Translate( ~Database update failed. <theErr>~ ) );
+		}
+	
+	return TRUE;
+}
+
+NUMERIC BatchConfig::AddOrderRollFrameToTable(OrderID,Roll,Frame)
+{
+	// Add the data to the table
+
+	Fields = ~OrderID,Roll,Frame~;
+	Values = ~'<Order>','<Roll>','<Frame>'~;
+
+	Query = ~Select count(*) From <TableName> Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+	Exists = gDP2DBLocal( RecordCountFor,~<Query>~ );
+
+	if ( !<Exists> )
+	{
+		Cmd = ~Insert Into <TableName>(<Fields>) Values(<Values>)~;
+		
+		if (!gDP2DBLocal( Cmd, ~<Cmd>~))
+		{
+			gDP2DBLocal( GetErrorDescription, theErr );
+			return Warning( Translate(~Cmd Failed <Cmd>. <theErr>~) );
+		}
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC BatchConfig::AddOrderRollToTable(OrderID,Roll)
+{
+	// Add the data to the table
+
+	Query = ~Select Roll,Frame From Images Where OrderID = '<Order>' AND Roll = '<Roll>'~;
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Query Failed <Query>. <theErr>~) );
+	}
+
+	Fields = ~OrderID,Roll,Frame~;
+
+	while ( List( GetNext,Image ) )
+	{
+		Roll = ~<$pcon.Image[Roll]>~;
+		Frame = ~<$pcon.Image[Frame]>~;
+		Values = ~'<OrderID>','<Roll>','<Frame>'~;
+
+		Query = ~Select count(*) From <TableName> Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		Exists = gDP2DBLocal( RecordCountFor,~<Query>~ );
+		if ( !<Exists> )
+		{
+			Cmd = ~Insert Into <TableName>(<Fields>) Values(<Values>)~;
+			
+			if (!gDP2DBLocal( Cmd, ~<Cmd>~))
+			{
+				gDP2DBLocal( GetErrorDescription, theErr );
+				return Warning( Translate(~Cmd Failed <Cmd>. <theErr>~) );
+			}
+		}
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC BatchConfig::AddOrderToTable(OrderID)
+{
+	// Add the data to the table
+
+	Query = ~Select Roll,Frame From Images Where OrderID = '<Order>'~;
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Query Failed <Query>. <theErr>~) );
+	}
+
+	Fields = ~OrderID,Roll,Frame~;
+
+	while ( List( GetNext,Image ) )
+	{
+		Roll = ~<$pcon.Image[Roll]>~;
+		Frame = ~<$pcon.Image[Frame]>~;
+		Values = ~'<OrderID>','<Roll>','<Frame>'~;
+
+		Query = ~Select count(*) From <TableName> Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		Exists = gDP2DBLocal( RecordCountFor,~<Query>~ );
+		if ( !<Exists> )
+		{
+			Cmd = ~Insert Into <TableName>(<Fields>) Values(<Values>)~;
+			
+			if (!gDP2DBLocal( Cmd, ~<Cmd>~))
+			{
+				gDP2DBLocal( GetErrorDescription, theErr );
+				return Warning( Translate(~Cmd Failed <Cmd>. <theErr>~) );
+			}
+		}
+	}
+	
+	return TRUE;
+}
+
+
+/* ********************************************************** */
+
+VOID Init( OrderID,Roll,Frame )
+{
+	if ( !Defined( KarsConfig ) )
+	{
+		Class( BatchConfig,Extends,BaseDialog,
+						Member,Order,Str,~<OrderID>~,
+						Member,TableName,Str,~RetouchOrder~,
+						Member,DialogSetupComplete,Numeric,0 );
+
+		BatchConfig( New,KarsConfig );
+
+		KarsConfig.DefineDictionary();
+		KarsConfig.SetupConnection();
+
+		KarsConfig.AddOrderRollFrameToTable( ~<OrderID>~,~<Roll>~,~<Frame>~ );
+
+		Global( KarsConfig );
+		return;
+	}
+
+	KarsConfig.CheckExistingOrder( ~<OrderID>~ );
+
+	if ( DefinedAndNotNull( Roll ) && DefinedAndNotNull( Frame ) )
+	{
+		KarsConfig.AddOrderRollFrameToTable( ~<OrderID>~,~<Roll>~,~<Frame>~ );
+	}
+	else if ( DefinedAndNotNull( Roll ) )
+	{
+		KarsConfig.AddOrderRollToTable( ~<OrderID>~,~<Roll>~ );
+	}
+	else
+	{
+		KarsConfig.AddOrderToTable( ~<OrderID>~ );
+	}
+
+	KarsConfig.ReOpen();
+}
+
+VOID OnAddImagesComplete()
+{
+	dlgExists = KarsConfig.Get( DialogSetupComplete );
+	if ( !<dlgExists> )
+	{
+		KarsConfig.DefineDialog();
+		KarsConfig.SetupList();
+	}
+	
+	KarsConfig.OnRefreshButton();
+}
+

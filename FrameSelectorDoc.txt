@@ -1,0 +1,4265 @@
+
+UpdateItemsAfterCreating = ~OrderItemsDoc~;  // defining this indicates to udate OrderItems display after items created.
+
+Include: ~FormattingRoutines~;
+Include: ~GetFullLayout~;
+Include: ~MakeImageWritable~;
+Include: ~Utilities2~;
+Include: ~KparsUtilities~;
+Include: ~../Scripts/Cmds~;
+Include: ~ConversionUtilities~;
+
+if ( !DataDict( TheDictionary,Get,DDOpenForRetouch ) )
+{
+	Dictionary: DDOpenForRetouch
+		Fields:	Name OrderID			Type Text
+		Fields:	Name ImagesOrderID		Type Text
+		Fields:	Name Roll				Type Text
+		Fields:	Name Frame				Type Text
+		Fields:	Name WhichFrames		Type Text
+		Fields: Name SubjectID			Type Text
+		Fields:	Name ScanDone			Type Long
+		Fields:	Name RetouchDone		Type Long
+		Fields:	Name KarsDone			Type Long
+		Fields:	Name KarsBatchDone		Type Long
+		Fields: Name ColorCorrectDone	Type Long
+		Fields: Name RejectDone			Type Long
+		Fields: Name Qty				Type Long
+		Fields: Name OpenOrderItem		Type Long
+		Fields: Name SeeProducts		Type Long
+		Fields: Name StayOnTop			Type Long
+		Fields: Name RemakesOnly		Type Long
+		Fields: Name CropX				Type Double
+		Fields: Name CropY				Type Double
+		Fields: Name CropWidth			Type Double
+		Fields: Name CropLength			Type Double
+		Fields: Name CropName			Type Text
+		Fields: Name Product			Type Text
+		Fields: Name ProductStatus		Type Text
+		Fields:	Name CustomerID			Type Text
+
+	StringList:	Name FramesToRetouchList
+	Hang:	FramesToRetouchList	~[STRINGS]~
+
+	StringList:	Name FramesForKarsList
+	Hang:	FramesForKarsList	~[STRINGS]~
+
+	StringList: Name NavigatorCropsList
+	Hang:	NavigatorCropsList	~[STRINGS]~ ;
+
+	StringList: Name ProductstoOrderList
+	Hang:	ProductstoOrderList	~[STRINGS]~ ;
+
+	StringList: Name RollList
+	Hang:	RollList ~[STRINGS]~ ;
+}
+
+Define: DlgData Using DDOpenForRetouch
+		Fields:	WhichFrames		~All~
+				SeeProducts		FALSE
+				StayOnTop		1
+				Qty				1  ;
+
+Left = 5; Top = 5;		hGap = 4; vGap = 2;
+TextHeight = 20;        TextWidth = 110;  
+ButtonHeight = 20;		ButtonWidth = 70;
+StaticTextWidth = 50;	StaticTextHeight = 20;
+EditTextWidth = 200;	EditTextHeight = 20;
+ComboBoxWidth = 90;	ComboBoxHeight = 120;
+x = $Left;				y = $Top;
+
+VOID DefineDialog()
+{
+	DialogLeft = App( thisApp,MainWindow,GetClientWidth ) / 2;
+
+    Define: DlgDefinition Using DDWinDef
+            Fields: Position			$DialogLeft 0 $DialogWidth $DialogHeight
+                    Title				Translate( ~Navigate~ )
+                    TypeName			~Dialog~
+					WantsMinimizeBox	TRUE
+					StatusBar			~2 60 40~
+					HACTIONSTEXT		ACTION SHOWHELPPAGE ( KPISHelpFile "Navigator.htm" ) 
+					DropActionsText		ACTION EXEC ( HandleDrop() )
+                    OACTIONSTEXT		ACTION EXEC ( CloseDialog() ) ;
+
+    Contains: InListOrder
+    {
+	    Define: OrderIDPrompt Using DDWinCtrlDef AsSymbol OrderIDPrompt 
+            Fields: TypeName		Button
+                    Text			Translate( ~Order~ )
+					DActionsText	ACTION EXEC ( OnOrderButton() )	
+                    Position		$x,$y,$StaticTextWidth,$StaticTextHeight
+
+        Define: OrderIDField Using DDWinCtrlDef AsSymbol OrderIDField 
+            Fields: TypeName		MaskedEditText  
+                    Position		OrderIDPrompt(GetRight,Position) + $hGap,OrderIDPrompt(GetTop,Position),<EditTextWidth> ,<EditTextHeight> 
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+                    GenConName       THIS
+                    GenConField		~OrderID~
+                    Tooltip         ~Select an Order~
+					Mask			~<$[DATABASE FieldTypes].OrderID[Mask]>~
+					PromptChar		~<$[DATABASE FieldTypes].OrderID[PromptChar]>~
+					AllowedChars	~<$[DATABASE FieldTypes].OrderID[AllowedChars]>~
+					DisallowedChars ~<$[DATABASE FieldTypes].OrderID[DisallowedChars]>~
+					WantReturnKey	~T~
+					ReturnKeyActionsText ACTION EXEC ( HandleOrderIDReturnKey(~~) )
+
+	    Define: RollPrompt Using DDWinCtrlDef AsSymbol RollPrompt 
+            Fields: TypeName		Button
+                    Text			Translate( ~Roll~ )
+					DActionsText	ACTION EXEC ( SeeRollsForOrder() )
+                    Position		OrderIDPrompt(GetLeft,Position),OrderIDPrompt(GetBottom,Position) + $vGap,$StaticTextWidth,$StaticTextHeight
+
+        Define: RollsCombolBox Using DDWinCtrlDef AsSymbol RollsCombolBox 
+            Fields: TypeName		SComboBox  
+                    Position		RollPrompt(GetRight,Position) + $hGap,RollPrompt(GetTop,Position),<EditTextWidth>,<EditTextHeight> * 4
+					IActionsText	ACTIONS ( GetList(RollList) Get )
+					DActionsText	ACTION EXEC ( NewRollSelected() )	// 
+					OActionsText	ACTIONS ( Save )
+					DropDownActionsText ACTION CALL ( UpdateRollsCombo(0)  )
+					ReturnKeyActionsText ACTION EXEC ( NewRollSelected()  )
+					Mask			~<$[DATABASE FieldTypes].Roll[Mask]>~
+					PromptChar		~<$[DATABASE FieldTypes].Roll[PromptChar]>~
+					AllowedChars	~<$[DATABASE FieldTypes].Roll[AllowedChars]>~
+					DisallowedChars ~<$[DATABASE FieldTypes].Roll[DisallowedChars]>~
+                    GenConName       THIS
+                    GenConField		~Roll~
+					IsTabStop		T
+                    Tooltip         ~Select a roll~;
+
+	    Define: FramePrompt Using DDWinCtrlDef AsSymbol FramePrompt 
+            Fields: TypeName		Button
+                    Text			Translate( ~Frame~ )
+					DActionsText	ACTION EXEC ( SeeFramesForOrder() )
+                    Position		OrderIDPrompt(GetLeft,Position),RollPrompt(GetBottom,Position) + $vGap,$StaticTextWidth,$StaticTextHeight
+
+        Define: FrameField Using DDWinCtrlDef AsSymbol FrameField 
+            Fields: TypeName		MaskedEditText  
+                    Position		FramePrompt(GetRight,Position) + $hGap,FramePrompt(GetTop,Position),<EditTextWidth>-55,<EditTextHeight> 
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+                    GenConName       THIS
+                    GenConField		~Frame~
+					Mask			~<$[DATABASE FieldTypes].Frame[Mask]>~
+					PromptChar		~<$[DATABASE FieldTypes].Frame[PromptChar]>~
+					AllowedChars	~<$[DATABASE FieldTypes].Frame[AllowedChars]>~
+					DisallowedChars ~<$[DATABASE FieldTypes].Frame[DisallowedChars]>~
+					WantReturnKey	~T~
+					ReturnKeyActionsText ACTION EXEC ( NewFrameTyped() )
+                    Tooltip         ~Type a frame number~;
+
+	    Define: RemakeForFrameButton Using DDWinCtrlDef AsSymbol RemakeForFrameButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Remake~ )
+					IsHidden		RunningVersion( 5.05 ) ? F : T
+					Tooltip			Translate( ~Remake OrderItems that use the selected image~ )
+					DActionsText	ACTION EXEC ( RemakeForFrame() )
+                    Position		FrameField(GetRight,Position)+$hGap,FrameField(GetTop,Position)+2,50,$StaticTextHeight-2
+
+	    Define: SubjectIDPrompt Using DDWinCtrlDef AsSymbol SubjectIDPrompt 
+            Fields: TypeName		Button
+                    Text			Translate( ~Su&bject~ )
+					DActionsText	ACTION EXEC ( ViewSubjectInfoData(All) )
+                    Position		FramePrompt(GetLeft,Position),FramePrompt(GetBottom,Position) + $vGap,$StaticTextWidth,$StaticTextHeight
+
+        Define: SubjectIDField Using DDWinCtrlDef AsSymbol SubjectIDField 
+            Fields: TypeName		MaskedEditText  
+                    Position		SubjectIDPrompt(GetRight,Position) + $hGap,SubjectIDPrompt(GetTop,Position),<EditTextWidth>,<EditTextHeight> 
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+                    GenConName       THIS
+                    GenConField		~SubjectID~
+                    Tooltip         ~Type a Subject ID~
+					Mask			~<$[DATABASE FieldTypes].SubjectID[Mask]>~
+					PromptChar		~<$[DATABASE FieldTypes].SubjectID[PromptChar]>~
+					AllowedChars	~<$[DATABASE FieldTypes].SubjectID[AllowedChars]>~
+					DisallowedChars ~<$[DATABASE FieldTypes].SubjectID[DisallowedChars]>~
+					WantReturnKey	~T~
+					ReturnKeyActionsText ACTION EXEC ( NewSubjectIDTyped() )
+
+	    Define: CropPrompt Using DDWinCtrlDef AsSymbol CropPrompt 
+            Fields: TypeName		Button
+                    Text			Translate( ~&Crop~ )
+					DActionsText	ACTION EXEC ( OnUseLastCrop() )
+                    Position		FramePrompt(GetLeft,Position),SubjectIDPrompt(GetBottom,Position) + $vGap,$StaticTextWidth,$StaticTextHeight ;
+
+		Define: CropsComboBox Using DDWinCtrlDef AsSymbol CropsComboBox 
+			Fields: TypeName        SComboBox  
+					Position		CropPrompt(GetRight,Position) + $hGap,CropPrompt(GetTop,Position),<ComboBoxWidth>,200
+					IActionsText	ACTIONS ( UpdateList(NavigatorCropsList "Select Name From Crops Order By Name" Name) GetList(NavigatorCropsList) Get )
+					DropDownActionsText ACTIONS ( UpdateList(NavigatorCropsList "Select Name From Crops Order By Name" Name) GetList(NavigatorCropsList) Get  )
+					DActionsText	ACTIONS ( Save "Exec(ChangeCrop(TRUE))" )
+					OActionsText	ACTIONS ( Save )
+					GenConName		THIS
+					GenConField		~CropName~
+					Tooltip			~Select from a list of crops~;
+
+		Define: SaveCropButton Using DDWinCtrlDef AsSymbol SaveCropButton 
+			Fields:	TypeName		Button
+					Text			Translate( ~&Save~ )
+					Position		CropsComboBox(GetRight,Position)+ $hGap,CropsComboBox(GetTop,Position),38,<ButtonHeight>
+					DActionsText	ACTION EXEC  ( RememberCrop() ) 
+					Tooltip			Translate( ~Remember the current crop~ );
+
+		Define: ViewCropsButton Using DDWinCtrlDef AsSymbol ViewCropsButton 
+			Fields:	TypeName		Button
+					Text			Translate( ~?~ )
+					Position		SaveCropButton(GetRight,Position)+ $hGap,SaveCropButton(GetTop,Position),20,<ButtonHeight>
+					DActionsText	ACTION EXEC  ( OnViewCrops() ) 
+					Tooltip			Translate( ~View the saved crops~ );
+
+
+		Define: LastCropButton Using DDWinCtrlDef AsSymbol LastCropButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Add~ )
+                    Position		ViewCropsButton(Getright,Position) + $hGap,ViewCropsButton(GetTop,Position),38, $ButtonHeight
+                    DActionsText	ACTION EXEC ( OnSaveCrop() ) 
+                    Tooltip			Translate( ~Add the current crop to the list of saved crops~ );
+
+		IF 0
+		{
+			CropFieldWidth = 49;
+
+			Define: TheCropXField Using DDWinCtrlDef AsSymbol TheCropXField
+				Fields: GENCONFIELD		CropX
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						POSITION		CropPrompt(Getright,Position) + $hGap,
+										CropPrompt(GetTop,Position),
+										<CropFieldWidth>, <EditTextHeight> 
+						TOOLTIP			~X position (in percent) of the middle of the crop~
+						TYPENAME		StaticText // MaskedEditText
+						Mask			~######~
+						AllowedChars	~.~
+						PromptChar		~ ~ ;
+
+			Define: TheCropYField Using DDWinCtrlDef AsSymbol TheCropYField
+				Fields: GENCONFIELD		CropY
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						POSITION		TheCropXField(Getright,Position) + 1,
+										TheCropXField(GetTop,Position),
+										<CropFieldWidth>, <EditTextHeight> 
+						TOOLTIP			~Y position (in percent) of the middle of the crop~
+						TYPENAME		StaticText // MaskedEditText
+						Mask			~######~
+						AllowedChars	~.~
+						PromptChar		~ ~ ;
+
+			Define: TheCropWidthField Using DDWinCtrlDef AsSymbol TheCropWidthField
+				Fields: GENCONFIELD		CropWidth
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						POSITION		TheCropYField(Getright,Position) + 1,
+										TheCropYField(GetTop,Position),
+										<CropFieldWidth>, <EditTextHeight> 
+						TOOLTIP			~Width (in percent) of the crop ~
+						TYPENAME		StaticText // MaskedEditText
+						Mask			~######~
+						AllowedChars	~.~
+						PromptChar		~ ~ ;
+
+			Define: TheCropLengthField Using DDWinCtrlDef AsSymbol TheCropLengthField
+				Fields: GENCONFIELD		CropLength
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						POSITION		TheCropWidthField(Getright,Position) + 1,TheCropWidthField(GetTop,Position),<CropFieldWidth>, <EditTextHeight> 
+						TOOLTIP			~Length (in percent) of the crop~
+						TYPENAME		StaticText // MaskedEditText
+						Mask			~######~
+						AllowedChars	~.~
+						PromptChar		~ ~ ;
+		}
+
+
+		DialogWidth = LastCropButton(GetRight,Position) + ($hGap * 3);
+
+		Define: DoScanButton Using DDWinCtrlDef AsSymbol DoScanButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Scan~ )
+					Position		$x, CropPrompt(Getbottom,Position) + $vGap*3,$StaticTextWidth,  <StaticTextHeight>
+                    DActionsText	ACTION EXEC ( OnDoScanButton() ) 
+                    Tooltip			Translate( ~Scan this Order~ );
+
+		Define: ScanBox Using DDWinCtrlDef AsSymbol ScanBox 
+			Fields: TypeName		RadioButton
+					Position		DoScanButton(GetRight,Position) + $hGap DoScanButton(GetTop,Position), 20,  <StaticTextHeight>
+					GenConName		THIS
+                    GenConField		~WhichFrames~	
+					IActionsText    ACTIONS (  Get  )
+					DActionsText	ACTIONS ( CheckButton(ScanBox) UncheckButton(RejectBox) UncheckButton(AllBox) UncheckButton(RetouchBox) UncheckButton(KarsBox) UncheckButton(KarsBatchBox) UncheckButton(ColorCorrectBox) Save "Exec(UpdateFrames();)" )
+					OActionsText	ACTIONS ( Save )
+					RadioTrueValue	~Scan~
+					Tooltip         Translate(~See only the frames needing scanning or rescanning~)
+
+		Define: ScanDoneBox Using DDWinCtrlDef AsSymbol ScanDoneBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~~ )
+					GenConName		THIS
+                    GenConField		~ScanDone~	
+					Position		ScanBox(GetRight,Position) + $hGap,ScanBox(GetTop,Position), 20,  <StaticTextHeight>
+                    IActionsText    ACTIONS (  Get  )
+					DActionsText	ACTIONS ( Save "Exec(OnScanDoneBox())" ) 
+					OActionsText	ACTIONS ( Save )
+                    Tooltip			Translate( ~Identify the image as needing scanned or re-scanned (Checked).  When unchecking, DP2 will add a thumbnail to the image to replace the one lost by your retouching software.~ );
+
+		Define: DoRetouchButton Using DDWinCtrlDef AsSymbol DoRetouchButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Re&touch~ )
+					Position		DoScanButton(GetLeft,Position),DoScanButton(Getbottom,Position) + $vGap, $StaticTextWidth,  <StaticTextHeight>
+                    DActionsText	ACTION EXEC ( OnDoRetouchButton() ) 
+                    Tooltip			Translate( ~Retouch the selected image~ );
+
+		Define: RetouchBox Using DDWinCtrlDef AsSymbol RetouchBox 
+			Fields: TypeName		RadioButton
+					Position		DoRetouchButton(GetRight,Position) + $hGap,DoRetouchButton(GetTop,Position), 20,  <StaticTextHeight>
+					GenConName		THIS
+                    GenConField		~WhichFrames~	
+					IActionsText    ACTIONS ( Get )
+					DActionsText	ACTIONS ( CheckButton(RetouchBox) UncheckButton(RejectBox) UncheckButton(AllBox) UncheckButton(ScanBox) UncheckButton(ColorCorrectBox) UncheckButton(KarsBox) UncheckButton(KarsBatchBox) Save "Exec(UpdateFrames();)" )
+					OActionsText	ACTIONS ( Save )
+					RadioTrueValue	~Retouch~
+					Tooltip         Translate(~See Only the frames needing retouching~)
+
+		Define: RetouchDoneBox Using DDWinCtrlDef AsSymbol RetouchDoneBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~~ )
+					GenConName		THIS
+                    GenConField		~RetouchDone~	
+					Position		RetouchBox(GetRight,Position) + $hGap,RetouchBox(GetTop,Position), 20,  <StaticTextHeight>
+                    IActionsText    ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save "Exec(OnRetouchDoneBox())" ) 
+					OActionsText	ACTIONS ( Save )
+                    Tooltip			Translate( ~Identify the image as needing retouched (Checked)~ );
+	
+		yPosition = DoRetouchButton(GetBottom,Position);
+
+//begin Kars
+		if ( <EnableKpars> )
+		{
+			Define: DoKarsButton Using DDWinCtrlDef AsSymbol DoKarsButton 
+				Fields: TypeName		Button
+						Text			Translate( ~Auto Retouch~ )
+						Position		DoScanButton(GetLeft,Position),DoRetouchButton(Getbottom,Position) + $vGap, $StaticTextWidth,  <StaticTextHeight>*1.75
+						DActionsText	ACTION EXEC ( OnDoKarsButton() ) 
+						Tooltip			Translate( ~Retouch the selected image with Kodak Professional Auto Retouching~ )
+						WordWrap		1
+						IsEnabled		<EnableKpars>
+						IsHidden		!<EnableKpars>;
+
+			Define: KarsBox Using DDWinCtrlDef AsSymbol KarsBox 
+				Fields: TypeName		RadioButton
+						Position		DoKarsButton(GetRight,Position) + $hGap,DoKarsButton(GetTop,Position), 20,  <StaticTextHeight>
+						GenConName		THIS
+						GenConField		~WhichFrames~	
+						IActionsText    ACTIONS ( Get )
+						DActionsText	ACTIONS ( CheckButton(KarsBox) UncheckButton(KarsBatchBox) UncheckButton(RejectBox) UncheckButton(AllBox) UncheckButton(ScanBox) UncheckButton(ColorCorrectBox) UncheckButton(RetouchBox) Save "Exec(UpdateFrames();)" )
+						OActionsText	ACTIONS ( Save )
+						RadioTrueValue	~KPARSReview~
+						IsEnabled		<EnableKpars>
+						IsHidden		!<EnableKpars>
+						Tooltip         Translate(~See Only the frames needing retouching with Kodak Professional Auto Retouching~);
+
+			Define: KarsDoneBox Using DDWinCtrlDef AsSymbol KarsDoneBox 
+				Fields: TypeName		CheckBox
+						Text			Translate( ~~ )
+						GenConName		THIS
+						GenConField		~KarsDone~	
+						Position		KarsBox(GetRight,Position) + $hGap,KarsBox(GetTop,Position), 20,  <StaticTextHeight>
+						IActionsText    ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save "Exec(OnKarsDoneBox(TRUE,~QueuedForReview~))" ) 
+						OActionsText	ACTIONS ( Save )
+						IsEnabled		<EnableKpars>
+						IsHidden		!<EnableKpars>
+						Tooltip			Translate( ~Identify the image as needing retouched with KPARS (Checked)~ );
+
+			Define: DoKarsBatchButton Using DDWinCtrlDef AsSymbol DoKarsBatchButton 
+				Fields: TypeName		Button
+						Text			Translate( ~Batch &Retouch~ )
+						Position		DoScanButton(GetLeft,Position),DoKarsButton(Getbottom,Position) + $vGap, $StaticTextWidth,  <StaticTextHeight>*1.75
+						DActionsText	ACTION EXEC ( OnDoKarsBatchButton() ) 
+						Tooltip			Translate( ~Start Kodak Professional Auto Retouching batch mode processing~ )
+						WordWrap		1
+						IsEnabled		<EnableKpars>
+						IsHidden		!<EnableKpars>;
+
+			Define: KarsBatchBox Using DDWinCtrlDef AsSymbol KarsBatchBox 
+				Fields: TypeName		RadioButton
+						Position		DoKarsBatchButton(GetRight,Position) + $hGap,DoKarsBatchButton(GetTop,Position), 20,  <StaticTextHeight>
+						GenConName		THIS
+						GenConField		~WhichFrames~	
+						IActionsText    ACTIONS ( Get )
+						DActionsText	ACTIONS ( CheckButton(KarsBatchBox) UncheckButton(KarsBox) UncheckButton(RejectBox) UncheckButton(AllBox) UncheckButton(ScanBox) UncheckButton(ColorCorrectBox) UncheckButton(RetouchBox) Save "Exec(UpdateFrames();)" )
+						OActionsText	ACTIONS ( Save )
+						RadioTrueValue	~KPARSBatch~
+						IsEnabled		<EnableKpars>
+						IsHidden		!<EnableKpars>
+						Tooltip         Translate(~See Only the frames needing batch retouching with KPARS~);
+
+			Define: KarsBatchDoneBox Using DDWinCtrlDef AsSymbol KarsBatchDoneBox 
+				Fields: TypeName		CheckBox
+						Text			Translate( ~~ )
+						GenConName		THIS
+						GenConField		~KarsBatchDone~	
+						Position		KarsBatchBox(GetRight,Position) + $hGap,KarsBatchBox(GetTop,Position), 20,  <StaticTextHeight>
+						IActionsText    ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save "Exec(OnKarsDoneBox(FALSE,~BatchSetupNeeded~))" ) 
+						OActionsText	ACTIONS ( Save )
+						IsEnabled		<EnableKpars>
+						IsHidden		!<EnableKpars>
+						Tooltip			Translate( ~Identify the image as needing batch retouching with KPARS (Checked)~ );
+
+			yPosition = DoKarsBatchButton(GetBottom,Position);
+		}
+
+
+		Define: DoColorCorrectButton Using DDWinCtrlDef AsSymbol DoColorCorrectButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~&Adjust~ )
+					Position		DoScanButton(GetLeft,Position),<yPosition> + $vGap, $StaticTextWidth,  <StaticTextHeight>
+                    DActionsText	ACTION EXEC ( OnDoColorCorrectButton() ) 
+                    Tooltip			Translate( ~Color correct the selected image~ );
+
+		Define: ColorCorrectBox Using DDWinCtrlDef AsSymbol ColorCorrectBox 
+			Fields: TypeName		RadioButton
+					Position		DoColorCorrectButton(GetRight,Position)+$hGap,DoColorCorrectButton(GetTop,Position), ScanBox(GetWidth,Position),  <StaticTextHeight>
+					GenConName		THIS
+                    GenConField		~WhichFrames~	
+					IActionsText    ACTIONS ( Get )
+					DActionsText	ACTIONS ( CheckButton(ColorCorrectBox) UncheckButton(RejectBox) UncheckButton(AllBox) UncheckButton(ScanBox) UncheckButton(RetouchBox) UncheckButton(KarsBox) UncheckButton(KarsBatchBox) Save "Exec(UpdateFrames();)" )
+					OActionsText	ACTIONS ( Save )
+					RadioTrueValue	~Correct~
+					Tooltip         Translate(~See only the frames needing image adjustment~)
+
+		Define: ColorCorrectDoneBox Using DDWinCtrlDef AsSymbol ColorCorrectDoneBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~~ )
+					GenConName		THIS
+                    GenConField		~ColorCorrectDone~	
+					Position		ColorCorrectBox(GetRight,Position) + $hGap,ColorCorrectBox(GetTop,Position), 20,  <StaticTextHeight>
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save "Exec(OnColorCorrectDoneBox())" ) 
+					OActionsText	ACTIONS ( Save )
+                    Tooltip			Translate( ~Identify the image as needing image adjustment (Checked)~ );
+
+		Define: DoRejectButton Using DDWinCtrlDef AsSymbol DoRejectButton 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Reject~ )
+					RightJustified	TRUE
+					Position		DoColorCorrectButton(GetLeft,Position),DoColorCorrectButton(GetBottom,Position)+$vGap, $StaticTextWidth,  <StaticTextHeight>
+
+		Define: RejectBox Using DDWinCtrlDef AsSymbol RejectBox 
+			Fields: TypeName		RadioButton
+					Position		DoRejectButton(Getright,Position)+$hGap,DoRejectButton(GetTop,Position), 20,  <StaticTextHeight>
+					GenConName		THIS
+                    GenConField		~WhichFrames~	
+					IActionsText    ACTIONS ( Get )
+					DActionsText	ACTIONS ( CheckButton(RejectBox) UncheckButton(ColorCorrectBox) UncheckButton(AllBox) UncheckButton(ScanBox) UncheckButton(RetouchBox) UncheckButton(KarsBox) UncheckButton(KarsBatchBox) Save "Exec(UpdateFrames();)" )
+					OActionsText	ACTIONS ( Save )
+					RadioTrueValue	~Reject~
+					Tooltip         Translate(~See only the images that have been rejected~)
+   
+		Define: RejectDoneBox Using DDWinCtrlDef AsSymbol RejectDoneBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~~ )
+					GenConName		THIS
+                    GenConField		~RejectDone~	
+					Position		RejectBox(GetRight,Position) + $hGap,RejectBox(GetTop,Position), 20,  <StaticTextHeight>
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save "Exec(OnRejectDoneBox())" ) 
+					OActionsText	ACTIONS ( Save )
+                    Tooltip			Translate( ~Identify the image as rejected (Checked)~ );
+
+		Define: DoAllButton Using DDWinCtrlDef AsSymbol DoAllButton 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~All~ )
+					RightJustified	TRUE
+					Position		DoRejectButton(GetLeft,Position),DoRejectButton(Getbottom,Position) + $vGap, $StaticTextWidth,  <StaticTextHeight>		
+
+		Define: AllBox Using DDWinCtrlDef AsSymbol AllBox 
+			Fields: TypeName		RadioButton
+					Position		DoAllButton(GetRight,Position)+$hGap,DoAllButton(GetTop,Position), 30,  <StaticTextHeight>
+					GenConName		THIS
+                    GenConField		~WhichFrames~	
+					IActionsText    ACTIONS ( Get )
+					DActionsText	ACTIONS ( CheckButton(AllBox) UncheckButton(RejectBox) UncheckButton(ColorCorrectBox) UncheckButton(ScanBox) UncheckButton(RetouchBox) UncheckButton(KarsBox) UncheckButton(KarsBatchBox) Save "Exec(UpdateFrames();)" )
+					OActionsText	ACTIONS ( Save )
+					RadioTrueValue	~All~
+					Tooltip         Translate(~See all the frames for the Order,Roll~);	
+		
+		Define: ViewImagesButton Using DDWinCtrlDef AsSymbol ViewImagesButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Ima&ges~ )
+                    Position		DoAllButton(GetLeft,Position),DoAllButton(GetBottom,Position)+$vGap,$StaticTextWidth-8, $ButtonHeight
+                    DActionsText	ACTION EXEC ( ViewThumbnails() ) 
+                    Tooltip			Translate( ~View Thumbnails of the selected images~ );
+
+		Define: ProofButton Using DDWinCtrlDef AsSymbol ProofButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Proof~ )
+                    Position		ViewImagesButton(GetRight,Position)+$hGap,ViewImagesButton(GetTop,Position),ViewImagesButton(GetWidth,Position), $ButtonHeight
+                    DActionsText	ACTION EXEC ( OnProofButton() ) 
+                    Tooltip			Translate( ~Create proof order items for all images in the order~ );
+
+		Global( ProofButton );
+
+		Define: SetOrderStatusButton Using DDWinCtrlDef AsSymbol SetOrderStatusButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Status~ )
+                    Position		ProofButton(GetRight,Position)+$hGap,ProofButton(GetTop,Position),ViewImagesButton(GetWidth,Position), $ButtonHeight
+                    DActionsText	ACTION EXEC ( OnSetOrderStatus() ) 
+                    Tooltip			Translate( ~Set the status for the order~ );
+
+
+		Define: OtherButton Using DDWinCtrlDef AsSymbol OtherButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Other~ )
+                    Position		SetOrderStatusButton(GetRight,Position)+$hGap,SetOrderStatusButton(GetTop,Position),ViewImagesButton(GetWidth,Position), $ButtonHeight
+                    DActionsText	ACTION EXEC ( OtherDialog() )
+                    Tooltip			Translate( ~Other functions you can perform~ );
+
+		Define: CloseWindowsButton Using DDWinCtrlDef AsSymbol CloseWindowsButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~C&lose~ )
+                    DActionsText	ACTIONS  ( CloseAllWindows ) 
+                    Tooltip			Translate( ~Close all Windows~ )
+                    Position		OtherButton(GetRight,Position) + $hGap,OtherButton(GetTop,Position),ViewImagesButton(GetWidth,Position), $ButtonHeight
+
+		Define: SeeProductsBox Using DDWinCtrlDef AsSymbol SeeProductsBox 
+				Fields: TypeName		Button
+						Text			Translate( ~-->~ )
+						GenConName		THIS
+						GenConField		~SeeProducts~
+						IsTabStop		F	
+						Position		CloseWindowsButton(GetRight,Position) + $hGap*1,CloseWindowsButton(GetTop,Position), 25,  <StaticTextHeight>
+						//IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS (  "Exec(OnProductsBox())" ) 
+						//OActionsText	ACTIONS ( Save )
+						Tooltip			Translate( ~See products for ordering~ );
+
+		Define: NextButton Using DDWinCtrlDef AsSymbol NextButton 
+				Fields: TypeName		Button
+						Text			Translate( ~&N~ )
+						DActionsText	ACTION EXEC ( SelectNext(TRUE) ) 
+
+		Define: PrevButton Using DDWinCtrlDef AsSymbol PrevButton 
+				Fields: TypeName		Button
+						Text			Translate( ~&P~ )
+						DActionsText	ACTION EXEC ( SelectPrev(TRUE) ) 
+
+		Define: ShiftCropLeftButton Using DDWinCtrlDef AsSymbol ShiftCropLeftButton 
+				Fields: TypeName		Button
+						Text			Translate( ~&[~ )
+						DActionsText	ACTION EXEC ( ShiftCropLeft() ) 
+
+		Define: ShiftCropRightButton Using DDWinCtrlDef AsSymbol ShiftCropRightButton 
+				Fields: TypeName		Button
+						Text			Translate( ~&]~ )
+						DActionsText	ACTION EXEC ( ShiftCropRight() ) 
+
+		Define: ShiftCropUpButton Using DDWinCtrlDef AsSymbol ShiftCropUpButton 
+				Fields: TypeName		Button
+						Text			Translate( ~&;~ )
+						DActionsText	ACTION EXEC ( ShiftCropUp() ) 
+
+		Define: ShiftCropDownButton Using DDWinCtrlDef AsSymbol ShiftCropDownButton 
+				Fields: TypeName		Button
+						Text			Translate( ~&'~ )
+						DActionsText	ACTION EXEC ( ShiftCropDown() ) 
+
+		Define: ShrinkCropButton Using DDWinCtrlDef AsSymbol ShrinkCropButton 
+				Fields: TypeName		Button
+						Text			Translate( ~&-~ )
+						DActionsText	ACTION EXEC ( ShrinkCrop() ) 
+
+		Define: ExpandCropButton Using DDWinCtrlDef AsSymbol ExpandCropButton 
+				Fields: TypeName		Button
+						Text			Translate( ~&=~ )
+						DActionsText	ACTION EXEC ( ExpandCrop() ) 
+
+		Define: FramesListBox Using DDWinCtrlDef AsSymbol FramesListBox
+			Fields:	POSITION		ScanDoneBox(GetRight,Position)+$hGap ScanDoneBox(GetTop,Position),150 ,DoAllButton(GetBottom,Position)-ScanDoneBox(GetTop,Position)
+					GENCONNAME		THIS
+					GENCONFIELD		~Frame~
+					IACTIONSTEXT	ACTIONS ( GetList(FramesToRetouchList) Get )
+					DACTIONSTEXT	ACTIONS ( Save "Exec(OnFrameSelected();)" Update(FrameField)  )
+					OACTIONSTEXT	ACTIONS ( Save )
+					TYPENAME		ListBox ;
+
+		DialogWidth = FramesListBox(GetRight,Position) + ($hGap * 3);
+		NumButtons = 5;
+		ButtonWidth = ($DialogWidth - (($NumButtons+2) * $hGap)) / $NumButtons;
+
+		Define: ProductsListBox Using DDWinCtrlDef AsSymbol ProductsListBox
+			Fields:	POSITION		$DialogWidth OrderIDPrompt(GetTop,Position),100,($EditTextHeight * 11) - 12
+					GENCONNAME		THIS
+					GENCONFIELD		~Product~
+					//AllowMultipleSelection T
+					IACTIONSTEXT	ACTIONS ( GetList(ProductstoOrderList) Get )
+					DACTIONSTEXT	ACTIONS ( Save "Exec(OnProductSelected();)" )
+					OACTIONSTEXT	ACTIONS ( Save )
+					WantReturnKey	~T~
+					ReturnKeyActionsText ACTION EXEC ( HandleProductListReturnKey() )
+					Tooltip			Translate( ~Which product to create an order item for.  This list can be shortened by setting the Navigator Seq in the Products Data window~ )
+					TYPENAME		LISTBOX ;
+
+		Define: CreateJobButton Using DDWinCtrlDef AsSymbol CreateJobButton 
+			Fields: TypeName		Button
+					Text			Translate( ~A&dd~ )
+					Position		ProductsListBox(GetRight,Position) +$hGap,ProductsListBox(GetTop,Position),<StaticTextWidth>, $ButtonHeight
+					DActionsText	ACTION EXEC  ( CreateJobForProduct() ) 
+					Tooltip			Translate( ~Create a job for the selected image and product~ );
+
+		Define: OpenOrderItemBox Using DDWinCtrlDef AsSymbol OpenOrderItemBox 
+			Fields: TypeName		Checkbox
+					Text			Translate( ~Open~ )
+					Position		CreateJobButton(GetLeft,Position),CreateJobButton(GetBottom,Position)+$vGap,<StaticTextWidth>,$ButtonHeight
+					GenConName		THIS
+                    GenConField		~OpenOrderItem~	
+					IActionsText    ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+					Tooltip         Translate(~Open the Order Item after it is added~);
+
+		Define: MaintainButton Using DDWinCtrlDef AsSymbol MaintainButton 
+			Fields: TypeName		Button
+					Text			Translate( ~Maintain~ )
+					Position		OpenOrderItemBox(GetLeft,Position),OpenOrderItemBox(GetBottom,Position)+$vGap,<StaticTextWidth>, $ButtonHeight
+					DActionsText	ACTION EXEC  ( MaintainOrderItems() ) 
+					Tooltip			Translate( ~Maintain Order Items for this order.  Builds the preview icons without opening each OrderItem.~ );
+
+		Define: QtyPrompt Using DDWinCtrlDef AsSymbol QtyPrompt 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Qty~ )
+					POSITION		CreateJobButton(GetLeft,Position) MaintainButton(GetBottom,Position) + $vGap*4,20,$EditTextHeight
+
+		Define: QtyField Using DDWinCtrlDef AsSymbol QtyField 
+			Fields: TypeName		MaskedEditText  
+					Mask			~####~
+					PromptChar		~ ~
+					Position		QtyPrompt(GetRight,Position) + 2,QtyPrompt(GetTop,Position),27,<EditTextHeight> 
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName       THIS
+					GenConField		~Qty~
+					Tooltip         ~Type a Quantity of the above product you would like to make~;
+
+		Define: Qty1Button Using DDWinCtrlDef AsSymbol Qty1Button 
+			Fields: TypeName		Button  
+					Position		QtyPrompt(GetLeft,Position),QtyPrompt(GetBottom,Position)+$vGap,15,<EditTextHeight> 
+					DActionsText	ACTION EXEC ( QtyDigit( 1 ) )
+					Text			~&1~
+					Tooltip         Translate(~Set Quantity to 1~);
+
+		Define: Qty2Button Using DDWinCtrlDef AsSymbol Qty2Button 
+			Fields: TypeName		Button  
+					Position		Qty1Button(GetRight,Position) + 2,Qty1Button(GetTop,Position),15,<EditTextHeight> 
+					DActionsText	ACTION EXEC ( QtyDigit( 2 ) )
+					Text			~&2~
+					Tooltip         Translate(~Set Quantity to 2~);
+
+		Define: Qty3Button Using DDWinCtrlDef AsSymbol Qty3Button 
+			Fields: TypeName		Button  
+					Position		Qty2Button(GetRight,Position) + 2,Qty1Button(GetTop,Position),15,<EditTextHeight> 
+					DActionsText	ACTION EXEC ( QtyDigit( 3 ) )
+					Text			~&3~
+					Tooltip         Translate(~Set Quantity to 4~);
+
+		Define: Qty4Button Using DDWinCtrlDef AsSymbol Qty4Button 
+			Fields: TypeName		Button  
+					Position		Qty1Button(GetLeft,Position),Qty1Button(GetBottom,Position)+$vGap,15,<EditTextHeight> 
+					DActionsText	ACTION EXEC ( QtyDigit( 4 ) )
+					Text			~&4~
+					Tooltip         Translate(~Set Quantity to 8~);
+
+		Define: Qty5Button Using DDWinCtrlDef AsSymbol Qty5Button 
+			Fields: TypeName		Button  
+					Position		Qty4Button(GetRight,Position) + 2,Qty4Button(GetTop,Position),15,<EditTextHeight> 
+					DActionsText	ACTION EXEC ( QtyDigit( 5 ) )
+					Text			~&5~
+					Tooltip         Translate(~Set Quantity to 5~);
+
+		Define: Qty6Button Using DDWinCtrlDef AsSymbol Qty6Button 
+			Fields: TypeName		Button  
+					Position		Qty5Button(GetRight,Position) + 2,Qty5Button(GetTop,Position),15,<EditTextHeight> 
+					DActionsText	ACTION EXEC ( QtyDigit( 6 ) )
+					Text			~&6~
+					Tooltip         Translate(~Set Quantity to 6~);
+
+		Define: Qty7Button Using DDWinCtrlDef AsSymbol Qty7Button 
+			Fields: TypeName		Button  
+					Position		Qty1Button(GetLeft,Position),Qty6Button(GetBottom,Position)+$vGap,15,<EditTextHeight> 
+					DActionsText	ACTION EXEC ( QtyDigit( 7 ) )
+					Text			~&7~
+					Tooltip         Translate(~Set Quantity to 7~);
+
+		Define: Qty8Button Using DDWinCtrlDef AsSymbol Qty8Button 
+			Fields: TypeName		Button  
+					Position		Qty4Button(GetRight,Position) + 2,Qty7Button(GetTop,Position),15,<EditTextHeight> 
+					DActionsText	ACTION EXEC ( QtyDigit( 8 ) )
+					Text			~&8~
+					Tooltip         Translate(~Set Quantity to 8~);
+
+		Define: Qty9Button Using DDWinCtrlDef AsSymbol Qty9Button 
+			Fields: TypeName		Button  
+					Position		Qty8Button(GetRight,Position) + 2,Qty8Button(GetTop,Position),15,<EditTextHeight> 
+					DActionsText	ACTION EXEC ( QtyDigit( 9 ) )
+					Text			~&9~
+					Tooltip         Translate(~Set Quantity to 9~);
+
+		Define: Qty0Button Using DDWinCtrlDef AsSymbol Qty0Button 
+			Fields: TypeName		Button  
+					Position		Qty1Button(GetLeft,Position),Qty9Button(GetBottom,Position)+$vGap,15,<EditTextHeight> 
+					DActionsText	ACTION EXEC ( QtyDigit( 0 ) )
+					Text			~&0~
+					Tooltip         Translate(~Set Quantity to 0~);
+
+		Define: PlusQtyButton Using DDWinCtrlDef AsSymbol PlusQtyButton 
+			Fields: TypeName		Button  
+					Position		Qty0Button(GetRight,Position) + 2,Qty0Button(GetTop,Position),15,<EditTextHeight> 
+					DActionsText	ACTION EXEC ( IncQty( 1 ) )
+					Text			~+~
+					Tooltip         Translate(~Add 1 to the quantity~);
+
+		Define: MinusQtyButton Using DDWinCtrlDef AsSymbol MinusQtyButton 
+			Fields: TypeName		Button  
+					Position		PlusQtyButton(GetRight,Position) + 2,PlusQtyButton(GetTop,Position),15,<EditTextHeight> 
+					DActionsText	ACTION EXEC ( IncQty( -1 ) )
+					Text			~-~
+					Tooltip         Translate(~Subtract 1 from the quantity~);
+
+		Define: ClearQtyButton Using DDWinCtrlDef AsSymbol ClearQtyButton 
+			Fields: TypeName		Button  
+					Position		Qty1Button(GetLeft,Position),Qty0Button(GetBottom,Position)+$vGap,<StaticTextWidth>,<EditTextHeight> 
+					DActionsText	ACTION EXEC ( SetQty(~1~) )
+					Text			~Clear~
+					Tooltip         Translate(~Clear the quantity~);
+
+		Define: JobsButton Using DDWinCtrlDef AsSymbol JobsButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Items~ )
+                    Position		ProductsListBox(GetLeft,Position),ViewImagesButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+                    DActionsText	ACTION EXEC ( OnJobsButton() ) 
+                    Tooltip			Translate( ~See the Order Items for this order~ );
+
+		Define: PrintButton Using DDWinCtrlDef AsSymbol PrintButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Run~ )
+					Position		JobsButton(GetRight,Position) + $hGap,JobsButton(Gettop,Position),$ButtonWidth, $ButtonHeight
+                     DActionsText	ACTION EXEC ( OnPrintButton() ) 
+                    Tooltip			Translate( ~Print the order by submitting the OrderItems for this order to the JobQueue~ );
+
+		Define: JobQButton Using DDWinCtrlDef AsSymbol JobQButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Queue~ )
+					Position		PrintButton(GetRight,Position) + $hGap,PrintButton(Gettop,Position),$ButtonWidth, $ButtonHeight
+                     DActionsText	ACTION EXEC ( OnJobQButton() ) 
+                    Tooltip			Translate( ~View the Jobs for this order that are in the JobQueue~ );
+
+		Define: RemakeBox Using DDWinCtrlDef AsSymbol RemakeBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~~ )
+					GenConName		THIS
+                    GenConField		~RemakesOnly~	
+					IsHidden		RunningVersion( 5.05 ) ? F : T
+					Position		JobsButton(GetLeft,Position),JobsButton(GetTop,Position)-20, 20,  <StaticTextHeight>
+                    IActionsText    ACTIONS (  Get  )
+					DActionsText	ACTIONS ( Save ) 
+					OActionsText	ACTIONS ( Save )
+                    Tooltip			Translate( ~Indicates when the the Items and the Run button pertain to all OrderItems or just the ones that need remake.~ );
+
+		Define: RemakePrompt Using DDWinCtrlDef AsSymbol RemakePrompt 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Remakes Only~ )  
+					IsHidden		RunningVersion( 5.05 ) ? F : T               
+					Position		RemakeBox(GetRight,Position),RemakeBox(GetTop,Position)+2,90,15
+
+IF 0
+{
+		Define: ProductsStatus Using DDWinCtrlDef AsSymbol ProductsStatus 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~~ )
+                    Position		JobsButton(GetLeft,Position),JobsButton(GetBottom,Position) + $vGap,
+									JobQButton(GetRight,Position) - JobsButton(GetLeft,Position),<StaticTextHeight> 
+					GenConName		THIS
+					GenConField		~ProductStatus~
+}
+
+
+    };
+
+	DialogWidthWithoutProducts = $DialogWidth;
+
+	DialogWidth = JobQButton(GetRight,Position) + ($hGap * 3);
+
+	DialogWidthWithProducts = $DialogWidth;
+
+	DialogHeight = CloseWindowsButton(GetBottom,Position) + $vGap + 30;
+
+	Global( DialogHeight,DialogWidthWithoutProducts,DialogWidthWithProducts );
+
+	DialogLeft = App( thisApp,MainWindow,GetClientWidth ) * .9 - $DialogWidthWithProducts - 10;
+
+    DlgDefinition( Set,Position,~<DialogLeft> 8 <DialogWidth> <DialogWidthWithoutProducts>~ );
+
+	GenDlg( dlg,Definition,DlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    Global( dlg,DlgDefinition );
+}
+
+VOID ReOpen()
+{
+	dlg( SetWindowOrder,Top,SetFocus );
+}
+
+
+VOID ShowMainDialog()
+{
+	ShowTheDialog( DlgDefinition );
+}
+
+
+
+FirstDigit = TRUE;
+
+VOID SetQty( Qty )
+{
+	dlg( SetStrings,Qty,~<Qty>~ );
+	dlg( SetStatus,1,~<$con.dlgData[Product]>   Qty <Qty>~ );
+	FirstDigit = TRUE;
+}
+
+VOID QtyDigit( Num )
+{
+	dlg( GetInput,GetStrings,Qty,Qty );
+
+	Qty = ( <Qty> == 1 && <FirstDigit> ) ? ~<Num>~ : ~<Qty><Num>~;
+
+	if ( <Qty> < 999 )
+	{
+		SetQty( <Qty> );
+	}
+
+	dlg( SetControlFocus,QtyField );
+
+	FirstDigit = FALSE;
+}
+
+VOID IncQty( Delta )
+{
+	dlg( GetInput,GetStrings,Qty,Qty );
+
+	if ( ~Qty~ == ~~ )
+	{
+		Qty = 0;
+	}
+
+	SetQty( <Qty> + <Delta> );
+
+	FirstDigit = FALSE;
+
+	dlg( SetControlFocus,QtyField );
+}
+
+
+
+NUMERIC UpdateFrames()
+{
+	StringList( AnEmptyList,New );
+	dlg( SetControlFromStringList,FramesListBox,AnEmptyList );
+
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID,Roll,Roll,WhichFrames,WhichFrames );
+
+	if ( ~<OrderID>~ == ~~ )
+	{
+		return dlg( SetStatus,0,Translate( ~Enter an OrderID~ ) );
+	}
+
+	if ( ~<Roll>~ == ~~ )
+	{
+		return dlg( SetStatus,0,Translate( ~No Roll~ ) );
+	}
+
+	RollClause = ~~;
+
+	if ( ~<WhichFrames>~ == ~Retouch~ )
+	{
+		RollClause = ~ And (Retouch <> 0) ~;
+	}
+	else if ( ~<WhichFrames>~ == ~Scan~ )
+	{
+		RollClause = ~ And (Scan <> 0)~;
+	}
+	else if ( ~<WhichFrames>~ == ~Correct~ )
+	{
+		RollClause = ~ And (Inspect <> 0) ~;
+	}
+	else if ( ~<WhichFrames>~ == ~Reject~ )
+	{
+		RollClause = ~ And (Rejected <> 0) ~;
+	}
+
+	if ( ~<Roll>~ != ~~ )
+	{
+		RollClause = ~ <RollClause> And Roll = '<Roll>' ~;
+	}
+
+
+	WhichRoll = ~<Roll>~ == ~~ ? Translate( ~Any~ ) : ~<Roll>~;
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNull( ~<OrderID>~ ) )
+	{
+		return Warning( ~You must select an order first~ );
+	}
+
+	dlg( SetStatus,0,Translate( ~Searching For Order <OrderID>, Roll <WhichRoll>~ ) );
+
+	StringList( FramesList,New );
+
+	count = 0;
+
+	if ( ~<WhichFrames>~ == ~KPARSReview~ )
+	{
+		StatusClause = ~AND (RetouchState = 'QueuedForReview' OR RetouchState = 'QueuedForInteractive')~;
+		dlg( SetStatus,0,Translate( ~Searching For Order <OrderID>, Roll <WhichRoll>~ ) );
+
+		Query = ~Select * From RetouchImages where OrderID = '<OrderID>' <RollClause> <StatusClause> Order By Roll,Frame~;	
+		
+		if ( PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			Tab = Chr(9);
+
+			while ( List( GetNext,Record ) )
+			{
+				FramesList( AddString,~<$pcon.Record[Frame]>~ );
+				++count;
+			}
+		}
+	}
+	else if ( ~<WhichFrames>~ == ~KPARSBatch~ )
+	{
+		StatusClause = ~AND (RetouchState = 'QueuedForBatch' OR RetouchState = 'InBatch')~;
+		dlg( SetStatus,0,Translate( ~Searching For Order <OrderID>, Roll <WhichRoll>~ ) );
+
+		Query = ~Select * From RetouchImages where OrderID = '<OrderID>' <RollClause> <StatusClause> Order By Roll,Frame~;	
+		
+		if ( PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			Tab = Chr(9);
+
+			while ( List( GetNext,Record ) )
+			{
+				FramesList( AddString,~<$pcon.Record[Frame]>~ );
+				++count;
+			}
+		}
+	}
+
+	else
+	{
+		Query = ~Select * From Images where OrderID = '<OrderID>' <RollClause> Order By Roll,Frame~;	
+		
+		if ( PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			Tab = Chr(9);
+
+			while ( List( GetNext,Record ) )
+			{
+				FramesList( AddString,~<$pcon.Record[Frame]>~ );
+				++count;
+			}
+		}
+	}
+
+	if ( <count> > 0 && FALSE )
+	{
+		ImageQuery( ~'<OrderID>'~,TRUE );
+	}
+
+	dlg( SetStatus,0,Translate( ~<Count> Frame(s) for Order <OrderID>, Roll <WhichRoll>~ ) );
+	
+	dlg( SetControlFromStringList,FramesListBox,FramesList );
+
+	dlg( ListBox,FramesListBox,Select,0 );
+
+	dlg( TriggerControlActions,FrameField,IActionsText );
+
+	SelectCurrent(TRUE);
+
+	return TRUE;
+}
+
+
+NUMERIC NewFrameTyped()
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,Roll,Roll,Frame,Frame );
+
+	if ( ~<OrderID>~ == ~~ )
+	{
+		return dlg( SetStatus,0,Translate( ~Enter an OrderID~ ) );
+	}
+
+	if ( ~<Roll>~ == ~~ )
+	{
+		return dlg( SetStatus,0,Translate( ~Enter a Roll~ ) );
+	}
+
+	if ( ~<Frame>~ == ~~ )
+	{
+		return dlg( SetStatus,0,Translate( ~Enter a Frame~ ) );
+	}
+
+	UpdateFrameStatus(TRUE);
+
+	return TRUE;
+}
+
+NUMERIC NewSubjectIDTyped()
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID,Roll,Roll );
+
+	if ( ~<OrderID>~ == ~~ )
+	{
+		return dlg( SetStatus,0,Translate( ~Enter an OrderID~ ) );
+	}
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( ~<$con.dlgData[Roll]>~ == ~~ )
+	{
+		return dlg( SetStatus,0,Translate( ~Enter a Roll~ ) );
+	}
+
+	if ( ~<$con.dlgData[Frame]>~ == ~~ )
+	{
+		return dlg( SetStatus,0,Translate( ~Enter a Frame~ ) );
+	}
+
+	Key = ~OrderID = '<OrderID>' AND Roll = '<$con.DlgData[Roll]>' AND Frame = '<$con.DlgData[Frame]>'~;
+
+	Cmd = ~Update Images Set SubjectID = '<$con.DlgData[SubjectID]>' Where <Key>~;
+
+	if ( !Ado( dBase,Connect,Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return dlg( SetStatus,0,Translate( ~Failed to set the SubjectID for <OrderID>,<$con.DlgData[Roll]>,<$con.DlgData[Frame]>.  <theErr>~ ) );
+	}
+
+
+	if ( ~<$con.DlgData[SubjectID]>~ != ~~ )
+	{
+		if ( GetSubjectOrderIDInfoType( ~<OrderID>~, InfoType, SubjectInfoOrderId) )
+		{
+			Cmd = ~Insert Into SubjectInfo<InfoType>(OrderID,SubjectID) Values('<SubjectInfoOrderId>','<$con.DlgData[SubjectID]>')~;
+			dBase( Cmd,~<Cmd>~ );
+		}
+	}
+
+	ViewSubjectInfoData();
+
+	return TRUE;
+}
+
+
+NUMERIC OnColorCorrectNeedBox()
+{
+	return TRUE;
+}
+
+
+NUMERIC OnDoScanButton()
+{
+	dlg( GetInput );
+	dlgData( GetValues,OrderID,OrderID,Roll,Roll,Frame,Frame );
+
+	if ( Numeric(~<$[Symbols].RunVersion[Value]>~) >= 2.1 )
+	{
+		Actions = ACTION Doc ( ~StartScanningDoc~ OpenOnce StartScanningDoc "InitOrderRollFrame(~<OrderID>~,~<Roll>~,~<Frame>~);" );
+	}
+	else
+	{
+		Actions = ACTION Doc ( ~ScannerDoc~ OpenOnce ScannerDoc "OnChangeOrder(~Sizzle~,~<OrderID>~);" );
+	}
+	return PerformActions( Actions );
+}
+
+
+NUMERIC OnScanDoneBox()
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID,Roll,Roll,Frame,Frame );
+
+	Value = dlg( GetBoolean,ScanDone );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Select an Order first~ ) );
+	}
+
+	if ( IsNULL(~<Roll>~) )
+	{
+		return Warning( Translate( ~Select a roll first~ ) );
+	}
+
+	if ( IsNULL(~<Frame>~) )
+	{
+		return Warning( Translate( ~Select a frame first~ ) );
+	}
+
+	Key = ~OrderID = '<OrderID>' AND Roll = '<$con.DlgData[roll]>' AND Frame = '<$con.DlgData[Frame]>'~;
+
+	Cmd = ~Update Images Set Scan = <Value> Where <Key>~;
+
+	if ( !Ado( dBase,Connect,Cmd,~<Cmd>~ ) )
+	{
+		return dlg( SetStatus,0,Translate( ~Failed to set the retouch flag for <OrderID>,<$con.DlgData[Roll]>,<$con.DlgData[Frame]>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnDoRetouchButton()
+{
+	UpdateFrameStatus(FALSE);
+
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID,Roll,Roll,Frame,Frame );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Select an Order first~ ) );
+	}
+
+	if ( IsNULL(~<Roll>~) )
+	{
+		return Warning( Translate( ~Select a roll first~ ) );
+	}
+
+	if ( IsNULL(~<Frame>~) )
+	{
+		return Warning( Translate( ~Select a frame first~ ) );
+	}
+
+	Key = ~OrderID = '<OrderID>' AND Roll = '<$con.DlgData[roll]>' AND Frame = '<$con.DlgData[Frame]>'~;
+
+	Cmd = ~Update Images Set Retouch = 1 Where <Key>~;
+
+	if ( !Ado( dBase,Connect,Cmd,~<Cmd>~ ) )
+	{
+		return dlg( SetStatus,0,Translate( ~Failed to set the retouch flag for <OrderID>,<$con.DlgData[Roll]>,<$con.DlgData[Frame]>~ ) );
+	}
+
+	dlg( SetCheck,1,RetouchDoneBox );
+
+	Actions = ACTION Doc ( RetouchInstrDialog OpenOnce RetouchInstDoc "Init();" );
+	PerformActions( Actions );
+
+	Actions = ACTION Doc ( RetouchInstrDialog "NewImage( ~<OrderID>~,~<$con.DlgData[Roll]>~,~<$con.DlgData[Frame]>~);" );
+	PerformActions( Actions );
+
+	dlg( SetStatus,0,Translate( ~Opening <OrderID> <$con.DlgData[Roll]> <$con.DlgData[Frame]>~) );
+
+	return OpenAnImageExternal( ~<OrderID>~,~<$con.DlgData[Roll]>~,~<$con.DlgData[Frame]>~ );
+}
+
+
+NUMERIC OnDoKarsButton()
+{
+	UpdateFrameStatus(FALSE);
+
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID,Roll,Roll,Frame,Frame );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Select an Order first~ ) );
+	}
+
+	if ( IsNULL(~<Roll>~) )
+	{
+		return Warning( Translate( ~Select a roll first~ ) );
+	}
+
+	if ( IsNULL(~<Frame>~) )
+	{
+		return Warning( Translate( ~Select a frame first~ ) );
+	}
+
+	dlg( SetCheck,1,KarsDoneBox );
+
+	dlg( SetStatus,0,Translate( ~Opening <OrderID> <Roll> <Frame>~) );
+
+	return 	SendToKarsInteractive( ~<OrderID>~,~<$con.DlgData[Roll]>~,~<$con.DlgData[Frame]>~ );
+}
+
+
+NUMERIC OnDoKarsBatchButton()
+{
+	Actions = ACTION DOC ( RetouchBatchDoc OpenOnce RetouchBatchDoc "Init(FALSE);" );
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+NUMERIC SendToKarsInteractive( Order,Roll,Frame )
+{
+	WaitCursor( Begin );
+
+	Key = ~OrderID = '<Order>' AND Roll = '<$con.DlgData[roll]>' AND Frame = '<$con.DlgData[Frame]>'~;
+	Query	= ~Select Path From Images Where <Key>~;	
+
+	if ( !ADO( dBase,Connect,GetValuesFor,~<Query>~,Path ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Error getting the path for <Key>: <theErr>~ );
+	}
+
+	if ( IsNULL(~<Path>~) || !Files( FileExists,~<Path>~) )
+	{
+		return Warning( Translate( ~The image file (<Path>) is does not exist.~ ) );
+	}
+
+	WaitCursor( Begin );
+	if ( !AddSelectedToKars( dBase,~QueuedForInteractive~,~<Order>~,~<Roll>~,~<Frame>~,~<Path>~ ) )
+	{
+		WaitCursor( End );
+		return FALSE;
+	}
+
+	BroadcastMessageToAllViews( ReleaseImageChain,~<Path>~ );
+	CloseWindowByPath( ~<Path>~ );
+
+	if ( !MakeImageWritable( ~<Path>~ ) )
+	{
+		WaitCursor( End );
+		return FALSE;
+	}
+
+	ForgetLocal( dBase );
+	StatusBarText( ~Sending image to Kodak Auto-Retouching application~ );
+
+	Actions = ACTION DOC ( RetouchInteractiveDoc OpenOnce RetouchInteractiveDoc "Init(~<Order>~,~<Roll>~,~<Frame>~);" );
+	PerformActions( Actions );
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC AddSelectedToKars( &dBase,State,Order,Roll,Frame,Path )
+{
+	Fields = ~OverwriteOriginal,OriginalPrefix,OriginalSuffix,OriginalPath,IntermediateDataPath,JPEGQuality,FileResolution,BatchCompleteProcessing,SubmittedAt~;
+	Values = ~<KparsOverWrite>,'<KparsPrefix>','<KparsSuffix>','<KparsImgPath>','<KparsDataPath>',100,250,'<KparsBatchComplete>','<$Date.SortableDateTime>'~;
+	UpdateFields = ~OverwriteOriginal=<KparsOverWrite>,OriginalPrefix='<KparsPrefix>',OriginalSuffix='<KparsSuffix>',OriginalPath='<KparsImgPath>',IntermediateDataPath='<KparsDataPath>',JPEGQuality=100,FileResolution=250,BatchCompleteProcessing='<KparsBatchComplete>'~;
+
+	if ( !IsNull(~<Path>~) )
+	{
+		batchSetup = ~~;
+		priority = 0;
+		GetRetouchBatchSetup(dBase,~<Order>~,~<Roll>~,~<Frame>~,batchSetup,priority);
+		if ( ~<State>~ == ~BatchSetupNeeded~ && ~<batchSetup>~ == ~~ )
+		{
+			Actions = ACTION Doc ( RetouchBatchConfigDlg OpenOnce RetouchBatchConfigDlg "Init( ~<Order>~,~<Roll>~,~<Frame>~ );" );
+			PerformActions( Actions );
+			WaitCursor( Begin );
+		}
+		else
+		{
+			if ( ~<State>~ != ~QueuedForReview~ && ~<State>~ != ~QueuedForInteractive~ )
+			{
+				State = ~QueuedForBatch~;
+			}
+			Key = ~OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+			Query = ~Select count(*) From RetouchImages Where <Key>~;
+
+			retouchState = ~~;
+			Exists = dBase( RecordCountFor,~<Query>~ );
+
+			if ( !<Exists> )
+			{
+				Fields2 = ~OrderID,Roll,Frame,BatchSetup,Priority,RetouchState,<Fields>~;
+				Values2 = ~'<Order>','<Roll>','<Frame>','<batchSetup>',<priority>,'<State>',<Values>~;
+
+				Cmd = ~Insert Into RetouchImages(<Fields2>) Values(<Values2>)~;
+
+				if ( !dbase( CMD,~<Cmd>~ ) )
+				{
+					dbase( GetErrorDescription,theErr );
+					return Warning( Translate( ~Database update failed. <theErr>~ ) );
+				}
+				Cmd = ~Update Images Set Retouch = 1 Where <Key>~;
+
+				if ( !dbase( CMD,~<Cmd>~ ) )
+				{
+					return dlg( SetStatus,0,Translate( ~Failed to set the retouch flag for <Order>,<Roll>,<Frame>~ ) );
+				}
+
+				dlg( SetCheck,1,RetouchDoneBox );
+
+			}
+			else
+			{
+				Query = ~Select RetouchState From RetouchImages Where <Key>~;
+				dBase( GetValuesFor,~<Query>~,retouchState );
+
+				if ( ~<retouchState>~ != ~InBatch~ && ~<retouchState>~ != ~InReview~ && ~<retouchState>~ != ~InMerge~ && ~<retouchState>~ != ~InInteractive~ )
+				{
+					Cmd = ~Update RetouchImages Set RetouchState = '<State>',BatchSetup='<batchSetup>' WHERE OrderID = '<Order>' And Roll = '<Roll>' And Frame = '<Frame>'~;
+
+					if ( !dbase( CMD,~<Cmd>~ ) )
+					{
+						dbase( GetErrorDescription,theErr );
+						return Warning( Translate( ~Database update failed. <theErr>~ ) );
+					}
+				}
+				else
+				{
+					return Warning( Translate( ~The image is currently being retouched.~ ) );
+				}
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RemoveSelectedFromKars(State,Order,Roll,Frame)
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	Key = ~OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+	Query = ~Select * From RetouchImages Where <Key>~;
+
+	WaitCursor( Begin );
+	Exists = dBase( RecordCountFor,~Select count(*) From RetouchImages Where <Key>~ );
+
+	if ( <Exists> == 0 )
+	{
+		WaitCursor( End );
+		return TRUE;
+	}
+
+	RetouchState = ~~;
+	Query = ~Select RetouchState from RetouchImages WHERE <Key>~;
+	if ( !dBase( GetValuesFor,~<Query>~,RetouchState ) )
+	{
+		WaitCursor( End );
+		return Warning( Translate( ~There is no entry for <Order>,<Roll>,<Frame>~ ) );
+	}
+
+	if ( ~<retouchState>~ != ~InBatch~ && ~<retouchState>~ != ~InReview~ && ~<retouchState>~ != ~InMerge~ && ~<retouchState>~ != ~InInteractive~ )
+	{
+		Msg = ~Do you want to remove the selected frame from the Auto Retouch table?~;
+		if ( MessageBox( Translate( ~<Msg>~ ),YESNO ) == NO )
+		{ 
+			WaitCursor( End );
+			return TRUE; 
+		}
+
+		Cmd = ~Delete from RetouchImages Where <Key>~;
+
+		if ( !dbase( CMD,~<Cmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			WaitCursor( End );
+			return Warning( Translate( ~Database update failed. <theErr>~ ) );
+		}
+	}
+	else
+	{
+		Msg = ~The image for Order <Order>, Roll <Roll>, Frame <Frame> is in the <RetouchState> state and cannot be removed from the RetouchImages table~;
+		return Warning( Translate( ~<Msg>~ ) );
+	}
+
+	return TRUE;
+}
+
+NUMERIC ShowKarsReviewOptions()
+{
+	GenCon( ListMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+		theAction  = ACTION EXEC ( RunReviewForSelected(); );
+		GenCon( ReviewSelected,New,DDMenuItemDef,
+				SetValues,	Text,~Review Selected Image~,
+							IDText,	~ID~,
+							ActionsText, ~<theAction>~ );
+
+		ListMenu( InsertBack,ReviewSelected );
+
+		theAction  = ACTION EXEC ( RunReviewForOrder(); );
+		GenCon( ReviewOrder,New,DDMenuItemDef,
+				SetValues,	Text,~Review Order~,
+							IDText,	~ID~,
+							ActionsText, ~<theAction>~ );
+
+		ListMenu( InsertBack,ReviewOrder );
+
+		theAction  = ACTION EXEC ( RunKarsReview(TRUE); );
+		GenCon( ReviewAll,New,DDMenuItemDef,
+				SetValues,	Text,~Review Full Queue~,
+							IDText,	~ID~,
+							ActionsText, ~<theAction>~ );
+
+		ListMenu( InsertBack,ReviewAll );
+
+	OtherDlg( DisplayMenu,ListMenu,RunRetouchReviewButton(GetRight,Position),RunRetouchReviewButton(GetTop,Position) );
+
+	return TRUE;
+}
+
+
+NUMERIC RunReviewForSelected()
+{
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID,Roll,Roll,Frame,Frame );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Select an Order first~ ) );
+	}
+
+	if ( IsNULL(~<Roll>~) )
+	{
+		return Warning( Translate( ~Select a roll first~ ) );
+	}
+
+	if ( IsNULL(~<Frame>~) )
+	{
+		return Warning( Translate( ~Select a frame first~ ) );
+	}
+
+	if ( !dlg( GetBoolean,KarsDone ) )
+	{
+		dlg( SetCheck,TRUE,KarsDoneBox );
+		dlgData( SetValues,KarsDone,TRUE );
+		if ( !OnKarsDoneBox(TRUE,~QueuedForReview~) )
+		{
+			return FALSE;
+		}
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	Key = STR ( OrderID = '<OrderID>' AND Roll = '<Roll>' AND Frame = '<Frame>' );
+
+	workstationQuery = ~Select ReviewID from RetouchImages Where <Key>~;
+	if ( !dBase( GetValuesFor,~<workstationQuery>~,ReviewStation ) )
+	{
+		dBase( GetErrorDescription,theErr );
+			return Warning( ~Error checking Workstation for <Key>: <theErr>~ );
+	}
+
+	if ( ~<ReviewStation>~ != ~~ && ~<ReviewStation>~ != ~<$App.ComputerName>.<$App.Instance>~ && ~<ReviewStation>~ != ~<$App.ComputerName>~)
+	{
+		msg = Translate( ~This image is assigned to a different workstation for review.\n\nDo you want to change the review workstation for frame <Frame>?~ );		
+		if ( MessageBox( ~<msg>~,YESNO ) == NO )
+		{
+			return FALSE;
+		}
+	}
+
+	Cmd = ~Update RetouchImages Set ReviewID='<$App.ComputerName>.<$App.Instance>' Where <Key>~;
+
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( ~Update Failed.  <Cmd>.  <theErr>~ );
+		break;
+	}
+
+	return RunKarsReview( TRUE );
+}
+
+
+NUMERIC RunReviewForOrder()
+{
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Select an Order first~ ) );
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	Key = STR ( OrderID = '<OrderID>' );
+
+	workstationQuery = ~Select count(*) from RetouchImages Where <Key> AND ReviewID <> '<$App.ComputerName>.<$App.Instance>' AND ReviewID <> '<$App.ComputerName>' AND ReviewID Is Not NULL AND ReviewID <> ''~;
+	NumRecs = dBase( RecordCountFor,~<workstationQuery>~ ); 
+
+	changeAll = FALSE;
+	if ( <NumRecs> > 0 )
+	{
+		msg = Translate( ~<NumRecs> images in this order are assigned to a different workstation for review.\n\nDo you want to change the review workstation for all images in the Order?~ );		
+		if ( MessageBox( ~<msg>~,YESNO ) == YES )
+		{
+			changeAll = TRUE;
+		}
+	}
+
+	if ( <changeAll> )
+	{
+		Cmd = ~Update RetouchImages Set ReviewID='<$App.ComputerName>.<$App.Instance>' Where <Key>~;
+	}
+	else
+	{
+		Cmd = ~Update RetouchImages Set ReviewID='<$App.ComputerName>.<$App.Instance>' Where <Key> AND (ReviewID = '' OR ReviewID Is NULL)~;
+	}
+
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( ~Update Failed.  <Cmd>.  <theErr>~ );
+		break;
+	}
+
+	return RunKarsReview( TRUE );
+}
+
+
+NUMERIC RunKarsReview( Restricted )
+{
+	Actions = ACTION DOC ( RetouchReviewDoc OpenOnce RetouchReviewDoc "Init(<Restricted>);" );
+	PerformActions( Actions );
+
+	return TRUE;	
+}
+
+
+NUMERIC ViewRetouchImages()
+{
+	Actions = ACTION DOC ( RetouchImagesDoc OpenOnce RetouchImagesDoc "Init(~Retouch Images~,~~);" );
+	PerformActions( Actions );
+
+	return TRUE;	
+}
+
+
+NUMERIC ShowRetouchInstructions()
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID,Roll,Roll,Frame,Frame );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Select an Order first~ ) );
+	}
+
+	if ( IsNULL(~<Roll>~) )
+	{
+		return Warning( Translate( ~Select a roll first~ ) );
+	}
+
+	if ( IsNULL(~<Frame>~) )
+	{
+		return Warning( Translate( ~Select a frame first~ ) );
+	}
+
+	Actions = ACTION Doc ( RetouchInstrDialog OpenOnce RetouchInstDoc "Init();" );
+	PerformActions( Actions );
+
+	Actions = ACTION Doc ( RetouchInstrDialog "NewImage( ~<OrderID>~,~<$con.DlgData[Roll]>~,~<$con.DlgData[Frame]>~);" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC OnRetouchDoneBox()
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID,Roll,Roll,Frame,Frame );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Select an Order first~ ) );
+	}
+
+	if ( IsNULL(~<Roll>~) )
+	{
+		return Warning( Translate( ~Select a roll first~ ) );
+	}
+
+	if ( IsNULL(~<Frame>~) )
+	{
+		return Warning( Translate( ~Select a frame first~ ) );
+	}
+
+	Value = dlg( GetBoolean,RetouchDone );
+
+	if ( !<value> )
+	{
+		RemakeItemsUsing(~<OrderID>~,~<Roll>~,~<Frame>~ );
+	}
+
+	Key		= ~OrderID='<OrderID>' AND Roll='<Roll>' AND Frame='<Frame>'~;
+
+	UpdateCmd = ~Update Images Set Retouch = <value> Where <Key>~;
+
+	if ( !ADO( dBase,Connect,Cmd,~<UpdateCmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Error setting the retouch flag for <key>: <theErr>~ );
+	}
+
+	Query	= ~Select Path From Images Where <Key>~;	
+
+	if ( !dBase( Connect,GetValuesFor,~<Query>~,Path ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Error getting the path for <key>: <theErr>~ );
+	}
+
+	if ( IsNULL(~<path>~) )
+	{
+		return TRUE;
+	}
+
+	ForgetLocal( dBase );
+
+	if ( !<Value> )
+	{
+		BroadcastMessageToAllViews( ReleaseImageChain,~<Path>~ );
+		CloseWindowByPath( ~<Path>~ );
+
+		Cmd = STR ( AddAThumbNailToImage(~<OrderID>~,~<Roll>~,~<Frame>~) );
+		ThumbNailThread( EnQueueContentsOf,Cmd,Post,10,0,0 );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnKarsDoneBox( Interactive,karsState )
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID,Roll,Roll,Frame,Frame );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Select an Order first~ ) );
+	}
+
+	if ( IsNULL(~<Roll>~) )
+	{
+		return Warning( Translate( ~Select a roll first~ ) );
+	}
+
+	if ( IsNULL(~<Frame>~) )
+	{
+		return Warning( Translate( ~Select a frame first~ ) );
+	}
+
+	if ( <Interactive> )
+	{
+		Value = dlg( GetBoolean,KarsDone );
+	}
+	else
+	{
+		Value = dlg( GetBoolean,KarsBatchDone );
+	}
+
+	if ( <Value>)
+	{
+		WaitCursor( Begin );
+
+		Key = ~OrderID = '<OrderID>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		Query	= ~Select Path From Images Where <Key>~;	
+
+		if ( !ADO( dBase,Connect,GetValuesFor,~<Query>~,Path ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Error getting the path for <Key>: <theErr>~ );
+		}
+
+		if ( IsNULL(~<Path>~) )
+		{
+			return Warning( Translate( ~The image cannot be sumbitted to AutoRetouching because the image path is empty~ ) );
+		}
+
+		if ( !AddSelectedToKars( dBase,~<karsState>~,~<OrderID>~,~<Roll>~,~<Frame>~,~<Path>~ ) )
+		{
+			return FALSE;
+		}
+		if ( <Interactive> )
+		{
+			dlg( SetCheck,FALSE,KarsBatchDoneBox);
+		}
+		else
+		{
+			dlg( SetCheck,FALSE,KarsDoneBox);
+		}
+	}
+	else
+	{
+		if ( !<Interactive> )
+		{
+			karsState = ~QueuedForBatch~;
+		}
+		if ( !RemoveSelectedFromKars( ~<karsState>~,~<OrderID>~,~<Roll>~,~<Frame>~ ) )
+		{
+			return FALSE;
+		}
+
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC MakeThumbnailsForOrder()
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNull( ~<OrderID>~ ) )
+	{
+		return Warning( ~You must select an order first~ );
+	}
+
+	Query = ~Select Roll,Frame,Path From Images Where OrderID = '<OrderID>' AND Path IS NOT NULL Order By Roll,Frame~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Query Failed <Query>. <theErr>~) );
+	}
+
+	while ( List( GetNext,Image ) )
+	{
+		Path = ~<$pcon.Image[Path]>~;
+
+		BroadcastMessageToAllViews( ReleaseImageChain,~<Path>~ );
+		CloseWindowByPath( ~<Path>~ );
+
+		Cmd = STR ( AddAThumbNailToImage(~<OrderID>~,~<$pcon.Image[Roll]>~,~<$pcon.Image[Frame]>~) );
+		ThumbNailThread( EnQueueContentsOf,Cmd );
+	}
+
+	return ThumbNailThread( Post,10,0,0 );
+}
+
+
+NUMERIC OnDoColorCorrectButton()
+{
+	Action = ACTION DOC ( EditImagesDoc3 OpenOnce EditImagesDoc3 );
+	return PerformActions( Action );
+}
+
+
+NUMERIC OnColorCorrectDoneBox()
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID,Roll,Roll,Frame,Frame );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Select an Order first~ ) );
+	}
+
+	if ( IsNULL(~<Roll>~) )
+	{
+		return Warning( Translate( ~Select a roll first~ ) );
+	}
+
+	if ( IsNULL(~<Frame>~) )
+	{
+		return Warning( Translate( ~Select a frame first~ ) );
+	}
+
+	Value = dlg( GetBoolean,ColorCorrectDone );
+
+	Key = ~OrderID = '<OrderID>' AND Roll = '<$con.DlgData[roll]>' AND Frame = '<$con.DlgData[Frame]>'~;
+
+	Cmd = ~Update Images Set Inspect = <Value> Where <Key>~;
+
+	if ( !Ado( dBase,Connect,Cmd,~<Cmd>~ ) )
+	{
+		return dlg( SetStatus,0,Translate( ~Failed to set the Inspect flag for <OrderID>,<$con.DlgData[Roll]>,<$con.DlgData[Frame]>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnRejectDoneBox()
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID,Roll,Roll,Frame,Frame );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Select an Order first~ ) );
+	}
+
+	if ( IsNULL(~<Roll>~) )
+	{
+		return Warning( Translate( ~Select a roll first~ ) );
+	}
+
+	if ( IsNULL(~<Frame>~) )
+	{
+		return Warning( Translate( ~Select a frame first~ ) );
+	}
+
+	Value = dlg( GetBoolean,RejectDone );
+
+	Key = ~OrderID = '<OrderID>' AND Roll = '<$con.DlgData[roll]>' AND Frame = '<$con.DlgData[Frame]>'~;
+
+	Cmd = ~Update Images Set Rejected = <Value> Where <Key>~;
+
+	if ( !Ado( dBase,Connect,Cmd,~<Cmd>~ ) )
+	{
+		return dlg( SetStatus,0,Translate( ~Failed to set the rejected flag for <OrderID>,<$con.DlgData[Roll]>,<$con.DlgData[Frame]>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RemakeForFrame()
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID,Roll,Roll,Frame,Frame );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Select an Order first~ ) );
+	}
+
+	if ( IsNULL(~<Roll>~) )
+	{
+		return Warning( Translate( ~Select a roll first~ ) );
+	}
+
+	if ( IsNULL(~<Frame>~) )
+	{
+		return Warning( Translate( ~Select a frame first~ ) );
+	}
+
+	if ( MessageBox( ~Are you sure you want to remake order items using the image for <OrderID>,<Roll>,<Frame>? ~,YESNO ) == NO )
+		{ return TRUE; }
+
+	return RemakeItemsUsing(~<OrderID>~,~<Roll>~,~<Frame>~ );
+}
+
+
+LastCropX = 50;
+LastCropY = 50;
+LastCropWidth = 100;
+LastCropLength = 100;
+LastRotation = 0;
+
+VOID ChangeCrop( SetTheCrop )
+{
+	dlg( GetInput );
+
+	if ( ~<$con.DlgData[CropName]>~ != ~~ )
+	{
+		Query = ~Select CropX,CropY,CropWidth,CropLength,Rotation From Crops Where Name = '<$con.DlgData[CropName]>'~;
+
+		if ( !Ado( dBase,Connect,GetValuesFor,~<Query>~,CropX,CropY,CropWidth,CropLength,Rotation ) )
+		{
+			return dlg( SetStatus,0,Translate( ~No crop exists for <$con.DlgData[CropName]>~ ) );
+		}
+
+		LastCropX = ~<CropX>~;			LastCropY = ~<CropY>~; 
+		LastCropWidth = ~<CropWidth>~;	LastCropLength= ~<CropLength>~;
+		LastRotation = ~<Rotation>~;
+
+		if ( <SetTheCrop> )
+		{
+			OnUseLastCrop();
+		}
+	}
+}
+
+
+VOID OnSaveCrop()
+{
+	dlg( GetInput );
+
+	Query = STR ( SELECT * From Crops Order By Name );
+	Actions = ACTION Doc ( ~Crops~ OpenOnce CropsDoc "AddNewCrop( ~All~,~<Query>~,~<$con.dlgData[CropX]>~,~<$con.dlgData[CropY]>~,~<$con.dlgData[CropWidth]>~,~<$con.dlgData[CropLength]>~,50,50,100,100,0,~~,0);" );
+	
+	PerformActions( Actions );
+}
+
+VOID OnViewCrops()
+{
+	Query = STR ( SELECT * From Crops Order By Name );
+
+	Actions = ACTION Doc ( ~Crops~ OpenOnce CropsDoc "Init( ~~,~<Query>~ );" );
+	PerformActions( Actions );
+}
+
+
+
+
+VOID ShrinkCrop()
+{
+	if ( ImageCorrections( GetCrop,~<LastImagePath>~,cX,cY,cW,cL ) )
+	{
+		orgW = <cW>;
+
+		if ( <--cW> < 10 )
+		{
+			cW = 10;
+		}
+
+		cL = <cW> * <cL> / <orgW>;
+
+		dlg( SetStrings,CropWidth,~<cW>~,CropLength,~<cL>~ );
+		ImageCorrections( UpdateCrop,~<LastImagePath>~,~<cX>~,~<cY>~,~<cW>~,~<cL>~ );
+	}
+}
+
+
+VOID ExpandCrop()
+{
+	if ( ImageCorrections( GetCrop,~<LastImagePath>~,cX,cY,cW,cL ) )
+	{
+		orgW = <cW>;
+
+		if ( <++cW> > 100 )
+		{
+			cW = 100;
+		}
+
+		cL = <cW> * <cL> / <orgW>;
+
+		dlg( SetStrings,CropWidth,~<cW>~,CropLength,~<cL>~ );
+		ImageCorrections( UpdateCrop,~<LastImagePath>~,~<cX>~,~<cY>~,~<cW>~,~<cL>~ );
+	}
+}
+
+
+VOID ShiftCropLeft()
+{
+	if ( ImageCorrections( GetCrop,~<LastImagePath>~,cX,cY,cW,cL ) )
+	{
+		if ( <--cX> < 0 )
+		{
+			cX = 0;
+		}
+
+		dlg( SetStrings,CropX,~<cX>~ );
+		ImageCorrections( UpdateCrop,~<LastImagePath>~,~<cX>~,~<cY>~,~<cW>~,~<cL>~ );
+	}
+}
+
+
+VOID ShiftCropDown()
+{
+	if ( ImageCorrections( GetCrop,~<LastImagePath>~,cX,cY,cW,cL ) )
+	{
+		if ( <++cY> > 100 )
+		{
+			cY = 100;
+		}
+
+		dlg( SetStrings,CropY,~<cY>~ );
+		ImageCorrections( UpdateCrop,~<LastImagePath>~,~<cX>~,~<cY>~,~<cW>~,~<cL>~ );
+	}
+}
+
+
+VOID ShiftCropRight()
+{
+	if ( ImageCorrections( GetCrop,~<LastImagePath>~,cX,cY,cW,cL ) )
+	{
+		if ( <++cX> > 100 )
+		{
+			cX = 100;
+		}
+
+		dlg( SetStrings,CropX,~<cX>~ );
+		ImageCorrections( UpdateCrop,~<LastImagePath>~,~<cX>~,~<cY>~,~<cW>~,~<cL>~ );
+	}
+}
+
+
+VOID ShiftCropUp()
+{
+	if ( ImageCorrections( GetCrop,~<LastImagePath>~,cX,cY,cW,cL ) )
+	{
+
+		if ( <--cY> < 0 )
+		{
+			cY = 0;
+		}
+
+		dlg( SetStrings,CropY,~<cY>~ );
+		ImageCorrections( UpdateCrop,~<LastImagePath>~,~<cX>~,~<cY>~,~<cW>~,~<cL>~ );
+	}
+}
+
+VOID OnUseLastCrop()
+{
+	dlg( SetStrings,CropX,~<LastCropX>~,CropY,~<LastCropY>~,CropWidth,~<LastCropWidth>~,CropLength,~<LastCropLength>~);
+
+	if ( !IsNull( ~<LastImagePath>~ ) )
+	{
+		ImageCorrections( UpdateCrop,~<LastImagePath>~,~<LastCropX>~,~<LastCropY>~,~<LastCropWidth>~,~<LastCropLength>~ );
+	}
+}
+
+VOID RememberCrop()
+{
+	dlg( GetStrings,X,CropX,Y,CropY,Width,CropWidth,Length,CropLength );
+
+	LastCropX = ~<X>~;	LastCropY = ~<Y>~;  LastCropWidth = ~<Width>~;  LastCropLength = ~<Length>~; 
+}
+
+
+NUMERIC UpdateFrameStatus( OpenImage )
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID,Roll,Roll,Frame,Frame );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return dlg( SetStatus,0,Translate( ~No order~ ) );
+	}
+
+	if ( IsNULL(~<Roll>~) )
+	{
+		return dlg( SetStatus,0,Translate( ~No rolls~ ) );
+	}
+
+	if ( IsNULL(~<Frame>~) )
+	{
+		dlg( SetCheck,0,ScanDoneBox,RetouchDoneBox,KarsDoneBox,KarsBatchDoneBox,ColorCorrectDoneBox,RejectDoneBox );
+		return dlg( SetStatus,0,Translate( ~No frames~ ) );
+	}
+
+	if ( ~<OrderID>~ == ~~ || ~<$con.DlgData[Roll]>~ == ~~ || ~<$con.DlgData[Frame]>~ == ~~ )
+	{
+		dlg( EnableControls,FALSE,ScanDoneBox,DoScanButton,KarsDoneBox,KarsBatchDoneBox,RetouchDoneBox,DoRetouchButton,DoKarsButton,ColorCorrectDoneBox,DoColorCorrectButton,RejectBox,RejectDoneBox );
+		dlg( SetCheck,0,ScanDoneBox,RetouchDoneBox,KarsDoneBox,KarsBatchDoneBox,ColorCorrectDoneBox,RejectDoneBox );
+	}
+
+	dlg( EnableControls,TRUE,ScanDoneBox,DoScanButton,RetouchDoneBox,DoRetouchButton,KarsDoneBox,KarsBatchDoneBox,DoKarsButton,ColorCorrectDoneBox,DoColorCorrectButton,RejectBox );
+
+	Key = ~OrderID = '<OrderID>' AND Roll = '<$con.DlgData[Roll]>' AND Frame = '<$con.DlgData[Frame]>'~;
+	Query = ~Select Scan,Retouch,Inspect,Rejected,Path,SubjectID,CropX,CropY,CropWidth,CropLength,Width,Length,PreviewWidth,PreviewLength,FileType From Images Where <Key>~;
+
+	Width=Length=PreviewWidth=PreviewLength=0;	FileType =~~;
+
+	if ( !Ado( dBase,Connect,GetValuesFor,~<Query>~,Scan,Retouch,Inspect,Rejected,Path,SubjectID,CropX,CropY,CropWidth,CropLength,Width,Length,PreviewWidth,PreviewLength,FileType ) )
+	{
+		return dlg( SetStatus,0,Translate( ~No image exists for <OrderID>,<$con.DlgData[Roll]>,<$con.DlgData[Frame]>~ ) );
+	}
+
+	dlg( SetCheck,MakeNumber(~<Scan>~),ScanDoneBox );
+	dlg( SetCheck,MakeNumber(~<Retouch>~),RetouchDoneBox );
+	dlg( SetCheck,MakeNumber(~<Inspect>~),ColorCorrectDoneBox );
+	dlg( SetCheck,MakeNumber(~<Rejected>~),RejectDoneBox );
+
+	dlg( SetString,Translate( ~<SubjectID>~ ) ,SubjectID,0 );
+
+	dlg( SetStrings,CropX,~<CropX>~,CropY,~<CropY>~,CropWidth,~<CropWidth>~,CropLength,~<CropLength>~);
+
+	retouchState = ~~;
+	Query2 = ~Select RetouchState from RetouchImages Where <Key>~;
+	dBase( GetValuesFor,~<Query2>~,retouchState );
+
+	if ( ~<retouchState>~ == ~QueuedForBatch~ || ~<retouchState>~ == ~<InBatch>~ )
+	{
+		dlg( SetCheck,TRUE,KarsBatchDoneBox );
+		dlg( SetCheck,FALSE,KarsDoneBox );
+	}
+	else if ( ~<retouchState>~ != ~~ && ~<retouchState>~ != ~<Complete>~ )
+	{
+		dlg( SetCheck,FALSE,KarsBatchDoneBox );
+		dlg( SetCheck,TRUE,KarsDoneBox );
+	}
+	else
+	{
+		dlg( SetCheck,FALSE,KarsBatchDoneBox );
+		dlg( SetCheck,FALSE,KarsDoneBox );
+	}
+
+	Actions = ACTION Doc ( ImagesDoc "SelectImage( ~<OrderID>~,~<$con.DlgData[Roll]>~,~<$con.DlgData[Frame]>~);" );
+	PerformActions( Actions );
+
+	Actions = ACTION Doc ( RetouchInstrDialog "NewImage( ~<OrderID>~,~<$con.DlgData[Roll]>~,~<$con.DlgData[Frame]>~);" );
+	PerformActions( Actions );
+
+	ImageFound = TRUE;
+
+	if ( <OpenImage> )
+	{
+		ImageFound = OpenAnImage( ~<OrderID>~,~<$con.DlgData[Roll]>~,~<$con.DlgData[Frame]>~ );
+		ViewSubjectInfoData();
+	}
+
+	NoImage = $ImageFound ? ~~ : ~No Image~;
+	DeltaDRGB = ~~;
+
+	if ( DRGBFromAdjustments( OrderRollFrame,~<OrderID>~,~<$con.DlgData[Roll]>~,~<$con.DlgData[Frame]>~,D,R,G,B ) )
+	{
+		DeltaDRGB = ~dDRGB(<D>,<R>,<G>,<B>)~;
+	}
+
+	return dlg( SetStatus,0,Translate( ~<OrderID> <$con.DlgData[Roll]> <$con.DlgData[Frame]>.  <Width>x<Length>  <FileType> <NoImage>  <DeltaDRGB>~) );
+}
+
+
+
+NUMERIC OnFrameSelected()
+{ 
+	UpdateFrameStatus(TRUE);
+
+	return TRUE;
+}
+
+
+NUMERIC OpenAnImageExternal( OrderID,Roll,Frame )
+{
+	WaitCursor( Begin );
+
+	Query = ~Select Path From Images Where OrderID = '<OrderID>' And Roll = '<Roll>' And Frame = '<Frame>'~;
+
+	if ( !Ado( dBase,Connect,GetValuesFor,~<Query>~,Path ) )
+	{
+		WaitCursor( End );
+		return dlg( SetStatus,0,Translate( ~No image exists for <OrderID>,<Roll>,<Frame>~ ) );
+	}
+
+	if ( ~<Path>~ == ~~ )
+	{
+		WaitCursor( End );
+		return dlg( SetStatus,0,Translate( ~No image exists for <OrderID>,<Roll>,<Frame>~ ) );
+	}
+
+	BroadcastMessageToAllViews( ReleaseImageChain,~<Path>~ );
+	CloseWindowByPath( ~<Path>~ );
+
+
+	if ( !MakeImageWritable( ~<Path>~ ) )
+	{
+		WaitCursor( End );
+		return FALSE;
+	}
+
+	if ( !FindExecutable( ~<Path>~,Program ) )
+	{
+		GetLastError( ErrorString,theErr );
+		WaitCursor( End );
+		return Warning( ~You must go to View/Options/FileTypes of the Windows Explorer to define the program that can open\n\n  <Path>.\n\n<theErr>~ );
+	}
+
+	StatusBarText( ~Opening <Path> with <Program>~ );
+
+	if ( !ShellExecute( Open,~<Path>~ ) )
+	{
+		GetLastError( ErrorString,theErr );
+		Log( Session,~Could not open <Path>. <theErr>~ );
+		WaitCursor( End );
+		return FALSE;
+	}
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+LastImagePath = ~~;
+
+NUMERIC OpenAnImage( OrderID,Roll,Frame )
+{
+	Query = ~Select Path From Images Where OrderID = '<OrderID>' And Roll = '<Roll>' And Frame = '<Frame>'~;
+
+	if ( !Ado( dBase,Connect,GetValuesFor,~<Query>~,Path ) )
+	{
+		dlg( SetStatus,0,Translate( ~No image exists for <OrderID>,<Roll>,<Frame>~ ) );
+		return FALSE;
+	}
+
+	if ( ~<Path>~ == ~~ )
+	{
+		dlg( SetStatus,0,Translate( ~No image exists for <OrderID>,<Roll>,<Frame>~ ) );
+		return FALSE;
+	}
+
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( ~Could not create document info for <Path>~ ); }
+
+	Info( SetValues,OrderID,~<OrderID>~,Roll,~<Roll>~,Frame,~<Frame>~ );
+
+	Document( Doc );
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == ImageView || ~<ViewType>~ == ImageEditView )
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~~ ) 
+				continue;
+
+			if ( ~<DocumentPath>~ == ~<Path>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+			
+			if ( KeyState( LSHIFT ) || KeyState( RSHIFT ) )
+			{
+				if ( !Doc( Open,~<Path>~,Image,~~,Info ) )
+				{ 
+					return FALSE;
+				}
+
+				return TRUE;		//Window( CloseWindow );
+			}
+
+			if ( Doc( FindByPath,~<DocumentPath>~ ) )
+			{
+				ImageCorrections( Free,~<LastImagePath>~ );
+
+				if ( !Files( FileExists,~<Path>~ ) )
+				{
+						dlg( SetStatus,0,~Frame <Frame> has no image~ );
+						return FALSE;
+				}
+
+				ImageCorrections( GetAndFreeWhenLastView,~<Path>~ );	// NEED THIS TO RECEIVE CROP UPDATES
+				LastImagePath = ~<Path>~;
+				return Doc( ReplaceImage,~<Path>~,Info );
+			}
+		}
+	}
+
+	ImageCorrections( Free,~<LastImagePath>~ );
+
+	if ( !Files( FileExists,~<Path>~ ) )
+	{
+		dlg( SetStatus,0,~Frame <Frame> has no image~ );
+		return FALSE;
+	}
+
+	if ( !Doc( Open,~<Path>~,Image,~~,Info ) )
+	{ 
+		return FALSE;
+	}
+
+	ImageCorrections( GetAndFreeWhenLastView,~<Path>~ );	// NEED THIS TO RECEIVE CROP UPDATES
+
+	LastImagePath = ~<Path>~;
+
+	return TRUE;
+}
+
+RefreshRoutine = STR ( OnDocumentRefresh(%ld) );
+
+VOID OnDocumentRefresh( settingScanArea )
+{
+	ImageCorrections( GetCrop,~<LastImagePath>~,cX,cY,cW,cL );
+
+	dlg( SetStrings,CropX,<cX>,CropY,<cY>,CropWidth,<cW>,CropLength,<cL> );	 					
+}
+
+
+NUMERIC ExportImages()
+{
+	if ( IsNULL(~<$con.DlgData[OrderID]>~) )
+	{
+		return Warning( Translate( ~You must enter an Order First~ ) );
+	}
+
+	Actions = ACTION Doc ( ~ExportImagesDoc~ OpenOnce ExportImagesDoc "Init(~<$con.DlgData[OrderID]>~);" );
+
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+
+NUMERIC OnSetOrderStatus()
+{
+	DlgDefinition( GetWindowPosition,Left,Top);	
+
+	Left -= 280;
+
+	dlg( GetInput,GetStrings,Order,Order );
+
+	if ( IsNULL(~<$con.DlgData[OrderID]>~) )	
+	{ 
+		return Warning( ~You must select an Order~ );
+	}
+
+	Actions = ACTIONS ( Doc( ~SetOrderStatusDoc~ Open SetOrderStatusDoc "Init( ~<$con.DlgData[OrderID]>~,~<Left>~,~<Top>~ );" ) );
+	return PerformActions( Actions );
+}
+
+
+
+NUMERIC OnImportImagesButton()	// ??? Images Order or ReOrder
+{
+	Actions = ACTION Doc ( ~ImportImagesDoc~ OpenOnce ImportImagesDoc "Init(~<$con.DlgData[OrderID]>~);" );
+	PerformActions( Actions );
+
+	return CloseOtherDialog();
+}
+
+
+NUMERIC OnImportButton()	// ??? Images Order or ReOrder
+{
+	OtherDlgDefinition( GetWindowPosition,xPos,yPos );
+
+	xPos = <xPos> - 72;
+
+	if ( <xPos> < 0 )
+	{
+		xPos = 10;
+	}
+
+	if ( <yPos> < 0 )
+	{
+		yPos = 10;
+	}
+
+	Actions = ACTION Doc ( ~StartImportingDoc~ OpenOnce StartImportingDoc "Init(~<$con.DlgData[OrderID]>~,<xPos>,<yPos>);" );
+	PerformActions( Actions );
+
+	return CloseOtherDialog();
+}
+
+
+VOID ViewThumbnails()
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( ~<OrderID>~ != ~~ )
+	{
+		ImageQuery( ~'<OrderID>'~,TRUE );
+	}
+}
+
+
+NUMERIC ImageQuery( List,AsImages )
+{
+	RollClause = ~~;
+
+	if ( ~<$con.dlgData[Roll]>~ != ~~ )
+	{
+		RollClause = ~ And Roll = '<$con.dlgData[Roll]>' ~;
+	}
+
+	if ( ~<$con.dlgData[WhichFrames]>~ == ~Retouch~ )
+	{
+		RollClause = ~ <RollClause> And (Retouch <> 0) ~;
+	}
+	else if ( ~<$con.dlgData[WhichFrames]>~ == ~Scan~ )
+	{
+		RollClause = ~ <RollClause> And (Scan <> 0)~;
+	}
+	else if ( ~<$con.dlgData[WhichFrames]>~ == ~Correct~ )
+	{
+		RollClause = ~ <RollClause> And (Inspect <> 0) ~;
+	}
+	else if ( ~<$con.dlgData[WhichFrames]>~ == ~Reject~ )
+	{
+		RollClause = ~ <RollClause> And (Rejected <> 0) ~;
+	}
+
+	Query = ~Select * From Images Where OrderID In (<List>) <RollClause> Order By OrderID,Roll,Frame~;
+
+	WhichDoc = <AsImages> ? ImagesDoc : ImagesDataDoc;
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	Actions = ACTION Doc ( ~OrderImages~ <OpenMethod> <WhichDoc> "Init( ~<List>~,<AsImages>,~<Query>~,0 );" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC ItemsQuery( List,AsImages )
+{
+	Query = ~Select OrderItems.*, Products.LayoutName From OrderItems,Products  Where OrderID In (<List>) And OrderItems.ProductID = Products.ID ORDER BY OrderID,OrderItems.Sequence~;
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	Actions = ACTION Doc ( ~OrderItems~ <OpenMethod> OrderItemsDoc "Init( ~<List>~,~<Query>~,<AsImages> );" );
+	return PerformActions( Actions );
+
+	return TRUE;
+}
+
+
+NUMERIC OrderQuery( ID )
+{
+	Query = ~Select * From Orders Where ID = '<ID>' Order By ID~;
+
+	Actions = ACTIONS ( Doc( ~Orders~ OpenOnce OrdersDoc "Init( ~<ID>~,~<Query>~);" ) );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC OnOrderButton()
+{
+	if ( ~<$con.DlgData[OrderID]>~ != ~~ )
+	{
+		Query = ~Select * From Orders Where ID Like '<$con.DlgData[OrderID]>%' OR ImagesOrderID Like '<$con.DlgData[OrderID]>%' Order By ID~;
+
+		Actions = ACTIONS ( Doc( ~Orders~ OpenOnce OrdersDoc "Init( ~<$con.DlgData[OrderID]>~,~<Query>~);" ) );
+	}
+	else
+	{
+		Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( Orders );" ) );
+	}
+	
+	PerformActions( Actions );
+
+	CloseDialog();
+}
+
+
+NUMERIC SeeRollsForOrder()
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( ~<OrderID>~ != ~~ )
+	{
+		Query = ~Select * From Rolls Where OrderID In ('<OrderID>') Order By OrderID,Roll~;
+
+		OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+		Actions = ACTION Doc ( ~Rolls~ <OpenMethod> RollsDoc "Init( ~<OrderID>~,~<Query>~ );" );
+		return PerformActions( Actions );
+	}
+
+	return dlg( SetStatus,0,Translate( ~You must select an order first~ ) );
+}
+
+
+NUMERIC SeeFramesForOrder()
+{
+	dlg( GetInput );
+
+	if ( ~<$con.DlgData[OrderID]>~ == ~~ )
+	{
+		return Warning( ~Enter and order id~ );
+	}
+
+	RollClause = ~~;
+
+	if ( ~<$con.DlgData[Roll]>~ != ~~ )
+	{
+		RollClause = ~ And Roll = '<$con.DlgData[Roll]>' ~;
+	}
+
+	if ( ~<$con.DlgData[WhichFrames]>~ == ~Retouch~ )
+	{
+		RollClause = ~ And (Retouch <> 0) ~;
+	}
+	else if ( ~<$con.DlgData[WhichFrames]>~ == ~Scan~ )
+	{
+		RollClause = ~ And (Scan <> 0)~;
+	}
+	else if ( ~<$con.DlgData[WhichFrames]>~ == ~Correct~ )
+	{
+		RollClause = ~ And (Inspect <> 0) ~;
+	}
+	else if ( ~<$con.DlgData[WhichFrames]>~ == ~Reject~ )
+	{
+		RollClause = ~ And (Rejected <> 0) ~;
+	}
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID );
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNull( ~<OrderID>~ ) )
+	{
+		return Warning( ~You must select an order first~ );
+	}
+
+	Query = ~Select * From Images Where OrderID In ('<OrderID>') <RollClause> Order By OrderID,Roll,Frame~;
+
+	OpenMethod = KeyState( LSHIFT ) ? Open : OpenOnce;
+	//Actions = ACTION Doc ( ~OrderImages~ <OpenMethod> ImagesDataDoc "Init( ~'<OrderID>'~,FALSE,~<Query>~,0 );" );
+	//PerformActions( Actions );
+
+	Actions = ACTION Doc ( ImagesDataDoc <OpenMethod> ImagesDataDoc "FrameDataForOrderRoll( ~<OrderID>~,FALSE,~<Query>~,0,~<OrderID>~,~<$con.DlgData[Roll]>~ );" );
+	PerformActions( Actions );
+
+	return TRUE;
+
+}
+
+
+NUMERIC OnJobsButton()
+{
+	dlg( GetInput );
+
+	if ( IsNULL(~<$con.DlgData[OrderID]>~) )
+	{
+		return Warning( Translate( ~You must enter an Order First~ ) );
+	}
+
+	RemakeClause =  Numeric(~<$con.dlgData[RemakesOnly]>~) ? ~AND Remake <> 0~ : ~~;
+
+	Query = ~Select OrderItems.*, Products.LayoutName From OrderItems,Products  Where OrderID In ('<$con.DlgData[OrderID]>') <RemakeClause> And OrderItems.ProductID = Products.ID ORDER BY OrderID,OrderItems.Sequence~;
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	Actions = ACTION Doc ( ~OrderItems~ <OpenMethod> OrderItemsDoc "Init( ~<$con.DlgData[OrderID]>~,~<Query>~,TRUE );" );
+	PerformActions( Actions );
+
+	return OpenProducts();
+}
+
+
+NUMERIC OpenProducts()
+{
+	if ( !Document( Doc,FindByFileName,ProductsDoc ) )
+	{
+		Actions = ACTION DOC ( Products OpenOnce ProductsDoc "Init( ~~,TRUE,~Select * From Products Order By Category,Sequence,ID~ );" );
+		return PerformActions( Actions );
+	}
+
+	return FALSE;
+}
+
+
+
+VOID OnPrintButton()
+{
+	RunWholeOrder();
+	return;
+}
+
+
+VOID OnJobQButton()
+{
+	OpenMethod = KeyState( LSHIFT ) ? Open : OpenOnce;
+
+	Query = ~Select * From JobQueue Where OrderID = '<$con.DlgData[OrderID]>'~;
+
+	Actions = ACTION DOC ( AllJobs <OpenMethod> JobQueueDoc "Init( ~~,~<Query>~ );" );
+
+	PerformActions( Actions );
+}
+
+
+VOID OnOrderPadButton()
+{
+	Actions = ACTION DOC ( OrderPad OpenOnce SimpleOrderingDoc "Init( ~<$con.DlgData[OrderID]>~,~<$con.DlgData[OrderID]>~ );" );
+
+	PerformActions( Actions );
+}
+
+
+VOID OnOrderDoneButton()
+{
+	return;
+}
+
+
+
+NUMERIC ViewSubjectInfoData( WhichSubjects )
+{
+	IsAlreadyOpen = Document( Doc,FindByFileName,SubjectInfoDoc );
+
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,ImagesOrderID,ImagesOrderID);
+
+	if ( ~<OrderID>~ == ~~ )
+	{
+		return dlg( SetStatus,0,Translate( ~Enter an OrderID~ ) );
+	}
+
+	if ( ~<ImagesOrderID>~ != ~~ )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNull( ~<OrderID>~ ) )
+	{
+		return Warning( ~You must select an order first~ );
+	}
+
+	if ( !GetSubjectOrderIDInfoType( ~<OrderID>~, InfoType, SubjectInfoOrderId) )
+	{	return FALSE;	}
+
+	Query = ~Select * From SubjectInfo Where OrderID = '<SubjectInfoOrderID>' ~;
+
+	if ( ~<WhichSubjects>~ != ~All~ )
+	{
+		if ( !<IsAlreadyOpen> )
+		{
+			return FALSE;
+		}
+
+		Query = ~<Query> AND SubjectID = '<$con.dlgdata[SubjectID]>'~;
+		OkayToOpen = TRUE;
+	}
+
+	Query = ~<Query> Order By OrderID,SubjectID~;
+
+	Actions = ACTION Doc ( ~SubjectInfo~ OpenOnce SubjectInfoDoc "Init2( ~<SubjectInfoOrderId>~,~<InfoType>~,~<Query>~ );" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC RunWholeOrder()
+{
+	dlg( GetInput );
+
+	Query = ~Select Priority,Owner From Orders Where ID = '<$con.dlgData[OrderID]>'~;
+
+	if ( !Ado( dBase,Connect,GetValuesFor,~<Query>~,Priority,Owner ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Error on query:\n\n<Query>.\n\n<theErr>~ );
+	}
+
+	RemakesOnly = Numeric(~<$con.dlgData[RemakesOnly]>~) != 0;
+
+	RemakesClause = <RemakesOnly> ? ~ AND Remake <> 0 ~ : ~~;
+
+	Count = dBase( RecordCountFor,~Select * From OrderItems Where OrderID = '<$con.dlgData[OrderID]>' <RemakesClause>~ );
+
+	if ( <Count> <= 0 )
+	{ 
+		return Warning( ~There are no order items for this order~ );
+	}
+
+	if ( MessageBox( ~<Count> orders items will be printed for Order <$con.dlgData[OrderID]>.  Do you wish to continue?~,YESNO ) != YES )
+	{ 
+		return FALSE;
+	}
+
+	if ( !Ado( dbLocal,ConnectLocal ) )
+	{
+		dbLocal( GetErrorDescription,theErr );
+		return Warning( ~Error connecting to the local database: <theErr>~ );
+	}
+
+	BatchID = UniquePrintBatchID();
+
+	if ( ~<Owner>~ == ~~ )
+	{
+		Owner = ~<$App.UserName>~;
+	}
+
+	if ( ~<Priority>~ == ~~ )
+	{
+		Priority = 50;
+	}
+
+	Now = Time();
+
+
+	Fields = STR ( BatchID,OrderID,OrderItemID,Sequence,Priority,Owner,SubmitDate,PrintStatus,RemakesOnly );
+	Values = STR ( '<BatchID>','<$con.dlgData[OrderID]>',0,<++count>,<Priority>,'<Owner>','<Now>',1,<RemakesOnly> );
+
+	Cmd = STR ( Insert Into OrderItemsToQueue(<Fields>) Values(<Values>) );
+
+	if ( !dbLocal( BeginTransaction,CMD,~<Cmd>~ ) )
+	{
+		dbLocal( GetErrorDescription,theErr,RollBackTransaction );
+		return Warning( ~Error: <theErr>  <Cmd>~ );
+	}
+
+	dbLocal( CommitTransaction );
+
+	Action = ~ProcessTheOrders()~;
+	QueueContentsAfter( Action,2000 );
+
+	return TRUE;
+}
+
+// FUNCTION: CreateBatchCards()
+//
+//  This function creates the appropriate size batch card for the given order and 
+//  product.
+//
+NUMERIC CreateRemakeBatchCards ( BatchID, OrderID, ProductID )
+{
+    // Avoid adding batch cards for batch card or index card products.
+    aStr = String( StringInString, ~Batch~, ~<ProductID>~);
+    if (~<aStr>~ != ~~)
+    {
+         return TRUE;
+    }
+
+    aStr = String( StringInString, ~Index~, ~<ProductID>~);
+    if (~<aStr>~ != ~~)
+    {
+         return TRUE;
+    }
+
+    // Deduce from products target Queue to work out the size of index card to use.
+    // Trim the G, L or Y for the Base Product
+    Length = strlen( ~<ProductID>~);
+    substr(~<ProductID>~`, 0, <Length> - 1,  BaseProductID );
+
+    // Capture the G, L or Y for the Surface
+    substr(~<ProductID>~, <Length> - 1, <Length>,  Surface );
+
+    BaseQueueName = GetQueueName(~<BaseProductID>~);
+
+    QueueName = GetQueueNameForSurface( ~<BaseQueueName>~, ~<Surface>~);
+
+    Log( Session, ~FrameSelector:************* QueueName = <QueueName> for ProductID <ProductID>~ );
+    if ( ~<QueueName>~ == ~~ )
+    {
+        Log( Session, ~There was no output queue specified for <ProductID>~ );
+        return FALSE;
+    }
+
+    // OK Queue names look like 05_Inch_G, so extract the second digit or first 2
+    substr(~<QueueName>~, 0, 1, FirstChar);
+    if (~<FirstChar>~ == ~0~)
+    {
+        substr(~<QueueName>~, 1, 1, Size);
+    }
+    else
+    {
+        substr(~<QueueName>~, 0, 2, Size);
+    }
+    
+    // Skip entirely for Theta or canvas or anything that doesnt have a
+    // numeric prepended Queue Name.
+    if (!IsNumeric(~<Size>~))
+    {
+        Log( Session, ~FrameSelector:************* Size <Size> is not Numeric, therefore have to skip batch cards for Product <ProductID> ~ );
+        return FALSE;
+    }
+
+    Log( Session, ~FrameSelector:************* Size of Batch card for <ProductID> = <Size>~ );
+
+    // Cap the max size of a batch card at 12 inch
+    if (<size> > 12)
+    {
+        Log( Session, ~FrameSelector:************* Batch cards are capped at 12 inch therefore dont print a <Size> Inch Batch Card~ );
+        return FALSE;
+    }
+
+    Log( Session, ~FrameSelector: ****** Read the Assembly Point for BatchID <BatchID> orderID <OrderID>~ );
+
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Log( Session, ~FrameSelector:********* Could not connect to database !!!!!~ );
+        return FALSE;
+    }
+
+    // Now do the batch cards.
+    Query = ~Select AssemblyPoint From WebBatchQueue Where BatchID='<BatchID>' and OrderID = '<OrderID>'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward, Query,~<Query>~ ) )
+    {
+        Log( Session, ~FrameSelector:********* Order <OrderID> does not exist !!!!!~ );
+        return FALSE;
+    }
+
+    List( GetFirst, Order );
+
+    // before creating the batch card work out some info to print
+    // 1) Who Imported the Order
+    // 2) Details of the order, ie batches etc
+    // 3) Straight or colour corrected.
+
+    ImportedBy = GetImporter( ~<OrderID>~ );
+
+    CreateOrderItemAndJob( ~<OrderID>~, ~~, ~~, ~<Size> Inch Batch~, ~1~,
+                           ~Node.10011.Text~, ~<ImportedBy>~,
+                           ~Node.10012.Text~, ~Batch ID <BatchID> Reprint Assembly Point <$pcon.Order[AssemblyPoint]>~,
+                           ~Keyword.Saveimage.Queuename~, ~<QueueName>~ );
+    return TRUE;
+}
+
+NUMERIC AddRemakeBatchCards(BatchID, OrderID)
+{
+    Log( Session, ~FrameSelector: ****** Start AddRemakeBatchCards for orderID <OrderID>~ );
+
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Log( Session, ~FrameSelector:********* Could not connect to database !!!!!~ );
+        return FALSE;
+    }
+
+    // Now do the batch cards.
+    Query = ~Select DISTINCT ProductID From OrderItems Where OrderID = '<OrderID>' and Remake = '1'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward, Query,~<Query>~ ) )
+    {
+        Log( Session, ~FrameSelector:********* Order <OrderID> does not exist !!!!!~ );
+        return FALSE;
+    }
+
+    // There may not be any Order Items
+    if (!List( NumEntries ))
+    {
+        Log( Session, ~FrameSelector:********* Order <OrderID> contains no Remake Order Items~ );
+        return FALSE;
+    }
+
+    // Loop creating batch cards for all the products in OrderItems.
+    LastProductID = ~~;
+    LastQueueName = ~~;
+    while ( List( GetNext, Item ) )
+    {
+        ProductID = ~<$pcon.Item[ProductID]>~;
+
+        // Trim the G, L or Y for the Base Product
+        Length = strlen( ~<ProductID>~);
+        substr(~<ProductID>~, 0, <Length> - 1,  BaseProductID );
+
+        // Capture the G, L or Y for the Surface
+        substr(~<ProductID>~, <Length> - 1, <Length>,  Surface );
+
+        BaseQueueName = GetQueueName(~<BaseProductID>~);
+
+        QueueName = GetQueueNameForSurface(~<BaseQueueName>~, ~<Surface>~);
+
+
+        if (!IsNULL(~<LastQueueName>~))
+        {
+            if (~<LastQueueName>~ != ~<QueueName>~)
+            {
+                CreateRemakeBatchCards( ~<BatchID>~, ~<OrderID>~, ~<LastProductID>~ );
+            }
+        }
+        LastProductID = ~<ProductID>~;
+        LastQueueName = ~<QueueName>~;
+    }
+    CreateRemakeBatchCards( ~<BatchID>~, ~<OrderID>~, ~<ProductID>~ );
+
+    Log( Session, ~FrameSelector: ****** AddRemakeBatchCards complete for orderID <OrderID>~ );
+    return TRUE;
+}
+
+// FUNCTION: GetLastSequence()
+//
+// This function gets the last seqence number added
+//
+NUMERIC GetLastSequence(OrderID)
+{
+    Query = ~Select * From OrderItems Where OrderID = '<OrderID>'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Warning( ~Failed to retrieve Sequence Number~ );
+        return -1;
+    }
+
+    count = List(NumEntries); 
+
+    return $count;
+}
+VOID MarkRemake(OrderID, BatchCardID)
+{
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Log( Session, ~FrameSelector:********* MarkRemake Could not connect to database !!!!!~ );
+        return;
+    }
+
+    if (!database( CMD, ~Update OrderItems set Remake='1' where OrderID='<OrderID>' and ID='<BatchCardID>' ~ ))
+    {
+        Log( Session, ~Failed to Update OrderItems to set Remake~);
+    }
+    else
+    {
+        Log( Session, ~****** Marking Image <BatchCardID> in OrderID <OrderID> to be re-made ******~ );
+    }
+}
+
+NUMERIC RunWholeOrderNoPrompt(ReleaseBatchID, OrderID, State, RemakeLevel)
+{
+    Log( Session, ~****************RunWholeOrderNoPrompt: For OrderID <OrderID> Remake level = <RemakeLevel> ~);
+
+    Query = ~Select Priority,Owner From Orders Where ID = '<OrderID>'~;
+
+    if ( !Ado( dBase,Connect,GetValuesFor,~<Query>~,Priority,Owner ) )
+    {
+        dBase( GetErrorDescription,theErr );
+        Log( Session, ~****************RunWholeOrderNoPrompt: Error on query:<Query>.<theErr> ~);
+        return Warning( ~Error on query:\n\n<Query>.\n\n<theErr>~ );
+    }
+
+    if (DefinedAndNotNULL( RemakeLevel ))
+    {
+        RemakesClause = ~ AND Remake = <RemakeLevel>~;
+    }
+    else
+    {
+        RemakesClause = ~~;
+    }
+
+    Count = dBase( RecordCountFor,~Select * From OrderItems Where OrderID = '<OrderID>' <RemakesClause>~ );
+
+    if ( <Count> <= 0 )
+    { 
+        Log( Session, ~****************RunWholeOrderNoPrompt: <OrderID> Has No Order Items!~);
+        return FALSE;
+    }
+
+    if ( !Ado( dbLocal,ConnectLocal ) )
+    {
+        dbLocal( GetErrorDescription,theErr );
+        Log( Session, ~****************RunWholeOrderNoPrompt: Error on connect <theErr> ~);
+        return FALSE;
+    }
+
+    BatchID = UniquePrintBatchID();
+
+    if ( ~<Owner>~ == ~~ )
+    {
+        Owner = ~<$App.UserName>~;
+    }
+
+    if ( ~<Priority>~ == ~~ )
+    {
+        Priority = 50;
+    }
+
+    // Reprints are level 1 and require batch cards
+    if (~<RemakeLevel>~ == ~1~)
+    {
+        // Force a high priority for Remakes
+        Priority = 90;
+
+        // Generate remake Batch cards
+        AddRemakeBatchCards(~<ReleaseBatchID>~, ~<OrderID>~);
+
+        // Need to mark it as a remake too.
+        BatchCardID = GetLastSequence(<OrderID>);
+        MarkRemake(<OrderID>, <BatchCardID>);
+    }
+
+    Now = Time();
+
+
+//  Values = STR ( '<BatchID>','<OrderID>',0,<++count>,<Priority>,'<Owner>','<Now>',1 ); 1  = Ready 0 - Hold
+
+    if (DefinedAndNotNULL( RemakeLevel ))
+    {
+        Fields = STR ( BatchID,OrderID,OrderItemID,Sequence,Priority,Owner,SubmitDate,PrintStatus,RemakesOnly );
+        Values = STR ( '<BatchID>','<OrderID>',0,<++count>,<Priority>,'<Owner>','<Now>',<State>, <RemakeLevel> );
+    }
+    else
+    {
+        Fields = STR ( BatchID,OrderID,OrderItemID,Sequence,Priority,Owner,SubmitDate,PrintStatus );
+        Values = STR ( '<BatchID>','<OrderID>',0,<++count>,<Priority>,'<Owner>','<Now>',<State> );
+    }
+
+    Cmd = STR ( Insert Into OrderItemsToQueue(<Fields>) Values(<Values>) );
+
+    if ( !dbLocal( BeginTransaction,CMD,~<Cmd>~ ) )
+    {
+        dbLocal( GetErrorDescription,theErr,RollBackTransaction );
+        Log( Session, ~****************RunWholeOrderNoPrompt: Error: <theErr>  <Cmd> ~);
+        return FALSE;
+    }
+
+    dbLocal( CommitTransaction );
+
+    ProcessTheOrders();
+
+    Log( Session, ~****************RunWholeOrderNoPrompt: Complete ~);
+    return TRUE;
+}
+
+VOID ProcessTheOrders()
+{
+	if ( Defined( BackgroundOrderProcessor ) )
+	{
+		RemoteJobServer( BackgroundOrderProcessor,ProcessOrders,TRUE );
+	}
+}
+
+
+
+NUMERIC HandleDrop()
+{
+	return Warning( Translate( ~Dragging to here has no meaning.\n\nPress the Other button and select Import Images~ ) );
+
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+	{ 
+		return FALSE;
+	}
+	
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );	// REMOVE THE DRAG INFO FROM THE TREE
+
+	return ExternalDrop(DragDropInfo);		
+}
+
+
+// Not Called 
+NUMERIC ExternalDrop( &DragDropInfo )
+{
+	if ( !DragDropInfo( GetDraggedFiles,DraggedFileList ) )
+	{ 
+		return ~There were no files in the object you dragged~;
+	}
+
+	count = DraggedFileList( ChildCount );
+		
+	if ( $count <= 0 )
+	{ 
+		return Warning( ~There were no files dragged~; )
+	}
+
+	if ( <count> > 1 )
+	{
+		SortOrder = CustomMessageBox( Title,~Import Images~,Message,~Sort files by ...~,
+										Button1,~File Name~,
+										Button2,~Creation Date~,
+										Button3,~Cancel~ );
+		if ( <SortOrder> == 1 )
+		{
+			DraggedFileList( SortListBy,~Text~,~CreationTime~ );
+		}
+		else if ( <SortOrder> == 2 )
+		{
+			DraggedFileList( SortListBy,~CreationTime~,~Text~ );
+		}
+		else 
+		{
+			return FALSE;
+		}
+	}
+
+	dlg( GetInput );
+
+	dlg( GetStrings,OrderID,OrderID,Roll,Roll,Frame,Frame );
+
+	if ( ~<OrderID>~ == ~~ )
+	{
+		return Warning( Translate(~You must specify an order~) );
+	}
+
+	if ( ~<Roll>~ == ~~ )
+	{
+		if ( MessageBox( ~You must specify a roll.  Would you like to add one or more rolls for this order? ~,YESNO ) != YES )
+			{ return FALSE; }
+
+		Query = ~Select * From Rolls Where OrderID In ('<OrderID>') Order By OrderID,Roll~;
+		Actions = ACTION Doc ( ~Rolls~ OpenOnce RollsDoc "Init( ~<OrderID>~,~<Query>~ );" );
+		return PerformActions( Actions );
+	}
+
+	if ( MessageBox( ~Are you sure you would like to assign the <count> image(s) to Order <OrderID>, Roll <Roll>?~,YESNO ) != YES )
+	{ 
+		return FALSE;
+	}
+
+	count = ProcessDraggedFiles( DraggedFileList,~<OrderID>~,~<Roll>~,~<Frame>~ );
+
+	return TRUE;
+}
+
+
+// Not Called - if do, should delete of image record be through common delete code?
+NUMERIC ProcessDraggedFiles( &DraggedFileList,OrderID,WhichRoll,WhichFrame )
+{
+	len = strlen( ~<WhichFrame>~ );
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	ImageType = 0;
+
+	count = 0;
+
+	more = DraggedFileList( GetFirst,Image );
+
+	while ( <more> )
+	{
+		TheImagePath = ~<$Con.Image[Text]>~;
+
+		dlg( SetStatus,0,Translate( ~Checking <TheImagePath>~ ) );
+
+		if ( !SQLSafe( ~<TheImagePath>~ ) )
+		{
+			Warning( ~Can't handle a path with a ' in it.  <TheImagePath>~ );
+			continue;
+		}
+
+		TheImagePath = MakePath( Type,UNC,~<TheImagePath>~);
+
+		if ( !Files( IsUNC,~<TheImagePath>~ ) && NetworkOperation() )
+		{
+			Msg = Translate( UIMessages,UnsharedFile,~<TheImagePath>~ );
+
+			if ( MessageBox( ~<Msg>~,YESNO ) != YES )
+				{ return FALSE; }
+		}
+
+		FileName = ~<$Str.$TheImagePath.FileName>~;
+		Frame = ~<$Str.$FileName.WithOutExt>~;
+		Roll = ~<WhichRoll>~ == ~~ ? ~<$Str.$TheImagePath.Folder>~ : ~<WhichRoll>~;
+		Frame = <len> ? Format( ~<WhichFrame>~,~%0<len>ld~ ) : ~<Frame>~ ;
+
+		if ( strlen(~<Frame>~) > 31 )
+			{ return Warning( Translate( ~The Frame (<FileName>) of <TheImagePath> is greater than 31 characters~ ) ); } 
+
+		if ( strlen(~<Roll>~) > 31 )
+			{ return Warning( Translate( ~The Roll (<Roll>) of <TheImagePath> is greater than 31 characters ) ); }  
+
+		Query = ~Select * From Images Where Path = '<TheImagePath>'~;
+
+		if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate(~Query Failed <Query>. <theErr>~) );
+		}
+
+		if ( List( GetFirst,Image ) )
+		{
+			if (~<$pcon.Image[OrderID]>~ != ~<OrderID>~)
+			{
+				MessageBox( Translate( ~Unable to add the image to this order because the image already exists\nin Order <$pcon.Image[OrderID]>.  Currently, an image can exist in only one order.~ ) );
+				return 0;
+			}
+		}
+
+		more = DraggedFileList( GetNext,Image );
+	}
+
+	Fields = ~ID,Status,Type,Priority,Owner,OrderDate,ShipDate~;
+	Values = ~'<OrderID>','Scan','Original',50,'<$App.UserName>',<$Date.Date.SharedDateQuoted>,<$Date.Date.SharedDateQuoted>~;
+
+	dbase( CMD,~Insert Into Orders(<Fields>) Values(<Values>)~ );	//not called
+
+	size = ~<$SystemSettings.Thumbnail[Size]>~;
+	compressionQuality = ~<$SystemSettings.Thumbnail[Quality]>~;
+
+	size = IsNULL( ~<size>~ ) ? ~500~ : ~<size>~;
+	compressionQuality = IsNULL( ~<compressionQuality>~ ) ? ~100~ : ~<compressionQuality>~;
+
+	more = DraggedFileList( GetFirst,Image );
+
+	while ( <more> )
+	{
+		TheImagePath = ~<$Con.Image[Text]>~;
+
+		FileName = ~<$Str.$TheImagePath.FileName>~;
+		Frame = ~<$Str.$FileName.WithOutExt>~;
+		Roll = ~<WhichRoll>~ == ~~ ? ~<$Str.$TheImagePath.Folder>~ : ~<WhichRoll>~;
+		Frame = <len> ? Format( ~<WhichFrame>~,~%0<len>ld~ ) : ~<Frame>~ ;
+
+		if ( ~<WhichFrame>~ != ~~ )
+		{
+			Frame = Format( ~<Frame>~,~%0<len>ld~ );
+		}
+
+		dlg( SetStatus,0,Translate( ~Adding <TheImagePath>~ ) );
+
+		xRes = yRes = 0;
+		//AddThumbNail = TRUE;
+
+		result = AddThumbNailToImage( ~<TheImagePath>~,<size>,<compressionQuality>,FileType,xRes,yRes,PreviewWidth,PreviewLength );
+
+		if ( !<result> )
+		{
+			Warning( ~<TheImagePath> is not an image or we could not add a thumbnail to it~ );
+			continue;
+		}
+
+		if ( <result> < 0 )
+		{ 
+			GetLastError( ErrorString,theErr );
+			return Warning( ~Error adding thumbnail to image\n\n <TheImagePath>.\n\n,<theErr>~ );
+		}
+
+		RemoveCmd = ~Delete From Images Where OrderID = '<OrderID>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		RemoveCmd2 = ~Delete From SBAImages Where OrderID = '<OrderID>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		RemoveCmd3 = ~Delete From ImageCorrections Where OrderID = '<OrderID>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		RemoveCmd4 = ~Delete From RetouchImages Where OrderID = '<OrderID>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		RemoveCmd5 = ~Delete From DSBAImages Where OrderID = '<OrderID>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+		Fields		= ~OrderID,Roll,Frame,ImageType,Path,Category,Sequence,Gamma,Width,Length,Filetype,PreviewWidth,PreviewLength,CropX,CropY,CropWidth,CropLength,Inspect~;
+		Values		= ~'<OrderID>','<Roll>','<Frame>',<ImageType>,'<TheImagePath>','All',<Sequence++>,1.0,<xRes>,<yRes>,'<Filetype>',<PreviewWidth>,<PreviewLength>,50.0,50.0,100.0,100.0,1~;	
+		InsertCmd	= ~Insert Into Images(<Fields>) Values(<Values>)~;
+
+		DeleteKPARSImageOriginal( dbase, ~<OrderID>~, ~<Roll>~, ~<Frame>~ );
+
+		dbase( CMD,~<RemoveCmd>~ );		// OKAY FOR THIS TO ERROR OUT
+		dbase( CMD,~<RemoveCmd2>~ );	// OKAY FOR THIS TO ERROR OUT
+		dbase( CMD,~<RemoveCmd3>~ );	// OKAY FOR THIS TO ERROR OUT
+		dbase( CMD,~<RemoveCmd4>~ );	// OKAY FOR THIS TO ERROR OUT
+		dbase( CMD,~<RemoveCmd5>~ );	// OKAY FOR THIS TO ERROR OUT
+
+		if ( !dbase( CMD,~<InsertCmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			return Warning( Translate( ~Database update failed. <InsertCmd>. <theErr>~ ) );
+		}
+
+		++count;
+
+		if ( ~<WhichFrame>~ != ~~ )
+		{
+			if ( IsNumeric(~<WhichFrame>~) )
+			{
+				++WhichFrame;
+			}
+		}
+			
+		more = DraggedFileList( GetNext,Image );
+	}
+
+	if ( <count> )
+	{
+		UpdateFrames();
+	}
+
+	return <count>;
+}
+
+NUMERIC SetDialogStatus( Pane,Msg )
+{
+	return dlg( SetStatus,<Pane>,~<Msg>~ );
+}
+
+
+NUMERIC DialogWarning( Msg )
+{
+	return Warning( ~<Msg>~ );
+}
+
+
+VOID ThreadProgressMsg( Msg )
+{
+	StatusBarText( ~<Msg>~ );
+}
+
+VOID RefreshViews( Path )
+{
+	BroadcastMessageToAllViews( ReleaseImageChain,~<Path>~ );
+	//BroadcastMessageToAllViews( RedrawIfDirty );
+
+	BroadcastMessageToAllViews( RedrawByPath,~<Path>~,TRUE );
+	BroadcastMessageToAllViews( RedrawIfDirty );
+}
+
+
+Thread( ThumbNailThread,New,ThumbNailThreadLoopProc );
+
+VOID ThumbNailThreadLoopProc()
+{
+	ThreadIs( aThread );
+
+	while ( aThread( Wait,Msg,lParam,wParam ) )
+	{
+		if ( <Quitting> )
+			{ return; }
+
+		while ( aThread( Dequeue,data ) )
+		{
+			<data>;
+
+			if ( <Quitting> )
+				{ return; }
+		}
+
+		if ( <Quitting> )
+			{ return; }
+	}
+}
+
+
+NUMERIC AddAThumbNailToImage( OrderID,Roll,Frame )	// CAN RUN ON A THREAD
+{
+	Invoke( ThreadProgressMsg,Translate( ~Adding thumbnail to <OrderID> <Roll> <Frame>~) );
+
+	Key		= ~OrderID='<OrderID>' AND Roll='<Roll>' AND Frame='<Frame>'~;
+	Query	= ~Select Path From Images Where <Key>~;	
+
+	if ( !Ado( dBase,Connect,GetValuesFor,~<Query>~,Path ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Invoke( DialogWarning,~Error getting the path for <Key>: <theErr>~ );
+		return FALSE;
+	}
+
+	if ( IsNULL(~<path>~) )
+	{
+		return TRUE;
+	}
+
+	size = ~<$SystemSettings.Thumbnail[Size]>~;
+	compressionQuality = ~<$SystemSettings.Thumbnail[Quality]>~;
+
+	size = IsNULL( ~<size>~ ) ? ~500~ : ~<size>~;
+	compressionQuality = IsNULL( ~<compressionQuality>~ ) ? ~100~ : ~<compressionQuality>~;
+
+	PreviewWidth = PreviewLength = Width = Length = 0;
+	FileType = ~~;
+
+	result = AddThumbNailToImage( ~<Path>~,<size>,<compressionQuality>,FileType,Width,Length,PreviewWidth,PreviewLength );
+
+	if ( !<result> )
+	{
+		Invoke( DialogWarning,Translate(~<Path> is not an image or we could not add a thumbnail to it~) );
+		return FALSE;
+	}
+
+	if ( <result> < 0 )
+	{ 
+		GetLastError( ErrorString,theErr );
+		Invoke( DialogWarning,Translate(~Error adding thumbnail to image\n\n<Path>\n\n<theErr>~) );
+		return FALSE;
+	}
+
+	Key		= ~OrderID='<OrderID>' AND Roll='<Roll>' AND Frame='<Frame>'~;	
+	Fields	= ~PreviewWidth=<PreviewWidth>,PreviewLength=<PreviewLength>,Width=<Width>,Length=<Length>,FileType='<FileType>'~;
+	UpdateCmd	= ~Update Images Set <Fields> Where <Key>~;
+
+	if ( !dbase( CMD,~<UpdateCmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Invoke( DialogWarning,Translate( ~Database update failed. <UpdateCmd>. <theErr>~ ) );
+		return FALSE;
+	}
+
+	Invoke( ThreadProgressMsg,Translate( ~Added Thumbnail to <OrderID> <Roll> <Frame>.  Preview is <PreviewWidth>x<PreviewLength>.  Image is <Width>x<Length>  <FileType>~) );
+
+	Invoke( RefreshViews,~<Path>~ );
+
+	return TRUE;
+}
+
+
+SeeProducts = FALSE;
+
+VOID OnProductsBox()
+{
+	SeeProducts = !<SeeProducts>;
+
+	SetQty( 1 );
+
+	if ( <SeeProducts> )
+	{
+		dlg( SetControlTitle,SeeProductsBox,~<--~ );
+		dlg( SetWindowSize,<DialogWidthWithProducts>,$DialogHeight );
+		//Action = STR ( OpenProducts(); );
+		//QueueContentsAfter( Action,100 );
+	}
+	else
+	{
+		dlg( SetControlTitle,SeeProductsBox,~-->~ );
+		dlg( SetWindowSize,<DialogWidthWithoutProducts>,$DialogHeight );
+		//CloseWindowForDataType(Products);
+	}
+}
+
+NUMERIC CloseWindowForDataType(Which)
+{
+	Count = Index = 0;
+
+	//app( ThisApp,MessagePump,3 );
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( Window( GETNEXT,aView ) )
+		{
+			aView( GET,ViewDataType,ViewDataType );
+
+			if ( ~<ViewDataType>~ == ~<Which>~ )
+			{
+				aView( GetDocumentPath,DocumentPath );
+				Window( CloseWindow );
+				++Count;
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CloseWindowByPath(Path)
+{
+	Count = Index = 0;
+
+	//app( ThisApp,MessagePump,3 );
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( Window( GETNEXT,aView ) )
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( SimilarStr( ~<DocumentPath>~,~<Path>~ ) )
+			{
+				return Window( CloseWindow );
+			}
+		}
+	}
+
+	return FALSE;
+}
+
+
+VOID OnProductSelected()
+{
+	SetQty( 1 );
+
+	ADO( dBase,Connect,GetValuesFor,~Select Layoutname From Products where ID = '<$con.dlgData[Product]>'~,Layoutname );
+	dlg( SetStatus,1,~<LayoutName>~ );
+
+	if ( ~<$con.dlgData[Product]>~ != ~~ )
+	{
+		Actions = ACTION Doc ( Products "SelectProduct(~<$con.DlgData[Product]>~);" );
+		PerformActions( Actions );
+	}
+}
+
+NUMERIC HandleProductListReturnKey()
+{
+	return TRUE;	// FOR THE FUTURE
+}
+
+
+VOID AddProducts()
+{
+	StringList( ProductsList,New );
+
+	ProductQuery = ~Select ID,LayoutName From Products Where OrderPadSequence > 0 AND Multiple = 0 AND Style = 0 Order By OrderPadSequence~;
+	
+	count = 0;	
+	
+	if ( PGenConList( List,Connect,Cursor,Forward,QUERY,~<ProductQuery>~ ) )
+	{
+		Tab = Chr(9);
+
+		while ( List( GetNext,Record ) )
+		{
+			ProductsList( AddString,~<$pcon.Record[ID]>~ );
+			++count;
+		}
+	}
+	
+	if ( !<count> )
+	{
+		ProductQuery = ~Select ID,LayoutName From Products Where  Multiple = 0 AND Style = 0 Order By LayoutName~;
+		
+		ForgetLocal( List );	
+		
+		if ( PGenConList( List,Connect,Cursor,Forward,QUERY,~<ProductQuery>~ ) )
+		{
+			Tab = Chr(9);
+
+			while ( List( GetNext,Record ) )
+			{
+				ProductsList( AddString,~<$pcon.Record[ID]>~ );
+				++count;
+			}
+		}
+	}
+	
+	dlg( SetControlFromStringList,ProductsListBox,ProductsList );
+}
+
+
+NUMERIC MaintainOrderItems()
+{
+	dlg( GetInput,GetStrings,OrderID,OrderID );
+
+	if ( IsNULL( ~<OrderID>~ ) )
+	{
+		return Warning( Translate( ~Select an order first~ ) );
+	}
+
+	Actions = ACTION Doc ( ~MaintainOrdersDoc~ Open MaintainOrdersDoc "Init( ~<OrderID>~,FALSE,TRUE,FALSE );" );
+	return PerformActions( Actions );
+}
+
+
+
+Include:  ~CreateOrderItems.txt~;
+
+NUMERIC CreateJobForProduct()
+{
+	dlg( GetInput,GetStrings,Product,Product,OrderID,OrderID,Roll,Roll,Frame,Frame,Qty,Qty );
+
+	if ( MakeNumber( ~<Qty>~ ) == 0 )
+	{
+		return Warning( Translate( ~Qty can't be 0~ ) );
+	}
+
+	SetQty( 1 );
+
+	if ( ~<$con.dlgData[Product]>~ == ~~ )
+	{
+		return FALSE;
+	}
+
+	if ( IsNULL( ~<OrderID>~ ) )
+	{
+		return Warning( Translate( ~Select an order first~ ) );
+	}
+
+	if ( IsNULL( ~<ProductID>~ ) )
+	{
+		return Warning( Translate( ~Select a product first~ ) );
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	dlg( GetInput );
+	dlgData( GetValues,ImagesOrderID,ImagesOrderID );
+
+	if ( IsNULL( ~<ImagesOrderID>~ ) )
+	{
+		ImagesOrderID = ~<OrderID>~ ;	
+	}
+
+	ImagePath = ~<$@Image.PathOfOrderRollFrame['<ImagesOrderID>','<Roll>','<Frame>']>~;
+
+	if ( dlgData( GetNumeric,OpenOrderItem ) )
+	{
+		CloseAllJobs();
+		OpenLayoutAfterCreating = 1;
+		Global(OpenLayoutAfterCreating);
+	}
+
+	if ( CreateOrderItemsFromImage( dBase,~<ImagePath>~,~<Product>~,~<OrderID>~,~<Qty>~,~~ ) )
+	{
+		if ( dlgData( GetNumeric,OpenOrderItem ) )
+		{
+			ForgetGlobal(OpenLayoutAfterCreating);
+//			Open( Any,~<JobPath>~ ) ;
+		}
+		return TRUE;  // SetTimer( 5,5000,~DelayedNotifyAffectedDocuments()~ );
+
+	}
+
+	ForgetGlobal(OpenLayoutAfterCreating);
+	dlg( SetStatus,1,Translate( ~An Order Item was not created~ ) );
+
+	return FALSE;
+}
+
+
+NUMERIC CloseAllJobs()
+{
+	Count = Index = 0;
+
+	app( ThisApp,MessagePump,3 );
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( Window( GETNEXT,aView ) )
+		{
+			aView( GET,ViewType,ViewType );
+
+			if ( ~<ViewType>~ == ~JobView~ )
+			{
+				aView( GetDocumentPath,DocumentPath );
+				Window( CloseWindow );
+				++Count;
+			}
+		}
+	}
+
+	ThisApp( MessagePump,0 );
+
+	return TRUE;
+}
+
+
+NUMERIC NewRollSelected()
+{
+	return UpdateFrames();
+}
+
+
+// Begin ADD ORDER ***********************************************************************************
+
+
+NUMERIC HandleOrderIDReturnKey( DesiredOrderID )
+{
+	dlg( GetInput,SetFocus );
+
+	if ( ~<DesiredOrderID>~ != ~~ )
+	{
+		dlg( SetStrings,OrderID,~<DesiredOrderID>~ );
+	}
+
+	dlgData( GetValues,OrderID,OrderID );
+
+	if ( ~<OrderID>~ == ~~ )
+	{
+		return FALSE;
+	}
+
+	if ( !ADO( dBase,Connect,GetValuesFor,~Select ID,ImagesOrderID From Orders where ID = '<OrderID>'~,OrderID,ImagesOrderID ) )
+	{
+		if ( MessageBox( Translate(~Order <OrderID> does not exist.\n\nWould like you to add a new order? ~ ),YESNO ) != YES )
+		{
+			dlg( SetControlFocus,OrderIDField );
+			return FALSE;
+		}
+
+		ADO( dBase,Connect,Cmd,~Insert Into Orders(ID,OrderDate,ShipDate) Values('<OrderID>',<$Date.Date.SharedDateQuoted>,<$Date.Date.SharedDateQuoted>)~ );
+
+		if ( MessageBox( Translate(~Order <OrderID> was added.  Would like to edit it? ~ ),YESNO ) == YES )
+		{
+			Query = ~Select * From Orders Where ID = '<OrderID>'~;
+
+			Actions = ACTIONS ( Doc( ~Orders~ OpenOnce OrdersDoc "Init( ~<OrderID>~,~<Query>~);" ) );
+			PerformActions( Actions );
+		}
+	}
+	else
+	{
+		if ( !IsNULL(~<ImagesOrderID>~) )
+		{
+			dlgData( Set,ImagesOrderID,~<ImagesOrderID>~ ) ;
+		}
+	}
+
+	dlg( SetCheck,0,ScanDoneBox,RetouchDoneBox,KarsDoneBox,KarsBatchDoneBox,ColorCorrectDoneBox,RejectDoneBox );
+
+	UpdateRollsCombo(1);
+
+	UpdateFrames();
+
+	SelectPrev(TRUE);
+
+	Actions = ACTION Doc ( OrderNotifyDoc OpenOnce OrderNotifyDoc "Init( ~<OrderID>~,FALSE );" );
+	PerformActions( Actions );
+
+	dlg( SetControlFocus,FramesListBox );
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateRollsCombo(WantSelection)
+{
+	dlg( GetInput,GetStrings,OrderID,OrderID,ImagesOrderID,ImagesOrderID );
+
+	if ( !IsNULL(~<ImagesOrderID>~) )
+	{ 
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	if ( IsNull( ~<OrderID>~ ) )
+	{
+		return Warning( ~You must select an order first~ );
+	}
+
+	Query = ~Select Distinct Roll From Rolls Where OrderID = '<OrderID>' Order By Roll~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the Rolls table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		ForgetLocal( List );
+
+		Query = ~Select Distinct Roll From Images Where OrderID = '<OrderID>' Order By Roll~;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ 
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate( ~Failed to query the Images table.\n\n<Query>\n\n<theErr>~ ) ); 
+		}
+	}
+
+	List( MakeStringList,RollsList,Roll );
+
+	dlgData( Set,Roll,~~ );
+
+	if (<WantSelection> == 0)
+	{
+		return dlg( SetControlFromStringList,RollsCombolBox,RollsList,NoSelection );
+	}
+	else
+	{
+		dlg( SetControlValue,RollsCombolBox,~~ );
+		return dlg( SetControlFromStringList,RollsCombolBox,RollsList );
+	}
+
+}
+
+NUMERIC AddAnOrder()
+{
+	AddOrderDlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,CustomerID,CustomerID );
+
+	if ( ~<OrderID>~ == ~~ )
+	{
+		return FALSE;
+	}
+
+	Cmd = ~Insert Into Orders( ID,CustomerID,OrderDate,ShipDate ) Values( '<OrderID>','<CustomerID>',<$Date.Date.SharedDateQuoted>,<$Date.Date.SharedDateQuoted> )~;
+
+	return ADO( dBase,Connect,Cmd,~<Cmd>~ );
+}
+
+
+VOID CloseAddOrderDialog()
+{
+	AddOrderDlg( END );
+    ForgetGlobal( AddOrderDlg,AddOrderDlgDefinition );
+}
+
+
+NUMERIC AddOrderDialog()
+{
+	DlgDefinition( GetWindowPosition,x,y );
+
+   Define: AddOrderDlgDefinition Using DDWinDef
+            Fields: Position		$x $y 300 200
+                    Title			Translate( ~Add Order~ )
+                    TypeName		~Dialog~
+					WantsMinimizeBox TRUE
+                    OACTIONSTEXT	ACTION EXEC ( CloseAddOrderDialog() )
+
+		Contains:	INLISTORDER
+			{
+				Define: CustomerPrompt Using DDWinCtrlDef AsSymbol CustomerPrompt
+					Fields:	TypeName		StaticText
+							Text			Translate( ~Customer~ )
+							RightJustified	TRUE
+							Position		$Left,$Top,$StaticTextWidth, $StaticTextHeight
+
+				Define: CustomerField Using DDWinCtrlDef AsSymbol CustomerField
+					Fields:	TypeName		EditText
+							GenConName		This
+							GenConField		CustomerID
+							IActionsText	ACTIONS ( Get )
+							OActionsText	ACTIONS ( Save )
+							Position		CustomerPrompt(GetRight,Position) + $hGap,CustomerPrompt(GetTop,Position),$EditTextWidth, $EditTextHeight
+
+				Define: AddButton Using DDWinCtrlDef AsSymbol AddButton
+					Fields:	TypeName		Button
+							Text			Translate( ~Add~ )
+							DActionsText	ACTION EXEC  ( AddAnOrder() )
+							RightJustified	TRUE
+							Position		$hGap,CustomerPrompt(GetBottom,Position)+$vGap*4,$ButtonWidth, $StaticTextHeight;
+				
+				Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+					Fields:	TypeName		Button
+							Text			Translate( ~Cancel~ )
+							DActionsText	ACTION EXEC  ( CloseAddOrderDialog() )
+							Position		AddButton(GetRight,Position) + $hGap,AddButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+			}
+
+	GenDlg( AddOrderDlg,Definition,AddOrderDlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    return Global( AddOrderDlg,AddOrderDlgDefinition );
+}
+
+// End ADD ORDER ***********************************************************************************
+
+
+// Begin OTHER ***********************************************************************************
+
+NUMERIC OtherDialog()
+{
+	if ( Defined(OtherDlg) )
+	{
+		return FALSE;
+	}
+
+	DlgDefinition( GetWindowPosition,x,y );
+
+	ThisButtonWidth = 120;
+
+	Define: OtherDlgDefinition Using DDWinDef
+            Fields: Position		$x $y $ThisButtonWidth+$hGap*4 200
+                    Title			Translate( ~Other~ )
+                    TypeName		~Dialog~
+					WantsMinimizeBox FALSE
+                    OACTIONSTEXT	ACTION EXEC ( CloseOtherDialog() )
+
+		Contains:	INLISTORDER
+			{
+				Define: ImportImagesButton Using DDWinCtrlDef AsSymbol ImportImagesButton
+					Fields:	TypeName		Button
+							Text			Translate( ~Import Images~ )
+							DActionsText	ACTION EXEC ( OnImportImagesButton() ) 
+							Position		$hGap,$vGap,$ThisButtonWidth, $StaticTextHeight
+							Tooltip			Translate( ~Import images from other sources.  Adds information to the database and builds thumbnail images for fast previewing~ );
+
+				Define: ImportButton Using DDWinCtrlDef AsSymbol ImportButton
+					Fields:	TypeName		Button
+							Text			Translate( ~Import Data~ )
+							DActionsText	ACTION EXEC ( OnImportButton() ) 
+							Position		ImportImagesButton(GetLeft,Position),ImportImagesButton(GetBottom,Position)+$vGap, $ThisButtonWidth,  <StaticTextHeight>
+							Tooltip			Translate( ~Import from Accunet, Shooter Files, or other textual files containing image information.~ );
+
+				Define: ExportImagesButton Using DDWinCtrlDef AsSymbol ExportImagesButton
+					Fields:	TypeName		Button
+							Text			Translate( ~Export Images~ )
+							DActionsText	ACTION EXEC ( ExportImages() ) 
+							Position		ImportButton(GetLeft,Position),ImportButton(GetBottom,Position)+$vGap, $ThisButtonWidth,  <StaticTextHeight>
+							Tooltip			Translate( ~Export images as new files of a desired size~ );
+
+				Define: MakeThumbnailsButton Using DDWinCtrlDef AsSymbol MakeThumbnailsButton
+					Fields:	TypeName		Button
+							Text			Translate( ~Refresh Thumbnails~ )
+							DActionsText	ACTION EXEC ( MakeThumbnailsForOrder() ) 
+							Position		ExportImagesButton(GetLeft,Position),ExportImagesButton(GetBottom,Position)+$vGap, $ThisButtonWidth,  <StaticTextHeight>
+							Tooltip			Translate( ~For each image in the order, check to see if a thumbnail needs to be created and create it if need be~ );
+
+				Define: ShowRetouchInstructionsButton Using DDWinCtrlDef AsSymbol ShowRetouchInstructionsButton
+					Fields:	TypeName		Button
+							Text			Translate( ~Retouch Instructions~ )
+							DActionsText	ACTION EXEC ( ShowRetouchInstructions() ) 
+							Position		MakeThumbnailsButton(GetLeft,Position),MakeThumbnailsButton(GetBottom,Position)+$vGap, $ThisButtonWidth,  <StaticTextHeight>
+							Tooltip			Translate( ~Open the retouch instructions window~ );
+
+				y = ShowRetouchInstructionsButton( GetBottom,Position );
+				
+				if ( <EnableKpars> )
+				{
+					if ( !Defined(RunRetouchReviewButton) )
+					{
+						Define: RunRetouchReviewButton Using DDWinCtrlDef AsSymbol RunRetouchReviewButton
+							Fields:	TypeName		Button
+									Text			Translate( ~Run Retouch Review~ )
+									DActionsText	ACTION EXEC ( ShowKarsReviewOptions() ) 
+									Position		ShowRetouchInstructionsButton(GetLeft,Position),$y+$vGap, $ThisButtonWidth,  <StaticTextHeight>
+									Tooltip			Translate( ~Run Kodak Auto Retouch Review Queue~ );
+						Global( RunRetouchReviewButton );
+					}
+
+					Define: ViewRetouchImagesButton Using DDWinCtrlDef AsSymbol ViewRetouchImagesButton
+						Fields:	TypeName		Button
+								Text			Translate( ~Retouch Images Table~ )
+								DActionsText	ACTION EXEC ( ViewRetouchImages() ) 
+								Position		RunRetouchReviewButton(GetLeft,Position),RunRetouchReviewButton(GetBottom,Position)+$vGap, $ThisButtonWidth,  <StaticTextHeight>
+								Tooltip			Translate( ~View the Retouch Images table~ );
+					
+					y = ViewRetouchImagesButton( GetBottom,Position );
+				}
+
+				Define: StayOnTopBox Using DDWinCtrlDef AsSymbol StayOnTopBox 
+					Fields: TypeName		CheckBox
+							Text			Translate( ~Stay On Top~ )
+							GenConName		THIS
+							GenConField		~StayOnTop~	
+							Position		ShowRetouchInstructionsButton(GetLeft,Position),$y+$vGap, $ThisButtonWidth,  <StaticTextHeight>
+							IActionsText	ACTIONS ( Get )
+							DActionsText	ACTIONS ( Save "EXEC(OnStayOnTopBox())" ) 
+							OActionsText	ACTIONS ( Save )
+							Tooltip			Translate( ~If checked, the Navigate dialog will stay on top of all applications.  Useful for retouching!~ );
+			
+			IF 0
+			{
+				Define: CloseButton Using DDWinCtrlDef AsSymbol CloseButton
+					Fields:	TypeName		Button
+							Text			Translate( ~Close~ )
+							DActionsText	ACTION EXEC  ( CloseOtherDialog() )
+							Position		ImportImagesButton(GetLeft,Position),StayOnTopBox(GetBottom,Position)+$vGap*3,$ThisButtonWidth, $ButtonHeight
+			}
+		}
+
+	Height = StayOnTopBox( GetBottom,Position ) + $vGap * 2 + 30 ;
+
+	Width = StayOnTopBox( GetRight,Position ) + $hGap * 2;
+
+	x = <x> - 200;
+
+	OtherDlgDefinition( Set,Position,~<x> <y> <Width> <Height>~ );
+
+	GenDlg( OtherDlg,Definition,OtherDlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    return Global( OtherDlg,OtherDlgDefinition );
+}
+
+Quitting = FALSE;
+
+NUMERIC CloseOtherDialog()
+{
+	if ( Defined( OtherDlg ) )
+	{
+		OtherDlg( END );
+	}
+
+	return ForgetGlobal( RunRetouchReviewButton,OtherDlg,OtherDlgDefinition );
+}
+
+
+
+VOID ShowTheDialog( &aDialog )
+{
+	if ( !Defined( dlg ) )
+	{
+		GenDlg( dlg,Definition,aDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+		Global( dlg );
+	}
+	else
+	{
+		aDialog( Get,Title,TheTitle );
+		dlg( Title,~<TheTitle>~ );
+		//dlg( ReplaceControls,aDialog );
+	}
+}
+
+
+
+VOID CloseDialog()
+{
+	Quitting = TRUE;
+
+	ThumbNailThread( Post,0,0,0 );
+
+	Sleep( 200 );
+
+	Count = 0;
+
+	while ( ThumbNailThread( IsActive ) )
+	{
+		dlg( SetStatus,0,Translate( ~<++Count>) Still making thumbnails.  Try again in a few seconds~ ) );
+		Sleep( 1000 );
+	}
+
+    dlg( END );
+    Exit();
+}
+
+
+VOID OnStayOnTopBox()
+{
+	dlg( GetInput,SetWindowOrder,DlgData(GetNumeric,StayOnTop) ? TOPMOST : NOTOPMOST );
+}
+
+
+VOID StayOnTop()
+{
+	dlg( SetWindowOrder,TOPMOST );
+}
+
+
+NUMERIC OnProofButton()
+{
+	dlg( GetInput );
+
+	if ( IsNULL( ~<$con.dlgData[OrderID]>~ ) )
+	{
+		return Warning( Translate( ~Select an order first~ ) );
+	}
+
+	return DisplayProductsOfType( Translate(~Proof~) );
+}
+
+
+
+NUMERIC DisplayProductsOfType( Type )
+{
+	Query = ~Select * From Products Where Category = '<Type>' And Package = 0 Order By Category,Sequence,ID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Products table: <Query>. <theErr>~ );
+	}
+
+	Count = List( NumEntries );
+
+	if ( !<Count> )
+		{ return Warning( ~You don't have any proof products defined.  Create a proof product and put it in a category called Proof.~ ); }
+
+	GenCon(ListMenu,New,DDMenuDef,SetValue,Position,-1 );
+
+	Count = 0;
+	while ( List( GetNext,Item ) )
+	{
+		GenCon( ProofLayout<++Count>,New,DDMenuItemDef,SetValues,
+					Text,		~&<Count>)  ID: <$pcon.Item[ID]>  Name: <$pcon.Item[LayoutName]>~,
+					IDText,		~ID~ );
+
+		theAction = ACTION Exec ( ProduceProofsForOrders(~<$pcon.Item[ID]>~); );
+
+		ProofLayout<Count>( SetValuesFrom,ActionsText,theAction );
+
+		ListMenu( InsertBack,ProofLayout<Count> );;
+	}
+		
+
+	dlg( SetControlFocus,ProofButton );
+
+	dlg( DisplayMenu,ListMenu,ProofButton(GetLeft,Position),ProofButton(GetTop,Position) );
+
+	return TRUE;
+}
+
+
+NUMERIC  ProduceProofsForOrders( ProductID )
+{
+	dlg( SetControlFocus,FramesListBox );
+
+	dlg( GetInput );
+
+	if ( ~<ProductID>~ == ~~ )
+		{ return Warning( ~There was no product selected~ ); }
+
+	if ( ~<$con.dlgData[OrderID]>~ == ~~ )
+		{ return Warning( ~You must enter an Order ID~ ); }
+
+	if ( MessageBox( ~Are you sure you would like to proof order <$con.dlgData[OrderID]> with product <ProductID>?~,YESNO ) != YES )
+	{ 
+		return FALSE;
+	}
+
+	if ( !Ado( dbLocal,ConnectLocal ) )
+	{
+		dbLocal( GetErrorDescription,theErr );
+		return Warning( ~Error connecting to the local database: <theErr>~ );
+	}
+
+	BatchID = UniquePrintBatchID();  Now = Time();
+
+	Fields = STR ( BatchID,OrderID,ProductID,SubmitDate );
+	Values = STR ( '<BatchID>','<$con.dlgData[OrderID]>','<ProductID>','<Now>' );
+
+	Cmd = STR ( Insert Into OrdersToProof(<Fields>) Values(<Values>) );
+
+	if ( !dbLocal( CMD,~<Cmd>~ ) )
+	{
+		dbLocal( GetErrorDescription,theErr );
+		return Warning( ~Error: <theErr>  <Cmd>~ );
+	}
+
+	Queue( ~ProcessTheOrders()~ );
+
+	return Warning( Translate(~Creating OrderItems in the background for <$con.dlgData[OrderID]>~) );
+}
+
+
+NUMERIC SelectNext(GainFocus)
+{
+	dlg( ListBox,FramesListBox,SelectNext );
+	UpdateFrameStatus(TRUE);
+	if ( <GainFocus> )
+	{
+		dlg( SetFocus );
+	}
+
+	return true;
+	return dlg( SetControlFocus,FramesListBox );
+}
+
+NUMERIC SelectPrev(GainFocus)
+{
+	dlg( ListBox,FramesListBox,SelectPrev );
+	UpdateFrameStatus(TRUE);
+	if ( <GainFocus> )
+	{
+		dlg( SetFocus );
+	}
+	return true;
+	return dlg( SetControlFocus,FramesListBox );
+}
+
+NUMERIC SelectCurrent(GainFocus)
+{
+	UpdateFrameStatus(TRUE);
+	if ( <GainFocus> )
+	{
+		dlg( SetFocus );
+	}
+	return true;
+	return dlg( SetControlFocus,FramesListBox );
+}
+
+
+NUMERIC SendOrderID( WhichDoc,WhichRoutine )	// CALLED FROM OTHER SCRIPTS
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID );
+
+	if ( IsNull( ~<OrderID>~ ) ) { return FALSE; }
+
+	Actions = ACTION DOC ( <WhichDoc> "<WhichRoutine>( ~<OrderID>~ )" );
+
+	return PerformActions( Actions );
+}
+
+
+
+NUMERIC SendImageData( WhichDoc,WhichRoutine,Arg1 )	// CALLED FROM OTHER SCRIPTS
+{
+	dlg( GetInput );
+
+	dlgData( GetValues,OrderID,OrderID,Roll,Roll,Frame,Frame );
+
+	if ( IsNull( ~<OrderID>~ ) ) { return FALSE; }
+	if ( IsNull( ~<Roll>~ ) ) { return FALSE; }
+	if ( IsNull( ~<Frame>~   ) ) { return FALSE; }
+
+	Actions = ACTION DOC ( <WhichDoc> "<WhichRoutine>( ~<Arg1>~,~<OrderID>~,~<Roll>~,~<Frame>~ )" );
+
+	return PerformActions( Actions );
+}
+
+VOID Init()
+{
+	DefineDialog();	
+	ChangeCrop(FALSE);	
+	UpdateFrames();
+	AddProducts();
+	dlg( SetWindowSize,<DialogWidthWithoutProducts>,$DialogHeight );
+	OnStayOnTopBox();
+}
+
+
+Init();
+
+
+
+
+	

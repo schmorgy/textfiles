@@ -1,0 +1,508 @@
+
+IncludeClass( BaseThread );
+IncludeClass( BaseDialog );
+
+
+Class( SpoolDialog,Extends,BaseDialog );
+Class( SpoolThread,Extends,BaseThread,
+		Member,fVisible,Numeric,FALSE,
+		Member,fTimeout,Numeric,30,
+		Member,fPollDelay,Numeric,1000 * 60,
+		Member,fPrinting,Numeric,FALSE,
+		Member,fURL,Str,~~ );
+
+
+VOID SpoolThread::SpoolThread()		{  }
+VOID SpoolThread::!SpoolThread()	{  }
+
+
+NUMERIC SpoolThread::Printing()		{ return <fPrinting>; }
+
+NUMERIC SpoolThread::PrintReport( &InternetExplorer )	// NOT USED
+{ 
+	Invoke( UpdateStatus,~Printing: <fURL>~ );
+
+	if ( !InternetExplorer( Method,ExecWB,I4,6,I4,2,Variant,0,Variant,0 ) )
+	{
+		ErrMsg = SystemErrorMsg( InternetExplorer(HRESULT) );
+		BadArg = InternetExplorer(BadArg);
+
+		return Warning( ~Printing <fURL>: <ErrMsg>  Arg <BadArg>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SpoolThread::WaitPrintComplete( &InternetExplorer )	// NOT USED
+{
+	Invoke( UpdateStatus,~Waiting for printing to complete: <fURL>~ );
+
+	Sleep( 5000 );	// NEED A BETTER WAY TO KNOW WHEN THE PRINT IS COMPLETE
+
+	return TRUE;
+}
+
+NUMERIC SpoolThread::Navigate( &InternetExplorer )	// NOT USED
+{
+	if ( !InternetExplorer( Method,Navigate,BSTR,~<fURL>~) )
+	{
+		return Warning( SystemErrorMsg( IE(HRESULT) ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SpoolThread::WaitBusy( &InternetExplorer )	// NOT USED
+{
+	TimeOut = <fTimeout>;
+
+	IsBusy = TRUE;
+
+	while ( <Timeout--> && <IsBusy> )
+	{
+		Invoke( UpdateStatus,~<Timeout>) Waiting to load: <fURL>~ );
+
+		Sleep( 1000 );
+
+		InternetExplorer( Get,Busy,IsBusy );
+	}
+
+	return !<IsBusy>;
+}
+
+
+NUMERIC SpoolThread::PrintAutomation()	// NOT USED
+{
+	Log( Session,~Printing: <fURL>~ );
+
+	Invoke( UpdateStatus,~Printing: <fURL>~ );
+
+	ReturnOnFailure( Automation( IE,CLSIDFromProgID,~InternetExplorer.Application~,CreateInstance  ) );
+
+	Invoke( UpdateStatus,~Loading: <fURL>~ );
+
+	ReturnOnFailure( Navigate(IE,~<fURL>~) );
+
+	if ( <fVisible> )
+	{
+		IE( Put,Visible,I4,TRUE );
+	}
+
+	ReturnOnFailure( WaitBusy( IE ) );
+
+	ReturnOnFailure( PrintReport( IE ) );
+
+	ReturnOnFailure( WaitPrintComplete( IE ));
+
+	IE( Method,Quit );
+
+	Invoke( UpdateStatus,~Printed: <fURL>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC SpoolThread::Print()
+{
+	Log( Session,~<$Job.Title>: Printing <fURL>~ );
+
+	Invoke( UpdateStatus,~Printing: <fURL>~ );
+
+	if ( !IEPrintURL( ~<fURL>~,60000,20000,<fVisible> ) )
+	{
+		ErrMsg = GetLastErrorMsg();
+		Log( Session,~<$Job.Title>: <errMsg>~ );
+		Invoke( UpdateStatus,~Printed: <fURL>~ );
+		return FALSE;
+	}
+
+	Invoke( UpdateStatus,~<$Job.Title>: Printed <fURL>~ );
+
+	return TRUE;
+}
+
+
+STR SpoolThread::LookForWork(ClaimIt)
+{
+	Invoke( UpdateStatus,~<$Date.Time>  Looking for work~ );
+
+	Query = ~Select * From ReportQueue Where Computer = '<$App.ComputerName>' Order By SubmitDate~;
+
+	if ( !PGenConList( List,Connect,SetMaxRecords,1,SetCacheSize,1,Query,~<Query>~ ) )
+	{
+		Log( Session,~<$Job.Title>: Query Failed. <Query>~ );
+		return ~~;
+	}
+	
+	if ( List( GetFirst,Item ) )
+	{
+		DateTime( Now,Now );
+		DateTime( WhenToPrint,SetFromSortableDateTime,~<$pcon.Item[SubmitDate]>~ );
+
+		if ( Now( IsGreaterOrEqual,WhenToPrint ) )
+		{
+			URL = ~<$pcon.Item[URL]>~;
+
+			if ( <ClaimIt> )
+			{
+				Invoke( UpdateStatus,~<$Date.Time>  Starting <URL>~ );
+
+				List( Remove );
+			}
+
+			return ~<URL>~;
+		}
+	}
+
+	Invoke( UpdateStatus,~<$Date.Time>  Nothing to print~ );
+	
+	return ~~;  
+}
+
+VOID SpoolThread::WakeupNow()
+{ 
+	Post( WM_TIMER(),2,3 );
+}
+
+NUMERIC SpoolThread::HandleStart()
+{ 
+	SetTimer( <fPollDelay> );
+
+	ID = ThreadID();
+
+	Log( Session,~Starting <$Job.Title> background thread - ID=<$str.$ID.%lx>~ );
+
+	return TRUE;
+}	
+
+NUMERIC SpoolThread::HandleQuit()
+{ 
+	ID = ThreadID();
+
+	Log( Session,~Ending <$Job.Title> background thread - ID=<$str.$ID.%lx>~ );
+
+	return TRUE;
+}	
+	
+
+NUMERIC SpoolThread::HandleMsg( Msg,lparam,wparam )
+{
+	KillTimer();
+
+	if ( <Msg> == WM_QUIT() )
+	{
+		Invoke( UpdateStatus,~<$Date.Time>  Stopped~ );
+		return TRUE;
+	}
+
+	PollDelay = ~<fPollDelay>~;
+
+	if ( <Msg> == WM_TIMER() )
+	{
+		fPrinting = TRUE;
+ 
+		fURL = LookForWork(TRUE);
+
+		if ( !IsNULL( ~<fURL>~ ) )
+		{
+			if ( Aborting() )	{ fPrinting = FALSE; return TRUE; }
+
+			Print();
+
+			if ( Aborting() )	{ fPrinting = FALSE; return TRUE; }
+
+			anURL = LookForWork(FALSE);
+
+			if ( !IsNULL( ~<fURL>~ ) )
+			{
+				PollDelay = 1000;
+			}
+		}
+
+
+		fPrinting = FALSE; 
+	}
+
+	SetTimer( <PollDelay> );
+
+	return TRUE;
+}
+
+
+VOID SpoolDialog::WindowDefinition()
+{
+	Fields:		IsHidden	TRUE;
+}
+
+VOID SpoolDialog::DefineControls()
+{
+	Define: AutoStartBox Using DDWinCtrlDef AsSymbol AutoStartBox Private
+		Fields:	TYPENAME			CheckBox
+				GENCONNAME			THIS
+				GENCONFIELD			AutoStart
+				Position			<hgap> <vGap>+2 100 <ButtonHeight>
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnAutoStartBox() )
+				ToolTip				~Automatically startup when <$App.Name> starts~
+				Text				~Auto Start~;
+
+	Define: VisibleBox Using DDWinCtrlDef AsSymbol VisibleBox Private
+		Fields:	TYPENAME			CheckBox
+				GENCONNAME			THIS
+				GENCONFIELD			Visible
+				Position			AutoStartBox(GetLeft,Position) AutoStartBox(GetBottom,Position)+$vGap AutoStartBox(GetWidth,Position) <ButtonHeight>
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnVisibleBox() )
+				ToolTip				~Watch the reports being created in an Internet Explorer Window~
+				Text				~Visible~;
+
+	Define: GoButton Using DDWinCtrlDef AsSymbol GoButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				ISEnabled			F
+				Position			VisibleBox(GetLeft,Position) VisibleBox(GetBottom,Position)+$vGap*2,$ButtonWidth 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnGoButton() )
+				Text				~Start~;
+
+	Define: PrintButton Using DDWinCtrlDef AsSymbol PrintButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				IsEnabled			F
+				Position			GoButton(GetRight,Position)+$hGap GoButton(GetTop,Position),GoButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( StartPrintingNow() )
+				ToolTip				~Wake up the driver now to look for work~
+				Text				~Print Now~;
+
+	Define: HideButton Using DDWinCtrlDef AsSymbol HideButton Private
+		Fields:	TYPENAME			DefaultButton
+				Position			PrintButton(GetRight,Position)+$hGap PrintButton(GetTop,Position),GoButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.HideDialog() )
+				ToolTip				~Hide the Report Driver window~
+				Text				~Hide~;
+
+	Define: QuitButton Using DDWinCtrlDef AsSymbol QuitButton Private
+		Fields:	TYPENAME			Button
+				Position			HideButton(GetRight,Position)+$hGap HideButton(GetTop,Position),GoButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.DoCancelButton() )
+				ToolTip				~Stop the Report Driver~
+				Text				~Stop~;
+
+
+	Define: BrowseQueueButton Using DDWinCtrlDef AsSymbol BrowseQueueButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Position			QuitButton(GetRight,Position)+$hGap QuitButton(GetTop,Position),HideButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.BrowseOpen() )
+				Text				~Report Queue~;
+}
+
+
+NUMERIC SpoolDialog::OnVisibleBox()
+{
+	dlg( GetInput );
+
+	aThread.Set( fVisible,dlgData(GetNumeric,Visible) );
+
+	return TRUE;
+}
+
+
+NUMERIC SpoolDialog::OnAutoStartBox()
+{
+	dlg( GetInput );
+
+	SetWorkStationSettings( ~<$Job.Title>_<$App.Instance>~,AutoStart,Numeric(~<$con.dlgData[AutoStart]>~),TRUE );
+
+	return TRUE;
+}
+
+
+VOID SpoolDialog::BrowseOpen()
+{
+	Action = ACTION DOC ( ReportQueueDoc OpenOnce ReportQueueDoc "Init()" );
+	PerformActions( Action );
+}
+
+
+VOID SpoolDialog::HideDialog()
+{
+	dlg( ShowDialog,FALSE );
+}
+
+
+VOID SpoolDialog::EnableGo()
+{
+	DisableControls( PrintButton );
+	EnableControls( GoButton );
+}
+
+VOID SpoolDialog::EnablePrint()
+{
+	DisableControls( GoButton );
+	EnableControls( PrintButton );
+}
+
+VOID SpoolDialog::DisablePrintGo()
+{
+	DisableControls( ~PrintButton,GoButton~ );
+}
+
+
+VOID SpoolDialog::OnGoButton()
+{
+	Log( Session,~Starting <$Job.Title>~ );
+	Invoke( UpdateStatus,~Started...~ );
+
+	EnablePrint();
+
+	aThread.New();
+}
+
+
+VOID SpoolDialog::OnStop()
+{
+	DisablePrintGo();
+}
+
+
+NUMERIC SpoolDialog::OkayToCancel()
+{
+	if ( IsAppShuttingDown() )
+	{
+		ReturnOnSuccess( !aThread.Running() );
+
+		OnStop();
+
+		Sleep( 100 );
+
+		if ( aThread.Printing() )
+		{
+			ShowDialog(TRUE );	
+			return Warning( ~Wait for the current report to print and try again~ );
+		}
+
+		return TRUE;
+	}
+
+	if ( MessageBox( Translate(~Are you sure you want to stop the <$App.Title> Report Driver?~),YESNO ) == YES )
+	{
+		ReturnOnSuccess( !aThread.Running() );
+
+		OnStop();
+
+		Sleep( 100 );
+
+		if ( aThread.Printing() )
+		{
+			ShowDialog(TRUE );	
+			return Warning( ~Wait for the current report to print and try again~ );
+		}
+
+		return TRUE;
+	}
+
+	CancelShutdown();
+
+	return FALSE; 
+}
+
+
+VOID SpoolDialog::DoCancelButton()
+{
+	if ( OkayToCancel() )
+	{
+		SetWorkStationSettings( ~<$Job.Title>_<$App.Instance>~,AutoStart,Numeric(~<$con.dlgData[AutoStart]>~),TRUE );
+
+		Log( Session,~Stopping <$Job.Title>~ );
+		Invoke( UpdateStatus,~Stopping...~ );
+		aThread.WaitForThreadDeath();
+
+		CancelNow();
+	}
+}
+
+
+VOID UpdateStatus( Msg )
+{
+
+	if ( Defined( ThisDialog ) )
+	{
+		ThisDialog.StatusBar(0,~<Msg>~);
+	}
+}
+
+
+VOID SpoolDialog::SpoolDialog()
+{
+	Title = ~<$App.Title> Report Driver~;
+	Left = 200;
+	HelpPage = ~ReportsDriver.htm~;
+	Dictionary = ~DDReportSpoolDialog~;
+	ButtonWidth = 75;
+}
+
+
+VOID SpoolDialog::DefineDictionary()
+{
+	Dictionary: ~<Dictionary>~ 
+		Fields: Name AutoStart		type long
+		Fields: Name Visible		type long
+}
+
+
+VOID SpoolDialog::ReOpen()				
+{ 
+	dlg( ShowDialog,TRUE );
+	dlg( SetFocus );
+}
+
+
+VOID SpoolDialog::Initialize()				
+{ 
+	if ( GetWorkStationSettings( ~<$Job.Title>_<$App.Instance>~,AutoStart,AutoStart,Enabled ) )
+	{
+		if ( <Enabled> )
+		{
+			dlg( SetStrings,AutoStart,Numeric(~<AutoStart>~) ); 
+		}
+	}
+}
+
+VOID StartPrintingNow()		{ aThread.WakeupNow(); }
+
+
+VOID Init(Hide,WantAutoStart)
+{
+	if ( Defined( ThisDialog ) )
+	{
+		ThisDialog.ReOpen();
+	}
+	else
+	{
+		SpoolThread( New,aThread );
+		Global( aThread );
+			
+		SpoolDialog( New,ThisDialog );	
+		Global( ThisDialog );
+
+		ThisDialog.DefineDialog();
+		ThisDialog.Initialize();
+		ThisDialog.SetBackGroundServer(TRUE);
+
+		if ( !<Hide> )
+		{
+			ThisDialog.ShowDialog(TRUE );	
+		}
+
+		if ( <WantAutoStart> )
+		{
+			ThisDialog.OnGoButton();
+		}
+		else
+		{
+			ThisDialog.EnableGo();
+		}
+	}
+
+	Debug( SetDontDebugThis,TRUE );
+}

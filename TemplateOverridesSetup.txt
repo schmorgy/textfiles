@@ -1,0 +1,89 @@
+IncludeClass( BaseGrid);
+
+VOID SubstratesGrid::SubstratesGrid()					// CONSTRUCTOR
+{
+	TableName = ~TemplateOverridesSetup~;
+	DocumentQuery = ~Select * from <TableName> Order By OverrideName,OverrideType,Sequence~;
+	Title = ~Template Overrides Setup~;
+	WindowWidth = 70;
+	WindowHeight = 50;
+	HelpFile = ~AdminHelpFile~;
+	HelpPage = ~OrderItems.htm~;
+}
+
+STR SubstratesGrid::GetKey( &Item )			{ return ~OverrideName = '<$con.Item[OverrideName]>' And OverrideType = '<$con.Item[OverrideType]>'~; }  // PRIMARY KEY FOR THE TABLE
+
+VOID SubstratesGrid::OnAddRecord( &NewRow )	
+{
+	SequenceQuery = ~Select MAX(Sequence) From <TableName>~;
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~SubstratesGrid():OnAddRecord: Unable to connect to the database. <theErr>~ );
+		Warning( ~Could not connect to database~ );
+		return;
+	}
+	if (dBase( GetValuesFor, ~<SequenceQuery>~, maxSequence ))
+	{
+		maxSequence = <maxSequence> + 10;
+	}
+	else
+	{
+		maxSequence = 0;
+	}
+	NewRow( SetValues,OverrideName,~~,OverrideType,~~,Sequence,0,Enabled,~1~,Sequence,~<maxSequence>~ ); 
+}
+
+NUMERIC SubstratesGrid::ChangeRecordAudits( &Changed )		// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[OverrideType]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  OverrideType cannot be blank.~ ) ); }
+
+	OverrideType = ~<$Con.Changed[OverrideType]>~;
+	if (
+		!SimilarStr(~<OverrideType>~,body_substrate) &&
+		!SimilarStr(~<OverrideType>~,insert_substrate) &&
+		!SimilarStr(~<OverrideType>~,cover_substrate) &&
+		!SimilarStr(~<OverrideType>~,target_device) &&
+		!SimilarStr(~<OverrideType>~,schedule_mode) &&
+		!SimilarStr(~<OverrideType>~,separator_substrate)
+		)
+	{
+		 return Warning( Translate( ~Substrate type must be cover_substrate, insert_substrate, body_substrate or separator_substrate.~ ) ); 
+	}
+
+	if ( IsNULL(~<$Con.Changed[OverrideName]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  OverrideName cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[Sequence]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  Sequence cannot be blank.~ ) ); }
+
+
+	return TRUE;
+}
+/*
+*/
+VOID SubstratesGrid::SetParams(TheTitle,Query)
+{
+	DocumentQuery = ~<Query>~;
+	Title = ~<TheTitle>~;
+	SetTitle(~<TheTitle>~);
+}
+
+NUMERIC Init(ThisTitle,Query)
+{
+	if (Defined(Grid))
+	{
+		Grid.SetParams(~<ThisTitle>~,~<Query>~);
+		Grid.RefreshListView();
+		return TRUE;
+	}
+	Class( SubstratesGrid,Extends,BaseGrid );
+
+	SubstratesGrid( New,Grid );
+	Grid.DefineWindow();
+	Grid.SetParams(~<ThisTitle>~,~<Query>~);
+	Grid.Init();
+
+	return Global( Grid );
+}

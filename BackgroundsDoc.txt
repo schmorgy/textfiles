@@ -1,0 +1,160 @@
+IncludeClass(BaseGrid);
+
+
+VOID Grid::Grid()					// CONSTRUCTOR
+{
+	TableName = ~Backgrounds~;
+	DocumentQuery = ~Select * from <TableName> Order By ID~;
+	Title = ~Chroma Key Backgrounds~;
+	
+	WindowLeft = 41;
+	WindowTop = 0;
+	WindowWidth = 45;
+	WindowHeight = 50;
+	
+	SplitterRows = ~2 5 95~;
+}
+
+
+STR Grid::GetKey( &Item )						// PRIMARY KEY FOR THE TABLE
+{
+	return ~ID = '<$con.Item[ID]>' AND Orientation = <$con.Item[Orientation]>~;
+}
+
+
+NUMERIC Grid::ChangeRecordAudits( &Changed )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[ID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  ID cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[Orientation]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  Orientation cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[Path]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  Path cannot be blank.~ ) ); }
+
+	return TRUE;
+}
+
+
+NUMERIC Grid::OnDoubleClick()
+{
+	if ( !<ViewName>View( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( TR( BaseGridTrans, NoRowsSelected ) ); }
+
+	ReturnOnFailure( SelectedRows( GetFirst,Item ) );
+	
+	return OpenAnImage( ~<$con.Item[Path]>~,~<$con.Item[OrderID]>~,~<$con.Item[Roll]>~,~<$con.Item[Frame]>~ );
+}
+
+
+NUMERIC Grid::OpenAnImage( Path,OrderID,Roll,Frame )
+{
+	if ( !Files( FileExists,~<Path>~ ) )
+		{ return Warning( ~Could not open <Path>~ ); }
+
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( ~Could not create document info for <Path>~ ); }
+
+	Info( SetValues,OrderID,~<OrderID>~,Roll,~<Roll>~,Frame,~<Frame>~ );
+
+	StatusBarText( ~Order <OrderID>  Roll <Roll>   Frame <Frame>.   <Path>~ );
+
+	Document( Doc );
+
+	TopMostWindow = ~~;
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )	// TRY TO BRING EXISTING WINDOW TO FRONT
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == ImageView || ~<ViewType>~ == ImageEditView || ~<ViewType>~ == PIEEditView)
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<Path>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+
+			if ( IsNULL( ~<TopMostWindow>~ ) )
+			{
+				TopMostWindow = ~<DocumentPath>~;
+			}
+		}
+	}
+
+	if ( KeyState( LSHIFT ) || KeyState( RSHIFT ) )		// OPEN A NEW WINDOW NO MATTER WHAT?
+	{
+		if ( !Doc( Open,~<Path>~,Image,~~,Info ) )
+		{ 
+			return Warning( Translate( ~Could not open <Path>~ ) );
+		}
+
+		return TRUE;
+	}
+
+	if ( ~<TopMostWindow>~ != ~~ )
+	{
+		if ( Doc( FindByPath,~<TopMostWindow>~ ) )			// REPLACE THE TOP MOST WINDOWS CONTENTS
+		{
+			ImageCorrections( Free,~<LastImagePath>~ );
+			ImageCorrections( GetAndFreeWhenLastView,~<Path>~ );				// NEED THIS TO RECEIVE CROP UPDATES
+			LastImagePath = ~<Path>~;
+			return Doc( ReplaceImage,~<Path>~,Info );
+		}
+	}
+
+	// IF ALL ELSE FAILS, JUST OPEN THE DARN THING.
+
+	ImageCorrections( Free,~<LastImagePath>~ );
+
+	if ( !Doc( Open,~<Path>~,Image,~~,Info ) )
+	{ 
+		return Warning( ~Could not open <Path>~ );
+	}
+
+	ImageCorrections( GetAndFreeWhenLastView,~<Path>~ );	// NEED THIS TO RECEIVE CROP UPDATES
+
+	LastImagePath = ~<Path>~;
+
+	return TRUE;
+}
+
+
+NUMERIC Grid::UpdateOrientationCombo( &ColumnDefinition,&aStringList,Col )
+{
+	StringList( OrientationList,new );
+	
+	OrientationList( AddString,90 );
+	OrientationList( AddString,0 );
+	
+	if ( !UpdateComboBox( ColumnDefinition,OrientationList,<Col> ) )
+	{
+		return Warning(Translate(~UpdateCharacterSetCombo: Unable to update Orientation combo box.~ ) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC Init()
+{
+	Class( Grid,Extends,BaseGrid );
+
+	Grid( New,Obj );
+
+	Obj.DefineWindow();
+	Obj.Init();
+
+	return Global( Obj );
+}
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\<$Job.Name>~ );
+
+
+

@@ -1,0 +1,149 @@
+
+NUMERIC RefreshListView( Requery )
+{
+	if ( TablesDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	TablesList( Requery );
+
+	TablesDataWindow( RefreshWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC EditExternalFileFormats()
+{
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	if ( !View( GetSelected,SelectedTables ) )		
+		{ return Warning( Translate( ~There were no rows selected.~ ) ); }
+
+	while ( SelectedTables( GetNext,SelectedTable ) )
+	{
+		Table = ~<$con.SelectedTable[TABLE_NAME]>~;
+
+		Query = ~Select * From FileFormats Where TableName = '<Table>' Order By ID,Sequence,TableName~;
+
+		action = ACTION DOC ( FileFormats Open FileFormatsDoc "Init( ~~,~<Table>~,~<Query>~ );" );
+		
+		PerformActions( action );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SeePrimaryKeys()
+{
+Debug( 1 );
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	if ( !View( GetSelected,SelectedTables ) )		
+		{ return Warning( Translate( ~There were no rows selected.~ ) ); }
+
+	if ( SelectedTables( GetNext,SelectedTable ) )
+	{
+		Table = ~<$con.SelectedTable[TABLE_NAME]>~;
+
+		if ( !PGenConList( PrimaryKeysList,Connection,db,Cursor,Keyset,Schema,~Indexes~ ) )
+			{ return Warning( Translate( ~Failed to query the Tables table~ ) ); }
+
+		more = PrimaryKeysList( GetFirst,PrimaryKey );
+
+		while ( $more )
+		{
+			more = PrimaryKeysList( GetNext,PrimaryKey );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( Translate( ~There was no active view~ ) ); }
+
+	ActiveView( DisplayMenu,TablesListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC Init()
+{
+	if ( !PGenConList( TablesList,Connection,db,Cursor,Keyset,Schema,~Tables~ ) )
+		{ Error( Translate( ~Failed to query the Tables table~ ) ); }
+
+	SetDocumentData( TablesList(GetObject) );
+
+	Global( TablesList );
+
+	if ( !TablesDataWindow( CreateWindow,Translate( ~Tables~ ) ) )
+		{ Error( Translate( ~Failed to create the window~ ) ); }
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseTablesDataView()
+{
+	return TablesDataWindow( ForceCloseWindow );
+}
+
+
+
+Define:			TablesTableDefinition Using DDLong
+	Contains:	InListOrder
+	{
+		Define: TableName		CopyOf TableName		~[Database FieldTypes]~	
+	}
+	
+if ( !ado( db,CONNECT ) )
+	{ Error( Translate( ~Could not open Database to access the Tables Table~ ) ); }	
+
+Define:	TablesListViewMenu Using DDMenuDef AsSymbol TablesListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	EditExternal	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Edit External File Formats~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( EditExternalFileFormats() )
+
+		Define:	ViewPrimaryKeys	using	DDMenuItemDef
+			Fields:	Text		Translate( ~View Primary Keys~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SeePrimaryKeys() )
+	}
+
+Define: TablesDataWindow Using DDWinDef
+	Fields:		Title					Translate( ~Tables~ )
+				Position				0 50 70 15
+				IsPositionPercent		T
+
+	Contains:	INLISTORDER
+	{
+		Define: TablesDataView Using DDViewDef AsSymbol TablesDataView
+			Fields:	ViewType				ListView
+				//	GridControlTypes		TablesTableDefinition(GetObject)
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+				//  DoubleClickActionsText	ACTION Exec ( OpenTables() )
+					CloseActionsText		ACTION Call ( OnCloseTablesDataView() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "TablesData.htm" );
+	}
+	
+

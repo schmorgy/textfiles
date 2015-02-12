@@ -1,0 +1,945 @@
+IF 0
+{
+	Utilities used by KparsCmds.txt.
+
+	NUMERIC AddToKparsQueue( &database,State,Order,Roll,Frame,RetouchCode )
+	    adds an image to the desired queue (State); If a RetouchCode is
+		specified and there is an associated BatchSetup for that RetouchCode,
+		that BatchSetup is assigned to the image.
+		If there is no corresponding BatchSetup, the setup is taken from either
+		the Images, Rolls or Orders table (in order of precedence).
+
+	NUMERIC GetRetouchBatchSetup( &database,Order,Roll,Frame,&batchSetup,&priority )
+		Determines the KPARS BatchSetup based on settings in Images, Rolls or Orders
+		tables.
+
+	NUMERIC GetBatchSetupFromRetouchCode( &database,RetouchCode,&retouchbatchSetup,&priority )
+		Finds the BatchSetup that corresponds to the specified RetouchCode
+
+}
+
+NUMERIC AddToKparsQueue( &database,State,Order,Roll,Frame,RetouchCode )
+{
+	GetKparsDefaultsDB( database );
+
+	RetouchID = ~~;
+	if ( DefinedAndNotNull( RetouchCode ) )
+	{
+		RetouchID = ~<RetouchCode>~;
+	}
+
+	Fields = ~OverwriteOriginal,OriginalPrefix,OriginalSuffix,OriginalPath,IntermediateDataPath,JPEGQuality,FileResolution,BatchCompleteProcessing,SubmittedAt,AutoBatch,SingleFace~;
+	Values = ~<KparsOverWrite>,'<KparsPrefix>','<KparsSuffix>','<KparsImgPath>','<KparsDataPath>',100,250,'<KparsBatchComplete>','<$Date.SortableDateTime>',<KparsAutoBatch>,<KparsSingleFace>~;
+	UpdateFields = ~OverwriteOriginal=<KparsOverWrite>,OriginalPrefix='<KparsPrefix>',OriginalSuffix='<KparsSuffix>',OriginalPath='<KparsImgPath>',IntermediateDataPath='<KparsDataPath>',JPEGQuality=100,FileResolution=250,BatchCompleteProcessing='<KparsBatchComplete>',AutoBatch=<KparsAutoBatch>,SingleFace=<KparsSingleFace>~;
+
+	batchSetup = ~~;
+	priority = 0;
+	
+	if ( ~<RetouchID>~ != ~~)
+	{
+		GetBatchSetupFromRetouchCode( database,~<RetouchID>~,batchSetup,priority );
+	}
+
+	if ( ~<batchSetup>~ == ~~)
+	{
+		GetRetouchBatchSetup(database,~<Order>~,~<Roll>~,~<Frame>~,batchSetup,priority);
+	}
+
+	Key = ~OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+	Query = ~Select RetouchState From RetouchImages Where <Key>~;
+
+	retouchState = ~~;
+	Exists = database( RecordCountFor,~<Query>~ );
+	database( GetValuesFor,~<Query>~,retouchState );
+
+	if ( !<Exists> )
+	{
+		Fields2 = ~OrderID,Roll,Frame,BatchSetup,Priority,RetouchState,<Fields>~;
+		Values2 = ~'<Order>','<Roll>','<Frame>','<batchSetup>',<priority>,'<State>',<Values>~;
+
+		Cmd = ~Insert Into RetouchImages(<Fields2>) Values(<Values2>)~;
+
+		if ( !database( CMD,~<Cmd>~ ) )
+		{
+			database( GetErrorDescription,theErr );
+			DoKparsWarning( Translate( ~Database update failed. <theErr>~ ) );
+			return FALSE;
+		}
+		Cmd = ~Update Images Set Retouch = 1 Where <Key>~;
+
+		if ( !database( CMD,~<Cmd>~ ) )
+		{
+			DoKparsStatusBarText( Translate( ~Failed to set the retouch flag for <Order>,<Roll>,<Frame>~ ) );
+			return FALSE;
+		}
+
+	}
+	else
+	{
+		if ( ~<retouchState>~ != ~InBatch~ && ~<retouchState>~ != ~InReview~ && ~<retouchState>~ != ~InMerge~ && ~<retouchState>~ != ~InInteractive~ )
+		{
+			Cmd = ~Update RetouchImages Set RetouchState='<State>',BatchSetup='<batchSetup>' WHERE OrderID = '<Order>' And Roll = '<Roll>' And Frame = '<Frame>'~;
+
+			if ( !database( CMD,~<Cmd>~ ) )
+			{
+				database( GetErrorDescription,theErr );
+				DoKparsWarning( Translate( ~Database update failed. <theErr>~ ) );
+				return FALSE;
+			}
+		}
+		else
+		{
+			DoKparsWarning( Translate( ~The image is currently being retouched.~ ) );
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddToKparsQueueWithSetup( &database,State,Order,Roll,Frame,BatchSetup )
+{
+	GetKparsDefaultsDB( database );
+
+	Fields = ~OverwriteOriginal,OriginalPrefix,OriginalSuffix,OriginalPath,IntermediateDataPath,JPEGQuality,FileResolution,BatchCompleteProcessing,SubmittedAt,AutoBatch,SingleFace~;
+	Values = ~<KparsOverWrite>,'<KparsPrefix>','<KparsSuffix>','<KparsImgPath>','<KparsDataPath>',100,250,'<KparsBatchComplete>','<$Date.SortableDateTime>',<KparsAutoBatch>,<KparsSingleFace>~;
+	UpdateFields = ~OverwriteOriginal=<KparsOverWrite>,OriginalPrefix='<KparsPrefix>',OriginalSuffix='<KparsSuffix>',OriginalPath='<KparsImgPath>',IntermediateDataPath='<KparsDataPath>',JPEGQuality=100,FileResolution=250,BatchCompleteProcessing='<KparsBatchComplete>',KparsAutoBatch=<KparsAutoBatch>,KparsSingleFace=<KparsSingleFace>~;
+
+	if ( !DefinedAndNotNull( BatchSetup ) && !<KparsAutoBatch> )
+	{
+		GetRetouchBatchSetup( database,~<Order>~,~<Roll>~,~<Frame>~,BatchSetup,priority );
+	}
+
+	priority = 0;
+	GetRetouchPriority( database,~<Order>~,~<Roll>~,~<Frame>~,priority );
+
+	
+	Key = ~OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+	Query = ~Select RetouchState From RetouchImages Where <Key>~;
+
+	retouchState = ~~;
+	Exists = database( RecordCountFor,~<Query>~ );
+	database( GetValuesFor,~<Query>~,retouchState );
+
+	if ( !<Exists> )
+	{
+		Fields2 = ~OrderID,Roll,Frame,BatchSetup,Priority,RetouchState,<Fields>~;
+		Values2 = ~'<Order>','<Roll>','<Frame>','<BatchSetup>',<priority>,'<State>',<Values>~;
+
+		Cmd = ~Insert Into RetouchImages(<Fields2>) Values(<Values2>)~;
+
+		if ( !database( CMD,~<Cmd>~ ) )
+		{
+			database( GetErrorDescription,theErr );
+			DoKparsWarning( Translate( ~Database update failed. <theErr>~ ) );
+			return FALSE;
+		}
+		Cmd = ~Update Images Set Retouch = 1 Where <Key>~;
+
+		if ( !database( CMD,~<Cmd>~ ) )
+		{
+			DoKparsStatusBarText( Translate( ~Failed to set the retouch flag for <Order>,<Roll>,<Frame>~ ) );
+			return FALSE;
+		}
+
+	}
+	else
+	{
+		if ( ~<retouchState>~ != ~InBatch~ && ~<retouchState>~ != ~InReview~ && ~<retouchState>~ != ~InMerge~ && ~<retouchState>~ != ~InInteractive~ )
+		{
+			Cmd = ~Update RetouchImages Set RetouchState='<State>',BatchSetup='<BatchSetup>' WHERE OrderID = '<Order>' And Roll = '<Roll>' And Frame = '<Frame>'~;
+
+			if ( !database( CMD,~<Cmd>~ ) )
+			{
+				database( GetErrorDescription,theErr );
+				DoKparsWarning( Translate( ~Database update failed. <theErr>~ ) );
+				return FALSE;
+			}
+		}
+		else
+		{
+			DoKparsWarning( Translate( ~The image is currently being retouched.~ ) );
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddToKparsBatchWithCode( &database,State,Order,Roll,Frame,RetouchCode )
+{
+	GetKparsDefaultsDB( database );
+
+	RetouchID = ~~;
+	if ( DefinedAndNotNull( RetouchCode ) )
+	{
+		RetouchID = ~<RetouchCode>~;
+	}
+
+	Fields = ~OverwriteOriginal,OriginalPrefix,OriginalSuffix,OriginalPath,IntermediateDataPath,JPEGQuality,FileResolution,BatchCompleteProcessing,SubmittedAt,AutoBatch,SingleFace~;
+	Values = ~<KparsOverWrite>,'<KparsPrefix>','<KparsSuffix>','<KparsImgPath>','<KparsDataPath>',100,250,'<KparsBatchComplete>','<$Date.SortableDateTime>',<KparsAutoBatch>,<KparsSingleFace>~;
+	UpdateFields = ~OverwriteOriginal=<KparsOverWrite>,OriginalPrefix='<KparsPrefix>',OriginalSuffix='<KparsSuffix>',OriginalPath='<KparsImgPath>',IntermediateDataPath='<KparsDataPath>',JPEGQuality=100,FileResolution=250,BatchCompleteProcessing='<KparsBatchComplete>',AutoBatch=<KparsAutoBatch>,SingleFace=<KparsSingleFace>~;
+
+	batchSetup = ~~;
+	priority = 0;
+	
+	if ( ~<RetouchID>~ != ~~ && !<KparsAutoBatch> )
+	{
+		GetBatchSetupFromRetouchCode( database,~<RetouchID>~,batchSetup,priority );
+	}
+
+	if ( ~<batchSetup>~ == ~~ && !<KparsAutoBatch> )
+	{
+		return FALSE;
+	}
+
+	Key = ~OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+	Query = ~Select RetouchState From RetouchImages Where <Key>~;
+
+	retouchState = ~~;
+	Exists = database( RecordCountFor,~<Query>~ );
+	database( GetValuesFor,~<Query>~,retouchState );
+
+	if ( !<Exists> )
+	{
+		Fields2 = ~OrderID,Roll,Frame,BatchSetup,Priority,RetouchState,<Fields>~;
+		Values2 = ~'<Order>','<Roll>','<Frame>','<batchSetup>',<priority>,'<State>',<Values>~;
+
+		Cmd = ~Insert Into RetouchImages(<Fields2>) Values(<Values2>)~;
+
+		if ( !database( CMD,~<Cmd>~ ) )
+		{
+			database( GetErrorDescription,theErr );
+			DoKparsWarning( Translate( ~Database update failed. <theErr>~ ) );
+			return FALSE;
+		}
+		Cmd = ~Update Images Set Retouch = 1 Where <Key>~;
+
+		if ( !database( CMD,~<Cmd>~ ) )
+		{
+			DoKparsStatusBarText( Translate( ~Failed to set the retouch flag for <Order>,<Roll>,<Frame>~ ) );
+			return FALSE;
+		}
+
+	}
+	else
+	{
+		if ( ~<retouchState>~ != ~InBatch~ && ~<retouchState>~ != ~InReview~ && ~<retouchState>~ != ~InMerge~ && ~<retouchState>~ != ~InInteractive~ )
+		{
+			Cmd = ~Update RetouchImages Set RetouchState='<State>',BatchSetup='<batchSetup>' WHERE OrderID = '<Order>' And Roll = '<Roll>' And Frame = '<Frame>'~;
+
+			if ( !database( CMD,~<Cmd>~ ) )
+			{
+				database( GetErrorDescription,theErr );
+				DoKparsWarning( Translate( ~Database update failed. <theErr>~ ) );
+				return FALSE;
+			}
+		}
+		else
+		{
+			DoKparsWarning( Translate( ~The image is currently being retouched.~ ) );
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC GetRetouchBatchSetup( &database,Order,Roll,Frame,&batchSetup,&priority )
+{
+	ImageSetup = ~~;
+	RollSetup = ~~;
+	OrderSetup = ~~;
+	OrderPriority = 0;
+
+	Fields = ~RetouchBatchSetup~;
+	
+	Query = ~Select <Fields> From Images Where OrderID = '<Order>' And Roll = '<Roll>' And Frame = '<Frame>'~;
+	database( GetValuesFor,~<Query>~,ImageSetup );
+
+	if ( ~<ImageSetup>~ == ~~ )
+	{
+		if ( GetBatchSetupFromSubjectInfo( database,~<Order>~,~<Roll>~,~<Frame>~,batchSetup,priority ) )
+		{
+			return TRUE;
+		}
+	}
+
+	Query = ~Select <Fields> From Rolls Where OrderID = '<Order>' And Roll = '<Roll>'~;
+	database( GetValuesFor,~<Query>~,RollSetup );
+
+	Query = ~Select RetouchBatchSetup,Priority From Orders Where ID = '<Order>'~;
+	database( GetValuesFor,~<Query>~,OrderSetup,OrderPriority );
+
+	if ( ~<ImageSetup>~ != ~~ )
+	{
+		batchSetup = ~<ImageSetup>~;
+	}
+	else if ( ~<RollSetup>~ != ~~ )
+	{
+		batchSetup = ~<RollSetup>~;
+	}
+	else if ( ~<OrderSetup>~ != ~~ )
+	{
+		batchSetup = ~<OrderSetup>~;
+	}
+
+	if ( ~<OrderPriority>~ != ~~ && IsNumeric( ~<OrderPriority>~ ) )
+	{
+		oPriority = atof(~<OrderPriority>~);
+		if (<oPriority> > 0)
+		{
+			priority = <oPriority>;
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC GetRetouchPriority( &database,Order,Roll,Frame,&priority )
+{
+	OrderPriority = 0;
+
+	Fields = ~RetouchBatchSetup~;
+	
+	Query = ~Select Priority From Orders Where ID = '<Order>'~;
+	database( GetValuesFor,~<Query>~,OrderPriority );
+
+	if ( ~<OrderPriority>~ != ~~ && IsNumeric( ~<OrderPriority>~ ) )
+	{
+		oPriority = atof(~<OrderPriority>~);
+		if (<oPriority> > 0)
+		{
+			priority = <oPriority>;
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC GetBatchSetupFromRetouchCode( &database,RetouchCode,&retouchbatchSetup,&priority )
+{
+	ImageSetup = ~~;
+	RollSetup = ~~;
+	OrderSetup = ~~;
+	OrderPriority = 0;
+
+	Fields = ~BatchSetup~;
+	
+	Query = ~Select <Fields> From KparsSetupCodeCrossRef Where ID = '<RetouchCode>'~;
+	database( GetValuesFor,~<Query>~,retouchbatchSetup );
+
+	Query = ~Select Priority From Orders Where ID = '<Order>'~;
+	database( GetValuesFor,~<Query>~,OrderPriority );
+
+	if ( ~<OrderPriority>~ != ~~ && IsNumeric( ~<OrderPriority>~ ) )
+	{
+		oPriority = atof(~<OrderPriority>~);
+		if (<oPriority> > 0)
+		{
+			priority = <oPriority>;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC GetBatchSetupFromRetouchTable( &database,Order,Roll,Frame,&retouchbatchSetup,&priority )
+{
+	ImageSetup = ~~;
+	RollSetup = ~~;
+	OrderSetup = ~~;
+	OrderPriority = 0;
+
+	Fields = ~RetouchBatchSetup~;
+	Key = ~OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+	
+	Query = ~Select <Fields> From Retouch Where <Key>;
+	database( GetValuesFor,~<Query>~,retouchbatchSetup );
+
+	if ( ~<retouchBatchSetup>~ == ~None~ )
+	{
+		retouchBatchSetup = ~~;
+	}
+
+	Query = ~Select Priority From Orders Where ID = '<Order>'~;
+	database( GetValuesFor,~<Query>~,OrderPriority );
+
+	if ( ~<OrderPriority>~ != ~~ && IsNumeric( ~<OrderPriority>~ ) )
+	{
+		oPriority = atof(~<OrderPriority>~);
+		if (<oPriority> > 0)
+		{
+			priority = <oPriority>;
+		}
+	}
+
+	return TRUE;
+}
+
+// check for a subjectinfo record for this image
+// check for a KPARS column that would identify the batch setup
+// get the batchsetup from the appropriate column
+NUMERIC GetBatchSetupFromSubjectInfo( &database,Order,Roll,Frame,&retouchbatchSetup,&priority )
+{
+	RETOUCH_TYPE		= 0;
+	RETOUCH_CODE_TYPE	= 1;
+	RETOUCH_SETUP_TYPE	= 2;
+
+	subjInfoSetup = ~~;
+
+	Query = STR ( Select SubjectId From Images Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>' );
+	database( GetValuesFor,~<Query>~,SubjectID );
+	if ( ~<SubjectID>~ == ~~ )
+	{
+		return FALSE;
+	}
+
+	if ( !GetKparsSubjectOrderIDInfoType( database, ~<Order>~, InfoType, SubjectInfoOrderId) )
+	{	return FALSE;	}
+
+	Query = STR ( Select * From SubjectInfo<InfoType> Where OrderID = '<SubjectInfoOrderId>' AND SubjectID = '<SubjectID>' );
+
+	if ( !PGenConList( List,Connection,database,Cursor,KeySet,GetRecordFor,~<Query>~,Record ) )
+	{
+		return FALSE;
+	}
+
+	BatchSetupColumn	= ~~;
+	RetouchCodeColumn	= ~~;
+	RetouchColumn		= ~~;
+
+	setupDefined		= FALSE;
+	codeDefined			= FALSE;
+	retouchDefined		= FALSE;
+
+	// identify the columns to use for lookups
+	// if none defined, show setup dialog
+	Query = ~Select * From SubjectKparsColumns Where TableName = 'SubjectInfo<InfoType>'~;
+	HaveColumnInfo = PGenConList( ColumnsList,Connection,database,Cursor,Forward,Query,~<Query>~ );
+	if ( <HaveColumnInfo> )
+	{
+		setupDefined   = FindKparsColumnName( database,ColumnsList,SubjectInfo<InfoType>,<RETOUCH_SETUP_TYPE>,BatchSetupColumn );	
+		codeDefined    = FindKparsColumnName( database,ColumnsList,SubjectInfo<InfoType>,<RETOUCH_CODE_TYPE>, RetouchCodeColumn );
+	}
+
+	if ( !<setupDefined> && !<codeDefined> && !<KparsAutoBatch> )
+	{
+		return FALSE;
+	}
+
+	if ( <setupDefined> )
+	{
+		Record( GetValue,~<BatchSetupColumn>~,Value );
+		if ( IsValidBatchSetup( database,~<Value>~ ) )
+		{
+			retouchbatchSetup  = ~<Value>~;
+
+			Query = ~Select Priority From Orders Where ID = '<Order>'~;
+			database( GetValuesFor,~<Query>~,OrderPriority );
+
+			if ( ~<OrderPriority>~ != ~~ && IsNumeric( ~<OrderPriority>~ ) )
+			{
+				oPriority = atof(~<OrderPriority>~);
+				if (<oPriority> > 0)
+				{
+					priority = <oPriority>;
+				}
+			}
+			return TRUE;
+		}
+	}
+	else if ( <codeDefined> )
+	{
+		Record( GetValue,~<RetouchCodeColumn>~,Value );
+		if ( IsValidRetouchCode( database,~<Value>~ ) )
+		{
+			retouchCode  = ~<Value>~;
+			GetBatchSetupFromRetouchCode( database,~<Value>~,retouchbatchSetup,priority );
+			return TRUE;
+		}
+	}
+	else if ( <KparsAutoBatch> )
+	{
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC IsValidBatchSetup( &database,setup )
+{
+	Exists = FALSE;
+
+	Query = ~Select count(*) from RetouchBatchSetup Where Name = '<setup>'~;
+
+	Exists = database( RecordCountFor,~<Query>~ );
+
+	return <Exists>;
+}
+
+
+NUMERIC IsValidRetouchCode( &database,code )
+{
+	Exists = FALSE;
+
+	Query = ~Select count(*) from KparsSetupCodeCrossRef Where ID = '<code>'~;
+
+	Exists = database( RecordCountFor,~<Query>~ );
+
+	return <Exists>;
+}
+
+NUMERIC DoKparsWarning( Msg )
+{
+	if ( FunctionDefined(ShowKparsWarning) ) // Thread's function
+	{	Invoke( ShowKparsWarning,~<Msg>~ );	}
+
+	else
+	{	Warning( ~<Msg>~ );	}
+
+	return FALSE;
+
+}
+
+VOID DoKparsStatusBarText( Msg )
+{
+	if ( FunctionDefined(ShowKparsProgress) ) // Thread's function
+	{	Invoke( ShowKparsProgress,~<Msg>~ );	}
+
+	else
+	{	dlg( SetStatus,0, ~<Msg>~ );	}
+}
+
+NUMERIC FindKparsColumnName( &dbase,&ColumnsList,&SubjectInfo,ColumnType,&ColumnName )			
+{
+	Operation = GetFirst;
+
+	while ( ColumnsList( <Operation>,ColumnInfo ) )
+	{
+		Operation = GetNext;
+
+		if ( MakeNumber( ~<$pcon.ColumnInfo[Type]>~ ) == <ColumnType> )
+		{	
+			ColumnName = ~<$pcon.ColumnInfo[ColumnName]>~;
+			break;
+		}
+	}
+
+	if ( ~<ColumnName>~ == ~~ )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC GetKparsSubjectOrderIDInfoType( &database, theOrderID, &theInfoType, &theSubjectInfoOrderId)
+{
+	Success = FALSE;
+
+	theQuery = ~Select ImagesOrderID ,InfoType, ShootDescID From Orders Where ID = '<theOrderID>'~;
+
+	Success = database( GetValuesFor,~<theQuery>~,theImagesID, theInfoType, theShootDescID ) != FALSE;
+
+	if (~<theImagesID>~ != ~~)
+	{
+		theOrderID = ~<theImagesID>~;
+
+		theQuery = ~Select InfoType, ShootDescID From Orders Where ID = '<theOrderID>'~;
+
+		Success = database(GetValuesFor,~<theQuery>~,theInfoType, theShootDescID ) != FALSE;
+	}
+
+	if ( ~<theShootDescID>~ != ~~)
+	{
+		newWaySetting = TRUE;
+		if ( GetSystemSettings( ~AlternateWay~,~OrderIsSubject~,Setting,Enabled ) )
+		{
+			if ( !IsNULL( ~<Setting>~ ) && <Enabled> )
+			{
+				newWaySetting = FALSE;
+			}
+		}
+		if ( <newWaySetting> )
+		{
+			theSubjectInfoOrderId = ~<theShootDescID>~;
+		}
+		else
+		{
+			theSubjectInfoOrderId = ~<theOrderID>~;
+		}
+	}
+	else
+	{
+		theSubjectInfoOrderId = ~<theOrderID>~;
+	}
+
+	return <Success>;
+}
+
+NUMERIC GetKparsDefaults()
+{
+	if ( Defined( EnableKpars ) )
+	{
+		return TRUE;
+	}
+
+	if ( !Ado( database,Connect ) )
+	{
+		database( GetErrorDescription,theErr );
+		Log( Session,~Error connecting to the shared database: <theErr>~ );
+		return FALSE;
+	}
+
+	return GetKparsDefaultsDB( database );
+}
+
+NUMERIC GetKparsDefaultsDB( &database )
+{
+	if ( Defined( EnableKpars ) )
+	{
+		return TRUE;
+	}
+
+	KparsOverWrite = FALSE;
+	KparsPrefix = ~~;
+	KparsSuffix = ~_original~;
+	KparsImgPath = ~~;
+	KparsPath = ~<$App.ShareDirectory>\KparsData~;
+	KparsPath = MakePath( Type, UNC, ~<KparsPath>~);
+	KparsBatchComplete = ~REVIEW~;
+	KparsDataPath = ~<KparsPath>~;
+	KparsAutoBatch = FALSE;
+	KparsSingleFace = FALSE;
+
+	EnableKpars = FALSE;
+
+	Global( KparsOverWrite );
+	Global( KparsPrefix );
+	Global( KparsSuffix );
+	Global( KparsImgPath );
+	Global( KparsPath );
+	Global( KparsPath );
+	Global( KparsBatchComplete );
+	Global( KparsDataPath );
+	Global( KparsAutoBatch );
+	Global( KparsSingleFace );
+
+	Global( EnableKpars );
+
+	defaultQuery = ~Select * from SystemSettings where Category = 'AutoRetouching' and Enabled=1 order by Item~;
+	if ( !PGenConList( kparsList,Connection,database,Cursor,Forward,Query,~<defaultQuery>~) )
+	{
+		kparsList( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the SystemSettings table.\n\n<defaultQuery>\n\n<theErr>~ ) ); 
+	}
+
+	while ( kparsList( GetNext,Item ) )
+	{
+		if ( ~<$pcon.Item[Item]>~ == ~KPARS~ )
+		{
+			EnableKpars = Numeric( ~<$pcon.Item[SettingsText]>~ );
+		}
+		else if ( ~<$pcon.Item[Item]>~ == ~OverwriteOriginal~ )
+		{
+			KparsOverWrite = Numeric( ~<$pcon.Item[SettingsText]>~ );
+		}
+		else if ( ~<$pcon.Item[Item]>~ == ~OriginalPrefix~ )
+		{
+			KparsPrefix = ~<$pcon.Item[SettingsText]>~;
+		}
+		else if ( ~<$pcon.Item[Item]>~ == ~OriginalSuffix~ )
+		{
+			KparsSuffix = ~<$pcon.Item[SettingsText]>~;
+		}
+		else if ( ~<$pcon.Item[Item]>~ == ~OriginalPath~ )
+		{
+			KparsImgPath = ~<$pcon.Item[SettingsText]>~;
+		}
+		else if ( ~<$pcon.Item[Item]>~ == ~EnhancementDataFolder~ )
+		{
+			KparsDataPath = ~<$pcon.Item[SettingsText]>~;
+		}
+		else if ( ~<$pcon.Item[Item]>~ == ~BatchCompleteProcessing~ )
+		{
+			KparsBatchComplete = ~<$pcon.Item[SettingsText]>~;
+		}
+		else if ( ~<$pcon.Item[Item]>~ == ~AutoBatch~ )
+		{
+			KparsAutoBatch = Numeric( ~<$pcon.Item[SettingsText]>~ );
+		}
+		else if ( ~<$pcon.Item[Item]>~ == ~SingleFace~ )
+		{
+			KparsSingleFace = Numeric( ~<$pcon.Item[SettingsText]>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+VOID ForgetKparsDefaults()
+{
+	ForgetGlobal( KparsOverWrite );
+	ForgetGlobal( KparsPrefix );
+	ForgetGlobal( KparsSuffix );
+	ForgetGlobal( KparsImgPath );
+	ForgetGlobal( KparsPath );
+	ForgetGlobal( KparsPath );
+	ForgetGlobal( KparsBatchComplete );
+	ForgetGlobal( KparsDataPath );
+	ForgetGlobal( KparsAutoBatch );
+	ForgetGlobal( KparsSingleFace );
+
+	ForgetGlobal( EnableKpars );
+}
+
+NUMERIC CheckAutoBatch()
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		fExitOnComplete = TRUE;
+		Log(Session, ~Could not connect to the database for KPARS AutoBatch test. <theErr>~ );
+		return FALSE;
+	}
+
+	typeQuery = ~Select count(*) from RetouchBatchSetup Where BatchSetupType = 'DarkSkinHighBlemish'~;
+	if ( dBase( RecordCountFor,~<typeQuery>~ ) == 0 )
+	{
+		return FALSE;
+	}
+
+	typeQuery = ~Select count(*) from RetouchBatchSetup Where BatchSetupType = 'DarkSkinLowBlemish'~;
+	if ( dBase( RecordCountFor,~<typeQuery>~ ) == 0 )
+	{
+		return FALSE;
+	}
+
+	typeQuery = ~Select count(*) from RetouchBatchSetup Where BatchSetupType = 'LightSkinHighBlemish'~;
+	if ( dBase( RecordCountFor,~<typeQuery>~ ) == 0 )
+	{
+		return FALSE;
+	}
+
+	typeQuery = ~Select count(*) from RetouchBatchSetup Where BatchSetupType = 'LightSkinLowBlemish'~;
+	if ( dBase( RecordCountFor,~<typeQuery>~ ) == 0 )
+	{
+		return FALSE;
+	}
+
+	typeQuery = ~Select count(*) from RetouchBatchSetup Where DefaultSetting = 1~;
+	if ( dBase( RecordCountFor,~<typeQuery>~ ) == 0 )
+	{
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+
+NUMERIC CheckAutoBatchDB( &database )
+{
+	typeQuery = ~Select count(*) from RetouchBatchSetup Where BatchSetupType = 'DarkSkinHighBlemish'~;
+	if ( database( RecordCountFor,~<typeQuery>~ ) == 0 )
+	{
+		return FALSE;
+	}
+
+	typeQuery = ~Select count(*) from RetouchBatchSetup Where BatchSetupType = 'DarkSkinLowBlemish'~;
+	if ( database( RecordCountFor,~<typeQuery>~ ) == 0 )
+	{
+		return FALSE;
+	}
+
+	typeQuery = ~Select count(*) from RetouchBatchSetup Where BatchSetupType = 'LightSkinHighBlemish'~;
+	if ( database( RecordCountFor,~<typeQuery>~ ) == 0 )
+	{
+		return FALSE;
+	}
+
+	typeQuery = ~Select count(*) from RetouchBatchSetup Where BatchSetupType = 'LightSkinLowBlemish'~;
+	if ( database( RecordCountFor,~<typeQuery>~ ) == 0 )
+	{
+		return FALSE;
+	}
+
+	typeQuery = ~Select count(*) from RetouchBatchSetup Where DefaultSetting = 1~;
+	if ( database( RecordCountFor,~<typeQuery>~ ) == 0 )
+	{
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+
+// Template Dialog Code
+Class( KparsWSDlg,Extends,BaseHTMLWin,
+	   Member,fOrderID,Str,~~ );
+
+VOID KparsWSDlg::HelpRoutine()
+{
+//	OpenHelpPage(~<$App.HTTPServer>/Manual/Retouch/Retouch.kpl~,TR(KparsWorkstation,HelpPageTitle));
+}
+
+VOID	KparsWSDlg::OnLoadComplete()	
+{  
+};		// Override as needed
+
+VOID KparsWSDlg::KparsWSDlg()
+{
+	BaseHtml::LoadTranslationFile(Kpars,KparsWorkstation,KparsWorkstation);
+
+	fTitle = TR( KparsWorkstation,Title );
+	WindowWidth = 468;
+	WindowHeight = 400;
+
+	fWindowStyle = ~WS_SIZEBOX~;
+
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+	{ 
+		return Warning( Translate(KparsWorkstation,NoImagesSelected) );
+	}
+
+	View(GetName,OrderID);
+	fOrderID = ~<OrderID>~ ;
+
+}
+
+VOID KparsWSDlg::DefineMessages()
+{
+	BaseHtml::DefineMessages();
+}
+
+NUMERIC KparsWSDlg::SetStationForOrder( &dBase, stationID, Mode )
+{
+	CountQuery = ~Select Count(*) From RetouchImages Where OrderID = '<fOrderID>'~;
+	existCount = dBase(RecordCountFor, ~<CountQuery>~);
+	
+	if ( <existCount> == 0 )
+	{
+		return Warning( Translate( KparsWorkstation,NoOrderInTable,~<fOrderID>~ ) );
+	}
+
+	Cmd = ~Update RetouchImages Set <Mode>ID='<stationID>' Where OrderID = '<fOrderID>'~;
+		
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+		break;
+	}
+
+	return TRUE;
+}
+
+NUMERIC KparsWSDlg::SetStationForImages( &dBase, stationID, Mode )
+{
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+	{ 
+		return Warning( Translate(KparsWorkstation,NoImagesSelected) );
+	}
+
+	if ( !View( GetSelected,SelectedImages ) )		
+	{ 
+		return Warning( Translate(KparsWorkstation,NoImagesSelected) );
+	}
+
+	Count = SelectedImages( ChildCount );
+
+	if ( <Count> == 0 )
+	{
+		return Warning( Translate(KparsWorkstation,NoImagesSelected) );
+	}
+
+	baseCmd = ~Update RetouchImages Set <Mode>ID='<stationID>' Where OrderID = '<fOrderID>' AND~;
+	baseQuery = ~Select Count(*) From RetouchImages Where OrderID = '<fOrderID>' AND~;
+
+	notQueuedCount = 0;
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		Cmd = ~<baseCmd> Roll='<$con.Image[Roll]>' AND Frame ='<$con.Image[Frame]>'~;
+		CountQuery = ~<baseQuery> Roll='<$con.Image[Roll]>' AND Frame ='<$con.Image[Frame]>'~;
+		existCount = dBase(RecordCountFor, ~<CountQuery>~);
+
+		if (<existCount> == 0 )
+		{
+			++notQueuedCount;
+			continue;
+		}
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+			break;
+		}
+	}
+
+	if ( <notQueuedCount> > 0 )
+	{
+		return Warning( Translate( KparsWorkstation,NoImageInTable,~<fOrderID>~ ) );
+	}
+
+
+	return TRUE;
+}
+
+VOID KparsWSDlg::OnOKWS()
+{
+	fullOrder = FALSE;
+	WsID	  = ~~;
+	Mode	  = ~~;
+
+	fHtmlView( Get,~SelectTypeOrder~,0,checked,fullOrder );
+	fHtmlView( Get,~StationID~,0,value,WsID );
+	fHtmlView( Get,~mode~,0,value,Mode );
+
+	if ( ~<WsID>~ == ~~ )
+	{
+		if ( MessageBox( TR(KparsWorkstation,NoWorkstationSpecified,~<Mode>~), YESNO ) != YES )
+		{
+			return;
+		}
+	}
+
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( Translate(DBMessages,ConnectionFailed,~RetouchImages~,~<theErr>~) );
+		return;
+	}
+
+	if ( <fullOrder> )
+	{
+		if ( !SetStationForOrder( dBase, ~<WsID>~, ~<Mode>~ ) )
+		{
+			return;
+		}
+	}
+	else
+	{
+		if ( !SetStationForImages( dBase, ~<WsID>~, ~<Mode>~ ) )
+		{
+			return;
+		}
+	}
+
+	ForceClose();
+	OnWindowClose();
+}
+
+VOID KparsWSDlg::OnCancelWS()
+{
+	if ( OkayToCancel() )
+	{
+		ForceClose();
+		OnWindowClose();
+	}
+}
+

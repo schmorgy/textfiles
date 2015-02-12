@@ -1,0 +1,209 @@
+
+VOID ReOpen()
+{
+}
+
+
+VOID DefineDialog()
+{
+	if ( Defined( dlg ) )
+	{
+		return;
+	}
+
+	if ( !DictionaryExists(DDStartScanningDialog) )
+	{
+		Dictionary: DDStartScanningDialog
+			Fields: Name	WhichScanner type text
+
+		StringList:	Name StartScanningItems
+			Fields: String	Translate(~HR500~)
+			Fields: String	Translate(~RFS 3570 Plus~)
+		Hang:	StartScanningItems	~[STRINGS]~
+	}
+
+	Define: DlgData Using DDStartScanningDialog
+		Fields:	WhichScanner	~RFS 3570 Plus~ ;
+
+	hGap = vGap = 10;
+	PromptHeight = 20;		PromptWidth = 120;		ValueWidth = 200;
+	ButtonWidth = 90;		ButtonHeight = 20;	
+	LeftX = $hGap;			CurrentY = $vGap;		CurrentRight = 0;
+
+	Define: TheDialog Using DDWinDef
+		Fields:	POSITION				100, 100, 600,600 
+				TITLE					Translate(~Select the scanner to use~)
+				TYPENAME				Dialog 
+				OACTIONSTEXT			ACTION EXEC ( CloseDialog() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "ScanUsing.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: HR500RadioButton Using DDWinCtrlDef AsSymbol HR500RadioButton
+				fields: TypeName		RadioButton  
+						Position		$hGap , $vGap ,$ValueWidth ,$ButtonHeight
+						IActionsText	~[Get]~
+						DActionsText	~[
+											CheckButton(HR500RadioButton) 
+											UncheckButton(RFSPlusRadioButton))
+										 ]~
+						OActionsText	~[Save]~
+						GenConName		THIS
+						GenConField		~WhichScanner~
+						RadioTrueValue	~HR500~
+ 						Text			Translate(~HR500~)
+						Tooltip			Translate(~Scan using the HR500 scanner~);
+
+			Define: RFSPlusRadioButton Using DDWinCtrlDef AsSymbol RFSPlusRadioButton
+				fields: TypeName		RadioButton  
+						Position		$hGap , HR500RadioButton(GetBottom,Position) + $hGap ,$ValueWidth ,$ButtonHeight
+						IActionsText	~[Get]~
+						DActionsText	~[
+											CheckButton(RFSPlusRadioButton) 
+											UncheckButton(HR500RadioButton)
+										 ]~
+						OActionsText	~[Save]~
+						GenConName		THIS
+						GenConField		~WhichScanner~
+						RadioTrueValue	~RFS 3570 Plus~
+ 						Text			Translate(~RFS 3570 Plus~)
+						Tooltip			Translate(~Scan using the RFS 3570 Plus scanner~);
+
+			CurrentRight = RFSPlusRadioButton(GetRight,Position) + $hGap;
+
+			Define: GoButton Using DDWinCtrlDef AsSymbol GoButton
+				Fields:	GENCONNAME		This
+						IsTabStop		1
+						DACTIONSTEXT	ACTION EXEC ( OnGoButton() )
+						POSITION		(($CurrentRight - $LeftX) / 2) - ($ButtonWidth + $hGap) ,
+										RFSPlusRadioButton(GetTop,Position) + $ButtonHeight + $vGap,$ButtonWidth, $ButtonHeight
+						TEXT			~Scan~
+						TOOLTIP			~Start scanning~
+						TYPENAME		DEFAULTBUTTON
+	
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				Fields:	GENCONNAME		This
+						IsTabStop		1
+						DACTIONSTEXT	ACTION EXEC ( CloseDialog() )
+						POSITION		GoButton(GetRight,Position) + $hGap ,
+										GoButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+						TEXT			~Close~
+						TOOLTIP			~Close this dialog using the current settings~
+						TYPENAME		BUTTON
+		}
+
+	CurrentRight = TheDialog( GetMaxRight,Position);
+
+	CurrentY = CancelButton(GetBottom,Position) + $vGap + 30;
+	TheDialog( Set,Position,~120  120  <CurrentRight>  <CurrentY>~ );
+
+	GenDlg( dlg,Definition,TheDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+	Global( DlgData,dlg,TheDialog );
+}
+
+
+NUMERIC CloseDialog()
+{
+	dlg( End );
+	return Exit();
+}
+
+
+VOID OnGoButton()
+{
+	dlg( GetInput );
+
+	if (~<$con.DlgData[WhichScanner]>~ == ~HR500~)
+	{
+		NotifyTheScannerDialog(~HR500~);
+	}
+	else
+	{
+		NotifyTheScannerDialog(~Sizzle~);
+	}
+
+	CloseDialog();
+}
+
+
+VOID NotifyTheScannerDialog( TheModel )
+{
+	if ( !Defined( WhichRoll ) )	// ARE WE JUST CHANGING ORDERS?
+	{
+		Actions = ACTION Doc ( ~Scanner<TheModel>Doc~ OpenOnce Scanner<TheModel>Doc "OnChangeOrderRollFrame(~<TheModel>~,~<WhichOrder>~,~~,~~,TRUE);" );
+	}
+	else	// WE ARE CHANGING ORDER,ROLL, AND OPTIONALLY FRAME
+	{
+		Actions = ACTION Doc ( ~Scanner<TheModel>Doc~ OpenOnce Scanner<TheModel>Doc "OnChangeOrderRollFrame(~<TheModel>~,~<WhichOrder>~,~<WhichRoll>~,~<WhichFrame>~,TRUE);" );
+	}
+	
+	PerformActions( Actions );	
+}
+
+
+VOID NotifyTheImageSorterDialog()
+{
+	if ( !Defined( WhichRoll ) )	// ARE WE JUST CHANGING ORDERS?
+	{
+		Actions = ACTION Doc ( ~ImageSorterDoc~ OpenOnce ImageSorterDoc "OnChangeOrderRollFrame(~HR500~,~<WhichOrder>~,~~,~~);" );
+	}
+	else	// WE ARE CHANGING ORDER,ROLL, AND OPTIONALLY FRAME
+	{
+		Actions = ACTION Doc ( ~ImageSorterDoc~ OpenOnce ImageSorterDoc "OnChangeOrderRollFrame(~HR500~,~<WhichOrder>~,~<WhichRoll>~,~<WhichFrame>~);" );
+	}
+	
+	PerformActions( Actions );	
+}
+
+
+NUMERIC IsScannerSizzleAlreadyOpen()
+{
+	return  Document( Doc,FindByFileName,ScannerSizzleDoc );
+}
+
+
+NUMERIC IsScannerHR500AlreadyOpen()
+{
+	return  Document( Doc,FindByFileName,ScannerHR500Doc );
+}
+
+
+VOID OptionallyAskForScannerModel()
+{
+	if ( IsScannerHR500AlreadyOpen() )
+	{
+		NotifyTheScannerDialog( ~HR500~ );
+		Exit();
+	}
+	else if ( IsScannerSizzleAlreadyOpen() )
+	{
+		NotifyTheScannerDialog( ~Sizzle~ );
+		Exit();
+	}
+	else
+	{
+		DefineDialog();
+	}
+}
+
+
+VOID Init( WhichOrder )		// ENTRY POINT FROM OTHER DOCUMENTS
+{
+	Global( WhichOrder );
+
+	if ( ~<WhichOrder>~ == ~HR500 Image Type Sorter~ )
+	{
+		NotifyTheImageSorterDialog();
+		Exit();
+	}
+
+	OptionallyAskForScannerModel();
+}
+
+
+VOID InitOrderRollFrame( WhichOrder,WhichRoll,WhichFrame )	// ENTRY POINT FROM OTHER DOCUMENTS
+{
+	Global( WhichOrder,WhichRoll,WhichFrame );
+
+	OptionallyAskForScannerModel();
+}

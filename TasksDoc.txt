@@ -1,0 +1,442 @@
+
+VOID RefreshDoc()
+{
+	RefreshListView();
+}
+
+
+NUMERIC RefreshListView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+	DataWindow( StatusBar,Text,~~ );
+
+	return TRUE;
+}
+
+NUMERIC FindScript()
+{
+	if ( !DataView( GetSelectedRows,SelectedTasks ) )		
+		{ return Warning( ~There was no row selected~ ); }
+
+	if ( !FileDialog( Title,Translate(~Select A File~),Path,Path,FileMustExist,Open ) )
+		{ return FALSE; }
+
+	if ( !SelectedTasks( GetFirst,Task ) )
+		{ return Warning( ~There was no row selected~ ); }
+
+	DataView( SetCellValue,Current,Process,~<Path>~ );
+	DataView( SetCellValue,Current,Type,~Open~ );
+
+	return TRUE;
+}
+
+
+
+STR GetKey( &Tasks )
+{
+	Key = STR (	Name = '<$con.Tasks[Name]>' );
+
+	return ~<Key>~;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,ChangedTask,OrigTask,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate( ~There was no changed row.~ ) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$Con.ChangedTask[Name]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Task cannot be blank.~ ) ); }
+
+	Key = GetKey( OrigTask );
+
+	Query = ~Select * From Tasks Where <Key>~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <Query>. <theErr>~ ) );
+	}
+
+	if ( !List( UpdateFrom,ChangedTask,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate( ~Could not update Task record where <Key>. <theErr>~ ) );
+	}
+	
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,TasksToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	if ( MessageBox( ~Are you sure you want to delete the selected Tasks?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( TasksToDelete( GetNext,Tasks ) )
+	{
+		Key = GetKey( Tasks );
+
+		Cmd = ~Delete From Tasks Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Database update failed: <Cmd>  <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,TasksToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	NewRow( Set,UserDefined,TRUE );
+	
+	RowBeingAdded = DataView( AddRow,NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Tasks );
+
+	return TRUE;
+}
+
+
+NUMERIC DuplicateRecord()
+{
+	if ( !DataView( GetSelectedRows,SelectedTasks ) )		
+		{ return Warning( Translate( UIMessages,NoRowsSelected ) ); }
+
+	if ( !SelectedTasks( GetFirst,SelectedTask ) )
+		{ return Warning( Translate( UIMessages,NoRowsSelected ) ); }
+
+	SelectedTask( Set,Name,~~ );
+	
+	RowBeingAdded = DataView( AddRow,SelectedTask );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	return TRUE;
+}
+
+
+
+NUMERIC RightClickInListView()
+{
+	DataView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+
+NUMERIC Tasks()
+{
+	if ( !DataView( GetSelectedRows,SelectedTasks ) )		
+		{ return Warning( ~There was orders selected~ ); }
+
+	if ( !SelectedTasks( GetFirst,SelectedTask ) )
+		{ return FALSE; }
+
+	if ( !PGenConList( ThisTask,Connect,Cursor,Forward,QUERY,~Select * From Tasks Where Name = '<$con.SelectedTask[Name]>'~ ) )
+		{ return Warning( ~Failed to Find <$con.SelectedTask[Name]> in the tasks table~ ); }
+
+	if ( !ThisTask( GetFirst,Task ) )
+		{ return FALSE; }
+
+	if ( ~<$pcon.Task[Type]>~ == ~ACTION~ )		// execute an action
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		PerformActions( Process );
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~DOC~ )		// execute an action
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		PerformDocActions( Process );
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~KPL~ )		// one or more KPL statements
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		<Process> ;
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~Open~ )		// a script to run
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		Open( Job,~<Process>~ ) ;
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~HTML~ )		// execute an action
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		Process = ACTION DOC ( BrowserDoc Open BrowserDoc "<Process>");
+		PerformActions( Process );
+		return TRUE;
+	}
+
+	Process = ~<$pcon.Task[Process]>~;
+	
+	if ( ~<Process>~ == ~~ )
+		{ return Warning( ~There is no process defined for this task~ ); }
+		
+	ParseDelayed( Process );
+
+	Process = ContentsOf( Process, 1 );	// Parse any macros before doing the Tasks
+
+	Actions = ACTION Doc ( ~Tasks~ OpenOnce <$pcon.Task[Type]>Doc 
+							"Init( ~<$pcon.Task[Description]>~,~<Process>~ );" );
+
+	PerformActions( Actions );
+
+	if ( ~<CloseInstructions>~ != ~StayOpen~ )
+	{ 
+		DataWindow( ForceCloseWindow );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new tasks that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+
+
+
+	
+
+VOID DefineListViewMenu( AllowEditing )
+{
+	GenCon( ListViewMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+	if ( $AllowEditing )
+	{
+		GenCon( AddRecord,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+				Text,		Translate( ~&Add Task~ ),
+				IDText,		~ID~,
+				ActionsText, ACTION Exec ( AddRecord() ) );
+
+		GenCon( DuplicateRecord,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+				Text,		Translate( ~Duplicate~ ),
+				IDText,		~ID~,
+				ActionsText, ACTION Exec ( DuplicateRecord() ) );
+
+		GenCon( NullLine1,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+				Text,		~~,
+				IDText,		~NULL~ );
+
+		GenCon( SaveAllChanges,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+				Text,		Translate( ~&Save Changes~ ),
+				IDText,		~ID~,
+				ActionsText,  ACTION Exec ( SaveAllChanges() ) );
+
+		GenCon( ForgetAllChanges,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+				Text,		Translate( ~&Cancel Changes~ ),
+				IDText,		~ID~,
+				ActionsText,  ACTION Exec ( RollBackAllChanges() ) );
+
+		GenCon( DeleteRecord,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+				Text,		Translate( ~&Delete~ ),
+				IDText,		~ID~,
+				ActionsText, ACTION Exec ( DeleteRecord() ) );
+
+		GenCon( FindScript,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+				Text,		Translate( ~&Find Script~ ),
+				IDText,		~ID~,
+				ActionsText, ACTION Exec ( FindScript() ) );
+	}
+
+	GenCon( Refresh,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+			Text,		Translate( ~&Refresh (F5)~ ),
+			IDText,		~ID~,
+			ActionsText, ACTION Exec ( RefreshListView() ) );
+
+	GenCon( Categories,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+			Text,		Translate( ~~ ),
+			IDText,		~ID~ );
+	
+
+	Global( ListViewMenu,Categories );
+}
+
+
+VOID DefineTaskWindow( Editing,Title )
+{
+	Define: DataWindow Using DDWinDef AsSymbol DataWindow
+		Fields:		Title					~Tasks~
+					Position				0 30 90 30
+					IsPositionPercent		~T~
+
+		Contains:	INLISTORDER
+		{
+			Define: DataView Using DDViewDef AsSymbol DataView
+				Fields:	ViewType					ListView
+						GridControlTypes			TableDefinition(GetReferenceTo,Fields)
+						ChangeRecordActionsText		ACTION Exec ( ChangeRecord() )
+						DeleteRecordActionsText		ACTION Exec ( DeleteRecord() )
+						HActionsText				ACTION ShowHelpPage ( AdminHelpFile "System Tasks.htm" )
+						RClickUpActionsText			ACTION Exec ( RightClickInListView() )
+						DoubleClickActionsText		ACTION Exec ( Tasks() ) 
+						RefreshActionsText			ACTION Exec ( RefreshListView() )
+						FontSize					<Editing> ? 10 : 8
+						CloseActionsText			ACTION Call ( OnCloseDataView() );
+		}
+
+	DataWindow( Set,Title,~<Title>~ );
+
+	Global( DataWindow,DataView );
+}
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+
+NUMERIC Init( WhichSettings,DocumentQuery,CloseInstructions,Editing )
+{
+	Global( WhichSettings,DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			Error( ~Database Query Failed: <DocumentQuery>. <theErr>~ );
+		}
+
+		SetDocumentData( List(GetObject) );
+
+		if ( ~<CloseInstructions>~ == ~~ )
+			{ CloseInstructions = ~StayOpen~; }
+
+		Global( CloseInstructions,Editing );
+
+		DefineTaskWindow( $Editing, ~<WhichSettings>~ == ~~ ? ~System Task Data~ : ~System Task Data - <WhichSettings>~ );
+
+		DefineListViewMenu( $Editing );
+
+		if ( !DataWindow( CreateWindow,~Tasks~ ) )
+			{ Error( ~Failed to create the window~ ); }
+
+		DataView( AllowRowColResizing,TRUE );
+	}
+
+	return TRUE;
+}
+
+
+if ( !GenCon( TableDefinition,GetFrom,Tasks,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The Tasks Table is not properly defined~ ); }
+	
+

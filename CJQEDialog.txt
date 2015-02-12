@@ -1,0 +1,415 @@
+//	CJQEDialog.txt
+
+ExecC() ;
+
+//	THIS FILE CONTAINS THE CODE FOR THE JOB QUEUE EDITOR
+
+//	SOME USEFUL GLOBALS
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+
+//	DIALOG SPECIFIC GLOBALS
+UGenCon	*gDlgData ;			//	THE DIALOG DATA GENCON
+UGenCon *gDlgDef ;			//	THE DIALOG DEFINITION
+char	*gDlg ;				//	THE POINTER TO THE DIALOG OBJECT
+
+//	DATABASE CONNECTION GLOBAL
+UADO	*gADO ;
+
+void main()
+{
+	Debug(0) ;
+	printf(_T("main()\r\n")) ;
+}
+
+
+void SetDialogData( UGenCon *DlgData, char *Dlg, UGenCon *DlgDef)
+{
+	Debug(0) ;
+	gDlgData	= DlgData ;
+	gDlg		= Dlg ;
+	gDlgDef		= DlgDef ;
+}
+
+
+
+void term()
+{
+	printf(_T("term()\r\n")) ;
+
+//	if( gDlg )
+//	{
+//		CloseDialog( gDlg ) ;		WE ARE CALLED FROM IT'S DESTRUCTOR
+//		gDlg = delete gDlg ;		DON'T TRY TO DESTROY THE DIALOG
+//	}
+
+	if( gDlgData )
+	{
+		gDlgData = delete gDlgData ;
+	}
+
+/*	if( gDlgDef )
+	{
+		gDlgDef = delete gDlgDef ;
+	}
+*/
+	if( gADO )
+	{
+		gADO = delete gADO ;
+	}
+}
+
+
+//	ADD THE SPECIAL CODE FOR THIS DIALOG
+
+void ToggleType( int ChangedBox )
+{
+	Debug(0) ;
+	printf( _T("ToggleType\n")) ;
+
+	long	 Remove		= gDlgData->GetLongValue( _T("Delete")) ;
+	long	 Update		= gDlgData->GetLongValue( _T("Update")) ;
+
+	if( ChangedBox == 1 )	//	UPDATE WAS CHANGED
+	{
+		if( Update == 1 )
+		{
+			gDlgData->SetLongValue( _T("Delete"), 0L ) ;
+		}
+		else
+		{
+			gDlgData->SetLongValue( _T("Delete"), 1L ) ;
+		}
+	}
+
+	if( ChangedBox == 2 )	//	DELETE WAS CHANGED
+	{
+		if( Remove == 1 )
+		{
+			gDlgData->SetLongValue( _T("Update"), 0L ) ;
+		}
+		else
+		{
+			gDlgData->SetLongValue( _T("Update"), 1L ) ;
+		}
+	}
+	DisplayControlValues( gDlg ) ;
+}
+
+
+Cancel()
+{
+	CloseDialog( gDlg ) ;
+}
+
+
+DoIt()
+{
+	int		 result = -1 ;
+	TCHAR	 theCmd[4098] ;
+	TCHAR	*UpdateBCmd = "UPDATE JobQueue SET PrintStatus = %s WHERE BatchID = '%s'" ;
+	TCHAR	*UpdateQCmd = "UPDATE JobQueue SET PrintStatus = %s WHERE QueueName = '%s'" ;
+	TCHAR	*UpdateBQCmd= "UPDATE JobQueue SET PrintStatus = %s WHERE QueueName = '%s' AND BatchID = '%s'" ;
+
+	gDlgData->SetAttrValue( _T("FeedBack"), _T("")) ;
+
+	DisplayControlValues( gDlg ) ;
+
+	gADO = ConnectToADO() ;
+
+	printf( _T("DoIt()\r\n")) ;
+
+	ShowGenCon( gDlgData ) ;
+
+	TCHAR	*QueueName	= gDlgData->GetStringValue( _T("QueueName")) ;
+	TCHAR	*BatchID	= gDlgData->GetStringValue( _T("BatchID")) ;
+	TCHAR	*Status		= gDlgData->GetStringValue( _T("NewStatus")) ;
+	TCHAR	*ExceptStat = gDlgData->GetStringValue( _T("XcptStatus")) ;
+
+	long	 Remove		= gDlgData->GetLongValue( _T("Delete")) ;
+	long	 Update		= gDlgData->GetLongValue( _T("Update")) ;
+
+	if( Remove )
+	{
+		result = RemoveBatchFromQueue( QueueName, BatchID ) ;
+	}
+	else
+	{
+		result = UpdateQueue( QueueName, BatchID, Status, ExceptStat ) ;
+	}
+
+	switch( result )
+	{
+		case	-1	:
+			gDlgData->SetAttrValue( _T("FeedBack"), _T("Missing information.")) ;
+			break ;
+		case	 0	:
+			gDlgData->SetAttrValue( _T("FeedBack"), _T("An Error occurred.")) ;
+			break ;
+		case	 1	:
+			gDlgData->SetAttrValue( _T("FeedBack"), _T("Operation Succeeded.")) ;
+			break ;
+	}
+	DisplayControlValues( gDlg ) ;
+}
+
+
+int UpdateQueue( TCHAR *Queue, TCHAR *Batch, TCHAR *Status, TCHAR *Except )
+{
+	int	StatusNum = GetPrintStatusNumber( Status ) ;
+	int ExceptNum = -1 ;
+	int	CmdType = 0 ;
+	int result = -1 ;
+
+	Debug(0) ;
+
+	TCHAR	 theCmd[4098], theException[1024] ;
+	TCHAR	*UpdateBCmd  = "UPDATE JobQueue SET PrintStatus = %d WHERE BatchID = '%s'" ;
+	TCHAR	*UpdateQCmd  = "UPDATE JobQueue SET PrintStatus = %d WHERE QueueName = '%s'" ;
+	TCHAR	*UpdateQBCmd = "UPDATE JobQueue SET PrintStatus = %d WHERE QueueName = '%s' AND BatchID = '%s'" ;
+	TCHAR	*ExceptCmd	 = " AND PrintStatus <> %d" ;
+
+	if( Batch )		{ CmdType += 1 ; }
+	if( Queue )		{ CmdType += 2 ; }
+
+	switch( CmdType )
+	{
+		case	0	:
+			return( result ) ;
+		case	1	:
+			sprintf( theCmd, UpdateBCmd, StatusNum, Batch ) ;
+			break ;
+		case	2	:
+			sprintf( theCmd, UpdateQCmd, StatusNum, Queue ) ;
+			break ;
+		case	3	:
+			sprintf( theCmd, UpdateQBCmd, StatusNum, Queue, Batch ) ;
+			break ;
+	}
+
+	if( Except )
+	{
+		ExceptNum = GetPrintStatusNumber( Except ) ;
+		sprintf( theException, ExceptCmd, ExceptNum ) ;
+		strcat( theCmd, theException ) ;
+	}
+
+	if( theCmd[0] )
+	{
+		result = DoSQL( theCmd ) ;
+	}
+
+	return( result ) ;
+}
+
+
+int DoSQL( TCHAR *theSQLStatement )
+{
+	int		result	= 0x8000405 ;	//	COULD NOT UPDATE BECAUSE LOCKED BY ANOTHER
+	long	count	= 0 ;
+	long	Level ;
+
+	while( result && count < 5 )
+	{
+		BeginTransaction( gADO, &Level ) ;
+		result = ADOCommand( gADO, theSQLStatement, "SQL", NULL ) ;
+		count++ ;
+		if( result != 0L )
+		{
+			RollBackTransaction(gADO) ;
+			Sleep(2000) ;
+		}
+		SessionLogDirect( "DoSQL: %s, result = %0lX, Count = %ld", theSQLStatement, result, count ) ;
+	}
+
+	if( result != 0 )
+	{
+		HandleDBError() ;
+	}
+	else
+	{
+		result = CommitTransaction( gADO ) ;
+		SessionLogDirect("DoSQL: CommitTransaction result = %0lX", result) ;
+	}
+	return( result == 0 ) ;
+}
+
+
+void HandleDBError()
+{
+	long	ErrorCount, ErrorIndex ;
+	TCHAR	ADOErrDesc[2048] ;
+	TCHAR	theMsg[4096] ;
+	long	StopHere = 0 ;
+
+	ErrorCount = GetErrorCount( gADO ) ;
+	for( ErrorIndex = 0L ; ErrorIndex < ErrorCount ; ErrorIndex++ )
+	{
+		GetErrorDescription( gADO, ErrorIndex, ADOErrDesc ) ;
+		sprintf( theMsg, "Database Error: %s", ADOErrDesc ) ;
+		SessionLogDirect( theMsg ) ;
+		ShowDialog( theMsg ) ;
+		Debug(StopHere) ;
+	}
+}
+
+void ShowDialog( TCHAR *theMsg )
+{
+	UGenCon	*aGC = new UGenCon( GetDataDictionary( _T("DDMessageDialog"))) ;
+	aGC->SetLongValue( _T("xPosition"), -1L ) ;
+	aGC->SetLongValue( _T("yPosition"), -1L ) ;
+	aGC->SetAttrValue( _T("Message1"), theMsg ) ;
+	aGC->SetLongValue( _T("DefaultButton"), 1L ) ;
+	aGC->SetAttrValue( _T("Button0"), _T("Oh...") ) ;
+	aGC->SetAttrValue( _T("Button0Response"), _T("Cancel") ) ;
+
+	MessageDialog( aGC, TRUE ) ;
+
+	delete aGC ;
+}
+
+UADO *ConnectToADO()
+{
+	TCHAR	 msg[256] ;
+	int		 result ;
+
+	gADO = new UADO ;
+
+	if( gADO == NULL )
+	{
+		MessageBox( "Could not get ADO.", "MB_OK" ) ;
+		return(gADO) ;
+	}
+
+	result = ConnectKPIS( gADO ) ;
+	if( result )
+	{
+		sprintf( msg, "Could not get Connection. Error = %d", result ) ;
+		MessageBox( msg, "MB_OK" ) ;
+		gADO = delete gADO ;
+		return(gADO) ;
+	}
+
+	return( gADO ) ;
+}
+
+//	THIS ROUTINE WILL REMOVE JOBS FROM THE JOB QUEUE
+//	THE JOBS MUST HAVE COMPLETED SUCCESSFULLY !
+RemoveBatchFromQueue( TCHAR *QueueName, TCHAR *BatchID )
+{
+	char	*aPGC ;
+	char	*aPGCList ;
+	TCHAR	 theSelectCmd[1024] ;
+	TCHAR	 theDeleteCmd[1024] ;
+	TCHAR	 theJobPath[2048] ;
+	int		 result = -1 ;
+	int		 CmdType = 0 ;
+	long	 Level ;
+	TCHAR	*SelectQBCmd = "Select * From JobQueue Where QueueName = '%s' AND BatchID = '%s'" ;
+	TCHAR	*DeleteQBCmd = "Delete From JobQueue Where QueueName = '%s' AND BatchID = '%s'" ;
+	TCHAR	*SelectQCmd  = "Select * From JobQueue Where QueueName = '%s'" ;
+	TCHAR	*DeleteQCmd  = "Delete From JobQueue Where QueueName = '%s'" ;
+	TCHAR	*SelectBCmd  = "Select * From JobQueue Where BatchID = '%s'" ;
+	TCHAR	*DeleteBCmd  = "Delete From JobQueue Where BatchID = '%s'" ;
+
+	Debug(0) ;
+
+	if( BatchID )
+		{ if( BatchID[0] )
+			{ CmdType += 1 ; } }
+
+	if( QueueName )
+		{ if( QueueName[0] )
+			{ CmdType += 2 ; }}
+
+	switch( CmdType )
+	{
+		case	0	:
+			return( result ) ;
+			break ;
+		case	1	:
+			sprintf( theSelectCmd, SelectBCmd, BatchID ) ;
+			sprintf( theDeleteCmd, DeleteBCmd, BatchID ) ;
+			break ;
+		case	2	:
+			sprintf( theSelectCmd, SelectQCmd, QueueName ) ;
+			sprintf( theDeleteCmd, DeleteQCmd, QueueName ) ;
+			break ;
+		case	3	:
+			sprintf( theSelectCmd, SelectQBCmd, QueueName, BatchID ) ;
+			sprintf( theDeleteCmd, DeleteQBCmd, QueueName, BatchID ) ;
+			break ;
+	}
+
+	if( gADO == NULL )
+	{
+		SessionLogDirect("RemoveBatchFromQueue: gADO = %0lX", gADO ) ;
+		return( FALSE ) ;
+	}
+
+	// CREATE A NEW UPGENCONLIST.
+	aPGCList = NewPGenConList( gADO ) ;
+	if( aPGCList == NULL )
+	{
+		HandleDBError(gADO) ;
+		SessionLogDirect("RemoveBatchFromQueue: NewPGenConList result = NULL") ;
+		return( FALSE ) ;
+	}
+
+	result = Query( aPGCList, theSelectCmd, "ReadOnly", "Forward" ) ;
+	if( result != 1 )
+	{
+		HandleDBError(gADO) ;
+		aPGCList = Delete( aPGCList ) ;
+		SessionLogDirect("RemoveBatchFromQueue: Query result = %ld", result ) ;
+		return(FALSE) ;
+	}
+
+	//	FOR EACH ENTRY WE HAVE TO DELETE THE JOB FILE
+	aPGC = GetFirst( aPGCList ) ;
+	while( aPGC )
+	{
+		GetAttrValue( aPGC, "JobPath", theJobPath ) ;
+		if( *theJobPath )
+		{
+			SessionLogDirect("RemoveBatchFromQueue: Deleting = [%s]", theJobPath ) ;
+			unlink( theJobPath ) ;
+		}
+		aPGC = GetNext( aPGCList ) ;
+	}
+
+	aPGCList = Delete( aPGCList ) ;
+
+	result = DoSQL( theDeleteCmd ) ;
+
+//	PostDocMessage( "Job Queue", "RefreshDoc()" ) ;
+
+	return( result == 1 ) ;
+}
+
+
+int GetPrintStatusNumber( TCHAR *Status )
+{
+	int		 loop ;
+	TCHAR	*aStatus ;
+
+	if( Status )
+	{
+		UStringList	*theSL = GetTreeObject(_T("PrintStatus"), _T("[STRINGS]")) ;
+		for( loop = 0 ; loop < theSL->GetNumEntries() ; loop++ )
+		{
+			aStatus = theSL->GetString( loop ) ;
+			if( aStatus )
+			{
+				if( stricmp( aStatus, Status ) == 0 )
+				{
+					return( loop ) ;
+				}
+			}
+		}
+	}
+	return( -1 ) ;
+}
+

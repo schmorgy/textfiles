@@ -1,0 +1,250 @@
+NUMERIC GetAutoLicense(&ModuleList,&LabInfo,LicenseSeats,LicenseDays,AddToExisting)
+{
+	if ( !GetKspLRF(ModuleList,LabInfo,-1,~<LicenseSeats>~,~<LicenseDays>~,<AddToExisting>,0) )
+	{
+		Log( Session,~Unable to generate license request file.~ );
+		return FALSE;
+	}
+
+    if ( !GetKspFP(LicenseRequestFilePath,0) )
+	{
+		Log( Session,~Unable to get license request file path.~ );
+		return FALSE;
+	}
+
+	if ( !Files(FileExists,~<LicenseRequestFilePath>~ ) )
+	{
+		Log( Session,~Unable to find license request file.~ );
+		return FALSE;
+	}
+
+    if ( !File(theFile,Open,~<LicenseRequestFilePath>~,Read,Binary ) )
+	{
+		Log( Session,~Unable to open license request file.~ );
+		return FALSE;
+	}
+
+	if ( !theFile( ReadTextFile,buffer ) )
+	{
+		Log( Session,~Unable to read license request file.~ );
+		theFile( Close );
+		return FALSE;
+	}
+
+	theFile( Close );
+	Files( Delete,~<LicenseRequestFilePath>~ );
+
+	InternetSession( iNet,Init );
+
+	if ( Authorized( KEXDSS ) )
+	{
+		URL = ~license.kodakexpress.com~;
+		Path = ~/kex/UploadLicenseRequest~;
+
+		// Check for system settings for URL and Path
+		if ( GetSystemSettings( ~KEXDSS~, ~KEXLicenseURL~, kexLicenseURL, Enabled ) )
+		{
+			if ( !IsNULL( ~<kexLicenseURL>~ ) && <Enabled> )
+			{
+				URL = ~<kexLicenseURL>~;
+			}
+		}
+
+		if ( GetSystemSettings( ~KEXDSS~, ~TestPath~, kexTestPath, Enabled ) )
+		{
+			if ( !IsNULL( ~<kexTestPath>~ ) && <Enabled> )
+			{
+				Path = ~/<kexTestPath>/UploadLicenseRequest~;
+			}
+		}
+
+		// DO NOT INDENT THE LINES BETWEEN THE BeginBUFFER AND EndBUFFER CALLS.
+		BeginBUFFER(Headers, 1);
+Content-Type: text/xml; charset=utf-8
+SOAPAction: "http://<URL><Path>"
+		EndBUFFER();
+
+		// DO NOT INDENT THE LINES BETWEEN THE BeginBUFFER AND EndBUFFER CALLS.
+		BeginBUFFER(Request,1);
+<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+	<soap:Body>
+		<buffer>
+	</soap:Body>
+</soap:Envelope>
+		EndBUFFER();
+	}
+	else if ( Authorized( DP2 ) )
+	{
+		URL = ~license.kodakexpress.com~;
+		Path = ~/dp2/UploadLicenseRequest~;
+
+		// Check for system settings for URL and Path
+		if ( GetSystemSettings( ~DP2~, ~DP2LicenseURL~, dp2LicenseURL, Enabled ) )
+		{
+			if ( !IsNULL( ~<dp2LicenseURL>~ ) && <Enabled> )
+			{
+				URL = ~<dp2LicenseURL>~;
+			}
+		}
+
+		if ( GetSystemSettings( ~DP2~, ~TestPath~, dp2TestPath, Enabled ) )
+		{
+			if ( !IsNULL( ~<dp2TestPath>~ ) && <Enabled> )
+			{
+				Path = ~/<dp2TestPath>/UploadLicenseRequest~;
+			}
+		}
+
+		// DO NOT INDENT THE LINES BETWEEN THE BeginBUFFER AND EndBUFFER CALLS.
+		BeginBUFFER(Headers);
+Content-Type: text/xml; charset=utf-8
+SOAPAction: "http://<URL><Path>"
+		EndBUFFER();
+
+		// DO NOT INDENT THE LINES BETWEEN THE BeginBUFFER AND EndBUFFER CALLS.
+		BeginBUFFER(Request,1);
+<?xml version="1.0" encoding="utf-8"?>
+<soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+	<soap:Body>
+		<buffer>
+	</soap:Body>
+</soap:Envelope>
+		EndBUFFER();
+	}
+	else
+	{
+		Log( Session,~Unable to complete license request.  Invalid app name.~ );
+		theFile( Close );
+		return FALSE;
+	}
+
+	if ( !iNet( HTTPRequest,Result,Status,~<URL>~,80,POST,~<Path>~,Headers,Request ) )
+	{
+		Log( Session,~Unable to complete HTTP request.~ );
+		return FALSE;
+	}
+
+	if ( !SimilarStr(~<Status>~,~200~) )
+	{
+		Log( Session,~HTTP request failed. Status = <Status>.~ );
+		return FALSE;
+	}
+
+	if ( !xml( licenseResponse,LoadXMLFromContentsOf,Result ) )
+	{
+		Log( Session,~Unable to get license response file.~ );
+		return FALSE;
+	}
+
+	retVal = 1;
+	found = licenseResponse( SelectSingleNode, MessageNode, ~/DP1LicenseResponse/Message~ );
+	if ( <found> )
+	{
+		MessageNode( GetNodeText, messageValue );
+		Log( Session,~License request message = <messageValue>.~ );
+
+		if ( SimilarStr(~<messageValue>~,~License Generated~) )
+		{
+			retVal = 1;
+		}
+		else if ( SimilarStr(~<messageValue>~,~Trial License Generated~) )
+		{
+			retVal = 2;
+		}
+		else if ( SimilarStr(~<messageValue>~,~License Reissued~) )
+		{
+			retVal = 3;
+		}
+		else if ( SimilarStr(~<messageValue>~,~Lab is locked~) )
+		{
+			retVal = -1;
+		}
+	}
+
+	found = licenseResponse( SelectSingleNode, SuccessNode, ~/DP1LicenseResponse/Status~ );
+	if ( !<found> )
+	{
+		Log( Session,~Unable to get license response status.~ );
+
+		if ( <retVal> < 0 )
+		{
+			return <retVal>;
+		}
+		else
+		{
+			return FALSE;
+		}
+	}
+
+	SuccessNode( GetNodeText, statusValue );
+	Log( Session,~License request status = <statusValue>.~ );
+	if ( !SimilarStr(~<statusValue>~,~success~) )
+	{
+		if ( <retVal> < 0 )
+		{
+			return <retVal>;
+		}
+		else
+		{
+			return FALSE;
+		}
+	}
+
+	if (<retVal> > 0)
+	{
+		found = licenseResponse( SelectSingleNode, SiteKeyNode, ~/DP1LicenseResponse/Licenses/License/SiteKey~ );
+		if ( !<found> )
+		{
+			Log( Session,~Unable to get license response site key.~ );
+			return FALSE;
+		}
+
+		NewLabID = ~~;
+		found = licenseResponse( SelectSingleNode, LabUniqueIDNode, ~/DP1LicenseResponse/LabInfo/LabUniqueID~ );
+		if ( <found> )
+		{
+			LabUniqueIDNode( GetNodeText, NewLabID );
+		}
+
+		LabInfo( Get,LabUniqueID,LabID );
+		SiteKeyNode( GetNodeText, siteKeyValue );
+		result = SaveKsp(~0~,~<siteKeyValue>~,~<LabID>~,~<NewLabID>~);
+		if (<result> != 1)
+		{
+			Log( Session,~Save license site key failed. Error = <result>~ );
+			return FALSE;
+		}
+
+		if ( !SimilarStr(~<LabID>~,~<NewLabID>~) )
+		{
+			Log( Session,~Updating lab info for license.~ );
+			UpdateLabInfo(~<NewLabID>~);
+		}
+	}
+
+	return <retVal>;
+}
+
+NUMERIC UpdateLabInfo(LabID)
+{
+	if ( !ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session,~Unable to connect to the shared database.  <theErr>~ );
+		return FALSE;
+	}
+
+	Cmd = ~Update LabInfo Set LabUniqueID = '<LabID>'~;
+	if ( !dBase( Cmd, ~<Cmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Log( Session,~Database update failed <cmd>. <theErr>~ );
+		return FALSE;
+	}
+
+	Tree( Name,~LabID~,Value,~<LabID>~,DefineSymbol );
+	Log( Session,~Lab unique id: <LabID>~ );
+
+	return TRUE;
+}

@@ -1,0 +1,232 @@
+ScriptVersion = 2;
+
+VOID CheckVersionCompatibility()
+{
+	StatusBarText( ~~ );
+	
+	ShareDir = ~~;
+	DataLocationFile = ~<$App.Directory>\<$App.Name.WithoutExt>_DataLocation.txt~;
+	Include: ~<DataLocationFile>~;
+	if ( ~<ShareDir>~ == ~~ )
+	{
+		return;
+	}
+
+	if ( !GetFileVersionInfo( ~<ShareDir>\<$App.Name>~,FileVersion,theVersion ) )
+	{
+		return;
+	}
+
+	ServerVersion = ~<theVersion>~;
+
+	ServerMajor = ~0~;
+	ServerMinor = ~0~;
+	ServerBuild = ~0~;
+	GetTokens( ~<ServerVersion>~,~.~,ServerMajor,ServerMinor,ServerBuild );
+
+	GetFileVersionInfo(~<$App.Directory>\<$App.Name>~,FileVersion,LocalVersion);
+	LocalMajor = ~0~;
+	LocalMinor = ~0~;
+	LocalBuild = ~0~;
+	GetTokens( ~<LocalVersion>~,~.~,LocalMajor,LocalMinor,LocalBuild );
+
+	if ( ( Numeric(~<LocalMajor>~) < 12 ) || ( Numeric(~<LocalMajor>~) == 12 && Numeric(~<LocalMinor>~) == 0 ) )
+	{
+		if ( ( ~<ServerMajor>~ != ~<LocalMajor>~ ) || ( ~<ServerMinor>~ != ~<LocalMinor>~ ) )
+		{
+			OKToAddCode = FALSE;
+			if ( Numeric(~<LocalMajor>~) > 11 )
+			{
+				OKToAddCode = TRUE;
+			}
+			else if ( Numeric(~<LocalMajor>~) == 11 )
+			{
+				if ( ( Numeric(~<LocalMinor>~) == 0 ) && ( Numeric(~<LocalBuild>~) >= 143 ) )
+				{
+					OKToAddCode = TRUE;
+				}
+			}
+			else if ( Numeric(~<LocalMajor>~) == 10 )
+			{
+				if ( Numeric(~<LocalMinor>~) > 0 )
+				{
+					OKToAddCode = TRUE;
+				}
+				else
+				{
+					if ( Numeric(~<LocalBuild>~) > 90 )
+					{
+						OKToAddCode = TRUE;
+					}
+				}
+			}
+			
+			if ( <OKToAddCode> )
+			{
+				DirCreated = FALSE;
+				DirName = ~~;
+				i = 0;
+				while ( <i> < 100 )
+				{
+					DirName = ~<$App.Directory>\UpdChk<i>~;
+					if ( !Files( FileOrDirectoryExists,~<DirName>~ ) )
+					{
+						result = Directory( Create,~<DirName>~ );
+						if ( <result> )
+						{
+							DirCreated = TRUE;
+							break;
+						}
+					}			
+					
+					i = <i> + 1;
+					continue;
+				}
+
+				if ( <DirCreated> )
+				{
+					Directory( SetCurrentDirectory, ~<DirName>~ );
+					AddCode( <i> );
+
+					AESCrypt( AESCryptObj );
+					AESCryptObj(EncryptApplicationTextFile, ~<DirName>\\Startup.txt~, ~Application~ );
+							
+					Directory( SetCurrentDirectory, ~<$App.Directory>~ );
+					UpdateLib( <i> );
+				}
+			}
+
+			Msg = ~The shared directory contains version <ServerMajor>.<ServerMinor> of DP2 while this\n~;
+			Msg = ~<Msg>~ + ~system is running version <LocalMajor>.<LocalMinor>. You cannot run a mix of these\n~;
+			Msg = ~<Msg>~ + ~versions of DP2. You must install version 14.0 or later of DP2\n~;
+			Msg = ~<Msg>~ + ~on this system. DP2 will shut down after you hit the OK button.~;
+			Warning( ~<Msg>~ );
+			
+			ProcessID = Process( ThisProcessID );
+			if ( <ProcessID> > 0 )
+			{
+				Process( Kill, <ProcessID> );
+			}
+			Abort();			
+		}
+	}
+}
+
+C:
+{
+	char	*NULL;
+	int		 FALSE = 0;
+	int		 TRUE  = ! FALSE;
+
+	main()
+	{
+	}
+
+	void AddCode( int dirNum )
+	{
+		//Debug(1);
+		
+		TCHAR Directory[2048];
+		TCHAR FilePath[2048];
+
+		TCHAR *ExeDirectory = GetExeDirectory();
+		sprintf( Directory, _T("%s\\UpdChk%ld"), ExeDirectory, dirNum );
+
+		strcpy( FilePath, _T("Startup.txt") );
+		TCHAR *argv = &FilePath;
+		char* ScriptContents = filelib( _T("E"), _T("DP2_Text"), 1, argv );
+		TCHAR ConvertedContents[32000];
+		ConvertToUnicode( ScriptContents,ConvertedContents );
+			
+		sprintf( FilePath, _T("%s\\Startup.txt"), Directory );
+		char *fp = fopen( FilePath, _T("w"));
+		if ( !fp ) { return; }
+		
+		fprintf( fp, _T("VOID CheckVersionCompatibility()\n") );
+		fprintf( fp, _T("{\n") );
+		fprintf( fp, _T("	//Debug(1);\n") );
+		fprintf( fp, _T("	Sleep(250);\n") );
+		fprintf( fp, _T("	FindNewDataSource = KeyState( LSHIFT ) && KeyState( RSHIFT );\n") );
+		fprintf( fp, _T("	if ( <FindNewDataSource> )\n") );
+		fprintf( fp, _T("	{\n") );
+		fprintf( fp, _T("		return;\n") );
+		fprintf( fp, _T("	}\n") );
+		fprintf( fp, _T("\n") );
+		fprintf( fp, _T("	SetSymbolValue( VCodeAdded,1 );\n") );
+		fprintf( fp, _T("	ShareDir = ~~;\n") );
+		fprintf( fp, _T("	DataLocationFile = ~<$App.Directory>\\<$App.ExeName>_DataLocation.txt~;\n") );
+		fprintf( fp, _T("	Include: ~<DataLocationFile>~;\n") );
+		fprintf( fp, _T("	if ( ~<ShareDir>~ == ~~ )\n") );
+		fprintf( fp, _T("	{\n") );
+		fprintf( fp, _T("		return;\n") );
+		fprintf( fp, _T("	}\n") );
+		fprintf( fp, _T("\n") );
+		fprintf( fp, _T("	if ( !GetFileVersionInfo( ~<ShareDir>\\<$App.Name>~,FileVersion,theVersion ) )\n") );
+		fprintf( fp, _T("	{\n") );
+		fprintf( fp, _T("		return;\n") );
+		fprintf( fp, _T("	}\n") );
+		fprintf( fp, _T("\n") );
+		fprintf( fp, _T("	ServerVersion = ~<theVersion>~;\n") );
+		fprintf( fp, _T("\n") );
+		fprintf( fp, _T("	ServerMajor = ~0~;\n") );
+		fprintf( fp, _T("	ServerMinor = ~0~;\n") );
+		fprintf( fp, _T("	ServerBuild = ~0~;\n") );
+		fprintf( fp, _T("	GetTokens( ~<ServerVersion>~,~.~,ServerMajor,ServerMinor,ServerBuild );\n") );
+		fprintf( fp, _T("\n") );
+		fprintf( fp, _T("	if ( !GetFileVersionInfo( ~<$App.Directory>\\<$App.Name>~,FileVersion,theVersion ) )\n") );
+		fprintf( fp, _T("	{\n") );
+		fprintf( fp, _T("		return;\n") );
+		fprintf( fp, _T("	}\n") );
+		fprintf( fp, _T("\n") );
+		fprintf( fp, _T("	LocalVersion = ~<theVersion>~;\n") );
+		fprintf( fp, _T("\n") );
+		fprintf( fp, _T("	LocalMajor = ~0~;\n") );
+		fprintf( fp, _T("	LocalMinor = ~0~;\n") );
+		fprintf( fp, _T("	LocalBuild = ~0~;\n") );
+		fprintf( fp, _T("	GetTokens( ~<LocalVersion>~,~.~,LocalMajor,LocalMinor,LocalBuild );\n") );
+		fprintf( fp, _T("\n") );
+		fprintf( fp, _T("	if ( ( Numeric(~<LocalMajor>~) < 12 ) || ( Numeric(~<LocalMajor>~) == 12 && Numeric(~<LocalMinor>~) == 0 ) )\n") );
+		fprintf( fp, _T("	{\n") );
+		fprintf( fp, _T("		if ( ( ~<ServerMajor>~ != ~<LocalMajor>~ ) || ( ~<ServerMinor>~ != ~<LocalMinor>~ ) )\n") );
+		fprintf( fp, _T("		{\n") );
+		fprintf( fp, _T("			Msg = ~The shared directory contains version <ServerMajor>.<ServerMinor> of DP2 while this\\n~;\n") );
+		fprintf( fp, _T("			Msg = ~<Msg>~ + ~system is running version <LocalMajor>.<LocalMinor>. You cannot run a mix of these\\n~;\n") );
+		fprintf( fp, _T("			Msg = ~<Msg>~ + ~versions of DP2. You must install version 14.0 or later of DP2\\n~;\n") );
+		fprintf( fp, _T("			Msg = ~<Msg>~ + ~on this system. DP2 will shut down after you hit the OK button.~;\n") );
+		fprintf( fp, _T("			Warning( ~<Msg>~ );\n") );
+		fprintf( fp, _T("			ProcessID = Process( ThisProcessID );\n") );
+		fprintf( fp, _T("			if ( <ProcessID> > 0 )\n") );
+		fprintf( fp, _T("			{\n") );
+		fprintf( fp, _T("				Process( Kill, <ProcessID> );\n") );
+		fprintf( fp, _T("			}\n") );
+		fprintf( fp, _T("			Abort(1);\n") );
+		fprintf( fp, _T("		}\n") );
+		fprintf( fp, _T("	}\n") );
+		fprintf( fp, _T("}\n") );
+		fprintf( fp, _T("\n") );
+
+		fprintf( fp, _T("CheckVersionCompatibility();\n") );
+		fprintf( fp, _T("\n") );
+		fprintf( fp, ConvertedContents );
+
+		fclose(fp);
+	}
+
+	void UpdateLib( int dirNum )
+	{
+		//Debug(1);
+		
+		TCHAR Directory[2048];
+		TCHAR FilePath[2048];
+
+		sprintf( Directory, _T("UpdChk%ld"), dirNum );
+		sprintf( FilePath, _T("%s\\Startup.txt"), Directory );
+		TCHAR *argv = &FilePath;
+		filelib( _T("F"), _T("DP2_Text"), 1, argv );
+
+		unlink( FilePath );
+		rmdir( Directory );
+	}
+}
+
+CheckVersionCompatibility();

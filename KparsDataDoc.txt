@@ -1,0 +1,122 @@
+
+//IncludeClass( BaseMenu );
+IncludeClass( BaseGrid );
+
+VOID KparsData::KparsData( )					// CONSTRUCTOR
+{
+	TableName = ~KparsData~;
+	Title = Translate( ~KODAK Professional Auto-Retouching Tracking Data~ );
+	DocumentQuery = ~Select * from <TableName> Order By OrderID,Roll,Frame ~;
+	WindowTop = 0;
+	WindowWidth = 90;
+	WindowHeight = 25;
+//	HelpPage = ~AutoBalance_TrackingPref.htm~;
+	InsertActiveCell = ~Frame~;
+}
+
+VOID KparsData::AddMenuItems()					// ADD ADDITIONAL RIGHT CLICK MENU ITEMS
+{
+	AddMenuItem( TRUE,FALSE,Translate(~Export Data~),ACTION EXEC ( <THIS>.ExportSelectedToFile() ) );
+
+}
+
+STR KparsData::GetKey( &Item )	{ return ~OrderID = '<$con.Item[OrderID]>' AND Roll = '<$con.Item[Roll]>' AND Frame = '<$con.Item[Frame]>'~; }  // PRIMARY KEY FOR THE TABLE
+
+NUMERIC KparsData::DefineWindow()
+{
+	if ( !GenCon( TableDefinition,GetFrom,<TableName>,~[DATABASE <WhichTableDefinitions>]~ ) )
+		{ return Warning( ~The <TableName> Table is not properly defined~ ); }
+
+	Private( TableDefinition );
+
+	Define: DataWindow Using DDWinDef AsSymbol DataWindow Private
+		Fields:	Title					Translate(~<Title>~)
+				Position				<WindowLeft> <WindowTop> <WindowWidth> <WindowHeight>
+				IsPositionPercent		T
+				TypeName				SplitterWnd
+				SplitterRows			~<SplitterRows>~
+				SplitterColumns			~<SplitterCols>~
+				EnableStatusBar			<WantStatusBar> ? T : F ; 
+
+				WindowDefinition();			// OVERRIDE to specify other DDWinDef parameters
+
+		Contains:	INLISTORDER
+		{
+			Define: ControlView Using DDViewDef AsSymbol ControlView Private
+				Fields:	ViewType				FormView
+						KeyboardActionsText		ACTION Exec ( <THIS>.OnKeydown() ) 
+						DropActionsText			ACTION Exec ( <THIS>.HandleDrop() )
+						HActionsText			ACTION SHOWHELPPAGE ( <HelpFile> "<HelpPage>" );
+
+						ControlViewDefinition();
+
+				Contains:
+				{
+					position = AddControls( 0 );
+				}
+
+			Define: DataView Using DDViewDef AsSymbol DataView	Private
+				Fields:	ViewType				~ListView~
+						HActionsText			ACTION SHOWHELPPAGE ( <HelpFile> "<HelpPage>" )
+						GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+						ChangeRecordActionsText ACTION Exec ( <THIS>.ChangeRecord() )
+						DeleteRecordActionsText ACTION Exec ( <THIS>.DeleteRecord() )
+						RClickUpActionsText		ACTION Exec ( <THIS>.RightClickInListView() )
+						ComboBoxActionsText		ACTION Call ( <THIS>.OnComboBox() )
+						DoubleClickActionsText	ACTION Exec ( <THIS>.DoubleClick() )
+						ButtonClickActionsText	ACTION Exec ( <THIS>.OnButtonClick() )
+						DropActionsText			ACTION Exec ( <THIS>.HandleDrop() )
+						DragAcceptFiles			<DragAcceptFiles>
+						CloseActionsText		ACTION Call ( <THIS>.OnCloseDataView() ) ;
+
+						DataViewDefinition();
+		}
+
+	return TRUE;
+}
+
+
+NUMERIC KparsData::AddControls( position )
+{
+	Define: ExportDataButton Using DDWinCtrlDef AsSymbol ExportDataButton
+		Fields:	GENCONNAME		This
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.ExportSelectedToFile() )
+				POSITION		$position + $hGap, $vGap 60 $ButtonHeight
+				TEXT			Translate( ~Export~ )
+				TOOLTIP			Translate( ~Export data to a text file~ )
+				TYPENAME		BUTTON
+
+
+	return ExportDataButton( GetRight,Position );
+}
+
+NUMERIC KparsData::ProcessTextDrop( &Item )	{ return TRUE; }
+
+	
+	
+NUMERIC KparsData::RefreshListView( &Item )
+{
+	return BaseGrid::RefreshListView();
+}
+
+
+
+NUMERIC Init()
+{
+	if ( Defined(KparsDataGrid) )
+	{
+		KparsDataGrid.ReOpen();
+		KparsDataGrid.RefreshListView();
+		return TRUE;
+	}
+
+	Class( KparsData,Extends,BaseGrid );
+
+	KparsData( New,KparsDataGrid );
+
+	KparsDataGrid.DefineWindow();
+	KparsDataGrid.Init();
+
+	return Global( KparsDataGrid );
+}
+

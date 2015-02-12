@@ -1,0 +1,449 @@
+//	THIS ROUTINE WILL COMPARE TWO IMAGES
+
+ExecC() ;
+
+
+//	THIS ROUTINE WILL TAKE TWO FILENAMES OF IMAGES, READ THEM IN AND COLLECT STATISTICS
+//	ON HOW CLOSE TO THE SAME THEY ARE.
+
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+
+char	*gImgGC1 = NULL ;
+char	*gImgGC2 = NULL ;
+
+long	*gHist = NULL ;
+
+double	 gResult = -2.0 ;
+TCHAR	 gReturnedResult[256] ;
+
+main()
+{
+//	AskForAndCompareImages() ;
+}
+
+
+AskForAndCompareImages()
+{
+	TCHAR	ImageName1[1024] ;
+	TCHAR	ImageName2[1024] ;
+	TCHAR	Msg[4096] ;
+
+	FileDialog( 1, NULL, ImageName1, "", NULL, "Select Image #1 For Compare:" ) ;
+	FileDialog( 1, NULL, ImageName2, "", NULL, "Select Image #2 For Compare:" ) ;
+
+	if( ImageName1[0] && ImageName2[0] )
+	{
+		if(CompImages( ImageName1, ImageName2 ))
+		{
+			PrintHistogram() ;
+		}
+	}
+
+	//sprintf( Msg, "Comparing\r\n%s and\r\n%s\r\nResult = %lf", ImageName1, ImageName2, gResult ) ;
+	//MessageBox( Msg, "IDOK" ) ;
+
+	term() ;
+
+	return( gResult ) ;
+}
+
+
+CompareImages( TCHAR *Img1, TCHAR *Img2 )
+{
+	if( CompImages( Img1, Img2 ))
+	{
+		PrintHistogram() ;
+	}
+
+	term() ;
+	return( gResult ) ;
+}
+
+
+term()
+{
+	CleanUp() ;
+	if( gImgGC1 ) {	gImgGC1 = Delete( gImgGC1 ) ; }
+	if( gImgGC2 ) {	gImgGC2 = Delete( gImgGC2 ) ; }
+}
+
+
+CleanUp()
+{
+	char	*Ima ;
+	char	*Roat ;
+
+	if( gImgGC1 )
+	{
+		Ima = GetLongValue( gImgGC1, "Ima" ) ;
+		if( Ima )
+		{
+			Ima = Delete( Ima ) ;
+			SetLongValue( gImgGC1, "Ima", 0L ) ;
+		}
+		Roat = GetLongValue( gImgGC1, "Roat" ) ;
+		if( Roat )
+		{
+			Roat = Delete( Roat ) ;
+			SetLongValue( gImgGC1, "Roat", 0L ) ;
+		}
+	}
+
+	if( gImgGC2 )
+	{
+		Ima = GetLongValue( gImgGC2, "Ima" ) ;
+		if( Ima )
+		{
+			Ima = Delete( Ima ) ;
+			SetLongValue( gImgGC2, "Ima", 0L ) ;
+		}
+		Roat = GetLongValue( gImgGC2, "Roat" ) ;
+		if( Roat )
+		{
+			Roat = Delete( Roat ) ;
+			SetLongValue( gImgGC2, "Roat", 0L ) ;
+		}
+	}
+
+	if( gHist )	{ gHist = free( gHist ) ; }
+}
+
+
+CreateCompareImgGC()
+{
+	char	*theDataDict ;
+	TCHAR	*DataDictText ;
+	char	*CompareImgGC ;
+
+	DataDictText = "ImageName	text	0	0	0	0	0\
+					Ima			Long	0	0	0	0	0\
+					Source		Long	0	0	0	0	0\
+					Width		Long	0	0	0	0	0\
+					Height		Long	0	0	0	0	0\
+					Depth		Long	0	0	0	0	0\
+					Roat		Long	0	0	0	0	0" ;
+
+	theDataDict = GetDataDictionary("DDCompareImg") ;
+	if( theDataDict == NULL )
+	{
+		theDataDict = CreateDataDict( DataDictText, 0 ) ;
+		SetName( theDataDict, "DDCompareImg" ) ;
+		AddDataDictToApp( theDataDict ) ;
+	}
+
+	CompareImgGC = CreateGenCon( theDataDict ) ;
+
+	return( CompareImgGC ) ;
+}
+
+
+
+CompImages( TCHAR *Img1, TCHAR *Img2 )
+{
+	long	 Width, Height, Depth ;
+	char	*Ima ;
+
+	Debug(0) ;
+
+	gImgGC1 = CreateCompareImgGC() ;
+	gImgGC2 = CreateCompareImgGC() ;
+
+	SetAttrValue( gImgGC1, "ImageName", Img1 ) ;
+	SetAttrValue( gImgGC2, "ImageName", Img2 ) ;
+
+	if( CreateImaSource( gImgGC1 ) == FALSE )
+	{
+		return( FALSE ) ;
+	}
+
+	if( CreateImaSource( gImgGC2 ) == FALSE )
+	{
+		CleanUp() ;
+		return( FALSE ) ;
+	}
+	
+	if( InitialCompare() == FALSE )
+	{
+		CleanUp() ;
+		return( FALSE ) ;
+	}
+
+	//	NOW LET'S GO COMPARE THE ACTUAL IMAGES !
+	gHist = malloc( 256 * 4 ) ;
+	if( gHist == NULL )
+	{
+		CleanUp() ;
+		return( FALSE ) ;
+	}
+
+	memset( gHist, 0, 256 * 4 ) ;
+
+	int result = DoCompare() ;
+
+	return( result ) ;
+}
+
+
+CreateImaSource( char *ImgGC )
+{
+	char	*Ima = New( "UIma" ) ;
+	TCHAR	*ImgName ;
+	long	 XForm ;
+	long	 W, H, D ;
+
+	ImgName = GetStringValue( ImgGC, "ImageName" ) ;
+
+	XForm = ImaNewImageSource( Ima, "ANY", ImgName ) ;
+	if( XForm )
+	{
+		GetMaxResolution( Ima, XForm, &W, &H ) ;
+		D = GetNumberOfBands( Ima, XForm ) ;
+
+		SetLongValue( ImgGC, "Ima", Ima ) ;
+		SetLongValue( ImgGC, "Source", XForm ) ;
+		SetLongValue( ImgGC, "Width", W ) ;
+		SetLongValue( ImgGC, "Height", H ) ;
+		SetLongValue( ImgGC, "Depth", D ) ;
+
+		return( TRUE ) ;
+	}
+	else
+	{
+		if( XForm == 0L )
+		{
+			HandleError( "ImaNewImageSource Failed.", Ima ) ;
+			PrintGraph(Ima, XForm, 1, 0 ) ;
+		}
+		Ima = Delete( Ima ) ;
+	}
+	return( FALSE ) ;
+}
+
+
+InitialCompare()
+{
+	long	Width1  = GetLongValue( gImgGC1, "Width" ) ;
+	long	Width2  = GetLongValue( gImgGC2, "Width" ) ;
+
+	long	Height1 = GetLongValue( gImgGC1, "Height" ) ;
+	long	Height2 = GetLongValue( gImgGC2, "Height" ) ;
+
+	long	Depth1  = GetLongValue( gImgGC1, "Depth" ) ;
+	long	Depth2  = GetLongValue( gImgGC2, "Depth" ) ;
+
+	if( Width1 != Width2 )
+	{ return( FALSE ) ; }
+
+	if( Height1 != Height2 )
+	{ return( FALSE ) ; }
+
+	if( Depth1 != Depth2 )
+	{ return( FALSE ) ; }
+
+	return( TRUE ) ;
+}
+
+
+//	IF WE GOT HERE WE KNOW THAT THE IMAGES EXIST AND THEY ARE
+//	THE SAME WIDTH, HEIGHT, AND DEPTH
+DoCompare()
+{
+	long	 FirstRow, LastRow ;
+	long	 Height = GetLongValue( gImgGC1, "Height" ) ;
+	long	 Width  = GetLongValue( gImgGC1, "Width"  ) ;
+	long	 Depth  = GetLongValue( gImgGC1, "Depth"  ) ;
+	long	 numRows = 128 ;
+	long	 Size = (numRows + 10) * Width * Depth ;
+	long	 XForm ;
+	long	 JobID1, JobID2 ;
+	long	 DoneRendering = FALSE ;
+	long	 Result1, Result2 ;
+	TCHAR	*ErrorMsg = NULL ;
+	TCHAR	 Msg[4096] ;
+	char	*Ima ;
+	char	*Roat ;
+	long	 Stop = 1 ;
+
+	Debug(0) ;
+
+	unsigned char *memBuf1 = malloc( Size ) ;
+	if( memBuf1 == NULL )	{ return( FALSE ) ; }
+
+	unsigned char *memBuf2 = malloc( Size ) ;
+	if( memBuf2 == NULL )	{ memBuf1 = free( memBuf1 ) ; return( FALSE ) ; }
+
+	for( FirstRow = 0 ; FirstRow < Height ; FirstRow += numRows )
+	{
+		LastRow = FirstRow + numRows - 1 ;
+
+		if( LastRow >= Height )
+		{
+			LastRow = Height - 1 ;
+			numRows = LastRow - FirstRow + 1 ;
+		}
+
+		XForm  = CreateImaChain( gImgGC1, FirstRow, LastRow, memBuf1 ) ;
+		JobID1 = AsyncRender( gImgGC1, XForm ) ;
+
+		XForm  = CreateImaChain( gImgGC2, FirstRow, LastRow, memBuf2 ) ;
+		JobID2 = AsyncRender( gImgGC2, XForm ) ;
+
+		DoneRendering = FALSE ;
+
+		while( ! DoneRendering )
+		{
+			Result1 = JobIsComplete( gImgGC1, JobID1 ) ;
+			if( Result1 == -2L )
+			{
+				Ima  = GetLongValue( gImgGC1, "Ima" ) ;
+				Roat = GetLongValue( gImgGC1, "Roat" ) ;
+
+				ErrorMsg = GetJobErrorMsg( Roat, JobID1 ) ;
+				sprintf( Msg, "JobComplete 1 Error: %s", ErrorMsg ) ;
+				HandleError( Msg, Ima ) ;
+				DoneRendering = TRUE ;
+			}
+			Result2 = JobIsComplete( gImgGC2, JobID2 ) ;
+			if( Result2 == -2L )
+			{
+				Ima  = GetLongValue( gImgGC2, "Ima" ) ;
+				Roat = GetLongValue( gImgGC2, "Roat" ) ;
+
+				ErrorMsg = GetJobErrorMsg( Roat, JobID2 ) ;
+				sprintf( Msg, "JobComplete 2 Error: %s", ErrorMsg ) ;
+				HandleError( Msg, Ima ) ;
+				DoneRendering = TRUE ;
+			}
+			if( Result1 == 1L && Result2 == 1L )
+			{
+				DoneRendering = TRUE ;
+			}
+		}
+
+		if( Result1 == 1L && Result2 == 1L )
+		{
+			CompareImgBuffers( memBuf1, memBuf2, gHist, Width, numRows, Depth ) ;
+			Stop = 0 ;
+			if( Stop )
+			{
+				PrintHistogram() ;
+				Debug(Stop) ;
+			}
+		}
+	}
+
+	//	ALL DONE WITH CREATING THE HISTOGRAM
+	memBuf1 = free( memBuf1 ) ;
+	memBuf2 = free( memBuf2 ) ;
+	return( TRUE ) ;
+}
+
+
+CreateImaChain( char *ImgGC, long StartRow, long EndRow, unsigned char *memBuf )
+{
+	char	*Ima = NULL ;
+	double	 CropRect[4] ;
+	long	 XForm = 0L ;
+	long	 Width = GetLongValue( ImgGC, "Width" ) ;
+	long	 Depth = GetLongValue( ImgGC, "Depth" ) ;
+	
+	Ima   = GetLongValue( ImgGC, "Ima" ) ;
+	XForm = GetLongValue( ImgGC, "Source" ) ;
+
+	CropRect[0] = 0.0 ;
+	CropRect[1] = StartRow ;
+	CropRect[2] = Width ;
+	CropRect[3] = EndRow ;
+
+	XForm = ImaCrop( Ima, XForm, "INCHES", CropRect ) ;
+	if( XForm == 0L )
+	{
+		HandleError( "ImaCrop Failed.", Ima ) ;
+	}
+
+	ImaSetResolution( Ima, 1.0, 1.0 ) ;
+
+	XForm = ImaMemorySink( Ima, XForm, memBuf, "PIXEL_INTERLEAVED", NULL,
+						"U8", Width, EndRow - StartRow + 1, Depth, FALSE ) ;
+	if( XForm == 0L )
+	{
+		HandleError( "ImaMemorySink Failed.", Ima ) ;
+	}
+
+	return( XForm ) ;
+}
+
+
+AsyncRender( char *ImgGC, long XForm )
+{
+	long	 JobID = 0L ;
+	char	*Ima = NULL ;
+	char	*Roat = NULL ;
+
+	Ima  = GetLongValue( ImgGC, "Ima" ) ;
+	Roat = GetLongValue( ImgGC, "Roat" ) ;
+
+	if( Roat == NULL )
+	{
+		Roat = New( "URoat" ) ;
+		SetLongValue( ImgGC, "Roat", Roat ) ;
+	}
+
+	JobID = AddImaJob( Roat, Ima, XForm, 0L ) ;
+
+	return( JobID ) ;
+}
+
+JobIsComplete( char *ImgGC, long JobID )
+{
+	long	 result = 0L ;
+	char	*Roat = GetLongValue( ImgGC, "Roat" ) ;
+
+	result = JobComplete( Roat, JobID ) ;
+
+	return( result ) ;
+}
+
+
+
+PrintHistogram()
+{
+	long			 loop ;
+	long			 Width	= GetLongValue( gImgGC1, "Width" ) ;
+	long			 Height = GetLongValue( gImgGC1, "Height" ) ;
+	long			 Depth	= GetLongValue( gImgGC1, "Depth" ) ;
+	long			 TotalBytes ;
+	unsigned long	 NumDifferent = 0L ;
+	double			 dTotalDifferent = 0.0 ;
+	double			 dTotalBytes = 0.0 ;
+	double			 SamenessFactor = 0.0 ;
+
+	for( loop = 1 ; loop < 256 ; loop++ )
+	{
+		if( gHist[loop] )
+		{
+			NumDifferent += gHist[loop] ;
+			dTotalDifferent += gHist[loop] * loop ;
+		}
+	}
+
+	dTotalBytes += NumDifferent + gHist[0] ;
+	TotalBytes = dTotalBytes ;
+	SamenessFactor = 100.0 - ((dTotalDifferent * 100) / (dTotalBytes * 255.0)) ;
+	gResult = SamenessFactor ;
+}
+
+
+HandleError( TCHAR *Text, char *Ima, long XForm )
+{
+	TCHAR	 Msg[4096] ;
+	TCHAR	*theMsg = ImaGetLastErrorMsg( Ima ) ;
+
+	sprintf( Msg, "%s:\r\n%s", Text, theMsg ) ;
+	MessageBox( Msg, "IDOK" ) ;
+}
+
+

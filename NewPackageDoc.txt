@@ -1,0 +1,255 @@
+if ( !DictionaryExists( DDAddPackageDialog ) )
+{
+	Dictionary: DDAddPackageDialog
+		Fields:	Name ProductID			Type	text
+		Fields:	Name ProductDescription	Type	text
+		Fields:	Name Category			Type	text ;
+}
+
+
+Define: AddPackageData Using DDAddPackageDialog 
+	Fields: ProductID			~~
+	Fields: ProductDescription	~~
+	Fields: Category	~~ ;
+
+
+
+VOID DefineDialog()
+{
+	hGap = vGap = 10;
+	PromptHeight = 20;		PromptWidth = 120;		ValueWidth = 150;
+	ButtonWidth = 90;		ButtonHeight = 20;	
+	LeftX = $hGap;			CurrentY = $vGap;		CurrentRight = 0;
+
+	Define: AddPackageDialog Using DDWinDef
+		Fields:	POSITION				100, 100, 600,600 
+				TITLE					~Create a Package~
+				TYPENAME				Dialog 
+				OACTIONSTEXT			ACTION EXEC ( CancelDialog() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "NewPackage.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: ProductIDPrompt Using DDWinCtrlDef AsSymbol ProductIDPrompt
+				Fields:	TypeName		StaticText
+						Text			~Package ID~
+						Position		$LeftX $CurrentY, $PromptWidth $ButtonHeight
+
+			Define: ProductIDField Using DDWinCtrlDef AsSymbol ProductIDField
+				Fields:	TypeName		MaskedEditText
+						Position		ProductIDPrompt(GetRight,Position) + $hGap,
+										ProductIDPrompt(GetTop,Position),
+										$ValueWidth, $ButtonHeight
+						GenConName		THIS
+						GenConField		ProductID
+						Mask			~<$[DATABASE FieldTypes].ProductID[Mask]>~
+						PromptChar		~<$[DATABASE FieldTypes].ProductID[PromptChar]>~
+						IActionsText	~[GET]~
+						DActionsText	ACTION EXEC ( OnProductIDCharTyped() )
+						AllowedChars	~<$[DATABASE FieldTypes].ProductID[AllowedChars]>~
+						DisallowedChars	~<$[DATABASE FieldTypes].ProductID[DisallowedChars]>~
+						TOOLTIP			Translate( ~Type the product ID you want to call the package~ )
+						
+			Define: ProductDescriptionPrompt Using DDWinCtrlDef AsSymbol ProductDescriptionPrompt
+				Fields:	TypeName		StaticText
+						Text			~Package Description~
+						Position		$LeftX ,ProductIDPrompt(GetBottom,Position) + $vGap, 
+										$PromptWidth $ButtonHeight
+
+			Define: ProductDescriptionField Using DDWinCtrlDef AsSymbol ProductDescriptionField
+				Fields:	TypeName		MaskedEditText
+						Position		ProductDescriptionPrompt(GetRight,Position) + $hGap,
+										ProductDescriptionPrompt(GetTop,Position),
+										$ValueWidth, $ButtonHeight
+						Mask			~<$[DATABASE FieldTypes].ProductName[Mask]>~
+						PromptChar		~<$[DATABASE FieldTypes].ProductName[PromptChar]>~
+						AllowedChars	~<$[DATABASE FieldTypes].ProductName[AllowedChars]>~
+						DisallowedChars	~<$[DATABASE FieldTypes].ProductName[DisallowedChars]>~
+						GenConName		THIS
+						GenConField		ProductDescription
+						TOOLTIP			Translate( ~Type the product name for the package~ )
+						//IActionsText	~[GET]~
+						//DActionsText	~[Save]~ ;
+
+			Define: CategoryComboPrompt Using DDWinCtrlDef AsSymbol CategoryComboPrompt
+				Fields:	TypeName		StaticText
+						Text			~Category~
+						Position		$LeftX ,ProductDescriptionPrompt(GetBottom,Position) + $vGap, 
+										$PromptWidth $ButtonHeight
+
+			Define: CategoryComboBox Using DDWinCtrlDef AsSymbol CategoryComboBox
+				Fields:	TypeName		ComboBox
+						Position		CategoryComboPrompt(GetRight,Position) + $hGap,
+										CategoryComboPrompt(GetTop,Position),
+										$ValueWidth, ($ButtonHeight * 10)
+						GenConName		THIS
+						GenConField		Category
+						Mask			~<$[DATABASE FieldTypes].ProductName[Mask]>~
+						AllowedChars	~<$[DATABASE FieldTypes].ProductName[AllowedChars]>~
+						DisallowedChars	~<$[DATABASE FieldTypes].ProductName[DisallowedChars]>~
+						PromptChar		~<$[DATABASE FieldTypes].ProductName[PromptChar]>~		
+						DropDownActionsText ACTION CALL ( RefreshCategoryComboBox(FALSE) )
+						IActionsText		ACTION EXEC ( RefreshCategoryComboBox(TRUE) )
+						DActionsText	~[Save]~ ;
+
+			CurrentRight = ProductDescriptionField(GetRight,Position) + $hGap;
+			
+			Define: AddButton Using DDWinCtrlDef AsSymbol AddButton
+				Fields:	GENCONNAME		This
+						DACTIONSTEXT	ACTION EXEC ( AddAPackage() )
+						POSITION		(($CurrentRight - $LeftX) / 2) - ($ButtonWidth + $hGap) ,
+										CategoryComboPrompt(GetBottom,Position) + $vGap,$ButtonWidth, $ButtonHeight
+						TEXT			~Add Package~
+						TOOLTIP			~Add a package~
+						TYPENAME		BUTTON
+						HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "AddPackageButton.htm" ) ;
+	
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				Fields:	GENCONNAME		This
+						DACTIONSTEXT	ACTION EXEC ( CancelDialog() )
+						POSITION		AddButton(GetRight,Position) + ($hGap * 2) ,
+										AddButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+						TEXT			~Cancel~
+						TOOLTIP			~Close this dialog without adding a package~
+						TYPENAME		BUTTON
+						HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "AddPackageCancelButton.htm" ) ;
+		}
+
+	CurrentY = CancelButton(GetBottom,Position) + $vGap + 25;
+	AddPackageDialog( Set,Position,~20  20  <CurrentRight>  <CurrentY>~ );
+
+	GenDlg( dlg,Definition,AddPackageDialog,Data,AddPackageData,Document,$Doc.This,New,Temporary );
+
+	Global( dlg,AddPackageDialog );
+
+	RefreshCategoryComboBox(TRUE);
+}
+
+
+
+VOID RefreshCategoryComboBox(WantSelection)
+{
+	Query = ~Select Distinct Category From Products Order By Category~;
+
+	if ( !PGenConList( CategoryList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		CategoryList( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the Products table.  <theErr>~ ) ); 
+	}
+
+	CategoryList( MakeStringList,Categories,Category );
+
+	dlg( SetControlFromStringList,CategoryComboBox,Categories );
+	
+	if ( <wantSelection> )
+	{
+		if ( GenCon( ActiveView,GETACTIVEVIEW,GETNAME,Category ) )
+		{  
+			dlg( SetControlValue,CategoryComboBox,~<Category>~);
+		}
+	}
+
+}
+
+OldProductID = ~~;
+VOID OnProductIDCharTyped()
+{
+
+
+	dlg( GetControlValue,ProductIDField,ProductID);
+	dlg( GetControlValue,ProductDescriptionField,ProductName);
+	if (~<ProductName>~ == ~<OldProductID>~)
+	{
+		dlg( SetControlValue,ProductDescriptionField, ~<ProductID>~);
+	} 
+	OldProductID = ~<ProductID>~;
+	
+}
+
+VOID CancelDialog()
+{
+	GenCon( List,RemoveFrom,ProductsForPackage,~[GenCons]~ );
+	CloseDialog();
+}
+
+
+VOID CloseDialog()
+{
+	dlg( End );
+	Exit();
+}
+
+
+NUMERIC CalcNextSequenceForCategory( &Connection,Table,CategoryField,NewCategory,SequenceField )
+{
+	if ( !Connection( CMD,~Select MAX(<SequenceField>) From <Table> Where <CategoryField> = '<NewCategory>'~,MaxSequence ) )
+	{
+		NextSequence = -1;
+	}
+	else
+	{
+		NextSequence = ~<$rs.MaxSequence[#0]>~ == ~~ ? ~-1~ : ~<$rs.MaxSequence[#0]>~;
+	}
+
+	return $NextSequence + 1;
+}
+
+NUMERIC AddAPackage()
+{
+	dlg( GetInput );
+
+	ProductID = ~<$con.AddPackageData[ProductID]>~;
+	ProductDescription = ~<$con.AddPackageData[ProductDescription]>~;
+	Category = ~<$con.AddPackageData[Category]>~;
+
+	if ( ~<ProductID>~ == ~~ || ~<ProductDescription>~ == ~~ || ~<Category>~ == ~~ )
+	{
+		return Warning( Translate( ~All fields must be filled in~ ) );
+	}
+
+	if ( SimilarStr( ~<Category>~,~Proof~ ) )
+	{
+		Warning( ~You won't be able to proof a package~ );
+	}
+
+	Query = ~Select * from Products Where ID = '<ProductID>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <Query>. <theErr>~ ) );
+	}
+
+	if ( List( GetFirst,Product ) )
+	{
+		return Warning( Translate( ~A product already exists with ID = <ProductID>~ ) );
+	}
+
+	List( GetConnection,dBase );
+
+	NextSequence = CalcNextSequenceForCategory( dBase,Products,Category,~<Category>~,Sequence );
+
+	PreviewIconPath = ~<$App.ShareDirectory>\Images\PackageIcon~;
+
+	theSQL = ~Insert Into Products(ID,LayoutName,Package,Category,ProductType,Sequence,PreviewPath)
+							VALUES('<ProductID>','<ProductDescription>',1,'<Category>','Digital',<NextSequence>,'<PreviewIconPath>')~;
+
+	if ( !dBase( CMD,~<theSQL>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Error: <theErr>~,~From: [<theSQL>]~ ) );
+	}
+
+	action = ACTION DOC ( Packages Open PackagesDoc "AddNewPackage( ~<ProductID>~ );" );
+	PerformActions( action );
+
+	NotifyAffectedDocuments( ProductType );
+
+	CloseDialog();
+}
+
+
+VOID Init()
+{
+	DefineDialog();
+}

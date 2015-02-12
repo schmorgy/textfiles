@@ -1,0 +1,684 @@
+
+VOID RefreshDoc()
+{
+	ShowCategories();
+}
+
+
+NUMERIC RefreshListView()
+{
+	if ( UserTasksDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate( ~Would you like to save your pending changes?~ ),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	GetTasks( TRUE );
+
+	if ( $Editing )
+	{ 
+		RefreshTaskComboList();
+		RefreshUsersList();
+		RefreshCategoryList();
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	UserTasksDataWindow( StatusBar,Text,~Refreshing~ );
+	UserTasksDataWindow( RefreshWindow );
+	return UserTasksDataWindow( StatusBar,Text,~~ );
+
+}
+
+
+NUMERIC OnHelpKey()
+{
+	if ( <Editing> )
+	{
+		TheAction = ACTION ShowHelpPage ( AdminHelpFile "User Tasks.htm" );
+		return PerformActions( TheAction );		
+	}
+
+	UserTasksDataView( GetActiveCellValue,SelectedTask );
+
+	if ( ~<SelectedTask>~ == ~~ )	{ return FALSE; }
+
+	if ( !GetTasks( FALSE ) )		{ return FALSE; }
+
+	if ( !TaskList( Filter,~Name = '<SelectedTask>'~ ) ) { return Warning( Translate( ~Failed to filter the Tasks Table~ ) ); }
+
+	if ( !TaskList( GetFirst,Task )  )		{ return Warning( Translate( ~Couldn't find a task named <SelectedTask>~ ) ); }
+
+	Task( Get,HelpAction,TheAction );
+	
+	return PerformActions( TheAction );				
+}
+
+
+STR GetKey( &UserTasks )
+{
+	Key = STR (	Name = '<$con.UserTasks[Name]>' AND UserName = '<$con.UserTasks[UserName]>' AND Category = '<$con.UserTasks[Category]>' );
+
+	return ~<Key>~;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !UserTasksDataView( GetChangedRow,ChangedTask,OrigUserTask,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$Con.ChangedTask[Name]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Task cannot be blank.~ ) ); }
+
+	if ( ~<$Con.ChangedTask[UserName]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  User cannot be blank.~ ) ); }
+
+	Key = GetKey( OrigUserTask );
+	Query = ~Select * From UserTasks Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,ChangedTask,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate( ~Could not update User Task record where <Key>. <theErr>~ ) );
+	}
+
+	UserTasksDataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+NUMERIC DuplicateRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	if ( !UserTasksDataView( GetSelectedRows,RowsToImitate ) )	
+	{
+		return Warning( Translate( ~You must select a row to duplicate~ ) );	
+	}
+
+	RowsToImitate( GetFirst,RowToImitate );
+
+	RowBeingAdded = UserTasksDataView( AddRow, RowToImitate );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	UserTasksDataView( SetActiveCell,<RowBeingAdded>,Msg );
+
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !UserTasksDataView( GetSelectedRows,UserTasksToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	if ( MessageBox( ~Are you sure you want to delete the selected UserTasks?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( UserTasksToDelete( GetNext,UserTask ) )
+	{
+		Key = GetKey( UserTask );
+
+		if ( !dBase( CMD,~Delete From UserTasks Where <Key>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Could not delete UserTasks where <Key>. <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,UserTasksToDelete(GetCurrentPosition) );
+	}
+
+	UserTasksDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	RefreshTaskComboList();
+	RefreshUsersList();
+	RefreshCategoryList();
+
+	if ( UserTasksDataView( GetSelectedRows,UserTaskToImitate ) )		
+	{
+		UserTaskToImitate( GetFirst,NewRow );
+		NewRow( Set,UserName,~~ );
+
+	}
+	else
+	{
+		Document( Doc,This );
+		GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+	}
+
+	NewRow( Set,UserDefined,TRUE );
+	
+	RowBeingAdded = UserTasksDataView( AddRow,NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	UserTasksDataView( SetActiveCell,<RowBeingAdded>,UserTasks );
+
+	return TRUE;
+}
+
+
+NUMERIC OnKeyDown()
+{
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return FALSE; }
+
+	key = View( GetLastKeyStateless,KeyString );
+	KeyString = Upper( ~<KeyString>~ );
+
+	if ( ~<KeyString>~ == ~C~ )	
+		{ return RightClickInListView(); }
+
+
+	return RightClickInListView();
+}
+
+NUMERIC AllOptions()
+{
+	return RightClickInListView();
+}
+
+
+NUMERIC RightClickInListView()
+{
+	if ( $Editing )
+	{
+		GenCon( UserTasksMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+		GenCon( AddRecord,New,DDMenuItemDef,AddTo,UserTasksMenu,SetValues,
+				Text,		Translate( ~&Add Task~ ),
+				IDText,		~ID~,
+				ActionsText, ACTION Exec ( AddRecord(); ) );
+
+		GenCon( DuplicateRecord,New,DDMenuItemDef,AddTo,UserTasksMenu,SetValues,
+				Text,		Translate( ~&Duplicate~ ),
+				IDText,		~ID~,
+				ActionsText, ACTION Exec ( DuplicateRecord(); ) );
+
+		GenCon( NULL1,New,DDMenuItemDef,AddTo,UserTasksMenu,SetValues,
+				Text,		~~,
+				IDText,		~NULL~ );
+
+		GenCon( SaveAllChanges,New,DDMenuItemDef,AddTo,UserTasksMenu,SetValues,
+				Text,		Translate( ~&Save Changes~ ),
+				IDText,		~ID~,
+				ActionsText, ACTION Exec ( SaveAllChanges() ) );
+
+		GenCon( ForgetAllChanges,New,DDMenuItemDef,AddTo,UserTasksMenu,SetValues,
+				Text,		Translate( ~&Cancel Changes~ ),
+				IDText,		~ID~,
+				ActionsText,  ACTION Exec ( RollBackAllChanges() ) );
+
+		GenCon( DeleteRecord,New,DDMenuItemDef,AddTo,UserTasksMenu,SetValues,
+				Text,		Translate( ~&Delete~ ),
+				IDText,		~ID~,
+				ActionsText, ACTION Exec ( DeleteRecord(); ) );
+
+		GenCon( Refresh,New,DDMenuItemDef,AddTo,UserTasksMenu,SetValues,
+				Text,		Translate( ~&Refresh (F5)~ ),
+				IDText,		~ID~,
+				ActionsText, ACTION Exec ( RefreshListView(); )	);
+	}
+	else	// SHOW EM THE TASK BAR
+	{
+		Query = ~Select Distinct Category From UserTasks Where ((Enabled = 1) AND (UserName = '<$App.UserName>' OR  UserName = '*'))~;
+
+		More = PGenConList( CategoryList,Connect,Cursor,Forward,QUERY,~<Query>~ );
+
+		if ( $More )
+			{ More = CategoryList( GetFirst,Category ); }
+
+		GenCon( UserTasksMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+		index = 0;
+
+		while ( $More )
+		{
+			if ( GetUserPermissions( ~<$pcon.Category[Category]>~ ) || KeyState( CONTROL ) ) 
+			{
+				GenCon( Category<++index>,New,DDMenuItemDef,AddTo,UserTasksMenu,SetValues,
+						Text,		Translate( ~<$pcon.Category[Category]>~ ),
+						IDText,		~ID~ );
+							
+				ActionsText = ACTION Exec ( SwitchCategory(~<$App.Username>~,~<$pcon.Category[Category]>~) );
+
+				GenCon( Category<index>,SetValuesFrom,ActionsText,ActionsText );
+			}
+
+			More = CategoryList( GetNext,Category );
+		}	
+			
+		GenCon( NULL2New,DDMenuItemDef,AddTo,UserTasksMenu,SetValues,
+				Text,		~~,
+				IDText,		~NULL~ );
+
+		GenCon( RefreshNew,DDMenuItemDef,AddTo,UserTasksMenu,SetValues,
+				Text,		Translate( ~&Refresh (F5)~ ),
+				IDText,		~ID~,
+				ActionsText, ACTION Exec ( RefreshListView(); ) );
+	}
+
+	if ( FALSE )
+	{
+		UserTasksDataView( GetLastMousePosition,x,y );
+
+		if ( $y < 25 )	// WAS THE CLICK IN THE TITLE AREA?
+		{
+			x = -103;
+			y = 0;
+		}
+
+		UserTasksDataView( DisplayMenu,UserTasksMenu,$x,$y );
+	}
+
+	UserTasksDataView( DisplayMenu,UserTasksMenu );
+	
+	return TRUE;
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( ~<what> is not implemented yet!~ );
+	return TRUE;
+}
+
+
+NUMERIC GetTasksNew( Reread )
+{
+	if ( <Reread> )		{ ForgetGlobal( TaskList ); }
+
+	if ( !Defined( TaskList ) )
+	{
+		ADO( dBase,Connect );
+
+		if ( !PGenConList( TaskList,Connection,dBase,CursorLocation,Client,Cursor,Static,Lock,BatchOptimistic,QUERY,~Select * From Tasks~ ) )	
+			{ return Warning( Translate( ~Failed to query the Tasks table~ ) ); }
+
+		TaskList( SetConnection,~~ );	// DISCONNECT FROM THE DATABASE
+
+		Global( TaskList );
+	}
+
+	return TRUE;
+}
+
+NUMERIC GetTasks( Reread )
+{
+	if ( <Reread> )		{ ForgetGlobal( TaskList ); }
+
+	if ( !Defined( TaskList ) )
+	{
+		if ( !PGenConList( TaskList,Connect,CursorLocation,Client,Cursor,Static,Lock,BatchOptimistic,QUERY,~Select * From Tasks~ ) )	
+			{ return Warning( Translate( ~Failed to query the Tasks table~ ) ); }
+
+		TaskList( SetConnection,~~ );	// DISCONNECT FROM THE DATABASE
+
+		Global( TaskList );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC PerformTask( SelectedTask )
+{
+	if ( ~<SelectedTask>~ == ~~ )	{ return FALSE; }
+
+	if ( !GetTasks( FALSE ) )	{ return FALSE; }
+
+	if ( !TaskList( Filter,~Name = '<SelectedTask>'~ ) ) { return Warning( Translate( ~Failed to Query the Tasks Table~ ) ); }
+
+	if ( !TaskList( GetFirst,Task )  )	{ return Warning( Translate( ~Failed to find <SelectedTask> in the Tasks table~ ) ); }
+
+	if ( !Task( GetNumeric,Enabled ) )	{ return Warning( Translate( ~Sorry, "<SelectedTask>" has been disabled by the adminstrator~ ) ); }
+
+	if ( ~<$pcon.Task[Type]>~ == ~ACTION~ )		// one or more KPL statements
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		PerformActions( Process );
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~DOC~ )		// execute an action
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		PerformDocActions( Process );
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~KPL~ )		// one or more KPL statements
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		<Process> ;
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~Open~ )		// a script to run
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		Open( Job,~<Process>~ ) ;
+		return TRUE;
+	}
+
+	Process = ~<$pcon.Task[Process]>~;
+	
+	if ( ~<Process>~ == ~~ )
+		{ return Warning( ~There is no process defined for this task~ ); }
+		
+	ParseDelayed( Process );
+
+	Process = ContentsOf( Process, 1 );	// Parse any macros before doing the UserTasks
+
+	Actions = ACTION Doc ( ~UserTasks~ OpenOnce <$pcon.Task[Type]>Doc 
+							"Init( ~<$pcon.Task[Description]>~,~<Process>~ );" );
+
+	PerformActions( Actions );
+
+	if ( ~<CloseInstructions>~ != ~StayOpen~ )
+		{ UserTasksDataWindow( ForceCloseWindow ); }
+
+	return TRUE;
+}
+
+
+NUMERIC UserTaskButton()
+{
+	UserTasksDataView( GetActiveCellValue,which );
+
+	return PerformTask( ~<which>~ );
+}
+
+
+NUMERIC UserTasks()
+{
+	if ( !UserTasksDataView( GetSelectedRows,SelectedUserTasks ) )		
+		{ return Warning( Translate( ~There were no rows selected~ ) ); }
+
+	if ( !SelectedUserTasks( GetFirst,SelectedTask ) )
+		{ return FALSE; }
+
+	return PerformTask( ~<$con.SelectedTask[Name]>~ );
+}
+
+
+NUMERIC OnCloseUserTasksDataView()
+{
+	if ( UserTasksDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	UserTasksDataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( UserTasksDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !UserTasksDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new tasks that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( UserTasksDataView( PendingChanges ) )
+	{
+		UserTasksDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SwitchCategory( User,Category )
+{
+	DocumentQuery = ~Select Name From UserTasks Where (Category = '<Category>') AND (UserName = '<User>' OR UserName = '*') AND (Enabled = 1) Order By Sequence~;
+
+	UserTasksFields( GetFirst,NameColummn );
+	NameColummn( Set,DisplayName,~<Category>~ );
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+
+NUMERIC ShowCategories()	// NOT DEBUGGED OR USED
+{		
+	DocumentQuery = ~Select Distinct Category From UserTasks Where ((Enabled = 1) AND (UserName = '<$App.UserName>' OR  UserName = '*'))~;
+
+	UserTasksFields( GetFirst,NameColummn );
+	NameColummn( Set,DisplayName,~<Category>~ );
+
+	RefreshListView();
+
+	return TRUE;	
+}
+
+
+Define: UserTasksFields Using DDLong  Temporary 
+	Contains:	InListOrder
+	{
+		Define:	Name Using DDCtrlButtonDef
+			Fields: DisplayName				~Task~
+					IsDisplayWidthPercent	~T~
+					DisplayWidth			100 ;
+	}
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 90;  ButtonHeight = 20;  hGap = 1; vGap = 1;
+
+
+VOID DefineTaskWindow( Editing,Title )
+{
+	Position = $Editing ? ~0 0 90 30~ : ~90 0 10 50~;
+
+		Define: UserTasksDataWindow Using DDWinDef AsSymbol UserTasksDataWindow Temporary
+		Fields:		Position				<Position>
+					IsPositionPercent		~T~
+					CanResizeHorizontal		~F~
+					Purpose					$Editing ? ~Edit~ : ~Selection~
+
+		Contains:	INLISTORDER
+		{
+			Define: UserTasksDataView Using DDViewDef AsSymbol UserTasksDataView
+				Fields:	ViewType					ListView
+						EnableSelection				$Editing ? ~T~ : ~F~
+						IsSortable					$Editing ? ~T~ : ~F~
+						GridControlTypes			$Editing ? TableDefinition(GetReferenceTo,Fields) : UserTasksFields(GetObject)
+						ChangeRecordActionsText		ACTION Exec ( ChangeRecord() )
+						DeleteRecordActionsText		ACTION Exec ( DeleteRecord() )
+						HActionsText				ACTION Exec ( OnHelpKey() )
+						RClickUpActionsText			ACTION Exec ( RightClickInListView(FALSE) )
+						ButtonClickActionsText		ACTION Exec ( UserTaskButton() ) 
+						RefreshActionsText			ACTION Exec ( RefreshListView() )
+						DoubleClickActionsText		ACTION Exec ( UserTasks() )
+						FontSize					<Editing> ? 10 : 8
+						CloseActionsText			ACTION Call ( OnCloseUserTasksDataView() );
+		}
+
+	if ($Editing)
+	{
+		UserTasksDataWindow( Set,Title,~<Title>~ );
+	}
+
+	Global( UserTasksDataWindow,UserTasksDataView );
+}
+
+
+NUMERIC RefreshTaskComboList()
+{
+	if ( !PGenConList( TasksList,Connect,Cursor,Forward,QUERY,~Select Name From Tasks Order By Name~ ) )
+	{ 
+		TasksList( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Tasks table. <theErr>~ );
+	}
+
+	TasksList( MakeStringList,TaskNames,Name );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	Fields( GetByName,Name,NameField );
+
+	return NameField( DeleteReference,ChoiceList,Set,ChoiceList,TaskNames(GetCopyOf) );	
+}
+
+
+NUMERIC RefreshUsersList()
+{
+	Query = ~Select Distinct UserName From Users Order By UserName~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Users table. <theErr>~ );
+	}
+
+	List( MakeStringList,UserNames,UserName );
+
+	UserNames( AddString,~*~ );	// ALL USERS
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	Fields( GetByName,UserName,UserNameField );
+
+	return UserNameField( DeleteReference,ChoiceList,Set,ChoiceList,UserNames(GetCopyOf) );	
+}
+
+
+NUMERIC RefreshCategoryList()
+{
+	Query = ~Select Distinct Category From UserTasks Order By Category~;
+
+	if ( !PGenConList( TasksList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		TasksList( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Tasks table. <theErr>~ );
+	}
+
+	TasksList( MakeStringList,CategoryNames,Category );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	Fields( GetByName,Category,CategoryField );
+
+	return CategoryField( DeleteReference,ChoiceList,Set,ChoiceList,CategoryNames(GetCopyOf) );	
+}
+
+
+NUMERIC Init( WhichSettings,DocumentQuery,CloseInstructions,Editing )
+{
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Error( ~Failed to query the UserTasks table: <UserTasks>. <theErr>~ );
+	}
+
+	if ( ~<CloseInstructions>~ == ~~ )
+		{ CloseInstructions = ~StayOpen~; }
+
+	Global( WhichSettings,DocumentQuery,CloseInstructions,Editing );
+
+	DefineTaskWindow( $Editing, ~<WhichSettings>~ == ~~ ? ~User Task Data~ : ~User Task Data - <WhichSettings>~ );
+
+	if ( $Editing )
+	{ 
+		SetDocumentData( List(GetObject) );
+		RefreshTaskComboList();
+		RefreshUsersList();
+		RefreshCategoryList();
+	}
+
+	if ( !UserTasksDataWindow( CreateWindow,~UserTasks~ ) )
+		{ Error( ~Failed to create the window~ ); }
+
+	if ( !<Editing> )
+	{
+		UserTasksDataView( SetDefaultRowHeight,30 );
+		UserTasksDataView( SetColumnWidth,0,0,1 );
+		UserTasksDataView( AllowRowColResizing,TRUE,TRUE );
+		List( GetConnection,dBase );
+		dBase( GetValuesFor,~Select Category From Users Where UserName = '<$App.Username>'~,UsersCategory );
+		if ( ~<UsersCategory>~ == ~~ ) { UsersCategory = ~Order Entry~; }
+		SwitchCategory( ~<$App.Username>~,~<UsersCategory>~ );
+		Global( UsersCategory );
+	}
+
+	UserTasksDataView( AllowRowColResizing,TRUE );
+
+	return TRUE;
+}
+
+
+if ( !GenCon( TableDefinition,GetFrom,UserTasks,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The UserTasks Table is not properly defined~ ); }

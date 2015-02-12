@@ -1,0 +1,349 @@
+NUMERIC RefreshListView()
+{
+	if ( CropsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate( ~Would you like to save your pending changes?~ ),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	CropsDataWindow( StatusBar,Text,~Refreshing~ );
+	CropsDataWindow( RefreshWindow );
+	CropsDataWindow( StatusBar,Text,~~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !CropsDataView( GetChangedRow,ChangedCrop,OrigCrop,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate( ~There was no changed row.~ ) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$Con.ChangedCrop[Name]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Crop cannot be blank.~ ) ); }
+
+	if ( ~<$Con.ChangedCrop[Format]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Film format cannot be blank.~ ) ); }
+
+	Key = STR ( Name = '<$Con.OrigCrop[Name]>' );
+
+	Query = ~Select * From Crops Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <Query>. <theErr>~ ) );
+	}
+
+	if ( !List( UpdateFrom,ChangedCrop,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+		return Warning( Translate( ~Could not update Crop record where <Key>. <theErr>~ ) );
+	}
+
+	CropsDataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !CropsDataView( GetSelectedRows,CropsToDelete ) )		
+		{ return Warning( Translate( ~There was no row selected to delete~ ) ); }
+
+	count = CropsToDelete( ChildCount );
+
+	Prompt = Translate( ~Are you sure you want to delete the <count> selected crop(s)?~ );
+
+	if ( MessageBox( ~<Prompt>~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( CropsToDelete( GetNext,Crop ) )
+	{
+		Key = ~Name = '<$con.Crop[Name]>'~;
+
+		Cmd = ~Delete From Crops Where <Key>~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate( ~Database update failed:  <Cmd>. <theErr>~ ) );
+			break;
+		}
+
+		RowsToDelete( AddString,CropsToDelete(GetCurrentPosition) );
+	}
+		
+	CropsDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	NewRow( SetValues,CropX,50,CropY,50,CropWidth,100,CropLength,100 );
+	NewRow( SetValues,ScanX,50,ScanY,50,ScanWidth,100,ScanLength,100,Rotation,0 );
+	NewRow( SetValues,OverScanX,50,OverScanY,50,OverScanWidth,100,OverScanLength,100 );
+	NewRow( SetValues,Format,~35mm~ );
+	
+	RowBeingAdded = CropsDataView( AddRow,NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate( ~You are too low on memory to add any more rows~ ) ); }
+
+	CropsDataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	return TRUE;
+}
+
+
+
+NUMERIC AddRecordWithCrops( CropX,CropY,CropWidth,CropLength,ScanX,ScanY,ScanWidth,ScanLength,Rotation,Format,OpticalZoom,OverScanX,OverScanY,OverScanWidth,OverScanLength )
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	NewRow( SetValues,CropX,<CropX>,CropY,<CropY>,CropWidth,<CropWidth>,CropLength,<CropLength> );
+	NewRow( SetValues,ScanX,<ScanX>,ScanY,<ScanY>,ScanWidth,<ScanWidth>,ScanLength,<ScanLength> );
+	NewRow( SetValues,Rotation,<Rotation>,Format,~<Format>~,OpticalZoom,<OpticalZoom> );
+	NewRow( SetValues,OverScanX,<OverScanX>,OverScanY,<OverScanY>,OverScanWidth,<OverScanWidth>,OverScanLength,<OverScanLength> );
+
+	RowBeingAdded = CropsDataView( AddRow,NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate( ~You are too low on memory to add any more rows~ ) ); }
+
+	CropsDataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	return TRUE;
+}
+
+
+
+NUMERIC RightClickInListView()
+{
+	CropsDataView( DisplayMenu,CropsListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseCropsDataView()
+{
+	if ( CropsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate( ~Would you like to save your pending changes?~ ),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	CropsDataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( CropsDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !CropsDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new crops that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( CropsDataView( PendingChanges ) )
+	{
+		CropsDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddNewCrop( WhichCrops,DocumentQuery,CropX,CropY,CropWidth,CropLength,ScanX,ScanY,ScanWidth,ScanLength,Rotation,Format,OpticalZoom,OverScanX,OverScanY,OverScanWidth,OverScanLength )
+{
+	if ( !Init( ~<WhichCrops>~,~<DocumentQuery>~ ) )	{ return FALSE; }
+
+	if ( IsNull( <OverScanX> ) )
+	{	OverScanX = 50.0; }
+	if ( IsNull( <OverScanY> ) )
+	{	OverScanY = 50.0; }
+	if ( IsNull( <OverScanWidth> ) )
+	{	OverScanWidth = 100.0; }
+	if ( IsNull( <OverScanLength> ) )
+	{	OverScanLength = 100.0; }
+
+	return AddRecordWithCrops( <CropX>,<CropY>,<CropWidth>,<CropLength>,<ScanX>,<ScanY>,<ScanWidth>,<ScanLength>,<Rotation>,~<Format>~,<OpticalZoom>,<OverScanX>,<OverScanY>,<OverScanWidth>,<OverScanLength> );
+}
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+NUMERIC Init( WhichCrops,DocumentQuery )
+{
+	CropsDataWindow( Set,Title,~<WhichCrops>~ == ~~ ? ~Crop Data~ : ~Crop Data - <WhichCrops>~ );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+			{ Error( ~Failed to query the Crops table~ ); }
+
+		SetDocumentData( List(GetObject) );
+
+		Global( WhichCrops,DocumentQuery );
+
+		if ( !CropsDataWindow( CreateWindow,~Crops~ ) )
+			{ Error( Translate( ~Failed to create the window~ ) ); }
+
+		return TRUE;
+	}
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+VOID OnKeyDown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,CropsListViewMenu,~<KeyString>~ ) )
+	{
+		CropsDataView( DisplayMenu,CropsListViewMenu,0,0  );
+	}
+}
+
+
+if ( !GenCon( CropsTableDefinition,GetFrom,Crops,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The Crops Table is not properly defined~ ); }
+	
+
+Define:	CropsListViewMenu Using DDMenuDef AsSymbol CropsListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add Crop~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord() )
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView() )
+
+	}
+
+
+Include: ~DefineStdGridButtons~;
+
+Left = 5; Top = 5;		hGap = 5; vGap = 2;
+TextHeight = 20;        TextWidth = 110;  
+ButtonHeight = 20;		ButtonWidth = 70;
+
+
+Define: CropsDataWindow Using DDWinDef
+	Fields:		Title					Translate( ~Crops~ )
+				Position				0 40 70 30
+				IsPositionPercent		T
+				TypeName				SplitterWnd
+				SplitterRows			~2 10 90~
+				SplitterColumns			1
+				EnableStatusBar			T;
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "CropsData.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons(Crops) + 10;
+				}
+	
+		Define: CropsDataView Using DDViewDef AsSymbol CropsDataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		CropsTableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RefreshActionsText		ACTION Exec ( RefreshListView() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					CloseActionsText		ACTION Call ( OnCloseCropsDataView() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "CropsData.htm" ) ;
+	}
+	
+

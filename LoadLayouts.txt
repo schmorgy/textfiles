@@ -1,0 +1,109 @@
+// THIS SCRIPT READS THE DATABASE FOR ALL DIGITAL LAYOUTS 
+// AND CREATES A LAYOUT CONTROL THAT LETS THE USER
+// SELECT LAYOUT BY CATEGORY
+
+if ( GenCon( ProductsWindow,GetWindow,ProductsWindow ) )			// IS THE WINDOW ALREADY SHOWING
+{
+	HandleActions( ~CloseWindow(ProductsWindow)~ );
+	Tree( LOCATION,~[GenCons]~,NAME,ProductsWindow,PLUCKANDFREE );
+}
+ForgetGlobal( ProductsWindow );
+
+if ( !ado( db,CONNECT ) )
+	{ Error( ~Could not open KPIS Database to Add Layouts to the Products Table~ ); }		// *TRANSLATE*
+
+Query = ~SELECT ID,ProductType,Category,LayoutName,LayoutPath,PreviewPath FROM Products Order By Category,Sequence~;
+
+if ( !db( CMDTYPE,sql,LOCK,Optimistic,CURSOR,Forward,RECORDSET,Products,~<Query>~ ) )
+	{ Error( ~There is no Products Table in KPIS Database~ ); }								// *TRANSLATE*
+
+Define: ProductsWindow Using DDWinDef
+	Fields:         
+		Title						~Products~
+		TypeName					~ImageWnd~
+		Position					0 85 100 15
+		IsPositionPercent			T
+		IsCenteredVertical			F
+		IsCenteredHorizontal		F
+		IsMaximized					F
+		SourceWinDef				ThumbnailWindow
+		ImageFrameSize				80 ;
+
+CategoryCount = LayoutCount = -1;
+
+Category = Category<++CategoryCount>;
+
+Define: $Category Using DDViewDef
+	Fields:
+		Text						~New~
+		ViewType					~ThumbnailView~
+		IsModifiable				~T~
+		DoubleClickActionsText		~[PutSelectedItems(ActiveView SelectedLayout [GenCons]) 
+										OpenNew(Info3 SelectedLayout "[GenCons]") Pluck(SelectedLayout "[GenCons]")]~
+		IActionsText				~[EnableMenu(CreateLayoutCategories) EnableMenu(DeleteLayoutCategories)
+										DisableMenu(RegisterALayout) DisableMenu(LoadLayouts) ]~
+		OActionsText				~[DisableMenu(CreateLayoutCategories) DisableMenu(DeleteLayoutCategories)
+											EnableMenu(RegisterALayout) EnableMenu(LoadLayouts) EnableMenu(ViewLayouts)]~
+		RClickUpActionsText			~[GETMENU(NodeMenuObj)]~
+		DropTypes					~Products~
+		ViewDataType				Products
+		ViewDataFor					~New~
+		DropActionsText				~[RUNKPL(ProductDrop)]~;
+
+ProductsWindow( InsertBack,$Category );							// INSERT CATEGORY IN THE CONTROL LIST
+
+MoreProducts = Products( MoveFirst );
+
+while ( $MoreProducts )
+{
+	if ( !ProductsWindow(Find,Text,~<$rs.Products[Category]>~,which) )	// HAS THE CATEGORY ALREADY BEEN DEFINED?
+	{
+		Category = Category<++CategoryCount>;							// NOPE, NEED A NEW CATEGORY
+		Define: $Category Using DDViewDef
+			Fields:
+				Text						~<$rs.Products[Category]>~
+				ViewType					~ThumbnailView~
+				IsModifiable				~T~
+				DoubleClickActionsText		~[PutSelectedItems(ActiveView SelectedLayout [GenCons]) 
+												OpenNew(Info3 SelectedLayout "[GenCons]") Pluck(SelectedLayout "[GenCons]")]~
+				IActionsText				~[EnableMenu(CreateLayoutCategories) EnableMenu(DeleteLayoutCategories)
+												DisableMenu(RegisterALayout) DisableMenu(LoadLayouts) ]~
+				OActionsText				~[DisableMenu(CreateLayoutCategories) DisableMenu(DeleteLayoutCategories)
+													EnableMenu(RegisterALayout) EnableMenu(LoadLayouts) EnableMenu(ViewLayouts)]~
+				DropTypes					~Products~
+				ViewDataType				~Products~
+				ViewDataFor					~<Category>~
+				DropActionsText				~[RUNKPL(ProductDrop)]~ ;
+
+		ProductsWindow( InsertBack,$Category );							// INSERT CATEGORY IN THE CONTROL LIST
+	}
+	else	// THIS CATEGORY ALREADY EXISTS
+	{
+		Category = Category<which>;	
+	}
+	
+	Define: Layout<++LayoutCount> Using DDICImageDef AsSymbol Layout<LayoutCount>	// DEFINE THIS LAYOUT 
+		Fields:
+			Info1		~<$rs.Products[ProductType]>~
+			Info2		~<$rs.Products[LayoutName]>~
+			Info3		$App.Vol + ~<$rs.Products[LayoutPath]>~
+			Path		(~<$rs.Products[PreviewPath]>~ == ~~) ? ~~ : $App.Vol + ~<$rs.Products[PreviewPath]>~
+			IsDeleted	F
+			IsSelected	F 
+			DropTypes	Products
+			DataType	Products 
+			Table		Products
+			Key			~ID = '<$rs.Products[ID]>'~ ;
+		
+	<Category>( InsertBack,Layout<LayoutCount> );		// AND INSERT IT IN THE LIST FOR THIS CATETORY
+	
+	MoreProducts = Products( MoveNext );					// MOVE TO THE NEXT LAYOUT IN THE RECORDSET
+}
+
+Hang: ProductsWindow ~[GENCONS]~;
+HandleActions( ~Window(ProductsWindow [GENCONS])~ );
+
+
+            
+
+

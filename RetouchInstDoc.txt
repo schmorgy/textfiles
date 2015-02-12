@@ -1,0 +1,1313 @@
+Include: ~KparsCmds.txt~;
+
+
+NUMERIC ReOpen()
+{
+	return TRUE;
+}
+
+NUMERIC DefineDialog()
+{
+	if ( !DictionaryExists(DDRetouchInstructions) )
+	{
+		Dictionary: DDRetouchInstructions
+			Fields: Name	StayOnTop			type long;
+			Fields: Name	WhichInstruction	type long;
+			Fields: Name	WhichCode			type text;
+			Fields: Name	Total				type text;
+			Fields: Name	InstructionID		type text;
+			Fields: Name	Standard			type long;
+			Fields: Name	Actual				type long;
+			Fields: Name	Instruction			type text;
+			Fields: Name	Detail				type text;
+			Fields: Name	BatchSetup			type text;
+
+		StringList:	Name FramesToRetouchList
+		Hang:	FramesToRetouchList	~[STRINGS]~
+	}
+
+	Define:	DialogData Using DDRetouchInstructions
+		Fields:	StayOnTop 1;
+
+	PromptHeight = 20;	StaticTextWidth = 50;	StaticTextHeight = $PromptHeight;
+	vGap = 5;			hGap = 5;
+	ButtonWidth	= 47;	ButtonHeight	= 20;	ListBoxWidth = 500;
+	ComboBoxWidth = 100;						ComboBoxHeight = 100;
+
+	Define: RetouchInstrDialog Using DDWinDef
+		Fields:	POSITION				0,0,300,300
+				TITLE					~Retouching Instructions~
+				TYPENAME				~Dialog~ 
+				WantsMinimizeBox		TRUE
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "RetouchInstr.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			if ( <EnableKpars> )
+			{
+			Define: FieldLabels Using DDWinCtrlDef AsSymbol FieldLabels
+				Fields:	POSITION		$hGap,4,<ListBoxWidth> - 100,$ButtonHeight
+						IACTIONSTEXT	ACTIONS ( Get )
+						TEXT			~ID                    STD ACT C Setup         DESCRIPTION~
+						TYPENAME		StaticText ;
+			}
+			else
+			{
+			Define: FieldLabels Using DDWinCtrlDef AsSymbol FieldLabels
+				Fields:	POSITION		$hGap,4,<ListBoxWidth> - 100,$ButtonHeight
+						IACTIONSTEXT	ACTIONS ( Get )
+						TEXT			~ID                    STD ACT C      DESCRIPTION~
+						TYPENAME		StaticText ;
+			}
+
+			Define: ListDetailButton Using DDWinCtrlDef AsSymbol ListDetailButton
+				Fields:	Text			Translate( ~Detai&l~ )
+						POSITION		FieldLabels(GetRight,Position)+$hGap*7,FieldLabels(GetTop,Position)-3, $ButtonWidth, 18
+						DActionsText	ACTION EXEC ( OnListDetailButton() ) 
+						Tooltip			Translate( ~See a list of instructions (List) or one instruction at a time (Detail)~ )
+						TYPENAME		Button
+
+			Define: InstructionsListBox Using DDWinCtrlDef AsSymbol InstructionsListBox
+				Fields:	POSITION		$hGap,FieldLabels(GetBottom,Position)-4,<ListBoxWidth>,$PromptHeight * 4
+						GENCONNAME		THIS
+						GENCONFIELD		~WhichInstruction~
+						IACTIONSTEXT	ACTIONS ( GetList(FramesToRetouchList) Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						AllowMultipleSelection T
+						TYPENAME		ListBox ;
+
+			Define: DetailField Using DDWinCtrlDef AsSymbol DetailField
+				Fields:	GENCONFIELD		~Detail~
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						POSITION		InstructionsListBox(GetLeft,Position),InstructionsListBox(GetTop,Position),InstructionsListBox(GetWidth,Position),InstructionsListBox(GetLength,Position)-20
+						TEXT			~This is the detail field~
+						READONLY		T
+						NOHORIZONTALSCROLL T
+						IsHidden		T
+						TYPENAME		MLEDITTEXT;
+
+			DialogWidth = InstructionsListBox(GetRight,Position) + ($hGap * 2);
+
+			Define: NextButton Using DDWinCtrlDef AsSymbol NextButton
+				Fields:	Text			Translate( ~&Next~ )
+						POSITION		$hGap,InstructionsListBox(GetBottom,Position)-15, $ButtonWidth, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnNextButton() ) 
+						Tooltip			Translate( ~Advance to the next instruction~ )
+						TYPENAME		DefaultButton
+
+			Define: PrevButton Using DDWinCtrlDef AsSymbol PrevButton
+				Fields:	Text			Translate( ~&Prev~ )
+						POSITION		NextButton(GetRight,Position)+3,NextButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnPrevButton() ) 
+						Tooltip			Translate( ~Backup to the previous instruction~ )
+						TYPENAME		Button
+
+			Define: StartButton Using DDWinCtrlDef AsSymbol StartButton
+				Fields:	Text			Translate( ~Start~ )
+						POSITION		PrevButton(GetRight,Position)+$hGap*2,PrevButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnStart() ) 
+						Tooltip			Translate( ~Start or restart the timer that keeps track of how long a retouching instruction is taking.~ )
+						TYPENAME		Button
+			
+			Define: CompleteButton Using DDWinCtrlDef AsSymbol CompleteButton
+				Fields:	Text			Translate( ~&Done~ )
+						POSITION		StartButton(GetRight,Position)+3,StartButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnComplete(TRUE) ) 
+						Tooltip			Translate( ~Indicate that this operation is complete and set the actual value to the accumulated time so far~ )
+						TYPENAME		Button
+					
+			Define: ActualField Using DDWinCtrlDef AsSymbol ActualField
+				Fields:	GENCONFIELD		~Actual~
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						POSITION		CompleteButton(GetRight,Position) + $hGap,CompleteButton(GetTop,Position),30,$ButtonHeight
+						TEXT			~~
+						TOOLTIP			~The number of minutes it took you to perform the operation.  If you press the start button this field will count the number of minutes until you press Done.~
+						TYPENAME		EditText
+						Mask			~###~
+						PromptChar		~ ~ 
+						IsTabStop		T;
+
+			Define: InCompleteButton Using DDWinCtrlDef AsSymbol InCompleteButton
+				Fields:	Text			Translate( ~&More~ )
+						POSITION		ActualField(GetRight,Position)+$hGap,ActualField(GetTop,Position), $ButtonWidth, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnMore() ) 
+						Tooltip			Translate( ~Indicate that this operation is not complete~ )
+						TYPENAME		Button
+
+			Define: RefreshButton Using DDWinCtrlDef AsSymbol RefreshButton
+				Fields:	Text			Translate( ~&Refresh~ )
+						POSITION		InCompleteButton(GetRight,Position)+$hGap*2,InCompleteButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( GetInstructions() ) 
+						Tooltip			Translate( ~See any recent changes to the instructions~ )
+						TYPENAME		Button
+
+			Define: EditButton Using DDWinCtrlDef AsSymbol EditButton
+				Fields:	Text			Translate( ~&Edit~ )
+						POSITION		RefreshButton(GetRight,Position)+$hGap,RefreshButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnSeeMoreButton() ) 
+						Tooltip			Translate( ~Update the retouching codes or the instructions for this image~ )
+						TYPENAME		Button
+
+			Define: TotalsButton Using DDWinCtrlDef AsSymbol TotalsButton
+				Fields:	Text			Translate( ~&Totals~ )
+						POSITION		EditButton(GetRight,Position)+$hGap,EditButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnTotals() ) 
+						Tooltip			Translate( ~Show totals for the image and the order~ )
+						TYPENAME		Button
+
+			Define: StayOnTopButton Using DDWinCtrlDef AsSymbol StayOnTopButton
+				Fields:	GENCONNAME		THIS
+						GENCONFIELD		~StayOnTop~
+						Text			Translate( ~&Top~ )
+						POSITION		$DialogWidth - 40 - $hGap*2,InCompleteButton(GetTop,Position), 40, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save "EXEC(OnStayOnTopBox())" ) 
+						OActionsText	ACTIONS ( Save )
+						Tooltip			Translate( ~If checked this dialog will stay on top of all applications.  Useful for retouching in other applications!~ )
+						TYPENAME		CheckBox ;
+
+			ShortDialogHeight = StayOnTopButton(GetBottom,Position) + $vGap * 2 + 25;
+
+			Define: RetouchCodesStaticText Using DDWinCtrlDef AsSymbol RetouchCodesStaticText
+				Fields:	GENCONNAME		THIS
+						Text			Translate( ~Standard Instructions~ )
+						POSITION		$hGap,StayOnTopButton(GetBottom,Position)+$vGap*4+5, 120, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						TYPENAME		StaticText
+
+			Define: AddInstructionButton Using DDWinCtrlDef AsSymbol AddInstructionButton
+				Fields:	Text			Translate( ~&Add~ )
+						POSITION		RetouchCodesStaticText(GetRight,Position)+$hGap*2,StayOnTopButton(GetBottom,Position)+$vGap*4, $ButtonWidth, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnAddInstructionButton() ) 
+						Tooltip			Translate( ~Add the selected operations to the image~ )
+						TYPENAME		Button
+
+			Define: DeleteInstructionButton Using DDWinCtrlDef AsSymbol DeleteInstructionButton
+				Fields:	Text			Translate( ~Delete~ )
+						POSITION		AddInstructionButton(GetRight,Position)+$hGap*2,AddInstructionButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnDeleteInstructionButton() ) 
+						Tooltip			Translate( ~Delete the selected operation(s) to the image~ )
+						TYPENAME		Button
+
+			Define: DeleteAllInstructionButton Using DDWinCtrlDef AsSymbol DeleteAllInstructionButton
+				Fields:	Text			Translate( ~Delete All~ )
+						POSITION		DeleteInstructionButton(GetRight,Position)+$hGap*2,DeleteInstructionButton(GetTop,Position), $ButtonWidth+10, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnDeleteAllInstructionButton() ) 
+						Tooltip			Translate( ~Delete all of the selected operation(s) for the image~ )
+						TYPENAME		Button
+
+
+			Define: RetouchCodesListBox Using DDWinCtrlDef AsSymbol RetouchCodesListBox
+				Fields:	POSITION		$hGap,RetouchCodesStaticText(GetBottom,Position),<ListBoxWidth>,$PromptHeight * 10
+						GENCONNAME		THIS
+						GENCONFIELD		~WhichCode~
+						IACTIONSTEXT	ACTIONS ( GetList(CodesList) Get )
+						DACTIONSTEXT	ACTION EXEC ( CodeSelected() )
+						OACTIONSTEXT	ACTIONS ( Save )
+						AllowMultipleSelection T
+						TYPENAME		ListBox ;
+
+			Define: IDStaticText Using DDWinCtrlDef AsSymbol IDStaticText
+				Fields:	Text			Translate( ~ID~ )
+						POSITION		$hGap,RetouchCodesListBox(GetBottom,Position)+$vGap*2,$StaticTextWidth,$StaticTextHeight
+						TYPENAME		StaticText
+						RIGHTJUSTIFIED	TRUE
+
+			Define: IDEditField Using DDWinCtrlDef AsSymbol IDEditField
+				Fields:	GENCONFIELD		~InstructionID~
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						POSITION		IDStaticText(GetRight,Position) + $hGap,IDStaticText(GetTop,Position),90,$StaticTextHeight
+						TEXT			~~
+						TOOLTIP			~The ID for the instruction you wish to add/edit or delete~
+						TYPENAME		MaskedEditText
+						Mask			~<$[DATABASE FieldTypes].RetouchCode[Mask]>~
+						PromptChar		~<$[DATABASE FieldTypes].RetouchCode[PromptChar]>~
+						AllowedChars	~<$[DATABASE FieldTypes].RetouchCode[AllowedChars]>~
+						DisallowedChars ~<$[DATABASE FieldTypes].RetouchCode[DisallowedChars]>~
+						PromptChar		~ ~ 
+						IsTabStop		T;
+
+			Define: AddIDButton Using DDWinCtrlDef AsSymbol AddIDButton
+				Fields:	Text			Translate( ~&Save~ )
+						POSITION		IDEditField(GetRight,Position)+$hGap*2,IDEditField(GetTop,Position), $ButtonWidth, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnAddIDButton() ) 
+						Tooltip			Translate( ~Add a new instruction~ )
+						TYPENAME		Button
+
+			Define: DeleteCodeButton Using DDWinCtrlDef AsSymbol DeleteCodeButton
+				Fields:	Text			Translate( ~Delete~ )
+						POSITION		AddIDButton(GetRight,Position)+$hGap*2,AddIDButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnDeleteCodeButton() ) 
+						Tooltip			Translate( ~Delete an exisiting instruction~ )
+						TYPENAME		Button
+
+			Define: AddFreeFormButton Using DDWinCtrlDef AsSymbol AddFreeFormButton
+				Fields:	Text			Translate( ~Save as an instruction~ )
+						POSITION		DeleteCodeButton(GetRight,Position)+$hGap*2,DeleteCodeButton(GetTop,Position), $ButtonWidth*3, $ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnAddFreeFormButton() ) 
+						Tooltip			Translate( ~Rather than adding this to the list of standard instructions, save it as an instruction for the current image.~ )
+						TYPENAME		Button
+
+			Define: STDStaticText Using DDWinCtrlDef AsSymbol STDStaticText
+				Fields:	Text			Translate( ~Std~ )
+						POSITION		IDStaticText(GetLeft,Position),IDStaticText(GetBottom,Position)+$vGap, $StaticTextWidth, $ButtonHeight
+						TYPENAME		StaticText
+						RIGHTJUSTIFIED	TRUE
+
+			Define: STDField Using DDWinCtrlDef AsSymbol STDField
+				Fields:	GENCONFIELD		~Standard~
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						POSITION		STDStaticText(GetRight,Position) + $hGap,STDStaticText(GetTop,Position),$StaticTextWidth,$StaticTextHeight
+						TEXT			~~
+						TOOLTIP			~The standard number of minutes required to complete the operation~
+						TYPENAME		EditText
+						Mask			~###~
+						PromptChar		~ ~ 
+						IsTabStop		T;
+
+			if ( <EnableKpars> )
+			{
+			Define: BatchSetupStaticText Using DDWinCtrlDef AsSymbol BatchSetupStaticText
+				Fields:	Text			Translate( ~Auto-Retouch Batch Setup~ )
+						POSITION		AddIDButton(GetLeft,Position),STDField(GetTop,Position), $StaticTextWidth+80, $ButtonHeight
+						TYPENAME		StaticText
+						RIGHTJUSTIFIED	FALSE
+
+			Define: BatchSetupComboBox Using DDWinCtrlDef AsSymbol BatchSetupComboBox
+				Fields:	GENCONFIELD		~BatchSetup~
+						GENCONNAME		THIS
+						DActionsText	~[Save]~
+						OACTIONSTEXT	~[Save]~
+						Text			~~
+    					POSITION		BatchSetupStaticText(GetRight,Position) + $hGap,BatchSetupStaticText(GetTop,Position),100,<ComboBoxHeight>
+						TOOLTIP			~The Auto-Retouching batch setup associated with this instruction~
+						TYPENAME		SComboBox
+						DropDownActionsText ~[Call(UpdateBatchSetupCombo()) Get]~
+						IsTabStop		T;
+
+			Define: BatchSetupButton Using DDWinCtrlDef AsSymbol BatchSetupButton 
+				Fields: TypeName			Button
+						Text				Translate(~?~)
+						Position			BatchSetupComboBox(GetRight,Position) + $hGap,BatchSetupComboBox(GetTop,Position), 20,<ButtonHeight>
+						DActionsText		ACTION EXEC ( OnBatchSetupsButton() )
+						Tooltip				Translate(~View the Retouch Batch Setups table.~ );
+
+			}
+
+			Define: InstructionStaticText Using DDWinCtrlDef AsSymbol InstructionStaticText
+				Fields:	Text			Translate( ~Instruction~ )
+						POSITION		$hGap,STDStaticText(GetBottom,Position)+$vGap, $StaticTextWidth, $ButtonHeight
+						TYPENAME		StaticText
+						RIGHTJUSTIFIED	TRUE
+
+			Define: InstructionField Using DDWinCtrlDef AsSymbol InstructionField
+				Fields:	GENCONFIELD		~Instruction~
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						POSITION		InstructionStaticText(GetRight,Position) + $hGap,InstructionStaticText(GetTop,Position),<ListBoxWidth>-72,$StaticTextHeight*3
+						TEXT			~~
+						TOOLTIP			~The description of the operation to perform~
+						TYPENAME		MLEDITTEXT
+		}
+
+	LeftPosition = App( thisApp,MainWindow,GetClientWidth ) - $DialogWidth - 3;
+	TopPosition = App( thisApp,MainWindow,GetClientHeight ) - $ShortDialogHeight - 75;
+
+	ViewLeft = Defined(Left) ? ~<Left>~ : ~<LeftPosition>~;
+	ViewTop = Defined(Top) ? ~<Top>~ : ~<TopPosition>~;
+
+	LongDialogHeight = InstructionField(GetBottom,Position) + $vGap + 35;
+	RetouchInstrDialog( Set,Position,~<ViewLeft> <ViewTop>  <DialogWidth>  <ShortDialogHeight>~ );
+	
+	GenDlg( dlg,Definition,RetouchInstrDialog,Data,DialogData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DialogData,DialogWidth,LongDialogHeight,ShortDialogHeight,ViewLeft,ViewTop );
+
+	return TRUE;
+}
+
+
+ShowingList = TRUE;
+
+VOID OnListDetailButton()
+{
+	dlg( ShowControls,!<ShowingList>,InstructionsListBox,FieldLabels );
+	dlg( ShowControls,<ShowingList>,DetailField );
+
+	ShowingList	 = !<ShowingList>;
+
+	if ( <ShowingList> )
+	{
+		ControlTitle = ~Detai&l~;
+		dlg( SetControlFocus,InstructionsListBox );
+	}
+	else	// SHOWING DETAIL
+	{
+		ControlTitle = ~&List~;
+		dlg( SetControlFocus,NextButton );
+		ShowIndividualInstruction();
+	}
+
+	dlg( SetControlTitle,ListDetailButton,~<ControlTitle>~ );
+}
+
+
+VOID ShowIndividualInstruction()
+{
+	if ( dlg( ListBox,InstructionsListBox,GetSelectedItem,Item ) > 0 )
+	{
+		Index = dlg( ListBox,InstructionsListBox,GetSelectedIndex ) + 1;
+
+		Count = dlg( ListBox,InstructionsListBox,GetCount );
+
+		Tab = Chr(9);  CR = Chr(0x0D);  LF = Chr(0x0A);  CRLF = ~<CR><LF>~;
+
+		if ( <EnableKpars> )
+		{	GetTokens( ~<Item>~,~<Tab>~,ID,Std,Act,Complete,Setup,Description );
+
+			CompleteString = ~<Complete>~ == ~X~ ? ~Complete~ : ~Not Complete~;
+
+			dlg( SetStrings,Detail,~Operation <Index> of <Count>      <ID>        <Std> Standard Minutes    <Act> Actual Minutes     <CompleteString><CRLF>Batch Setup:<Setup><CRLF><Description>~ );
+		}
+		else
+		{
+			GetTokens( ~<Item>~,~<Tab>~,ID,Std,Act,Complete,Description );
+
+			CompleteString = ~<Complete>~ == ~X~ ? ~Complete~ : ~Not Complete~;
+
+			dlg( SetStrings,Detail,~Operation <Index> of <Count>      <ID>        <Std> Standard Minutes    <Act> Actual Minutes     <CompleteString><CRLF><CRLF><Description>~ );
+		}
+	}
+}
+
+
+SeeMore = FALSE;
+
+VOID OnSeeMoreButton()
+{
+	SeeMore = !<SeeMore>;
+
+	if ( <SeeMore> )
+	{
+		EditRetouchInstructions(0,20);
+	}
+	else
+	{
+		ViewRetouchInstructions();
+	}
+}
+
+
+VOID ViewRetouchInstructions()
+{
+	dlg( SetControlTitle,EditButton,~&Edit~ );
+	dlg( SetWindowSize,<DialogWidth>,<ShortDialogHeight> );
+	dlg( SetWindowPosition,<ViewLeft>,<ViewTop>+70 );	// I HAVE NO IDEA WHY I NEED THE + 70
+	SeeMore = FALSE;
+}
+
+
+VOID EditRetouchInstructions(x,y)
+{
+	dlg( SetControlTitle,EditButton,~&View~ );
+	dlg( SetWindowSize,<DialogWidth>,<LongDialogHeight> );
+	dlg( SetWindowPosition,Numeric(~<x>~),Numeric(~<y>~) );
+	SeeMore = TRUE;
+}
+
+		
+
+NUMERIC OnAddFreeFormButton()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DialogData[InstructionID]>~ ) )
+	{
+		return Warning( Translate( ~You must enter an ID~ ) );
+	}
+
+	if ( IsNull( ~<$con.DialogData[Instruction]>~ ) )
+	{
+		return Warning( Translate( ~You must enter an instruction~ ) );
+	}
+
+	Std = 0;
+
+	if ( ~<$con.DialogData[Standard]>~ != ~~ )
+	{
+		Std = MakeNumber(~<$con.DialogData[Standard]>~);
+	}
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Database connect failed: <theErr>~ );
+	}
+
+	if ( <EnableKpars> )
+	{
+		setup = ~<$con.DialogData[BatchSetup]>~;
+		if ( ~<setup>~ == ~None~ )
+		{
+			setup = ~~;
+		}
+		else
+		{
+			AssignBatchSetupToCode( dBase,~<$con.DialogData[InstructionID]>~,~<setup>~ );
+		}
+		Cmd = ~Insert Into Retouch(OrderID,Roll,Frame,ID,Std,RetouchBatchSetup,Description) Values('<OrderID>','<Roll>','<Frame>','<$con.DialogData[InstructionID]>',<Std>,'<setup>','<$con.DialogData[Instruction].SQlSafe>')~;
+	}
+	else
+	{
+		Cmd = ~Insert Into Retouch(OrderID,Roll,Frame,ID,Std,Description) Values('<OrderID>','<Roll>','<Frame>','<$con.DialogData[InstructionID]>',<Std>,'<$con.DialogData[Instruction].SQlSafe>')~;
+	}
+
+	if ( !Ado( dBase,Connect,Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr,GetErrorNumber,errNum );
+
+		if ( <errNum> == -2147467259 )	// DUPLICATE RECORD?
+		{
+			return Warning( ~<$con.DialogData[InstructionID]> already exists~ );
+		}
+
+		return Warning( ~Cmd failed: <Cmd>.  <theErr>~ );
+	}
+
+	if ( <EnableKpars> )
+	{
+		if ( AutoRetouchingNeeded( dBase,~<$con.DialogData[InstructionID]>~ ) )
+		{
+			if ( !AddToKparsBatch( dBase,~<OrderID>~,~<Roll>~,~<Frame>~,~<$con.DialogData[InstructionID]>~ ) )
+			{
+				Msg = ~The image could not be added to the Auto-Retouching Batch Queue.~ ;
+				Warning( Translate( ~<Msg>~ ) );
+			}
+		}
+	}
+
+	return Queue( ~GetInstructions()~ );
+}
+
+
+NUMERIC OnAddIDButton()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DialogData[InstructionID]>~ ) )
+	{
+		return Warning( Translate( ~You must enter an ID~ ) );
+	}
+
+	if ( IsNull( ~<$con.DialogData[Instruction]>~ ) )
+	{
+		return Warning( Translate( ~You must enter an instruction~ ) );
+	}
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Failed to connect to the shared database.  <theErr>~ );
+	}
+
+	ID = ~<$con.DialogData[InstructionID]>~;
+	Query = ~Select * From RetouchCodes Where ID = '<ID>'~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query failed: <Query>.  <theErr>~ );
+	}
+
+	if ( !List( GetNext,Item ) )
+	{
+		List( AddNew,Item );
+		Item( Set,ID,~<ID>~ );
+	}
+
+	Item( Set,Std,~<$con.DialogData[Standard]>~ );
+	Item( Set,Description,~<$con.DialogData[Instruction]>~ );
+
+	if ( <EnableKpars> )
+	{
+		dlgBatchSetup = ~<$con.DialogData[BatchSetup]>~;
+		if ( ~<dlgBatchSetup>~ == ~~ )
+		{
+			dlgBatchSetup = ~None~;
+		}
+		Item( Set,Setup,~<dlgBatchSetup>~ );
+	}
+
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Update failed: For <ID>.  <theErr>~ );
+	}
+
+	if ( <EnableKpars> )
+	{
+		if ( !AssignBatchSetupToCode( dBase,~<ID>~,~<dlgBatchSetup>~ ) )
+		{
+			return Warning( Translate( ~Failed to assign BatchSetup <BatchSetup> to RetouchCode <ID>.~ ) );
+		}
+	}
+
+	Log( Session, ~Update complete~ );
+	return Queue( ~GetCodes()~ );
+}
+
+
+NUMERIC AutoRetouchingUsed( &database,RetouchCode )
+{
+	Query = ~Select count(*) From Retouch Where ID = '<RetouchCode>'~;
+	count = database( RecordCountFor,~<Query>~ );
+
+	if ( <count> == 0 )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CodeSelected()
+{
+	if ( !dlg( ListBox,RetouchCodesListBox,GetSelectedItem,Item ) > 0 )
+	{
+		return FALSE;
+	}
+
+	Tab = Chr(9);
+
+	if ( <EnableKpars> )
+	{
+		GetTokens( ~<Item>~,~<Tab>~,ID,Std,Setup,Description );
+		if ( ~<Description>~ == ~~ && ~<Setup>~ != ~~ )
+		{
+			Description = ~<Setup>~;
+			Setup = ~~;
+		}
+	}
+	else
+	{
+		GetTokens( ~<Item>~,~<Tab>~,ID,Std,Description );
+	}
+
+	dlg( SetStrings,InstructionID,~<ID>~ );
+	UpdateBatchSetupCombo();
+	if ( ~<Setup>~ == ~~ )
+	{
+		Setup = ~None~;
+	}
+
+	dlg( SetStrings,BatchSetup,~<Setup>~ );
+
+	return OnEditInstructionButton();
+}
+
+
+NUMERIC OnEditInstructionButton()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DialogData[InstructionID]>~ ) )
+	{
+		return Warning( Translate( ~You must enter an ID~ ) );
+	}
+
+	Query = ~Select * From RetouchCodes Where ID = '<$con.DialogData[InstructionID]>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query failed: <Query>.  <theErr>~ );
+	}
+
+	if ( !List( GetNext,Item ) )
+	{
+		return TRUE;
+	}
+
+	dlg( SetStrings,Standard,~<$pcon.Item[Std]>~,Instruction,~<$pcon.Item[Description]>~ );
+
+	return TRUE;
+}
+
+NUMERIC OnDeleteCodeButton()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DialogData[InstructionID]>~ ) )
+	{
+		return Warning( Translate( ~You must enter an ID~ ) );
+	}
+
+	Cmd = ~Delete From RetouchCodes Where ID = '<$con.DialogData[InstructionID]>'~;
+
+	if ( !ADO( dBase,Connect,Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~<$con.DialogData[InstructionID]> does not exist.  <theErr>~ );
+	}
+
+	if ( !AutoRetouchingUsed( dBase,~<$con.DialogData[InstructionID]>~ ) )
+	{
+		Cmd = ~Delete From KparsSetupCodeCrossRef Where ID = '<$con.DialogData[InstructionID]>'~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~<$con.DialogData[InstructionID]> does not exist.  <theErr>~ );
+		}
+	}
+
+	return Queue( ~GetCodes()~ );
+}
+
+
+
+NUMERIC OnAddInstructionButton()
+{
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Database connect failed: <theErr>~ );
+	}
+
+	Tab = Chr(9);	N = 0; Count = 0;
+
+	while ( dlg( ListBox,RetouchCodesListBox,GetNthSelectedItem,<N++>,Item ) > 0 )
+	{
+		if ( <EnableKpars> )
+		{
+			GetTokens( ~<Item>~,~<Tab>~,ID,Std,Setup,Description );
+
+			MakeSQLSafe( Description );
+
+			Cmd = ~Insert Into Retouch(OrderID,Roll,Frame,ID,Std,RetouchBatchSetup,Description) Values('<OrderID>','<Roll>','<Frame>','<ID>',<Std>,'<Setup>','<Description>')~;
+		}
+		else
+		{
+			GetTokens( ~<Item>~,~<Tab>~,ID,Std,Description );
+
+			MakeSQLSafe( Description );
+
+			Cmd = ~Insert Into Retouch(OrderID,Roll,Frame,ID,Std,Description) Values('<OrderID>','<Roll>','<Frame>','<ID>',<Std>,'<Description>')~;
+		}
+		dBase( Cmd,~<Cmd>~ );
+
+		++Count;
+	}
+
+	if ( !<Count> )
+	{
+		return Warning( Translate( ~You must select from an instruction below before pressing Add~ ) );
+	}
+
+	if ( <EnableKpars> )
+	{
+		if ( AutoRetouchingNeeded( dBase,~<ID>~ ) )
+		{
+			if ( !AddToKparsBatch( dBase,~<OrderID>~,~<Roll>~,~<Frame>~,~<$con.DialogData[InstructionID]>~ ) )
+			{
+				Msg = ~The image could not be added to the Auto-Retouching Batch Queue.~ ;
+				Warning( Translate( ~<Msg>~ ) );
+			}
+		}
+	}
+
+
+	return Queue( ~GetInstructions()~ );
+}
+
+NUMERIC OnDeleteInstructionButton()
+{
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Database connect failed: <theErr>~ );
+	}
+
+	Tab = Chr(9);	N = 0; 
+
+	while ( dlg( ListBox,InstructionsListBox,GetNthSelectedItem,<N++>,Item ) > 0 )
+	{
+		if ( <EnableKpars> )
+		{
+			if ( AutoRetouchingNeeded( dBase,~<$con.DialogData[InstructionID]>~ ) )
+			{
+				if ( !RemoveFromKpars( dBase,~<OrderID>~,~<Roll>~,~<Frame>~ ) )
+				{
+					Msg = ~The image could not be removed from the Auto-Retouching Queue~;
+					Warning( Translate( ~<Msg>~ ) );
+				}
+			}
+		}
+
+		GetTokens( ~<Item>~,~<Tab>~,ID,Std,Description );
+
+		Key = ~OrderID='<OrderID>' AND Roll='<Roll>' AND Frame='<Frame>' AND ID='<ID>'~;
+
+		Cmd = ~Delete From Retouch Where <Key>~;
+
+		dBase( Cmd,~<Cmd>~ );
+	}
+
+	return Queue( ~GetInstructions()~ );
+}
+
+
+NUMERIC OnDeleteAllInstructionButton()
+{
+	Key = ~OrderID='<OrderID>' AND Roll='<Roll>' AND Frame='<Frame>'~;
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Database connect failed: <theErr>~ );
+	}
+
+	if ( <EnableKpars> )
+	{
+		if ( AutoRetouchingNeeded( dBase,~<$con.DialogData[InstructionID]>~ ) )
+		{
+			if ( !RemoveFromKpars( dBase,~<OrderID>~,~<Roll>~,~<Frame>~ ) )
+			{
+				Msg = ~The image could not be removed from the Auto-Retouching Queue~;
+				Warning( Translate( ~<Msg>~ ) );
+			}
+		}
+	}
+
+	Cmd = ~Delete From Retouch Where <Key>~;
+
+	if ( !dBase( Cmd,~<Cmd>~ ) )
+
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Database delete failed: <Cmd>.  <theErr>~ );
+	}
+
+	return Queue( ~GetInstructions()~ );
+}
+
+
+NUMERIC OnCodesButton()
+{
+	Action = ACTION DOC ( RetouchCodes OpenOnce RetouchCodesDoc );
+	return PerformActions( Action );
+}
+
+
+NUMERIC OnBatchSetupsButton()
+{
+	Action = ACTION DOC ( RetouchBatchSetupsDoc OpenOnce RetouchBatchSetupsDoc "Init();" );
+	return PerformActions( Action );
+}
+
+
+NUMERIC OnEditButton()
+{
+	Action = ACTION DOC ( Retouch OpenOnce RetouchDoc );
+	return PerformActions( Action );
+}
+
+
+NUMERIC DoCancelButton()
+{
+	StopTimer();
+	dlg( End );
+	return Exit();
+}
+
+
+VOID OnStayOnTopBox()
+{
+	dlg( GetInput,SetWindowOrder,DialogData(GetNumeric,StayOnTop) ? TOPMOST : NOTOPMOST );
+}
+
+
+NUMERIC OnStart()
+{
+	Dlg( GetInput );
+
+	count = dlg( ListBox,InstructionsListBox,GetSelectedCount );
+
+	if ( <Count> != 1 )
+	{
+		return Warning( ~Select a single instruction and press Start again~ );
+	}
+
+	dlg( ListBox,InstructionsListBox,GetNthSelectedItem,0,Item );
+
+	GetTokens( ~<Item>~,~<Tab>~,ID,Std,Actual );
+
+	dlg( SetStrings,Actual,<Actual>+1 );
+
+	dlg( SetControlTitle,StartButton,~Re&start~ );
+
+	OnMore();
+
+	StartTimer();
+
+	return TRUE;
+}
+
+
+VOID OnTimer()
+{
+	dlg( GetStrings,Actual,Actual );
+
+	dlg( SetStrings,Actual,<++Actual> );
+
+	StartTimer();
+}
+
+
+VOID StartTimer()
+{
+	StopTimer();
+
+	SetTimer( 67,1000 * 60,~OnTimer()~ );	// EXPIRE IN 1 MINUTE
+}
+
+
+VOID StopTimer()
+{
+	KillTimer( 67 );
+}
+
+
+NUMERIC OnMore()
+{
+	Dlg( GetInput );
+
+	count = dlg( ListBox,InstructionsListBox,GetSelectedCount );
+
+	if ( <Count> == 0 )
+	{
+		return Warning( ~You must select one or more instructions first~ );
+	}
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Failed to connect to the database.  <theErr>~ );
+	}
+
+	N = 0;
+
+	while ( dlg( ListBox,InstructionsListBox,GetNthSelectedItem,<N++>,Item ) > 0 )
+	{
+		GetTokens( ~<Item>~,~<Tab>~,ID );
+
+		ID = String( TrimLeft,~<ID>~ );
+
+		Key = ~OrderID = '<OrderID>' And Roll = '<Roll>' AND Frame = '<Frame>' AND ID = '<ID>'~;
+
+		Cmd = ~Update Retouch Set Complete = 0 Where <Key>~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Cmd failed: <Cmd>.  <theErr>~ );
+		}
+	}
+
+	return Queue( ~GetInstructions()~ );
+}
+
+
+NUMERIC OnComplete( Value )
+{
+	Dlg( GetInput );
+
+	StopTimer();
+
+	count = dlg( ListBox,InstructionsListBox,GetSelectedCount );
+
+	if ( <Count> == 0 )
+	{
+		return Warning( ~You must select one or more instructions first~ );
+	}
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Failed to connect to the database.  <theErr>~ );
+	}
+
+	Actual = DialogData( GetNumeric,Actual );
+
+	if ( !<Actual> )
+	{
+		Actual = DialogData( GetNumeric,Standard );
+	}
+
+	N = 0;	  Count = 0;
+
+	while ( dlg( ListBox,InstructionsListBox,GetNthSelectedItem,<N++>,Item ) > 0 )
+	{
+		GetTokens( ~<Item>~,~<Tab>~,ID );
+
+		ID = String( TrimLeft,~<ID>~ );
+
+		Key = ~OrderID = '<OrderID>' And Roll = '<Roll>' AND Frame = '<Frame>' AND ID = '<ID>'~;
+
+		Cmd = ~Update Retouch Set Complete = <Value>,Actual = <Actual> Where <Key>~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Cmd failed: <Cmd>.  <theErr>~ );
+		}
+
+		++Count;
+	}
+
+	if ( !<Count> )
+	{
+		return Warning( Translate( ~You must select one or more instructions first~ ) );
+	}
+
+	dlg( SetControlTitle,StartButton,~&Start~ );
+
+	return Queue( ~GetInstructions()~ );
+}
+
+
+NUMERIC OnTotals()
+{
+	Key = ~OrderID = '<OrderID>' And Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+	Query = ~Select Count(*),Sum(Retouch.Std),Sum(Retouch.Actual) From Retouch Where <Key>~;
+
+	if ( !ADO( dBase,Connect,CMD,~<Query>~,Total ) )
+	{ 
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Query failed: <Query>.  <theErr>~ );
+	}
+
+	Query = ~Select Count(*),Sum(Retouch.Std),Sum(Retouch.Actual) From Retouch Where <Key> And Complete <> 0~;
+
+	if ( !dBase( CMD,~<Query>~,Complete ) )
+	{ 
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Query failed: <Query>.  <theErr>~ );
+	}
+
+	Key = ~OrderID = '<OrderID>'~;
+
+	Query = ~Select Count(*),Sum(Retouch.Std),Sum(Retouch.Actual) From Retouch Where <Key>~;
+
+	if ( !dBase( CMD,~<Query>~,Order ) )
+	{ 
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Query failed: <Query>.  <theErr>~ );
+	}
+
+	CompleteLine = ~You have completed <$rs.Complete[#0]> of <$rs.Total[#0]> instructions for this image using <$rs.Complete[#2]> of <$rs.Complete[#1]> minutes.~;
+	ImageLine = ~Image requires <$rs.Total[#1]> Total Standard Minutes.  You have used <$rs.Total[#2]> Actual Minutes~;
+	OrderLine = ~Order requires <$rs.Order[#1]> Total Standard Minutes.  You have used <$rs.Total[#2]> Actual Minutes~;
+	
+	return Warning( Translate( ~<CompleteLine>\n\n<ImageLine>\n\n<OrderLine>~ ) );
+}
+
+
+
+NUMERIC UpdateBatchSetupCombo()
+{
+	// Get the current selection
+	Query = STR ( Select Name From RetouchBatchSetup Order By Name );
+
+	if ( PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		if ( List( GetFirst,EditorRecord ) )
+		{
+			List( MakeStringList,BatchSetupList,Name );
+			BatchSetupList( AddString,~None~ );
+			dlg( SetControlFromStringList,BatchSetupComboBox,BatchSetupList,Selection );
+			dlg( GetInput );
+			return TRUE;
+		}
+	}
+
+	StringList( EmptyList, New );
+	dlg( SetControlFromStringList,BatchSetupComboBox,EmptyList );
+
+	dlg( GetInput );
+
+	return TRUE;
+}
+
+NUMERIC GetInstructions()
+{
+	N = 0; Item = -1;
+
+	PreviousSelection = dlg( ListBox,InstructionsListBox,GetNthSelectedIndex,0 );
+
+	dlg( ListBox,InstructionsListBox,SetTabStops,1,12,16,20,24,36 );
+
+	StringList( RetouchList,New );
+
+	Key = ~OrderID = '<OrderID>' And Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Failed to connect to the shared database.  <theErr>~ );
+	}
+
+	Query = ~Select * From Retouch where <Key>~;
+	
+	Total = 0;	
+	
+	if ( PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		Tab = Chr(9);
+
+		while ( List( GetNext,Record ) )
+		{
+			Std = Format( MakeNumber(~<$pcon.Record[Std]>~),~%03ld~ );
+			Actual = Format( MakeNumber(~<$pcon.Record[Actual]>~),~%03ld~ );
+			Complete = MakeNumber(~<$pcon.Record[Complete]>~) != 0;
+			CompleteCode = <Complete> ? ~X~ : ~ ~;
+			ID = ~<$pcon.Record[ID]>~;
+
+			if ( <EnableKpars> )
+			{
+				Setup = ~~;
+				Query = ~Select BatchSetup from KparsSetupCodeCrossRef Where ID = '<ID>'~;
+				dBase( GetValuesFor,~<Query>~,Setup );
+				if ( ~<Setup>~ == ~~ )
+				{
+					Setup = ~None~;
+				}
+
+				RetouchList( AddString,~<ID><Tab><Std><Tab><Actual><Tab><CompleteCode><Tab><Setup><Tab><$pcon.Record[Description]>~ );
+			}
+			else
+			{
+				RetouchList( AddString,~<ID><Tab><Std><Tab><Actual><Tab><CompleteCode><Tab><$pcon.Record[Description]>~ );
+			}
+
+			Total += <Std>;
+			++count;
+		}
+	}
+
+	dlg( SetControlFromStringList,InstructionsListBox,RetouchList,Selection,Update );
+
+	if ( <PreviousSelection> >= 0 )
+	{
+		dlg( ListBox,InstructionsListBox,SetSel,~<PreviousSelection>~,TRUE );
+	}
+	else
+	{
+		dlg( ListBox,InstructionsListBox,SetSel,0,TRUE );
+	}
+
+	ShowIndividualInstruction();
+
+	return TRUE;
+}
+
+
+NUMERIC GetCodes()
+{
+	dlg( ListBox,RetouchCodesListBox,SetTabStops,1,12,24,36 );
+
+	StringList( RetouchCodeList,New );
+
+	Query = ~Select * From RetouchCodes~;
+	
+	Count = Total = 0;	
+	
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Failed to connect to the shared database.  <theErr>~ );
+	}
+
+	if ( PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		Tab = Chr(9);
+
+		while ( List( GetNext,Record ) )
+		{
+			Std = Format( MakeNumber(~<$pcon.Record[Std]>~),~%03ld~ );
+
+			if ( <EnableKpars> )
+			{
+				Setup = ~~;
+				Query = ~Select BatchSetup from KparsSetupCodeCrossRef Where ID = '<$pcon.Record[ID]>'~;
+				dBase( GetValuesFor,~<Query>~,Setup );
+				if ( ~<Setup>~ == ~~ )
+				{
+					Setup = ~None~;
+				}
+
+				RetouchCodeList( AddString,~<$pcon.Record[ID]><Tab><Std><Tab><Setup><Tab><$pcon.Record[Description]>~ );
+			}
+			else
+			{
+				RetouchCodeList( AddString,~<$pcon.Record[ID]><Tab><Std><Tab><$pcon.Record[Description]>~ );
+			}
+
+
+			Total += <Std>;
+			++count;
+		}
+	}
+
+	return dlg( SetControlFromStringList,RetouchCodesListBox,RetouchCodeList );
+}
+
+
+NUMERIC OpenAnImageExternal( OrderID,Roll,Frame )
+{
+	Query = ~Select Path From Images Where OrderID = '<OrderID>' And Roll = '<Roll>' And Frame = '<Frame>'~;
+
+	if ( !Ado( dBase,Connect,GetValuesFor,~<Query>~,Path ) )
+	{
+		return dlg( SetStatus,0,Translate( ~No image exists for <OrderID>,<Roll>,<Frame>~ ) );
+	}
+
+	if ( ~<Path>~ == ~~ )
+	{
+		return dlg( SetStatus,0,Translate( ~No image exists for <OrderID>,<Roll>,<Frame>~ ) );
+	}
+
+	BroadcastMessageToAllViews( ReleaseImageChain,~<Path>~ );
+
+	CloseWindowByPath( ~<Path>~ );
+	CloseWindowForDataType( Image );
+
+	if ( !ShellExecute( Open,~<Path>~ ) )
+	{
+		GetLastError( ErrorString,theErr );
+		Log( Session,~Could not open <Path>. <theErr>~ );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnRetouchButton()
+{
+	return OpenAnImageExternal( ~<OrderID>~,~<Roll>~,~<Frame>~ );
+}
+
+NUMERIC OnNextButton()
+{
+	if ( KeyState( SHIFT ) )
+	{
+		return SelectPrev(TRUE);
+	}
+
+	return SelectNext(TRUE);
+}
+
+
+NUMERIC OnPrevButton()
+{
+	if ( KeyState( SHIFT ) )
+	{
+		return SelectNext(TRUE);
+	}
+
+	return SelectPrev(TRUE);
+}
+
+
+
+NUMERIC SelectNext(GainFocus)
+{
+	dlg( ListBox,InstructionsListBox,SelectNext );
+
+	if ( <GainFocus> )
+	{
+		dlg( SetFocus );
+	}
+
+	ShowIndividualInstruction();
+
+	return TRUE;
+}
+
+NUMERIC SelectPrev(GainFocus)
+{
+	dlg( ListBox,InstructionsListBox,SelectPrev );
+
+	if ( <GainFocus> )
+	{
+		dlg( SetFocus );
+	}
+
+	ShowIndividualInstruction();
+
+	return TRUE;
+}
+
+
+VOID NewImage( AnOrderID,aRoll,aFrame )
+{
+	OrderID = ~<AnOrderID>~;  Roll = ~<aRoll>~;   Frame = ~<aFrame>~;
+
+	Global( OrderID,Roll,Frame );
+
+	dlg( Title,Translate( ~Instructions For <OrderID>,<Roll>,<Frame>~ ) );
+
+	Queue( ~GetInstructions()~ );
+}
+
+
+VOID Init( OrderID,Roll,Frame )
+{
+	GetKparsDefaults();
+
+	if ( !Defined( dlg ) )
+	{
+		DefineDialog();
+		dlg( SetWindowOrder,TOPMOST );
+		dlg( SetControlFocus,InstructionsListBox );
+	}
+
+	if ( !IsNull(~<OrderID>~) )
+	{
+		Global( OrderID,Roll,Frame );
+		NewImage( ~<OrderID>~,~<Roll>~,~<Frame>~ );
+	}
+
+	GetCodes();
+}
+
+Tab = Chr(9);
+
+
+// Init( Test,~0001~,~007~ );

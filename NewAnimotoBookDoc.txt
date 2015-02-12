@@ -1,0 +1,668 @@
+// This file is included in NewBookDoc.txt (to support book products) and OrderItemsDoc.txt (to support books);
+// Note that both books and book products use the class name TemplateDlg for creating books or book products, and EditTemplateDlg for editing books and book products
+
+// Define the data dictionary for Animoto books
+if (! DictionaryExists(DDAnimotoBookInfo))
+{
+		Dictionary:		DDAnimotoBookInfo
+			Fields:		Name Setup				Type Text
+			Fields:		Name Title				Type Text
+			Fields:		Name Style				Type Text
+			Fields:		Name SongGenre			Type Text
+			Fields:		Name SongTitle			Type Text
+			Fields:		Name SongStart			Type Double
+			Fields:		Name SongDuration		Type Double
+			Fields:		Name Pacing				Type Long
+			Fields:		Name Fit				Type Long
+			Fields:		Name MaxDuration		Type Double
+			Fields:		Name Resolution			Type Text
+			Fields:		Name FrameRate			Type Long
+			Fields:		Name Format				Type Text
+			Fields:		Name PostRoll			Type Long
+			Fields:		Name PostRollPath		Type Text
+			Fields:		Name NoPreview			Type Long
+			Fields:		Name ApprovalRequired	Type Long
+			Fields:		Name NotificationEmail	Type Text
+			Fields:		Name WantWebRes			Type Long
+			Fields:		Name Downloadable		Type Long
+			Fields:		Name DVDOutput			Type Long
+			Fields:		Name RImageOrderID		Type Text
+			Fields:		Name RImageTemplate		Type Text
+			Fields:		Name UserID				Type Text
+			Fields:		Name HiResDestinationPath	Type Text
+			Fields:		Name WebResDestinationPath	Type Text
+			Fields:		Name ReleaseRImageOrder	Type Long
+			Fields:		Name RImageQty			Type Long
+			Fields:		Name ProductCode		Type Text
+
+}
+
+if (! DictionaryExists(DDStyle))
+{
+		Dictionary:		DDStyle
+			Fields:		Name Text			Type Text
+			Fields:		Name Value			Type Text
+}
+
+if (! DictionaryExists(DDSong))
+{
+		Dictionary:		DDSong
+			Fields:		Name Text			Type Text
+			Fields:		Name Value			Type Text
+}
+
+IncludeClass( BaseAnimoto,~HTMLPages\Animoto~ );
+
+
+// load up the Animoto record with default values
+VOID TemplateDlg::InitAnimotoRecord(&List)
+{
+	if (!MemberDefined(AnimotoBookRec))
+	{
+		GenCon(AnimotoBookRec,New,DDAnimotoBookInfo);
+		AnimotoBookRec(SetValue,Setup,~~);
+		AnimotoBookRec(SetValue,Title,~~);
+		AnimotoBookRec(SetValue,Style,~~);
+		AnimotoBookRec(SetValue,UserID,~~);
+		AnimotoBookRec(SetValue,SongTitle,~~);
+		AnimotoBookRec(SetValue,SongStart,~0~);
+		AnimotoBookRec(SetValue,SongDuration,~0~);
+		AnimotoBookRec(SetValue,Pacing,~0~);			// is index into AnimotoPacingList, default is Auto
+		AnimotoBookRec(SetValue,Fit,~0~);				// is index into AnimotoFittingList, default is Best Fit
+		AnimotoBookRec(SetValue,MaxDuration,~1800~);
+		AnimotoBookRec(SetValue,Resolution,~720p~);		// contains one of the values in the stringlist AnimotoResolutionList in fieldTypes.txt
+		AnimotoBookRec(SetValue,FrameRate,~4~);			// is index into AnimotoFrameRateList, default is 30
+		AnimotoBookRec(SetValue,Format,~h264~);
+		AnimotoBookRec(SetValue,PostRoll,~0~);			// is index into AnimotoPostRollList,default is White Label
+		AnimotoBookRec(SetValue,PostRollPath,~~);
+		AnimotoBookRec(SetValue,ApprovalRequired,~0~);
+		AnimotoBookRec(SetValue,NotificationEmail,~~);
+		AnimotoBookRec(SetValue,WantWebRes,~0~);
+		AnimotoBookRec(SetValue,Downloadable,~0~);
+		AnimotoBookRec(SetValue,DVDOutput,~0~);
+		AnimotoBookRec(SetValue,RImageOrderID,~~);
+		AnimotoBookRec(SetValue,RImageQty,1);
+		AnimotoBookRec(SetValue,RImageTemplate,~h264~);
+		AnimotoBookRec(SetValue,ReleaseRImageOrder,~1~);
+		Private(AnimotoBookRec);
+		ForgetPrivate(SongGenres);
+		ForgetPrivate(CurrentSongGenre);
+	}
+}
+
+VOID TemplateDlg::InitAnimotoObject()
+{
+	if (!MemberDefined(fMusicObj))
+	{
+		BaseAnimoto( New,fMusicObj );
+		Private(fMusicObj);
+	}
+}
+
+//FolderName in Translations,Symbol,FileName
+
+LoadTranslationFile(OrderItems,AnimotoBookMessages,AnimotoBook);
+
+// List contains the list of PGencon records containing attribute/value pairs for
+// books or book products
+VOID EditTemplateDlg::InitAnimotoRecord(&List)
+{
+	TemplateDlg::InitAnimotoRecord(List);		// set defaults
+	more = List(GetFirst,Record);				// update database values in AnimotoBookRec Gencon
+	while (<more>)
+	{
+		Record(GetValues,Attribute,Attr,Value,Value);
+		AnimotoBookRec(SetValue,~<Attr>~,~<Value>~);
+		more = List(GetNext,Record);
+	}
+}
+
+VOID TemplateDlg::InitAnimotoDiv()
+{
+	fHtmlView(UpdateFrom,AnimotoBookRec,Animoto); //Update the view from a GenCon
+	LoadAnimotoSetupPopup();
+	SelectAnimotoSetup();
+	LoadAnimotoStylePopup();
+	SelectAnimotoStyle();
+	LoadSongGenrePopup();
+	SongGenre = SelectSongGenre();
+	LoadSongTitlePopup(~<SongGenre>~);
+	SelectSongTitle();
+	LoadRImageOrderIDPopup();
+	SelectRImageOrderID();
+	LoadRImageTemplatePopup();
+	SelectRImageTemplate();
+	SetReleaseRImageOrder();
+	LoadResolutionPopup();
+	SelectResolution();
+	LoadFittingPopup();
+	SelectFit();
+	LoadPostRollPopup();
+	SelectPostRoll();
+	InitSelectAnimotoPostRoll();
+	LoadPacingPopup();
+	SelectPacing();
+	LoadFrameRatePopup();
+	SelectFrameRate();
+	LoadFormatPopup();
+	SelectFormat();
+	OnAnimotoDVDOutput();
+	OnAnimotoApprovalRequired();
+	AnimotoDivInitialized = 1;
+	Private(AnimotoDivInitialized);
+	PlaySong = 1;
+	Private(PlaySong);
+}
+
+VOID TemplateDlg::GetUsersAnimotoValues()
+{
+	if (MemberDefined(AnimotoDivInitialized))
+	{
+		fHtmlView(Update,AnimotoBookRec,Animoto);  //Update AnimotoBookRec Gencon from the view
+		AnimotoBookRec(GetValue,~PostRoll~,Value);
+		if (Numeric(~<Value>~) != 1)
+		{
+			// if custom footage not chosen, then remove the PostRollPath values so
+			// they are not stored in the database
+			AnimotoBookRec(SetValue,~PostRollPath~,~~);
+		}		
+	}
+}
+
+VOID EditTemplateDlg::InitAnimoto()
+{
+	TemplateDlg::InitAnimoto();
+}
+
+// only load the styles once.  No need to do multiple parses of the xml file
+VOID TemplateDlg::LoadAnimotoStylePopup()
+{ 
+	fMusicObj.GetStyleNameStringList(StylesList);
+	fHtmlView( SetSelectOptionsLength,AnimotoStyle,0,0);
+	fHtmlView( CreateOptionsFromStringList, ~AnimotoStyle~, 0, StylesList);
+	return;
+}
+
+
+VOID TemplateDlg::LoadAnimotoSetupPopup()
+{ 
+	if ( !PGenConList( List,Connect,Query,~Select ID From Animoto Order By ID~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to read the Animoto Setups from the database.  <theErr>~ );
+	}
+	
+	List( MakeStringList,SetupsList,ID );
+	
+	fHtmlView( SetSelectOptionsLength,AnimotoSetup,0,0);
+	fHtmlView( CreateOptionsFromStringList, AnimotoSetup, 0, SetupsList);
+	return;
+}
+
+
+VOID TemplateDlg::SelectAnimotoSetup()
+{ 
+	AnimotoBookRec(GetValue,Setup,aSetup);
+	fHtmlView( SetSelectedOptionByValue,AnimotoSetup,0,~<aSetup>~ );
+}
+
+VOID TemplateDlg::GetAnimotoSetup()
+{ 
+}
+
+VOID TemplateDlg::SelectAnimotoStyle()
+{ 
+	AnimotoBookRec(GetValue,Style,aStyle);
+	fHtmlView( SetSelectedOptionByValue,AnimotoStyle,0,~<aStyle>~ );
+}
+
+VOID TemplateDlg::GetAnimotoStyle()
+{ 
+}
+
+
+VOID TemplateDlg::LoadSongGenrePopup()
+{ 
+	ReturnOnSuccess(MemberDefined(fParser));
+	
+	path = ~<$App.HTMLPages>\Animoto\AnimotoSongs.xml~;
+	xml( fParser );
+	Private(fParser);
+
+	NumNodes = fParser( load,~<path>~,SetSelectionNamespaces, ~xmlns:z='#RowsetSchema'~,SelectNodes,TitleList,~//z:row~ ) ;
+
+	CurrentNode = -1;
+	StringList(SongGenres,New);
+	SongGenres(NoDuplicateValues);
+	Private(SongGenres);
+	while ( TitleList( GetNodeByIndex,Row,<++CurrentNode> ) )
+	{
+		SongGenres(AddString,~<$XMLNode.Row[@genre/Text]>~);
+	}
+	fHtmlView(SetSelectOptionsLength,AnimotoSongGenre,0,0);
+	fHtmlView( CreateOptionsFromStringList, ~AnimotoSongGenre~, 0, SongGenres);
+}
+
+STR TemplateDlg::SelectSongGenre()
+{		
+	AnimotoBookRec(GetValue,~SongTitle~,CurrentSongTitle);
+	SongGenre = ~~;
+	if (fMusicObj.GetGenreForSong(~<CurrentSongTitle>~,SongGenre))
+	{
+		fHtmlView( SetSelectedOptionByValue,AnimotoSongGenre,0,~<SongGenre>~ );
+	}
+	else
+	{
+		fHtmlView( SetSelectedOptionByIndex,AnimotoSongGenre,0,0 );
+	}
+	return ~<SongGenre>~;
+}
+
+VOID TemplateDlg::LoadSongTitlePopup(SongGenre)
+{ 
+	if (fMusicObj.GetSongNodesByGenre(~<SongGenre>~) <= 0)
+	{ return; }
+	// Passes Back SongNodes
+			
+	CurrentNode = -1;
+	
+	GenCon(TitleList,New,DDSong);
+		
+	fHtmlView(SetSelectOptionsLength,AnimotoSongTitle,0,0);
+	while ( SongNodes( GetNodeByIndex,Row,<++CurrentNode> ) )
+	{
+		SongLengthMilliseconds = Numeric(~<$XMLNode.Row[@length/Text]>~);
+		SongLengthSeconds = Round(<SongLengthMilliseconds>/1000);
+		SongLengthMinutes = Truncate(<SongLengthSeconds> / 60);
+		SongLengthSeconds = <SongLengthSeconds> % 60;
+		FormattedSongLengthSeconds = ~<$Str.$SongLengthSeconds.%02ld>~;
+		GenCon(Song,New,DDSong);
+		Song(SetValue,Text,~<$XMLNode.Row[@title/Text]> <SongLengthMinutes>:<FormattedSongLengthSeconds>~);
+		Song(SetValue,Value,~<$XMLNode.Row[@title/Text]>~);
+		TitleList(InsertBack,Song);
+		
+	}
+	
+	fHtmlView( CreateOptionsFromGenConList, ~AnimotoSongTitle~, 0, TitleList,Text,0,Value);
+
+}
+
+VOID TemplateDlg::SelectSongTitle()
+{ 
+	AnimotoBookRec(GetValue,~SongTitle~,CurrentSongTitle);	
+	if (!fHtmlView( SetSelectedOptionByValue,AnimotoSongTitle,0,~<CurrentSongTitle>~ ))
+	{ 
+		GenCon(TitleList,New,DDSong);
+		GenCon(Song,New,DDSong);
+		Song(SetValue,Text,~<CurrentSongTitle> [<$tr.AnimotoBookMessages(AnimotoNotFound)>]~);
+		TitleList(InsertBack,Song);
+		fHtmlView( CreateOptionsFromGenConList, ~AnimotoSongTitle~, 0, TitleList,Text,0,Value);
+		fHtmlView( SetSelectedOptionByIndex,AnimotoSongTitle,0,0 );
+		fHtmlView( SetStyle,AnimotoSongTitle,0,~background: #009966; color: #FFF;~ );
+	}
+}
+
+VOID TemplateDlg::GetSongTitle()
+{ 
+	fHtmlView(Get, ~AnimotoSongTitle~, 0, value, Val);
+	AnimotoBookRec(SetValue,~SongTitle~,~<Val>~);
+}
+
+VOID TemplateDlg::GetSongGenre()
+{ 
+}
+
+
+VOID TemplateDlg::SetReleaseRImageOrder()
+{ 
+	val = Numeric(~<$con.AnimotoBookRec[ReleaseRImageOrder]>~);
+	fHtmlView( Set, animotoReleaseRImageOrderCheckbox, 0, checked, <val> ? ~true~ : ~~ );
+}
+
+VOID TemplateDlg::GetReleaseRImageOrder()
+{ 
+	fHtmlView( Get, animotoReleaseRImageOrderCheckbox, 0, checked, Val );
+	AnimotoBookRec(SetValue,~ReleaseRImageOrder~,Numeric(~<Val>~));
+}
+
+VOID TemplateDlg::LoadResolutionPopup()
+{
+	StringList( AnimotoResolutionList,New,Is,~<$[DATABASE FieldTypes].AnimotoResolution[ChoiceList]>~ );
+	fHtmlView( SetSelectOptionsLength,AnimotoResolution,0,0);
+	fHtmlView( CreateOptionsFromStringList, ~AnimotoResolution~, 0, AnimotoResolutionList);
+}
+
+VOID TemplateDlg::SelectResolution()
+{
+	AnimotoBookRec(GetValue,~Resolution~,Val);
+	fHtmlView( SetSelectedOptionByValue,AnimotoResolution,0,~<Val>~ );
+}
+
+VOID TemplateDlg::LoadFittingPopup()
+{
+	StringList( AnimotoFittingList,New,Is,~<$[DATABASE FieldTypes].AnimotoFitting[ChoiceList]>~ );
+	fHtmlView( SetSelectOptionsLength,AnimotoFit,0,0);
+	fHtmlView( CreateOptionsFromStringList, ~AnimotoFit~, 0, AnimotoFittingList,1);
+}
+
+VOID TemplateDlg::SelectFit()
+{
+	AnimotoBookRec(GetValue,~Fit~,Val);
+	fHtmlView( SetSelectedOptionByIndex,AnimotoFit,0,~<$Str.$Val.numeric>~ );
+}
+
+VOID TemplateDlg::LoadPostRollPopup()
+{
+	StringList( AnimotoPostRollList,New,Is,~<$[DATABASE FieldTypes].AnimotoPostRoll[ChoiceList]>~ );
+	fHtmlView( SetSelectOptionsLength,AnimotoPostRoll,0,0);
+	fHtmlView( CreateOptionsFromStringList, ~AnimotoPostRoll~, 0, AnimotoPostRollList,1);
+}
+
+VOID TemplateDlg::SelectPostRoll()
+{
+	AnimotoBookRec(GetValue,~PostRoll~,Val);
+	fHtmlView( SetSelectedOptionByIndex,AnimotoPostRoll,0,~<$Str.$Val.numeric>~ );
+}
+
+VOID TemplateDlg::LoadPacingPopup()
+{
+	StringList( AnimotoPacingList,New,Is,~<$[DATABASE FieldTypes].AnimotoPacing[ChoiceList]>~ );
+	fHtmlView( SetSelectOptionsLength,AnimotoPacing,0,0);
+	fHtmlView( CreateOptionsFromStringList, ~AnimotoPacing~, 0, AnimotoPacingList,1);
+}
+
+VOID TemplateDlg::SelectPacing()
+{
+	AnimotoBookRec(GetValue,~Pacing~,Val);
+	fHtmlView( SetSelectedOptionByIndex,AnimotoPacing,0,~<$Str.$Val.numeric>~ );
+}
+
+VOID TemplateDlg::LoadFrameRatePopup()
+{
+	StringList( AnimotoFrameRateList,New,Is,~<$[DATABASE FieldTypes].AnimotoFrameRate[ChoiceList]>~ );
+	fHtmlView( SetSelectOptionsLength,AnimotoFrameRate,0,0);
+	fHtmlView( CreateOptionsFromStringList, ~AnimotoFrameRate~, 0, AnimotoFrameRateList,1);
+}
+
+VOID TemplateDlg::SelectFrameRate()
+{
+	AnimotoBookRec(GetValue,~FrameRate~,Val);
+	fHtmlView( SetSelectedOptionByIndex,AnimotoFrameRate,0,~<$Str.$Val.Numeric>~ );
+}
+
+VOID TemplateDlg::LoadFormatPopup()
+{
+	StringList( AnimotoFormatList,New,Is,~<$[DATABASE FieldTypes].AnimotoFormat[ChoiceList]>~ );
+	fHtmlView( SetSelectOptionsLength,AnimotoFormat,0,0);
+	fHtmlView( CreateOptionsFromStringList, ~AnimotoFormat~, 0, AnimotoFormatList);
+}
+
+VOID TemplateDlg::SelectFormat()
+{
+	AnimotoBookRec(GetValue,~FrameRate~,Val);
+	fHtmlView( SetSelectedOptionByValue,AnimotoFrameRate,0,~<Val>~ );
+}
+
+VOID TemplateDlg::LoadRImageOrderIDPopup()
+{ 
+	Query = ~Select ID From RImageOrders Union Select '' From RImageOrders Order By ID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed: <Query>. <theErr>~ ) );
+	}
+	
+	fHtmlView( SetSelectOptionsLength,AnimotoRImageOrderID,0,0);
+	fHtmlView( CreateOptionsFromGenConList, ~AnimotoRImageOrderID~, 0, List,ID);
+}
+
+VOID TemplateDlg::SelectRImageOrderID()
+{ 
+	AnimotoBookRec(GetValue,~RImageOrderID~,~Val~);
+	if (IsNull(~<Val>~))
+	{
+		fHtmlView( SetSelectedOptionByIndex,AnimotoRImageOrderID,0,0);
+	}
+	else
+	{
+		fHtmlView( SetSelectedOptionByValue,AnimotoRImageOrderID,0,~<Val>~ );
+	}
+
+}
+
+VOID TemplateDlg::GetRImageOrderID()
+{ 
+	fHtmlView( Get,~AnimotoRImageOrderID~,0,value,Val);
+	AnimotoBookRec(SetValue,~AnimotoRImageOrderID~,~<Val>~);
+}
+
+
+VOID TemplateDlg::LoadRImageTemplatePopup()
+{ 
+	Query = ~Select ID From RImageTemplates Union Select '' From RImageTemplates Order By ID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed: <Query>. <theErr>~ ) );
+	}
+	
+	fHtmlView(SetSelectOptionsLength,AnimotoRImageTemplate,0,0);
+	fHtmlView( CreateOptionsFromGenConList, ~AnimotoRImageTemplate~, 0, List,ID);
+
+}
+
+VOID TemplateDlg::SelectRImageTemplate()
+{ 
+	AnimotoBookRec(GetValue,~RImageTemplate~,Val);
+	if (IsNull(~<Val>~))
+	{
+		fHtmlView( SetSelectedOptionByIndex,AnimotoRImageTemplate,0,0);
+	}
+	else
+	{
+		fHtmlView( SetSelectedOptionByValue,AnimotoRImageTemplate,0,~<Val>~ );
+	}
+}
+
+VOID TemplateDlg::GetRImageTemplate()
+{ 
+	fHtmlView( Get,~AnimotoRImageTemplate,0,value,Val);
+	AnimotoBookRec(SetValue,~RImageTemplate~,~<Val>~);
+}
+
+NUMERIC TemplateDlg::SelectFile(ID,UserText)
+{	
+	FileFilter = ~mp4 files|*.mp4~;
+	if ( FileDialog( Title, ~<UserText>~,Path,Path,Filter,~<FileFilter>~ ) )
+	{
+		Path = MakePath( Type,UNC,~<Path>~);
+
+		if ( !Files( IsUNC,~<Path>~ ) && NetworkOperation() )
+		{
+			Msg = Translate( UIMessages,UnsharedFile,~<Path>~ );
+
+			if ( MessageBox( ~<Msg>~,YESNO ) != YES )
+				{ return FALSE; }
+		}
+		
+		fHtmlView( Set, ~<ID>~, 0, value, ~<Path>~ );
+		return TRUE;
+	}
+	return FALSE;
+}
+
+
+NUMERIC TemplateDlg::OnSelectAnimotoSetup()
+{
+	return TRUE;
+}
+
+
+NUMERIC TemplateDlg::OnSelectAnimotoStyle()
+{
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnSelectAnimotoTitle()
+{	
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnSelectAnimotoGenre()
+{
+	fHtmlView(Get, ~AnimotoSongGenre~, 0, value, SongGenre);
+	LoadSongTitlePopup(~<SongGenre>~);
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnSelectAnimotoPacing()
+{
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnSelectAnimotoFit()
+{
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnSelectAnimotoResolution()
+{
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnSelectAnimotoFrameRate()
+{
+	return TRUE;
+}
+NUMERIC TemplateDlg::OnSelectAnimotoFormat()
+{
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnPlayMovie()
+{	
+	fHtmlView(Get, ~AnimotoStyle~, 0, value, Val);
+	fMusicObj.ShowExampleByDisplayName(~<Val>~);
+	if (<PlaySong> == 0)
+	{
+		fMusicObj.StopMusic();
+		fHtmlView(SetValue,PlaySongButton,0,~<$tr.AnimotoBookMessages(AnimotoPlaySong)>~);
+		PlaySong = 1;
+	
+	}
+	return TRUE;
+}
+NUMERIC TemplateDlg::OnPlaySong()
+{
+	if (<PlaySong>)
+	{
+		fHtmlView(Get, ~AnimotoSongTitle~, 0, value, Val);
+		fMusicObj.PlayMusicByTitle(~<Val>~);
+		fHtmlView(SetValue,PlaySongButton,0,~<$tr.AnimotoBookMessages(AnimotoStopSong)>~);
+	}
+	else
+	{
+		fMusicObj.StopMusic();
+		fHtmlView(SetValue,PlaySongButton,0,~<$tr.AnimotoBookMessages(AnimotoPlaySong)>~);
+	}
+	PlaySong = 1 - <PlaySong>;
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnSelectAnimotoPostRoll()
+{
+	fHtmlView( Get,AnimotoPostRoll,0,value,Val);
+	if (Numeric(~<Val>~) == 1)
+	{
+		fHtmlView( SetStyle,~animotoPostRollPathDiv~,0,display,~block~);
+		fHtmlView( Get, AnimotoPostRollPath,0,value,Val);
+		if (IsNull(~<Val>~))
+		{
+			OnSelectAnimotoFootage();
+		}
+	}
+	else
+	{
+		fHtmlView( SetStyle,~animotoPostRollPathDiv~,0,display,~none~);
+	}
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::InitSelectAnimotoPostRoll()
+{
+	fHtmlView( Get,AnimotoPostRoll,0,value,Val);
+	if (Numeric(~<Val>~) == 1)
+	{
+		fHtmlView( SetStyle,~animotoPostRollPathDiv~,0,display,~block~);
+		fHtmlView( Get, AnimotoPostRollPath,0,value,Val);
+	}
+	else
+	{
+		fHtmlView( SetStyle,~animotoPostRollPathDiv~,0,display,~none~);
+	}
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnSelectAnimotoFootage()
+{
+	UserText = ~<$tr.AnimotoBookMessages(FindDesiredPostRollPathFile)>~;
+	SelectFile(AnimotoPostRollPath,~<UserText>~);
+	fHtmlView( SetSelectedOptionByIndex,AnimotoPostRoll,0,2);
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnAnimotoNoPreview()
+{		
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnAnimotoApprovalRequired()
+{
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnAnimotoDownloadable()
+{
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnAnimotoDVDOutput()
+{
+	fHtmlView(Get,AnimotoDVDOutput,0,checked,checkBoxValue);
+	checkBoxChecked = SimilarStr(~<checkBoxValue>~,~True~);	
+	fHtmlView(SetStyle,animotoReleaseRImageOrderDiv,0,display,<checkBoxChecked> ? ~block~ : ~none~);
+	fHtmlView(SetStyle,animotoRImageTemplateDiv,0,display,<checkBoxChecked> ? ~block~ : ~none~);
+	fHtmlView(SetStyle,animotoRImageOrderDiv,0,display,<checkBoxChecked> ? ~block~ : ~none~);
+	fHtmlView(SetStyle,animotoRImageQuantityDiv,0,display,<checkBoxChecked> ? ~block~ : ~none~);
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnAnimotoWantWebRes()
+{
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnAnimotoRImageOrderID()
+{
+	fHtmlView( SetSelectedOptionByIndex,AnimotoRImageTemplate,0,0);
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnAnimotoRImageTemplate()
+{
+	fHtmlView( SetSelectedOptionByIndex,AnimotoRImageOrderID,0,0);
+
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnAnimotoReleaseRImageOrder()
+{
+	return TRUE;
+}
+
+
+
+
+

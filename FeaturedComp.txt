@@ -1,0 +1,1515 @@
+/*
+Pattern editor
+Require the featured node be the last node number
+
+Questions to ask user in making featured composite
+
+1.  Who gets featured subject composite?
+- None
+- All
+- All Students
+- Some students and/or staff  -->  if this is the answer must also ask based on what field(s) in subject info table
+- Fieldname : FeatureType
+
+2. How to identify staff if either All or some students and staff is chosen
+-- Need UI that identifies tail end of SQL statement, Like Select * from subjectinfo where Homeroom IN('T','TA')
+- Fieldname: StaffFilter
+
+3. If All or some students and or staff is chosen, need UI to identify how to shuffle staff into featured node:
+- leave empty position
+- shuffle all staff, leave last staff position empty
+- shuffle staff, shuffle kids into last staff position
+- FieldName: StaffShuffleMode
+
+4. SubjInfoFeatureOrderColumn, SubjInfoFeatureOrderValue 
+- If some students and staff want the feature subject, this column tells what column we are keying off
+- If some students and staff want the feature subject, this column tells what value of SubjInfoFeatureOrderColumn would result
+- in a featured composite
+
+
+Store the results of these answers into new fields in the composite table
+
+Assumptions:  The layout's featured node does not contain a staff image as defined through NodeDetails.  Have to handle this in the layout
+grid generator.
+*/
+
+if (!DictionaryExists(DDFeaturedCompData))
+{
+	Dictionary: DDFeaturedCompData
+		Fields:	Name IFile						Type Text
+		Fields:	Name Text						Type Text
+		Fields:	Name Style						Type Text
+		Fields:	Name Used						Type long
+		Fields:	Name IsStaff					Type long		// refers to the position in current node list.  Only to be used for filling, not creating order items
+		Fields: Name NodeName					Type Text;
+		Fields: Name NodeLabel					Type Text;
+		Fields: Name NodeNumber					Type long;
+		Fields: Name Featured					Type long;
+		Fields: Name IsCountable				Type long;
+		Fields: Name WriteOutEmptyNode			Type long;		// write out an empty node if user requests to leave a node empty
+
+	
+}
+
+// Featured Composite code
+Class( FeaturedComp,
+	  Member,StaffDisplacementMode,Numeric,0, 		// 0 = leave featured staff position empty,
+													// 1 = shuffle staff, empty at last staff position,
+													// 2 = shuffle staff, shuffle kids into last staff position
+	Member,fStaffRestriction,Str,~~,
+	Member,fWhoGets,Numeric,0,						// 0 = all students, 1= students and staff, 2 = determine from a field in the subject info table
+	Member,fNoRestrictionCmd,Str,~~,
+	Member,fInfoType,Str,~~,
+	Member,fFeaturedRestriction,Str,~~,
+	Member,fOrderId,Str,~~,
+	Member,fErrorMsg,Str,~~,
+	Member,fFeaturedNodeName,Str,Featured
+
+ );
+/* 
+On the fly Privates:
+
+FeaturedNode - a pointer to the featured node in the current node list 
+StaffImagesList a PGenConList to the list of staff images
+BaseNodeList - a list of of gencons of type DDFeaturedCompData that holds static information that is used to build CurrentNodeList.  It is built once.
+CurrentNodeList - a list of gencons of type DDFeaturedCompData that is meant to hold dynamic node information.  It is built for each order item from BaseNodeList 
+DefaultStyle - the name of the style applied to default countable nodes
+fFeaturedImagePosition - the position in the base list that contains the featured image.
+
+*/
+VOID FeaturedComp::FeaturedComp()
+{
+}
+
+VOID FeaturedComp::SetOrder(OrderID)
+{
+	fOrderID = ~<OrderID>~;
+}
+
+STR FeaturedComp::GetOrder()
+{
+	return ~<fOrderID>~;
+} 
+
+STR FeaturedComp::GetErrorMsg()
+{
+	return ~<fErrorMsg>~;
+}
+
+VOID FeaturedComp::SetErrorMsg(Msg)
+{
+	fErrorMsg = ~<Msg>~;
+}
+
+VOID FeaturedComp::SetStaffRestriction(StaffRestriction)
+{
+	fStaffRestriction = ~<StaffRestriction>~;
+}
+
+STR FeaturedComp::GetStaffRestriction()
+{
+	return ~<fStaffRestriction>~;
+}
+VOID FeaturedComp::SetFeaturedRestriction(Restriction)
+{
+	fFeaturedRestriction = ~<Restriction>~;
+}
+
+STR FeaturedComp::GetFeaturedRestriction()
+{
+	return ~<fFeaturedRestriction>~;
+}
+
+
+VOID FeaturedComp::SetShuffleMode(ShuffleMode)
+{
+	StaffDisplacementMode = ~<ShuffleMode>~;
+}
+
+NUMERIC FeaturedComp::GetShuffleMode()
+{
+	return ~<StaffDisplacementMode>~;
+}
+
+VOID FeaturedComp::SetWhoGets(who)
+{
+	fWhoGets = ~<who>~;
+}
+
+NUMERIC FeaturedComp::GetShuffleMode()
+{
+	return ~<fWhoGets>~;
+}
+
+VOID FeaturedComp::SetNoRestrictionCmd(NoRestrictionCmd)
+{
+	fNoRestrictionCmd = ~<NoRestrictionCmd>~;
+}
+
+STR FeaturedComp::GetNoRestrictionCmd()
+{
+	return ~<fNoRestrictionCmd>~;
+}
+
+VOID FeaturedComp::SetInfoType(type)
+{
+	fInfoType = ~<type>~;
+}
+
+STR FeaturedComp::GetInfoType()
+{
+	return ~<fInfoType>~;
+}
+
+VOID FeaturedComp::SetFeaturedQtyFld(FeaturedQuantityField)
+{
+	fFeaturedQuantityField = ~<FeaturedQuantityField>~; // refers to a field in the subject info table
+}
+
+STR FeaturedComp::GetFeaturedQtyFld()
+{
+	return ~<fFeaturedQuantityField>~;
+}
+
+VOID FeaturedComp::Dump(&GCList, Msg)
+{
+	another = GCList(GetFirst,GC);
+	while (<another>)
+	{
+		GC(Dump,~<Msg>~);
+		another = GCList(Getnext,GC);
+	}
+}
+
+NUMERIC FeaturedComp::CountCCDetails(ProductID)
+{
+	CountCC = 0;
+	more = NodeDetailList(GetFirst,DetailRecord);
+	while (<more>)
+	{
+		if (~<$con.DetailRecord[NodeName]>~ != Translate(CompJobDetailsMsgs,DefaultNode) )
+		{
+			if (NodeIsCountable(~<ProductID>~,~<$con.DetailRecord[NodeName]>~) )
+			{
+				ImagePath = ~<$con.DetailRecord[Image]>~;
+				if (!IsNull(~<ImagePath>~) && !SimilarStr(~<$con.DetailRecord[NodeName]>~,~<fFeaturedNodeName>~))
+				{
+					++CountCC;
+				}
+			}
+		}
+		more = NodeDetailList(GetNext,DetailRecord);
+	}
+	return <CountCC>;
+}
+
+// generates Private fCurrentBaseNodeListPosition
+NUMERIC FeaturedComp::GenerateClassPic(&dBase,&Data,&NodeDetailsData,theCmd,theDesc,&ItemID,&Stop)
+{
+	ForgetPrivate(fFeaturedImagePosition);
+	ForgetPrivate(FeaturedNode);
+	ForgetPrivate(StaffImagesList);
+	ForgetPrivate(BaseNodeList);
+	ForgetPrivate(CurrentNodeList);
+	ForgetPrivate(DefaultStyle);
+	GetFeaturedNodeName();
+	//	GenerateBase Generates Private BaseNodeList, 
+	//  and generates Globals SubjectImgRecord,CCList,MultiImages,ImagePath,
+	//	ImagesOrderIDList,SubjectInfoOrderID,InfoType,theCmd,theSortby
+	ReturnOnFailure(GenerateBase(dBase,Data,NodeDetailsData,~<theCmd>~,~<theDesc>~,ItemID,0));
+	if (!Defined(BaseNodeList))
+	{
+		return FALSE;
+	}
+
+	ReturnOnFailure(GetStaffPositions(dBase));				// generates private StaffImagesList
+
+	FoundFeaturedNode = GetBaseFeaturedNode();	// 
+
+	if (!<FoundFeaturedNode>)
+	{
+		fErrorMsg = TR(Composites,CouldNotFindFeaturedNode);
+		return FALSE;
+	}
+	IdentifyBaseStaff();				// sets the IsStaff attr in the base node list
+	RestoreBase();						// copies BaseNodeList to a new CurrentNodeList
+	GetFeaturedNode();					// generates private FeaturedNode - pointer to featured node in CurrentNodeList
+	RemoveNonStaff();					// sets the isStaff attribute in CurrentNodeList and removes the ifile and text for non staff
+
+	if (<Stop>)
+	{
+		return TRUE;
+	}
+	// Do the kids
+	morr = GetNextNonStaffPosition();	// generates private fFeaturedImagePosition, based on IsStaff attribute of CurrentNodeList
+	if (!<morr>)
+	{
+		// there are no kids
+		if (<fWhoGets> == 0)
+		{
+			fErrorMsg = TR(Composites,NoKids);// TR(Composites,NoKids) faster, no dereferencing
+			return FALSE;
+		}
+	}
+	while (<morr>)	
+	{
+		if (<Stop>)
+		{
+			return TRUE;
+		}
+		if (KidWantsFeatured(dbase,<fFeaturedImagePosition>))
+		{
+			Rotate1NonStaff();				// uses fFeaturedImagePosition
+			if (!Createorderitem(dBase,Data,NodeDetailsData,~<theCmd>~,~<theDesc>~,ItemID))
+			{
+				return FALSE;
+			}
+			RestoreBase();					// copies BaseNodeList to a new CurrentNodeList
+			GetFeaturedNode();				// generates private FeaturedNode - pointer to featured node in CurrentNodeList
+			RemoveNonStaff();				// sets the isStaff attribute in CurrentNodeList
+		}
+		morr = GetNextNonStaffPosition();// generates private fFeaturedImagePosition, based on IsStaff attribute of BaseNodeList
+	}
+
+	if (<Stop>)
+	{
+		return TRUE;
+	}
+	if (<StaffDisplacementMode> == 0 || <StaffDisplacementMode> == 1)// both of these leave an empty node
+	{
+		// Do the staff.  We have to increase the head size of the layout because node numbers for the increased
+		// head size layout may be completely different, although the node names should be the same.
+		ReturnOnFailure(GenerateBase(dBase,Data,NodeDetailsData,~<theCmd>~,~<theDesc>~,ItemID,1));
+		ReturnOnFailure(GetStaffPositions(dBase));				// generates private StaffImagesList
+		ReturnOnFailure(GetBaseFeaturedNode());	// 
+		IdentifyBaseStaff();				// sets the IsStaff attr in the base node list
+	}
+
+	if (<fWhoGets> != 0)					// == 0 means students only
+	{
+		ForgetPrivate(fFeaturedImagePosition);
+		morr = GetNextStaffPosition();		// generates private fFeaturedImagePosition based on current node list, starting at 0
+		while (<morr>)						
+		{
+			if (<Stop>)
+			{
+				return TRUE;
+			}
+			if (StaffWantsFeatured(dbase,<fFeaturedImagePosition>))
+			{
+				RestoreBase();					// copies BaseNodeList to  a new CurrentNodeList
+				GetFeaturedNode();				// generates private FeaturedNode - pointer to featured node in CurrentNodeList
+				RemoveAll();					// removes Ifile and text from current node list, keeps IsStaff attribute
+				Rotate1Staff();					// uses fFeaturedImagePosition 
+				if (!Createorderitem(dBase,Data,NodeDetailsData,~<theCmd>~,~<theDesc>~,ItemID))
+				{
+					return FALSE;
+				}
+			}
+			morr = GetNextStaffPosition();	// generates private fFeaturedImagePosition based on base node list
+		}
+	}
+	ForgetGlobal(ImagesOrderIDList,SubjectInfoOrderID,InfoType,theCmd,theSortby);
+	ForgetGlobal(CCList);
+	ForgetGlobal(MultiImages,ImagePath);
+	// create the order items according to the sort
+	return TRUE;
+}
+
+NUMERIC FeaturedComp::GetNumberOfCountableNodes(&NodeList)
+{
+	countable = 0;
+	more = NodeList(GetFirst,Node);
+	while (<more>)
+	{
+		IsCountable = Node(GetNumeric,IsCountable);
+		if (<IsCountable>)
+		{
+			++countable;
+		}
+		more = NodeList(GetNext,Node);
+	}
+
+	return <countable>;
+	
+}
+
+//generates private fFeaturedImagePosition based on BaseNodeList
+NUMERIC FeaturedComp::GetNextStaffPosition()
+{
+	Entries = BaseNodeList(ChildCount);
+	if (!MemberDefined(fFeaturedImagePosition))
+	{
+		fFeaturedImagePosition = 0;
+		Private(fFeaturedImagePosition);
+	}
+	else
+	{
+		fFeaturedImagePosition = <++fFeaturedImagePosition> % <Entries>;
+		if (<fFeaturedImagePosition> == 0)
+		{
+			return FALSE;
+		}
+	}
+
+	while (BaseNodeList(GetAt,<fFeaturedImagePosition>,WorkingNode))
+	{
+		WorkingNode(GetValue,IsCountable,IsCountable);
+		WorkingNode(GetValue,IsStaff,IsStaff);
+		if (<IsCountable> && <IsStaff>)
+		{
+			return TRUE;
+		}
+		fFeaturedImagePosition = <++fFeaturedImagePosition> % <Entries>;
+		if (<fFeaturedImagePosition> == 0)
+		{
+			return FALSE;
+		}
+	}
+	return false;
+}
+
+//generates private fFeaturedImagePosition based on BaseNodeList
+NUMERIC FeaturedComp::GetNextNonStaffPosition()
+{
+	Entries = BaseNodeList(ChildCount);
+	if (!MemberDefined(fFeaturedImagePosition))
+	{
+		fFeaturedImagePosition = 0;
+		Private(fFeaturedImagePosition);
+	}
+	else
+	{
+		fFeaturedImagePosition = <++fFeaturedImagePosition> % <Entries>;
+		if (<fFeaturedImagePosition> == 0)
+		{
+			return FALSE;
+		}
+	}
+
+	while (BaseNodeList(GetAt,<fFeaturedImagePosition>,WorkingNode))
+	{
+		WorkingNode(GetValue,IsCountable,IsCountable);
+		WorkingNode(GetValue,IsStaff,IsStaff);
+		if (<IsCountable> && !<IsStaff>)
+		{
+			return TRUE;
+		}
+		fFeaturedImagePosition = <++fFeaturedImagePosition> % <Entries>;
+		if (<fFeaturedImagePosition> == 0)
+		{
+			return FALSE;
+		}
+	}
+	return false;
+}
+
+// looks up whether an image path in the base list is a staff image
+// by taking the image path, looking up its subject ID,
+// and checking if it is in the list of staff images for the school
+NUMERIC FeaturedComp::StaffWantsFeatured(&dbase,BasePosition)
+{
+	// fWhoGets : 0 = students, 1 = students and staff, 2 = determine from a field in the subject info table
+	if (<fWhoGets> == 0)
+	{
+		return 0;
+	}
+	else if (<fWhoGets> == 1)
+	{
+		return 1;
+	}
+	else
+	{
+		Qty = GetQtyFromBase(dbase,<BasePosition>,FALSE);
+	}
+
+	return (<Qty> > 0 ? 1 : 0);}
+
+NUMERIC FeaturedComp::KidWantsFeatured(&dbase,BasePosition)
+{
+	if (<fWhoGets> != 2)
+	{
+		return 1;
+	}
+	else
+	{
+		Qty = GetQtyFromBase(dbase,<BasePosition>,TRUE);
+	}
+
+	return (<Qty> > 0 ? 1 : 0);
+}
+
+NUMERIC FeaturedComp::GetQtyFromBase(&dbase,BasePosition,Kid)
+{
+	MyPath = GetIFilePath(<BasePosition>);
+	if (IsNull(~<MyPath>~))
+	{
+		return 0;
+	}
+
+	if (<Kid> && IsStaffImage(~<MyPath>~))
+	{
+		return 0;
+	}
+	else if (!<Kid> && !IsStaffImage(~<MyPath>~))
+	{
+		return 0;
+	}
+	MySubjectID = GetSubjectID(dbase,~<MyPath>~);
+	if (IsNull(~<MySubjectID>~))
+	{
+		return 0;
+	}
+
+	Qty = GetFeaturedQty(dbase,~<MySubjectID>~);
+	return <Qty>;
+}
+
+NUMERIC FeaturedComp::GetFeaturedQty(&dbase,SubjectID)
+{
+	Qty = 0;
+	Restriction = GetFeaturedRestriction();
+	Query = ~Select * from SubjectInfo<fInfoType> Where OrderID = '<fOrderID>' And SubjectID = '<SubjectID>'~;
+	
+	if (!IsNull(~<Restriction>~))
+	{
+		Query = ~<Query> And ( <Restriction> )~;
+	}
+	else
+	{
+		Query = ~<Query> )~;
+	}
+	if ( !PGenConList( FieldList,Connection,dBase,Lock,BatchOptimistic,Cursor,Static,QUERY,~<Query>~ ) )
+	{
+		FieldList( GetErrorDescription,0,theErr );
+		Invoke( ShowWarning,Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		return FALSE;
+	}
+
+	CountRecords = FieldList( NumEntries );
+
+	if (FieldList(GetFirst,Item))
+	{
+		return TRUE;	
+	}
+	return FALSE;
+}
+
+
+
+STR FeaturedComp::GetSubjectID(&dbase,Path)
+{
+	SubjectID = ~~;
+	Query = ~Select SubjectID from Images Where Path = '<Path>'~;
+	if ( !PGenConList( SubjectIDList,Connection,dBase,Lock,BatchOptimistic,Cursor,Static,QUERY,~<Query>~ ) )
+	{
+		SubjectIDList( GetErrorDescription,0,theErr );
+		Invoke( ShowWarning,Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		return ~~;
+	}
+
+	if (SubjectIdList(GetFirst,Item))
+	{
+		Item(GetValue,SubjectID,SubjectID);
+	}
+	return ~<SubjectID>~;
+}
+
+
+STR FeaturedComp::GetIFilePath(PositionInbaseList)
+{
+	BaseNodeList(GetAt,<PositionInbaseList>,Item);
+	Item(GetValue,Ifile,Path);
+	return ~<Path>~;
+}
+
+NUMERIC FeaturedComp::RestoreBase()
+{
+	return CopyBase();
+}
+
+
+NUMERIC FeaturedComp::FillCountableNodes()
+{
+	currentPosition = 0;
+	currentListPosition = -1;
+	Entries = BaseNodeList(ChildCount);
+
+	// copy from the baseline all non staff members into an empty  countable node
+	while (BaseNodeList(GetAt,<currentPosition> ,BaseWorkingNode))
+	{
+		if (<currentPosition> != <fFeaturedImagePosition>) // bypass featured node
+		{
+			BaseWorkingNode(GetValue,IsStaff,IsStaff);
+			BaseWorkingNode(GetValue,isCountable,isCountable);
+			if (!<isStaff> && <isCountable>)
+			{
+				// found a node in the base that has a kid. 
+				// fill the next unused countable node with this kid
+				FillNextCurrentNode(BaseWorkingNode,currentListPosition);
+			}
+		}
+		currentPosition = (<currentPosition> + 1 ) % <Entries>;
+		if ( ! <currentPosition>)
+		{
+			break;
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC FeaturedComp::FillFeaturedNode()
+{
+	if (BaseNodeList(GetAt,<fFeaturedImagePosition>,BaseWorkingNode)) // this is the position in the base list of the featured subject
+	{
+		BaseWorkingNode(GetValue,~Ifile~,Path);
+		BaseWorkingNode(GetValue,~Text~,Text);
+		FeaturedNode(SetValue,~Ifile~,~<Path>~);
+		FeaturedNode(SetValue,~Text~,~<Text>~);
+		FeaturedNode(SetValue,~Used~,1 );
+		return TRUE;
+	}
+	return FALSE;
+}
+
+NUMERIC FeaturedComp::Rotate1NonStaff()
+{
+	ReturnOnFailure( FillFeaturedNode() );  // uses fFeaturedImagePosition
+	ReturnOnFailure( FillCountableNodes() );
+	return TRUE;
+}
+
+NUMERIC FeaturedComp::FillNextCurrentNode(&BaseWorkingNode,&currentListPosition)
+{
+	BaseWorkingNode(GetValue,Ifile,Ifile);
+	BaseWorkingNode(GetValue,Text,Text);
+	CurrentNodeList(SetCurrentPosition,<++currentListPosition>);
+	more = CurrentNodeList(GetCurrent,CurrentWorkingNode);
+	count = 0;
+	while (<more>)
+	{
+		CurrentWorkingNode(GetValue,IsStaff,IsStaff);
+		CurrentWorkingNode(GetValue,~Used~,Used);
+		CurrentWorkingNode(GetValue,~IsCountable~,IsCountable);
+		Used = Numeric(~<Used>~);
+		if (!<isStaff> && !<Used> && <IsCountable>)
+		{
+			BaseWorkingNode(GetValue,~Ifile~,Path);
+			BaseWorkingNode(GetValue,~Text~,Text);
+			CurrentWorkingNode(SetValue,~Ifile~,~<Path>~);
+			CurrentWorkingNode(SetValue,~Text~,~<Text>~);
+			CurrentWorkingNode(SetValue,~Used~,~1~);
+			CurrentWorkingNode(GetValue,NodeNumber, NodeNumber);
+			return true;
+		}
+		more = CurrentNodeList(GetNext,CurrentWorkingNode);
+		++currentListPosition;
+	}
+	return false;
+}
+
+// finds the position in the base list of
+// the next featured staff image and stores the answer in
+NUMERIC FeaturedComp::GetNextNonFeaturedStaff(&NonFeaturedStaffPosition)
+{
+	// fFeaturedImagePosition contains the position in the BaseNodeList
+	// of the featured image
+	Entries = BaseNodeList(ChildCount);
+	if (<NonFeaturedStaffPosition> == -1)
+	{
+		currentPosition = 0;		
+	}
+	else
+	{
+		currentPosition = (<NonFeaturedStaffPosition> + 1 ) % <Entries>;		
+		if (<currentPosition> == 0)
+		{
+			return FALSE;
+		}
+	}
+
+	while (BaseNodeList(GetAt,<currentPosition>,WorkingNode))
+	{
+		WorkingNode(GetValue,IsCountable,IsCountable);
+		WorkingNode(GetValue,IsStaff,IsStaff);
+		if (<IsCountable> && <IsStaff> && <currentPosition> != <fFeaturedImagePosition>)
+		{
+			NonFeaturedStaffPosition = <currentPosition>;
+			break;
+		}
+		currentPosition = <++currentPosition> % <Entries>;
+		if (<currentPosition> == 0)
+		{
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+NUMERIC FeaturedComp::MarkStaffNodeEmpty()
+{
+	if (<StaffDisplacementMode> == 0)
+	{
+		if (CurrentNodeList(GetAt,<fFeaturedImagePosition>,StaffNode))
+		{
+			StaffNode(SetValue,Ifile,~~);
+			StaffNode(SetValue,Text,~~);
+			StaffNode(SetValue,style,~~);
+			StaffNode(SetValue,Used,1);
+			StaffNode(SetValue,WriteOutEmptyNode,1);
+		}
+	}
+	return TRUE;
+}
+
+NUMERIC FeaturedComp::MarkLastStaffPosition()
+{
+	if (<StaffDisplacementMode> == 1)
+	{
+		// 1 = shuffle staff, empty at last staff position,
+		position = GetLastStaffPosition();
+		if (<position> >= 0)
+		{
+			if (CurrentNodeList(GetAt,<position>,CurrentNode))
+			{
+				CurrentNode(SetValue,Used,1);	// leave empty
+				CurrentNode(SetValue,WriteOutEmptyNode,1);
+
+			}
+		}
+	}
+	else if (<StaffDisplacementMode> == 2)
+	{
+		position = GetLastStaffPosition();
+		if (<position> >= 0)
+		{
+			if (CurrentNodeList(GetAt,<position>,CurrentNode))
+			{
+				CurrentNode(SetValue,IsStaff,0);	// allow shuffle of kids into last staff position
+			}
+		}
+	}
+	return TRUE;
+}
+
+NUMERIC FeaturedComp::FillNonFeaturedStaff()
+{
+	NonFeaturedStaffPosition = -1;
+	// is there another staff position?
+	result = GetNextNonFeaturedStaff(NonFeaturedStaffPosition);
+											// image from the base list
+	if (!<result>)
+	{ 
+		return true; 
+	}
+
+	// 0 = leave staff node empty
+	// 1 = shuffle staff, empty at last staff position,
+	// 2 = shuffle staff, shuffle kids into last staff position
+	while (<result>)
+	{
+		BaseNodeList(GetAt, <NonFeaturedStaffPosition>,Base);
+		Base(GetValue,Ifile,IFile);  
+		Base(GetValue,text,text);
+		Base(GetValue,style,style);
+
+		// if staff displacement is 0, just transfer from base
+
+		more = CurrentNodeList(GetFirst,CurrentNode);
+		//inc = 0;
+		while (<more>)
+		{
+			CurrentNode(GetValue,IsStaff,IsStaff);
+			CurrentNode(GetValue,Used,Used);
+			//++inc;
+			if (<IsStaff> && !<Used>)
+			{
+				CurrentNode(SetValue,Ifile,~<ifile>~);
+				CurrentNode(SetValue,text,~<text>~);
+				CurrentNode(SetValue,style,~<style>~);
+				CurrentNode(SetValue,used,~1~);
+				break;
+			}
+			more = CurrentNodeList(GetNext,CurrentNode);
+		}
+		result = GetNextNonFeaturedStaff(NonFeaturedStaffPosition);
+	}
+	return TRUE;
+}
+
+NUMERIC FeaturedComp::GetLastStaffPosition()
+{
+	position = BaseNodeList(ChildCount);
+	more = BaseNodeList(GetLast,BaseNode);
+	while (<more>)
+	{
+		--position;
+		BaseNode(GetValue,IsCountable,IsCountable);
+		BaseNode(GetValue,IsStaff,IsStaff);
+		if (<IsStaff> && <IsCountable>)
+		{
+			return <position>;
+		}
+		more = BaseNodeList(GetPrev,BaseNode);
+	}
+	return -1;
+}
+
+NUMERIC FeaturedComp::Rotate1Staff()
+{
+	ReturnOnFailure( FillFeaturedNode() );		// uses fFeaturedImagePosition
+	ReturnOnFailure( MarkStaffNodeEmpty()) ;	// uses fFeaturedImagePosition
+	ReturnOnFailure( FillNonFeaturedStaff() ); 
+	MarkLastStaffPosition();
+	ReturnOnFailure( FillWithKids() );			// uses fFeaturedImagePosition
+	return TRUE;
+
+}
+
+
+NUMERIC FeaturedComp::FillWithKids()
+{
+	currentPosition = 0;
+	Entries = BaseNodeList(ChildCount);
+	currentListPosition = -1;
+
+	// copy from the baseline all non staff members into an empty  countable node
+	while (BaseNodeList(GetAt,<currentPosition> ,BaseWorkingNode))
+	{
+		if (<currentPosition> != <fFeaturedImagePosition>) // bypass featured node
+		{
+			BaseWorkingNode(GetValue,IsStaff,IsStaff);
+			BaseWorkingNode(GetValue,isCountable,isCountable);
+			if (!<isStaff> && <isCountable>)
+			{
+				// found a node in the base that has a kid. 
+				// fill the next unused countable node with this kid
+				FillNextCurrentNode(BaseWorkingNode,currentListPosition);
+			}
+		}
+		currentPosition = (<currentPosition> + 1 ) % <Entries>;
+		if ( ! <currentPosition>)
+		{
+			break;
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC FeaturedComp::GetBaseFeaturedNode()
+{
+	FeaturedNodeAddress = 0;
+	CurrentPosition = 0;
+	while (BaseNodeList(GetAt,<CurrentPosition>,WorkingNode))
+	{
+		WorkingNode(GetValue,~Featured~,IsFeatured);
+		if (<isFeatured>)
+		{
+			// found a node that has a kid
+			FeaturedNodeAddress = WorkingNode(GetObjectReference);
+			break;
+		}
+		++CurrentPosition;
+	}
+	return (<FeaturedNodeAddress> != 0);
+}
+// generates Private FeaturedNode
+NUMERIC FeaturedComp::GetFeaturedNode()
+{
+	FeaturedNodeAddress = 0;
+	CurrentPosition = 0;
+	while (CurrentNodeList(GetAt,<CurrentPosition>,WorkingNode))
+	{
+		WorkingNode(GetValue,~Featured~,IsFeatured);
+		if (<isFeatured>)
+		{
+			// found a node that has a kid
+			FeaturedNodeAddress = WorkingNode(GetObjectReference);
+			ForgetPrivate(FeaturedNode);
+			GenCon(FeaturedNode,New,DDFeaturedCompData);
+			FeaturedNode(SetName,FeaturedNode);
+			FeaturedNode(Is,<FeaturedNodeAddress>);
+			Private(FeaturedNode);
+			break;
+		}
+		++CurrentPosition;
+	}
+	return (<FeaturedNodeAddress> != 0);
+}
+
+NUMERIC FeaturedComp::IdentifyBaseStaff()
+{
+	more = BaseNodeList(GetFirst,BaseNode);
+	while (<more>)
+	{
+		BaseNodePath = ~<$con.BaseNode[IFile]>~;
+		isStaff = IsStaffImage(~<BaseNodePath>~);
+		BaseNode(SetValue,IsStaff,<isStaff>);
+		more = BaseNodeList(GetNext,BaseNode);
+	}
+	return TRUE;
+}
+
+NUMERIC FeaturedComp::RemoveNonStaff()
+{
+	CurrentNodeList(SetCurrentPosition,0);
+	while (CurrentNodeList(GetNext,WorkingNode))
+	{
+		IsCountable=~<$con.WorkingNode[IsCountable]>~;
+		if (<IsCountable>)
+		{
+			isStaff = ~<$con.WorkingNode[IsStaff]>~;
+			if (!<isStaff>)
+			{
+				NodeNumber = ~<$con.WorkingNode[NodeNumber]>~;
+				WorkingNodePath=~<$con.WorkingNode[IFile]>~;
+				WorkingNodeText=~<$con.WorkingNode[Text]>~;
+				WorkingNode(SetValue,IsStaff,0);
+				WorkingNode(SetValue,IFile,~~);
+				WorkingNode(SetValue,Text,~~);
+				//Log(Session,~Node <NodeNumber> contains a non staff image <WorkingNodePath> and text <WorkingNodeText> and has been removed~);
+			}
+		}
+	}
+	return TRUE;
+}
+
+
+NUMERIC FeaturedComp::RemoveAll()
+{
+	CurrentNodeList(SetCurrentPosition,0);
+	while (CurrentNodeList(GetNext,WorkingNode))
+	{
+		IsCountable=~<$con.WorkingNode[IsCountable]>~;
+		if (<IsCountable>)
+		{	
+			WorkingNode(SetValue,IFile,~~);
+			WorkingNode(SetValue,Text,~~);
+			
+		}
+	}
+	return TRUE;
+}
+
+NUMERIC FeaturedComp::IsStaffImage(Path)
+{
+	if (IsNull(~<Path>~))
+	{
+		return FALSE;
+	}
+	more = StaffImagesList(GetFirst,WorkingStaffImage);
+	while (<more>)
+	{
+		StaffImagePath = ~<$pcon.WorkingStaffImage[Path]>~;
+		if (SimilarStr(~<Path>~,~<StaffImagePath>~))
+		{
+			return TRUE;
+		}
+		more = StaffImagesList(GetNext,WorkingStaffImage);
+	}
+	return FALSE;
+}
+// generates Private StaffImagesList, for the entire school
+NUMERIC FeaturedComp::GetStaffPositions(&dBase)
+{	
+
+	StaffRestrict = ~~;
+	if (!IsNull(~<fStaffRestriction>~))
+	{
+		StaffRestrict = ~AND ( <fStaffRestriction> )~;
+	}
+	else
+	{
+		PGenConList( StaffImagesList);
+		Private(StaffImagesList);
+		return TRUE;
+	}
+
+	// Because a shoot may contain n orders, find the order ids for the shoot
+	// and incorporate this into the query.  Failure to do this returned
+	// all matching subject IDs on any order.  01/28/09
+	OrderIDList = ~~;	
+	myCount = GetOriginalOrderIDsForSubjectInfo(~<fOrderID>~,~<fInfoType>~,OrderIDList,1);
+
+	Query2 = ~Select * from Images Where OrderID In (<OrderIDList>) AND SubjectID IN (Select SubjectID from SubjectInfo<fInfoType> Where  OrderID = '<fOrderID>' <StaffRestrict>)~;
+	if ( !PGenConList( StaffImagesList,Connection,dBase,Lock,BatchOptimistic,Cursor,Static,QUERY,~<Query2>~ ) )
+	{
+		StaffImagesList( GetErrorDescription,0,theErr );
+		fErrorMsg = Translate(DBMessages,QueryFailed,~<Query2>~,~<theErr>~);
+		return FALSE;
+	}
+	Private(StaffImagesList);
+
+	return TRUE;
+}
+
+// generates Private CurrentNodeList
+NUMERIC FeaturedComp::CopyBase()
+{
+	ForgetPrivate(CurrentNodeList);
+	addr = BaseNodeList(GetCopyOf);
+	if (<addr> )
+	{
+		GenCon(CurrentNodeList,New,DDFeaturedCompData);
+		CurrentNodeList(Is,<addr>);
+		CurrentNodeList(SetName,CurrentNodeList);
+		Private(CurrentNodeList);
+	}
+	return ( <addr> != 0);
+
+}
+
+NUMERIC FeaturedComp::CreateOrderItem(&dBase,&Data,&NodeDetailsData,theCmd,theDesc,&ItemID)
+{
+	Log( Session,~Generate Featured Composite for:  <theDesc>~ );
+	Invoke( ShowProgress,~Checking <theDesc>~ );
+
+	ItemID = 0;
+
+	ProductID = ~<$con.Data[Collection]>~;
+	if ( !dBase( GetValuesFor,~Select ProductLayoutPath From Products Where ID = '<ProductID>'~,LayoutPath ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		fErrorMsg = TR(Composites,ProductLayoutPathError,~<ProductID>~,~<theErr>~);
+		return FALSE;
+	}
+
+	ImagesOrderIDList = ~<$con.Data[ImagesOrderList]>~;
+	SubjectInfoOrderID = ~<$con.Data[SubjectOrderID]>~;
+	InfoType = ~<$con.Data[InfoType]>~;
+
+	// CCList was made global by GenerateBase
+
+	CountRecords = CCList( NumEntries );
+	if (<CountRecords> < 1)
+	{
+		ErrorMsg = TR(Composites,NoImages,~<theDesc>~);
+		Log(Session,~<ErrorMsg>~);
+		return TRUE;
+	}
+// in CreateOrderItem
+	CCList( SetConnection,~~ );	// DISCONNECT LIST FROM THE DATABASE
+	CountRecords = CCList( NumEntries );
+
+	OrderID = ~<$con.Data[OrderID]>~;
+	QtyType = ~<$con.Data[Quantity]>~;
+	Quantity = ~<$con.Data[QtyN]>~;
+	MergeWithSubjectPackages = ~<$con.Data[MergeWithSubjectPackages].numeric>~;
+	if (<Quantity> < 1)
+	{  Quantity = 1;  }
+
+	// ** Create the Job
+	theDesc = ~<theDesc>\<CountRecords>~;
+	theDesc = GetTypeNameFromDesc(~<theDesc>~);
+
+	ImagePath = ~~;
+	Global(ImagePath);
+
+	if (BaseNodeList(GetAt,<fFeaturedImagePosition>,BaseWorkingNode)) // this is the position in the base list of the featured subject
+	{
+		BaseWorkingNode(GetValue,~Ifile~,ImagePath);
+		GetItemSequence(dbase,~<ImagePath>~,~<OrderID>~,<MergeWithSubjectPackages>);
+		ItemID = <NextOrderItem>;
+	}
+	else
+	{
+		newSequence=BaseOrderItem::CalcNext( dbase,~<OrderID>~,Sequence );
+		ItemID=BaseOrderItem::CalcNext( dbase,~<OrderID>~,ID );
+		subsequence = 0;
+	}
+
+	JobPath = CreateJobPath( ~<OrderID>~,~<ItemID>~ );
+
+	if (~<JobPath>~ == ~~)
+	{	return FALSE;    }
+
+// in CreateOrderItem
+
+	Invoke( ShowProgress,~Adding Order Item <ItemID> for <theDesc>~ );
+	if ( !File( Job,UnicodeOutput,Open,~<JobPath>~,Create,Write ) )
+	{
+		fErrorMsg = TR(Composites,UnableToOpenFile,~<JobPath>~);
+		return FALSE;
+	}
+
+	Job( ~FileType: Job~ );
+	Job( ~LayoutPath: |<LayoutPath>|~ );
+	Job( ~ ~ );
+
+	// *** Add Named Detail Nodes to the Job ***
+	
+	StyleWritten = 0;
+//	StringList(CCIDList,New);
+
+// in CreateOrderItem
+	another = CurrentNodeList(GetFirst,Node);
+
+	while (<another>)
+	{
+		Node(GetValue,~WriteOutEmptyNode~,WriteOutEmptyNode);
+		Node(GetValue,~Ifile~,imagePath);
+		Node(GetValue,~Text~,TextField);
+		Node(GetValue,~Style~,Style);
+		Node(GetValue,Featured,IsFeat);
+		Node(GetValue,~NodeName~,NodeName);
+		Node(GetValue,~NodeNumber~,NodeNumber);
+		if (SimilarStr(~<NodeName>~ , ~Background~) )
+		{
+			Job( ~Main:~ );
+		}
+		else if (NodeIsCountable(~<ProductID>~,~<NodeName>~) )
+		{
+			if (~<ImagePath>~ == ~~)  // don't create CC node if no image.
+			{
+					
+				// if not a staff position, and not leaving a node empty, don't create a 
+				// cc node.  If a staff position and leaving a node empty,
+				// I must create a CC node in order to increment the layout head size
+				// by 1
+				if (<WriteOutEmptyNode> == 0)
+				{
+					another = CurrentNodeList(GetNext,Node);
+					continue;
+				}
+			}
+			Translated = Translate(CompJobDetailsMsgs,DefaultNode);
+			if (~<NodeName>~ != Translate(CompJobDetailsMsgs,DefaultNode) )
+			{
+				Job( ~CC: $<NodeName>~ );
+			}
+			else
+			{
+				if (!<StyleWritten>)
+				{
+					StyleWritten = 1;
+					if ((~<DefaultStyle>~ != ~ ~ )  &&  (~<DefaultStyle>~ != ~~ ))
+					{
+						Job(~Default:~);
+						AddStyleInfo(~<DefaultStyle>~, Job);
+						Job( ~ ~ );
+					}
+				}
+				Job( ~CC: <NodeNumber>~ );
+			}
+
+			//if (RenderList(GetNamedNode, ~<NodeName>~, theNode) )
+			//{
+			//	theNode(GetValues,~INTID:~,aNodeID);
+			//	CCIDList(AddString,~<$str.$aNodeID.%06ld>~,InAlphaOrder);
+			//}
+		}
+		else
+		{
+			Job( ~IL: $<NodeName>~ );
+		}
+
+// in CreateOrderItem
+		if (~<ImagePath>~ != ~~)
+		{
+			Job( ~    IFile: |<ImagePath>|~ );
+		}
+
+		if (~<TextField>~ != ~~)
+		{
+			Job( ~    Text: |<TextField>|~ );
+		}
+
+		if ((~<Style>~ != ~ ~ ) && (~<Style>~ != ~~ ))
+		{
+			if ((~<ImagePath>~ != ~~) || (~<TextField>~ != ~~))  // don't apply style if no image/text
+			{
+				if (!AddStyleInfo(~<Style>~, Job))
+				{
+				}
+			}
+		}
+		Job( ~ ~ );
+		another = CurrentNodeList(GetNext,Node);
+	}
+	
+// in CreateOrderItem
+
+	if (BaseNodeList(GetAt,<fFeaturedImagePosition>,BaseWorkingNode)) // this is the position in the base list of the featured subject
+	{
+		BaseWorkingNode(GetValue,~Ifile~,ImagePath);
+	}
+
+	ImagesOrderID = ~~;
+	ImagesSubjectID = ~~;
+	GetSubjectIDFromPath(dbase,~<ImagePath>~, ImagesOrderID,ImagesSubjectID);
+	
+	// Add record to database
+	OrderItemPreviewPath = MakePreviewPathFromPath( ~<JobPath>~,TRUE );
+	Files( Delete,~<OrderItemPreviewPath>~ );
+
+	if ( !AddOrderItemToDataBase(dBase,<ItemID>,~<OrderID>~,~<ProductID>~,~<Quantity>~,<newSequence>,~<JobPath>~,~Composite~,~<theDesc>~,<subsequence>,0,~~,~~,~~,~~,~<ImagesOrderID>~,~<ImagesSubjectID>~ ) )	// ADD THE ORDER ITEM TO THE DATABASE
+	{
+		Files( Delete,~<JobPath>~ );
+		fErrorMsg = TR(Composites,CouldNotAddOrderItem);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+VOID FeaturedComp::GetItemSequence(&dbase,ImagePath,OrderID,MergeWithSubjectPackages)
+{
+	subSequence = 0;
+	
+	if (<MergeWithSubjectPackages>)
+	{
+		BaseOrderItem(New,Obj);
+		if ( Obj.FindSubjPackage(dbase,~<ImagePath>~,OrderIDSymbol,ItemSequence,ItemSubsequence))
+		{
+			NextOrderItem = BaseOrderItem::CalcNext( dbase,~<OrderID>~,ID );
+			newSequence = <ItemSequence> ;
+			subSequence = <ItemSubsequence> + 1;
+			// update the order items having a matching sequence number and subsequence greater than or equal to the item dropped onto
+			SQLCommand = ~Update OrderItems Set Subsequence = Subsequence + 1 Where OrderID = '<OrderID>' AND Sequence = <newSequence> AND Subsequence >= <subSequence> ~;
+			if (!dbase(Cmd, ~<SQLCommand>~))
+			{
+				dBase(GetErrorDescription, theErr);
+				Log( Session,~Unable to update the sequence number for items having an sequence number >= <newSequence>.  <theErr>~ );
+			}
+
+			PassBack(subSequence);
+			PassBack(newSequence);
+			PassBack(NextOrderItem);
+			return;
+		}			
+	}
+	
+	newSequence=BaseOrderItem::CalcNext( dbase,~<OrderID>~,Sequence );
+	NextOrderItem=BaseOrderItem::CalcNext( dbase,~<OrderID>~,ID );
+	PassBack(subSequence);
+	PassBack(newSequence);
+	PassBack(NextOrderItem);
+}
+
+VOID FeaturedComp::GetFeaturedNodeName()
+{
+	if ( GetSystemSettings( ~GridLayouts~,~FeaturedNodeName~,FeaturedName,Enabled ) )
+	{
+		if (!IsNull(~<FeaturedName>~))
+		{
+			fFeaturedNodeName = ~<FeaturedName>~;
+		}
+	}
+	
+}
+
+VOID FeaturedComp::PrintCCList(&CCList)
+{
+	more = CCList(GetFirst,Rec);
+	while (<more>)
+	{
+		id = ~<$pcon.Rec[SubjectID]>~;
+		Log(Session,~Subject ID <id> read~);
+		more = CCList(getNext,Rec);
+	}
+}
+// generates Privates DefaultStyle,BaseNodeList
+/*
+
+1.  Get subject info records
+2.  Get the number of node detail records
+3.  Find the layout containing the correct number of heads (subject info records plus node detail records that are used in 
+	countable nodes)
+4.  Parse the layout into a render list
+5.	Find the featured node in the layout
+6.  Build the base node list.  There is one entry added to this list for each node detail record that is countable and
+	resolves to an image path, plus one for the background
+7.  Add an entry to the base node list for each subject info record
+
+*/
+NUMERIC FeaturedComp::GenerateBase( &dBase,&Data,&NodeDetailsData,theCmd,theDesc,&ItemID,CountFeaturedNode )	// RUNS ON A THREAD
+{
+	ItemID = 0;
+
+	if ( !GetSortBy(~<$con.Data[SortBy]>~, theSortby,theRestriction) ) // Data parameter
+	{	
+		fErrorMsg = Translate(DBMessages,QueryFailed,~<SortName>~);
+		return FALSE;
+	}
+
+	ProductID = ~<$con.Data[Collection]>~;
+	if ( !dBase( GetValuesFor,~Select ProductLayoutPath From Products Where ID = '<ProductID>'~,LayoutPath ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		fErrorMsg = TR(Composites,ProductLayoutPathError,~<ProductID>~,~<theErr>~);
+		return FALSE;
+	}
+
+	ImagesOrderIDList = ~<$con.Data[ImagesOrderList]>~;
+	SubjectInfoOrderID = ~<$con.Data[SubjectOrderID]>~;
+	InfoType = ~<$con.Data[InfoType]>~;
+	MultiImages = ~<$con.Data[MultiImages]>~;
+	Global(ImagesOrderIDList,theCmd,theSortby,SubjectInfoOrderID,InfoType,MultiImages); // global to give access to UserCompJobMacros.txt
+
+
+	// **Get the Image Records
+	// As Clause added for Jet databases.  See problem 6280
+	theQuery = ~Select *, SubjectInfo<infoType>.SubjectID As SubjectID from SubjectInfo<infoType>, Images where SubjectInfo<infoType>.Orderid = '<SubjectInfoOrderID>' AND Images.OrderId In (<ImagesOrderIDList>) and SubjectInfo<infoType>.SubjectId = Images.SubjectId And Images.Rejected <> 1 And <theCmd> Order By <theSortBy>,Images.SubjectId,Images.OrderId,Images.roll,Images.frame~;
+
+	if ( !PGenConList( CCList,Connection,dbase,Lock,BatchOptimistic,Cursor,Static,QUERY,~<theQuery>~ ) )
+	{
+		CCList( GetErrorDescription,0,theErr );
+		fErrorMsg = Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~);
+		return FALSE;
+	}
+
+	CountRecords = CCList( NumEntries );
+	if (<CountRecords> < 1)
+	{
+		ErrorMsg = TR(Composites,NoImages,~<theDesc>~);
+		Log(Session,~<ErrorMsg>~);
+		return FALSE;
+	}
+//generatebase
+	CCList( SetConnection,~~ );	// DISCONNECT LIST FROM THE DATABASE
+
+    HandleMultiImages(dbase,<MultiImages>,CCList);
+
+	CountRecords = CCList( NumEntries );
+	// Leave the subject info records global.  They are used in macros, such as FindMatchingImage
+	moreRecords = CCList(GetFirst,SubjectImgRecord);	// SubjectImgRecord must be defined global here because CountCCDetails may use macros that use it 
+	Global(SubjectImgRecord,CCList);					// global to give access to UserCompJobMacros.txt
+
+	//** Verify Appropriate # Layout File Exists
+	NumCCNodes = <CountFeaturedNode> + <CountRecords> + CountCCDetails(~<ProductID>~); // CountCCDetails ignores the featured node in node details
+
+	if (!Files( GetGridLayout,~<LayoutPath>~,<NumCCNodes>,UsePath ) || (~<UsePath>~ == ~~) )
+	{
+		fErrorMsg =  TR(Composites,NoLayoutAt,~<theDesc>~,~<LayoutPath>~,~<NumCCNodes>~);
+		return FALSE;
+	}
+
+	// ** Build Render List
+	if ( !Document( theJob,ParseFile,~<UsePath>~ ) )  // theJob - ScannerUDocument
+	{
+		fErrorMsg = TR(Composites,ParseError,~<UsePath>~);
+		return FALSE;
+	}
+
+	Index = 0;
+	if ( !theJob( GetRenderList,<Index++>,RenderList ) )  // RenderList - ScannerRenderList
+	{ 
+		fErrorMsg = TR(Composites,NoRenderList,~<UsePath>~);
+		return FALSE;
+	}
+
+	if (RenderList(GetNodeByNodeName,~<fFeaturedNodeName>~,FeaturedNode))
+	{
+		FeaturedNode(GetValue,~INTID:~,FeaturedNodeID);
+	}
+	else
+	{
+		fErrorMsg = TR(Composites,NoFeaturedNode,<NumCCNodes>,~<LayoutPath>~);
+		return FALSE;
+	}
+
+
+	OrderID = ~<$con.Data[OrderID]>~;
+
+
+	theDesc = ~<theDesc>\<CountRecords>~;
+	theDesc = GetTypeNameFromDesc(~<theDesc>~);
+
+	ImagePath = ~~;
+	Global(ImagePath);								// global to give access to UserCompJobMacros.txt
+
+	// *** Add Named Detail Nodes to the Job ***
+	DefaultStyle = ~ ~;
+	Private(DefaultStyle);
+	DefaultTextField = ~~;
+	StringList(CCIDList,New);
+
+
+	ForgetPrivate(BaseNodeList);
+	GenCon(BaseNodeList,New,DDFeaturedCompData);
+	Private(BaseNodeList);
+	BaseNodeList( SetName,~BaseNodeList~ ) ;
+// generatebase
+	FeaturedStyle = ~~;
+	Translated = Translate(CompJobDetailsMsgs,DefaultNode);
+	more = NodeDetailsData(GetFirst,DetailRecord);
+	while ( <more> )
+	{
+		NodeName = ~<$con.DetailRecord[NodeName]>~;
+		if (SimilarStr(~<NodeName>~,~<fFeaturedNodeName>~))
+		{
+			FeaturedStyle = ~<$con.DetailRecord[Style]>~;  // save for later
+			more = NodeDetailsData(GetNext,DetailRecord);
+			continue;
+		}
+		if (~<NodeName>~ != ~<Translated>~ )
+		{
+			ImagePath = ~<$con.DetailRecord[Image]>~;
+			Style = ~<$con.DetailRecord[Style]>~;
+
+			if (SimilarStr(~<NodeName>~ ,~Background~) )
+			{
+				ForgetLocal(NodeGC);
+				GenCon(NodeGC,New,DDFeaturedCompData);
+				NodeGC(SetName,NodeGC);
+				NodeGC(SetValue,NodeLabel,~Main:~);
+				NodeGC(SetValue,NodeName,~<NodeName>~);
+				NodeGC(SetValue,NodeNumber,-9001);
+				NodeGC(SetValue,Style,~<Style>~);
+				NodeGC(AddTo,BaseNodeList);
+			}
+// generatebase
+			else if (NodeIsCountable(~<ProductID>~,~<NodeName>~) )
+			{
+				if (~<ImagePath>~ == ~~)  // don't create CC node if no image.
+				{
+					//DetailRecord(GetValue,Image,ImageFieldvalue);
+					//StringContents(ReplaceCharWithCharIn,~<~,~ ~,ImageFieldValue);
+					//StringContents(ReplaceCharWithCharIn,~>~,~ ~,ImageFieldValue);
+					//fErrorMsg=Tr(Composites,CouldNotResolveNodeDetails, ContentsOf(ImageFieldValue));
+					//return FALSE;
+					more = NodeDetailsData(GetNext,DetailRecord);
+					continue;
+				
+				}
+				ForgetLocal(NodeGC);
+				GenCon(NodeGC,New,DDFeaturedCompData);
+				NodeGC(SetName,NodeGC);
+				NodeGC(SetValue,NodeLabel,~CC:~);
+				NodeGC(SetValue,NodeName,~<NodeName>~);
+				NodeGC(SetValue,IsCountable,1);
+				NodeGC(AddTo,BaseNodeList);
+				NodeGC(SetValue,Style,~<Style>~);
+				if (RenderList(GetNamedNode, ~<NodeName>~, theNode) )
+				{
+					theNode(GetValues,~INTID:~,aNodeID);
+					CCIDList(AddString,~<$str.$aNodeID.%06ld>~,InAlphaOrder);
+				}
+				else
+				{
+					fErrorMsg = TR(Composites,CouldNotFindNamedNode,~<NodeName>~,~<NumCCNodes>~);
+					return FALSE;
+				}
+
+			}
+			else
+			{
+				ForgetLocal(NodeGC);
+				GenCon(NodeGC,New,DDFeaturedCompData);
+				NodeGC(SetValue,NodeName,~<NodeName>~);
+				NodeGC(SetName,UncountableNodeGC);
+				NodeGC(SetValue,NodeLabel,~IL:~);
+				NodeGC(SetValue,Style,~<Style>~);
+				NodeGC(AddTo,BaseNodeList);
+			}
+// generatebase
+			if (~<ImagePath>~ != ~~)
+			{
+				NodeGC(SetValue,Ifile,~<ImagePath>~);
+			}
+
+			TextField = ~<$con.DetailRecord[Text]>~;
+			if (~<TextField>~ != ~~)
+			{
+				NodeGC(SetValue,Text,~<TextField>~);
+			}
+			ForgetGlobal(ImagesSubjectID);  // defined in image path macros
+		}
+// generatebase
+		else //DetailRecord is the default node data
+		{
+			DetailRecord(GetValue,Text,DefaultTextField);
+			DefaultStyle = ~<$con.DetailRecord[Style]>~;
+		}
+
+		more = NodeDetailsData(GetNext,DetailRecord);
+	}
+
+	BaseNodeListCount = BaseNodeList(ChildCount);
+	//*** Determine Node numbers used by countable named nodes.
+	UsedCCId = 0;
+	moreIds = CCIDList(GetFirstString,UsedCCId);
+
+
+	// *** Add Searched for (kids) nodes to the Job ***
+	Node = 1;  // 
+	xxCount = CCList(Count);
+
+	moreRecords = CCList(GetFirst,SubjectImgRecord);
+
+	Global(SubjectImgRecord);
+	while ( <moreRecords> )
+	{
+		Global(SubjectImgRecord);
+		while ( <moreIds> && (<Node> == <UsedCCId>))
+		{
+			++Node;
+			moreIds = CCIDList(GetNextString,UsedCCId);
+		}
+// generatebase
+		ImagePath = ~<$pcon.SubjectImgRecord[Path]>~;
+		if (IsNull(~<ImagePath>~))
+		{
+			Log(Session,~Image Path is a null string for subject ID record having order ID = <SubjectInfoOrderID> and subject id = <$pcon.SubjectImgRecord[ID]>~);
+		}
+		ForgetLocal(NodeGC);
+		GenCon(NodeGC,New,DDFeaturedCompData);
+		NodeGC(SetName,NodeGC);
+		NodeGC(SetValue,NodeLabel,~CC:~);
+		if (<FeaturedNodeID> == <Node>)
+		{
+			NodeGC(SetValue,Featured,1);
+			NodeGC(SetValue,Style,~<FeaturedStyle>~);
+			FeaturedNodeID = -1;
+		}
+		NodeGC(SetValue,NodeNumber,<Node++>);
+		NodeGC(SetValue,nodename,~<Translated>~);
+		NodeNumb = ~<$con.NodeGC[NodeNumber]>~;
+		NodeGC(SetValue,IFile,~<ImagePath>~);  
+		NodeGC(SetValue,IsCountable,1);  
+		NodeGC(AddTo,BaseNodeList);
+		if (~<DefaultTextField>~ != ~~)
+		{
+			NodeGC(SetValue,Text,~<DefaultTextField>~);  
+		}
+// generatebase
+		ForgetGlobal(SubjectImgRecord);
+		moreRecords = CCList(GetNext,SubjectImgRecord);
+		Global(SubjectImgRecord);
+	}
+	aaa = BaseNodeList(ChildCount);
+	if (<CountFeaturedNode> > 0)
+	{
+		if (GenCon(NodeGC1,New,DDFeaturedCompData))
+		{
+			NodeGC1(SetName,NodeGC1);
+			NodeGC1(SetValue,NodeLabel,~CC:~);
+			if (<FeaturedNodeID> > 0)
+			{
+				// didn't find the featured node up above.  
+				// The featured node must be the last node
+				NodeGC1(SetValue,Featured,1);
+				NodeGC1(SetValue,Style,~<FeaturedStyle>~);
+			}
+			else
+			{
+				NodeGC1(SetValue,Featured,0);
+				NodeGC1(SetValue,Style,~~);
+			}
+			NodeGC1(SetValue,NodeNumber,<Node>);
+			NodeGC1(SetValue,nodename,~<Translated>~);
+			NodeNumb = ~<$con.NodeGC1[NodeNumber]>~;
+			NodeGC1(SetValue,IFile,~~);  
+			NodeGC1(SetValue,IsCountable,1);  
+			NodeGC1(AddTo,BaseNodeList);
+		}
+	}
+	return TRUE;
+}
+
+
+
+
+	

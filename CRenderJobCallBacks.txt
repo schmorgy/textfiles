@@ -1,0 +1,525 @@
+//	CRenderJobCallBacks.txt
+
+
+//	THIS FILE CONTAINS THE SPECIFIC CODE FOR THE RenderJob CLASS
+
+
+//	SOME USEFUL GLOBALS
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+
+int		 gWantDebug = 0 ;
+
+char	*gRenderJob ;
+char	*gRenderJobThread ;
+char	*gADO ;
+
+TCHAR	gErrorMsg[1024] ;
+
+double	gVersion = 2.1 ;
+
+
+//	INITIALIZE THIS SCRIPT
+main()
+{
+//	MessagePumpEnable(0) ;
+
+	//	GET THE CURRENT PROGRAM VERSION
+	UGenCon	*aGC = GetTreeObject( _T("RunVersion"), _T("[SYMBOLS]")) ;
+	if( aGC )
+	{
+		gVersion = aGC->GetDoubleValue(_T("Value")) ;
+	}
+}
+
+
+SetRenderJob( char *thisRenderJob, char *theRenderJobThread )
+{
+	gRenderJob = thisRenderJob ;
+	gRenderJobThread = theRenderJobThread ;
+}
+
+SetADO(char *anADO)
+{
+	gADO = anADO ;
+}
+
+//	THIS ROUTINE ALLOWS THE OVER-RIDING OF THE
+//	JOB ATTRIBUTE STRUCTURE BEFORE SETTING THEM
+//	INTO THE IMA STRUCTURE
+UpdateJobAttributes( char *JobAttrGC, char *QueueGC )
+{
+	TCHAR	PrinterModel[64] ;
+
+	if( gWantDebug )
+	{
+		Debug(gWantDebug) ;
+		ShowGenCon( JobAttrGC ) ;
+	}
+
+}
+
+/*	GetAttrValue( QueueGC, "PrinterModel", PrinterModel ) ;
+	if( stricmp( PrinterModel, "KPDM II" ) == 0 )
+	{
+		//	TURN OFF THE ORDER PUNCH FOR BULLOCK's.
+		SetLongValue( JobAttrGC, "JobEndIndicator", 0L );
+	}
+*/
+
+//	0 = No Pkg, 1 = LUCHT BC Pkg, 2 = LUCHT MP Pkg, 3 = 8670 Pkg
+//	SetLongValue( JobAttrGC, _T("PackageType"), 2L ) ;		//	NO PACKAGE INFO
+
+
+
+//	THIS ROUTINE ALLOWS THE OVER-RIDING OF THE
+//	PAGE ATTRIBUTE STRUCTURE BEFORE SETTING THEM
+//	INTO THE IMA STRUCTURE
+UpdatePageAttributes(char *RenderList, char *PageAttrGC, char *OutputNodeGC, char *QueueGC )
+{
+	int		 result		= TRUE ;
+	long	 DeviceID	= GetLongValue( OutputNodeGC, "INTID:" ) ;
+
+	switch( DeviceID )
+	{
+		case	-9003 :		//	LFCRT & KPDM & KPDM II
+			result = HandleCRTPageAttr( RenderList, PageAttrGC, OutputNodeGC, QueueGC ) ;
+			break ;
+		case	-9004 :		//	LED
+			result = HandleLEDPageAttr( RenderList, PageAttrGC, OutputNodeGC, QueueGC ) ;
+			break ;
+		case	-9005 :		//	XLS
+		case	-9026 :		//	XLS
+			result = HandleXLSPageAttr( RenderList, PageAttrGC, OutputNodeGC ) ;
+			break ;
+		case	-9030 :		//	WINDOWS PRINTER
+			result = HandleLSRPageAttr( RenderList, PageAttrGC, OutputNodeGC ) ;
+			break ;
+	}
+
+	if( result == FALSE )
+	{
+		return( gErrorMsg ) ;
+	}
+
+	return( NULL ) ;
+}
+
+HandleCRTPageAttr( char *RenderList, char *PageAttrGC, char *OutputNodeGC, char *QueueGC )
+{
+	char	*theMainNode	= GetMainNode( RenderList ) ;
+	double	 MainWidth		= GetDoubleValue( theMainNode, "IWidth:" ) ;
+	double	 MainHeight		= GetDoubleValue( theMainNode, "IHeight:" ) ;
+	double	 PaperWidth		= GetDoubleValue( PageAttrGC, "fPageHeight" ) ;
+	double	 PaperAdvance	= GetDoubleValue( PageAttrGC, "fPageWidth" ) ;
+
+	long	 Borderless		= GetLongValue( OutputNodeGC, "Borderless:" ) ;
+
+	TCHAR	 Msg1[1024] ;
+	TCHAR	 OutputLut[1024], LastLut[1024] ;
+	TCHAR	 OutputCal[1024], LastCal[1024] ;
+	long	 CurrentTime, LastTime ;
+
+	Debug(0) ;
+
+//	if( Borderless )	ALWAYS DO THIS BECAUSE OF AN ARBITRARY CHECK IN HOP (NEWDIS)
+//	{
+		PaperWidth	 *= 1.02 ;
+		PaperAdvance *= 1.02 ;
+//	}
+
+	long	 lMainWidth		= MainWidth		* 100 ;	//	ROUND TO 100th PLACE
+	long	 lMainHeight	= MainHeight	* 100 ;	//	FOR THE COMPARISON
+	long	 lPaperWidth	= PaperWidth	* 100 ;	//	BELOW
+	long	 lPaperAdvance	= PaperAdvance	* 100 ;
+
+	//	TELL THE USER TO FIX THEIR PROBLEM !!!
+	if( lMainWidth > lPaperAdvance || lMainHeight > lPaperWidth )
+	{
+		sprintf( gErrorMsg,
+			"%s: The image is too big to print.\r\nImage: (%lf,%lf), Page: (%lf,%lf)",
+			GetName(RenderList), MainWidth, MainHeight, PaperAdvance, PaperWidth ) ;
+		return( FALSE ) ;
+	}
+
+	//	DETERMINE IF WE NEED TO SEND THE CAL LUT AND THE PAPER PACK
+	GetAttrValue( OutputNodeGC, "Lookup:", OutputLut ) ;
+	GetAttrValue( QueueGC, "Lookup", LastLut ) ;
+	GetAttrValue( OutputNodeGC, "PaperCalTable:", OutputCal ) ;
+	GetAttrValue( QueueGC, "PaperCalTable",  LastCal ) ;
+	LastTime = GetLongValue( QueueGC, "LastPrintTime" ) ;
+
+	if( Clock() - LastTime < 60000 &&
+		stricmp( OutputLut, LastLut ) == 0 &&
+		stricmp( OutputCal, LastCal ) == 0 )
+	{
+		SetLongValue( PageAttrGC, "CalColorCount",		0L ) ;
+		SetLongValue( PageAttrGC, "CalExposureCount",	0L ) ;
+		SetLongValue( PageAttrGC, "PaperPackSize",		0L ) ;
+	}
+	else
+	{
+		SetAttrValue( QueueGC, "Lookup",		OutputLut ) ;
+		SetAttrValue( QueueGC, "PaperCalTable", OutputCal ) ;
+	}
+
+	SetLongValue( QueueGC, "LastPrintTime", Clock()) ;
+	return( TRUE ) ;
+}
+
+
+
+HandleLEDPageAttr( char *RenderList, char *PageAttrGC, char *OutputNodeGC, char *QueueGC )
+{
+	char	*theMainNode	= GetMainNode( RenderList ) ;
+	double	 MainWidth		= GetDoubleValue( theMainNode, "IWidth:" ) ;
+	double	 MainHeight		= GetDoubleValue( theMainNode, "IHeight:" ) ;
+	double	 PaperWidth		= GetDoubleValue( PageAttrGC, "fPageHeight" ) ;
+	double	 PaperAdvance	= GetDoubleValue( PageAttrGC, "fPageWidth" ) ;
+	long	 Borderless		= GetLongValue( OutputNodeGC, "Borderless:" ) ;
+
+	TCHAR	 Msg1[1024] ;
+
+	//Debug(1) ;
+
+	if( Borderless )
+	{
+		PaperWidth += 0.304 ;
+	}
+
+	long	 lMainWidth		= MainWidth		* 1000 ;	//	ROUND TO 100th PLACE
+	long	 lMainHeight	= MainHeight	* 1000 ;	//	FOR THE COMPARISON
+	long	 lPaperWidth	= (PaperWidth + 0.005)	 * 1000 ;	//	BELOW
+	long	 lPaperAdvance	= (PaperAdvance	+ 0.005) * 1000 ;
+
+	//	TELL THE USER TO FIX THEIR PROBLEM !!!
+	if( lMainWidth > lPaperAdvance || lMainHeight > lPaperWidth )
+	{
+		sprintf( gErrorMsg,
+			"%s: The image is too big to print.\r\nImage: (%lf,%lf), Page: (%lf,%lf)",
+			GetName(RenderList), MainWidth, MainHeight, PaperAdvance, PaperWidth ) ;
+		return( FALSE ) ;
+	}
+
+	long SendLut = GetLongValue( QueueGC, "LEDSendCalLut" ) ;
+	if( SendLut )
+	{
+		//	RESET THE FLAG TO SAY WE ALREADY SENT THE LUT.
+//		HangTreeObject( PrinterSetupGC, "[Renderers]" ) ;
+		UGenCon *PrinterSetup = GetTreeObject( GetName(QueueGC), _T("[Renderers]") ) ;
+		PrinterSetup->SetLongValue( _T("LEDSendCalLut"), 0L ) ;
+		SetLongValue( QueueGC, "LEDSendCalLut", 0L ) ;
+	}
+	else
+	{
+		SetLongValue( PageAttrGC, "CalColorCount",		0L ) ;
+		SetLongValue( PageAttrGC, "CalExposureCount",	0L ) ;
+	}
+	return( TRUE ) ;
+}
+
+HandleXLSPageAttr( char *RenderList, char *PageAttrGC, char *OutputNodeGC )
+{
+	return( TRUE ) ;
+}
+
+HandleLSRPageAttr( char *RenderList, char *PageAttrGC, char *OutputNodeGC )
+{
+	return( TRUE ) ;
+}
+
+
+
+
+//	THIS ROUTINE ALLOWS THE OVER-RIDING OF THE
+//	PAGE ATTRIBUTE STRUCTURE BEFORE SETTING THEM
+//	INTO THE IMA STRUCTURE
+UpdateImageAttributes(char *RenderList, char *ImageAttrGC, char *OutputNodeGC)
+{
+
+//	double XOffset, YOffset ;
+
+//	SetLongValue( ImageAttrGC, "CenterOnPage", 0 ) ;	//	DEBUG TURN OFF CENTER ON PAGE !
+
+	if( gWantDebug )
+	{
+		Debug(gWantDebug) ;
+		ShowGenCon( ImageAttrGC ) ;
+		ShowGenCon( OutputNodeGC ) ;
+	}
+
+	//	TEST TEST TEST   SWAPPED FOR TEST TEST TEST
+//	XOffset = GetDoubleValue( ImageAttrGC, "StartingHorCoordinate" ) ;
+//	YOffset = GetDoubleValue( ImageAttrGC, "StartingVerCoordinate" ) ;
+
+//	SetDoubleValue( ImageAttrGC, "StartingHorCoordinate", YOffset ) ;
+//	SetDoubleValue( ImageAttrGC, "StartingVerCoordinate", XOffset ) ;
+
+}
+
+/*	NO LONGER USED
+UpdateDBQueue( TCHAR *JobID, char *PrinterSetupGC, TCHAR *Status )
+{
+	TCHAR	theUpdateCmd[1024] ;
+	TCHAR	BatchID[34] ;
+	TCHAR	theJobID[34] ;
+	TCHAR	OrderID[34] ;
+	TCHAR	OrderItemSeq[34] ;
+	TCHAR	PrinterName[34] ;
+	int		thePrintStatus ;
+	int		result ;
+
+	Debug( ! HeapCheck( "UpdateDBQueue: Start" )) ;
+
+	TCHAR	*UpdateCmd = "UPDATE JobQueue SET PrintStatus = %d WHERE BatchID = '%s' AND OrderID = '%s' AND OrderItemSequence = %s" ;
+
+	GetBatchOrderSeq( JobID, BatchID, OrderID, OrderItemSeq ) ;
+	thePrintStatus = GetPrintStatusNumber( Status ) ;
+
+	sprintf( theUpdateCmd, UpdateCmd, thePrintStatus, BatchID, OrderID, OrderItemSeq ) ;
+
+	result = DoSQL( theUpdateCmd ) ;
+	if( result == 0 )
+	{
+		GetAttrValue( PrinterSetupGC, "PrinterName", PrinterName ) ;
+		result = UpdateOrderItemTable( PrinterName, thePrintStatus, OrderID, OrderItemSeq ) ;
+	}
+
+	Debug( ! HeapCheck( "UpdateDBQueue: End" )) ;
+
+	return( result == 0 ) ;
+}
+
+
+
+UpdateOrderItemTable( TCHAR *PrinterName, int PrintStatus, TCHAR *OrderID, TCHAR *OrderItemSeq )
+{
+	TCHAR	 theQuery[1024] ;
+	TCHAR	 DateTime[128] ;
+	int		 result ;
+
+	GetTimeNow(DateTime) ;
+
+	sprintf( theQuery,
+		"UPDATE OrderItems SET PrintCount=PrintCount+1, PrinterName = '%s', PrintStatus = %d, TimePrinted = '%s' WHERE OrderID = '%s' AND Sequence = %s",
+		PrinterName, PrintStatus, DateTime, OrderID, OrderItemSeq ) ;
+
+	result = DoSQL( theQuery ) ;
+
+	return( result ) ;
+}
+
+
+DoSQL( TCHAR *theSQLStatement )
+{
+	int		result	= 0x8000405 ;	//	COULD NOT UPDATE BECAUSE LOCKED BY ANOTHER
+	long	count	= 0 ;
+	long	Level ;
+
+	BeginTransaction( gADO, &Level ) ;
+
+	while( result == 0x8000405 && count < 100 )
+	{
+		result = ADOCommand( gADO, theSQLStatement, "SQL", NULL ) ;
+		count++ ;
+		if( result == 0x8000405 )
+		{
+			Sleep(10) ;
+		}
+		SessionLogDirect( "DoSQL: %s, result = %0lX, Count = %ld", theSQLStatement, result, count ) ;
+	}
+
+	if( result != 0 )
+	{
+		HandleDBError(gADO) ;
+		RollBackTransaction( gADO ) ;
+	}
+	else
+	{
+		result = CommitTransaction( gADO ) ;
+		SessionLogDirect("UpdateOrderItemTable: CommitTransaction result = %0lX", result) ;
+	}
+	return( result ) ;
+}
+*/
+
+GetPrintStatusNumber( TCHAR *Status )
+{
+	int		 loop ;
+	TCHAR	*PrintStatus[7] ;
+
+	PrintStatus[0] = "Hold" ;
+	PrintStatus[1] = "Ready" ;
+	PrintStatus[2] = "Reserved" ;
+	PrintStatus[3] = "Printing" ;
+	PrintStatus[4] = "Printed" ;
+	PrintStatus[5] = "Saved" ;
+	PrintStatus[6] = "Error" ;
+
+	for( loop = 0 ; loop < 7 ; loop++ )
+	{
+		if( stricmp( PrintStatus[loop], Status ) == 0 )
+		{
+			return( loop ) ;
+		}
+	}
+	return( -1 ) ;
+}
+
+
+/*	NO LONGER USED
+//	THIS ROUTINE WILL REMOVE JOBS FROM THE JOB QUEUE
+//	THE JOBS MUST HAVE COMPLETED SUCCESSFULLY !
+RemoveBatchFromQueue( TCHAR *QueueName, TCHAR *BatchID )
+{
+	char	*aPGC ;
+	char	*aPGCList ;
+	TCHAR	 theSelectCmd[1024] ;
+	TCHAR	 theJobPath[2048] ;
+	int		 result ;
+	long	 Level ;
+	TCHAR	*SelectCmd = "Select * From JobQueue Where QueueName = '%s' AND BatchID = '%s'\
+ AND (PrintStatus = 4 OR PrintStatus = 5)" ;
+	//			Printed			   Saved
+
+	Debug( ! HeapCheck( "RemoveBatchFromQueue: Start" )) ;
+
+	SessionLogDirect("RemoveBatchFromQueue: Starting result = %ld", result ) ;
+
+	sprintf( theSelectCmd, SelectCmd, QueueName, BatchID ) ;
+
+	if( gADO == NULL ) { return( FALSE ) ; }
+
+	// CREATE A NEW UPGENCONLIST.
+	aPGCList = NewPGenConList( gADO ) ;
+	if( aPGCList == NULL )
+	{
+		HandleDBError(gADO) ;
+		SessionLogDirect("RemoveBatchFromQueue: NewPGenConList result = NULL") ;
+		return( FALSE ) ;
+	}
+
+	result = Query( aPGCList, theSelectCmd, "Optimistic", "Keyset" ) ;
+	if( result != 1 )
+	{
+		HandleDBError(gADO) ;
+		aPGCList = Delete( aPGCList ) ;
+		SessionLogDirect("RemoveBatchFromQueue: Query result = %ld", result ) ;
+		return(FALSE) ;
+	}
+
+	//	FOR EACH ENTRY WE HAVE TO DELETE THE JOB FILE
+	aPGC = GetFirst( aPGCList ) ;
+	while( aPGC )
+	{
+		GetAttrValue( aPGC, "JobPath", theJobPath ) ;
+		if( *theJobPath )
+		{
+			unlink( theJobPath ) ;
+		}
+		result = RemoveItem( aPGCList, aPGC ) ;
+		if( result == 0 )
+		{
+			HandleDBError(gADO) ;
+			SessionLogDirect("RemoveBatchFromQueue: RemoveItem result = %ld", result ) ;
+		}
+		aPGC = GetNext( aPGCList ) ;
+	}
+
+	aPGCList = Delete( aPGCList ) ;
+
+	Debug( ! HeapCheck( "RemoveBatchFromQueue: End" )) ;
+
+	return( result == 0 ) ;
+}
+*/
+
+/*	NO LONGER USED
+//	THIS ROUTINE WILL BREAK APART THE JOBID INTO
+//	BATCHID, ORDERID, AND ORDERITEMSEQUENCE
+GetBatchOrderSeq( TCHAR *JobID, TCHAR *BatchID, TCHAR *OrderID, TCHAR *OrderItemSeq )
+{
+	TCHAR	JobIDCopy[128] ;
+	TCHAR	*cptr ;
+
+	strcpy( JobIDCopy, JobID ) ;
+
+	cptr = strchr( JobIDCopy, '.' ) ;
+	Debug( cptr == NULL ) ;
+	*cptr = '\0' ;
+	strcpy( BatchID, JobIDCopy ) ;
+
+	strcpy( OrderID, cptr + 1 ) ;
+	cptr = strchr( OrderID, '.' ) ;
+	Debug( cptr == NULL ) ;
+	*cptr = '\0' ;
+
+	strcpy( OrderItemSeq, cptr + 1 ) ;
+}
+*/
+
+
+//	THIS ROUTINE IS CALLED BEFORE DOING THE ACTUAL RENDER.  THIS WILL ALLOW US TO
+//	CHANGE THE IMA PARAMETERS WITHOUT HAVING TO RECOMPILE ANYTHING !
+		//							  On/Off   NumProcessors	Priority
+//		anIma->ImaSetThreading(SinkRef,  1,    fNumberProcessors,   0 ) ;
+//		anIma->ImaSetThreading(SinkRef,  0,    1,					0 ) ;	//	USE FOR PROFILING
+//		anIma->SetImaAsyncRenderFlag( TRUE ) ;
+//		anIma->PrintGraph( SinkRef, 2 , 1 );
+bool PreRender( char *anIma, long SinkRef, int ThreadingOn, int numProcessors,
+						    int   Priority, int AsyncRender )
+{
+//	Debug(1) ;
+
+//	long	numProcs = numProcessors / 2 ;
+//	if( numProcs < 1 ) { numProcs = 1 ; }
+
+	long	numProcs = 1 ;
+
+//	ThreadingOn = 0 ;
+
+	ImaSetThreading( anIma, SinkRef, ThreadingOn, numProcessors, Priority ) ;
+//	ImaSetThreading( anIma, SinkRef,	0,			numProcs,	 Priority ) ;	//	USE FOR PROFILING
+
+	SetImaAsyncFlag( anIma, AsyncRender ) ;
+
+//	ImaPrintGraph( anIma, SinkRef, 2, 1 ) ;
+//	ImaSaveGraph( anIma, SinkRef, "F:\aaImaSaveGraph" ) ;
+
+	return( 1 ) ;
+
+}
+
+
+
+
+//	CHECK TO SEE IF THERE ARE ANY PROBLEMS
+//	HAVE ANY OF THE QUEUES HUNG-UP ????
+Problems( TCHAR *JobName, char *aRJ )
+{
+	return ;
+}
+
+
+/*	NO LONGER USED
+HandleDBError(char *anADO)
+{
+	long	ErrorCount, ErrorIndex ;
+	TCHAR	ADOErrDesc[2048] ;
+	TCHAR	theMsg[4096] ;
+
+	ErrorCount = GetErrorCount( anADO ) ;
+	for( ErrorIndex = 0L ; ErrorIndex < ErrorCount ; ErrorIndex++ )
+	{
+		GetErrorDescription( anADO, ErrorIndex, ADOErrDesc ) ;
+		sprintf( theMsg, "Queue Query Failed: %s", ADOErrDesc ) ;
+		ReportError( theMsg, 0, 0);
+		SessionLogDirect( "%s", theMsg ) ;
+	}
+}
+*/
+
+
+

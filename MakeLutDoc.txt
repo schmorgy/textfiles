@@ -1,0 +1,659 @@
+
+Include: UtilityRoutines;
+
+NUMERIC DefineDialog()
+{
+	if ( !DictionaryExists( DDMakeLutDialog ) )
+	{
+        Dictionary: DDMakeLutDialog 
+			Fields: Name	OrgLut			type text
+			Fields: Name	Lut				type text
+            Fields: Name	Image1Path		type text
+			Fields: Name	Image2Path		type text
+			Fields: Name	LutPath			type text
+			Fields: Name	Density			type long LowValue (-200)	HighValue 200
+			Fields: Name	Red				type long LowValue (-200)	HighValue 200
+			Fields: Name	Green			type long LowValue (-200)	HighValue 200
+			Fields: Name	Blue			type long LowValue (-200)	HighValue 200
+			Fields: Name	Contrast		type long LowValue (-100)	HighValue 100
+			Fields: Name	Threshold		type long 
+			Fields: Name	Invert			type long 
+			Fields: Name	Gamma			type double LowValue .1	HighValue 3
+ 	}
+
+	Define: DlgData Using DDMakeLutDialog
+		Fields: Gamma		1.0
+				Threshold	(-1);
+			
+	Left = 100;	Top = 100;	DialogWidth = 300; DialogHeight = 300;
+	StaticTextWidth = 100;	PathWidth = 450;
+
+	vGap = 5; hGap = 5; ButtonWidth = 120; ButtonHeight = 20;
+
+	Define: aDialog Using DDWinDef
+		Fields:	POSITION				100,100,$DialogWidth,$DialogHeight 
+				TITLE					~Create Or Modify a Lookup Table (LUT)~
+				TYPENAME				~Dialog~ 
+				STATUSBAR				~1 100~
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "CreateALut.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: OrgLutPrompt Using DDWinCtrlDef AsSymbol OrgLutPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Lut to Modify~ )
+						RightJustified	TRUE
+						Position		$hGap,$vGap,<StaticTextWidth>,<ButtonHeight> ;
+
+			Define: OrgLutField Using DDWinCtrlDef AsSymbol OrgLutField         
+				Fields: TypeName		EditText
+						Position        OrgLutPrompt(GetRight,Position) + $hGap
+										OrgLutPrompt(GetTop,Position) 
+										$PathWidth $ButtonHeight               
+						GenConName		THIS
+						GenConField		~OrgLut~
+						IActionsText	~[Get]~
+						OActionsText    ~[Save]~
+						Tooltip			Translate( ~Enter the path of the Lut you wish to modify.  Leave blank if creating a new lut~ ) ;
+
+			Define: BrowseOrgLut Using DDWinCtrlDef AsSymbol BrowseOrgLut 
+				Fields:	TEXT			~?~
+						GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( BrowseOrigLut() )
+						Position        OrgLutField(GetRight,Position) + $hGap
+										OrgLutField(GetTop,Position) 
+										20 $ButtonHeight               
+						TOOLTIP			Translate( ~Find the lut you wish to modify~ )
+						TYPENAME		BUTTON;
+
+			Define: ViewOrgLutButton Using DDWinCtrlDef AsSymbol ViewOrgLutButton 
+				Fields:	TEXT			~View~
+						GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ViewOrgLut() )
+						Position        BrowseOrgLut(GetRight,Position) + $hGap,BrowseOrgLut(GetTop,Position) 45 $ButtonHeight               
+						TOOLTIP			Translate( ~Open the lut you wish to modify in a text editor~ )
+						TYPENAME		BUTTON;
+
+			CurrentX = OrgLutPrompt(GetLeft,Position);
+			CurrentY = OrgLutPrompt(GetBottom,Position) + $vGap * 3;
+
+			CurrentY = ColorControl( Translate( Density ),Density,$CurrentX,$CurrentY,$hGap,-300,300,1,0 );
+			CurrentY = ColorControl( Translate( Red ),Red,$CurrentX,$CurrentY,$hGap,-300,300,1,0 );
+			CurrentY = ColorControl( Translate( Green ),Green,$CurrentX,$CurrentY,$hGap,-300,300,1,0 );
+			CurrentY = ColorControl( Translate( Blue ),Blue,$CurrentX,$CurrentY,$hGap,-300,300,1,0 );
+			CurrentY = ColorControl( Translate( Contrast ),Contrast,$CurrentX,$CurrentY,$hGap,-100,100,1,0 );
+			CurrentY = ColorControl( Translate( Gamma ),Gamma,$CurrentX,$CurrentY,$hGap,.1,3.0,.01,1 );
+
+
+			Define: InvertBox Using DDWinCtrlDef AsSymbol InvertBox         
+				Fields: TypeName		CheckBox
+						Position        OrgLutField(GetLeft,Position), $CurrentY + $vGap *3 
+										90 $ButtonHeight               
+						GenConName		THIS
+						GenConField		~Invert~
+						IActionsText	~[Get]~
+						OActionsText    ~[Save]~
+						Text			~Invert~
+						RightJustified	TRUE
+						Tooltip			Translate( ~If checked, an inverse lut will be created~ ) ;
+
+			Define: Path1Prompt Using DDWinCtrlDef AsSymbol Path1Prompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Test Image~ )
+						Position        OrgLutPrompt(GetLeft,Position)
+										InvertBox(GetBottom,Position) + $vGap *3
+										<StaticTextWidth> $ButtonHeight 
+						RightJustified	TRUE
+
+			Define: Path1Field Using DDWinCtrlDef AsSymbol Path1Field         
+				Fields: TypeName		EditText
+						Position        Path1Prompt(GetRight,Position) + $hGap
+										Path1Prompt(GetTop,Position) 
+										$PathWidth $ButtonHeight               
+						GenConName		THIS
+						GenConField		~Image1Path~
+						IActionsText	~[Get]~
+						OActionsText    ~[Save]~
+						Tooltip			Translate( ~Enter the path of a test image~ ) ;
+
+			Define: BrowseImage1 Using DDWinCtrlDef AsSymbol BrowseImage1 
+				Fields:	TEXT			~?~
+						GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( BrowseImage1() )
+						Position        Path1Field(GetRight,Position) + $hGap
+										Path1Field(GetTop,Position) 
+										20 $ButtonHeight               
+						TOOLTIP			Translate( ~Find the test image~ )
+						TYPENAME		BUTTON
+
+			Define: ViewImage1Button Using DDWinCtrlDef AsSymbol ViewImage1Button 
+				Fields:	TEXT			~View~
+						GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ViewImage1() )
+						Position        BrowseImage1(GetRight,Position) + $hGap,BrowseImage1(GetTop,Position) 45 $ButtonHeight               
+						TOOLTIP			Translate( ~View the test image~ )
+						TYPENAME		BUTTON;
+
+			Define: Path2Prompt Using DDWinCtrlDef AsSymbol Path2Prompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Modified Test Image~ )
+						Position        Path1Prompt(GetLeft,Position)
+										Path1Prompt(GetBottom,Position) + $vGap
+										<StaticTextWidth> $ButtonHeight   
+						RightJustified	TRUE
+
+			Define: Path2Field Using DDWinCtrlDef AsSymbol Path2Field         
+				Fields: TypeName		EditText
+						Position        Path2Prompt(GetRight,Position) + $hGap
+										Path2Prompt(GetTop,Position) 
+										$PathWidth $ButtonHeight               
+						GenConName		THIS
+						GenConField		~Image2Path~
+						IActionsText	~[Get]~
+						OActionsText    ~[Save]~
+						Tooltip			Translate( ~Enter the path of a modified test image.  The test image and the modified test image will be used to generate a lut that can convert the test image to the modified test image.~ ) ;
+
+			Define: BrowseImage2 Using DDWinCtrlDef AsSymbol BrowseImage2 
+				Fields:	TEXT			~?~
+						GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( BrowseImage2() )
+						Position        Path2Field(GetRight,Position) + $hGap
+										Path2Field(GetTop,Position) 
+										20 $ButtonHeight               
+						TOOLTIP			Translate( ~Find the modified image~ )
+						TYPENAME		BUTTON
+
+			Define: ViewImage2Button Using DDWinCtrlDef AsSymbol ViewImage2Button 
+				Fields:	TEXT			~View~
+						GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ViewImage2() )
+						Position        BrowseImage2(GetRight,Position) + $hGap,BrowseImage2(GetTop,Position) 45 $ButtonHeight               
+						TOOLTIP			Translate( ~Open the modified image~ )
+						TYPENAME		BUTTON;
+
+			Define: LutPrompt Using DDWinCtrlDef AsSymbol LutPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~New Lut~ )
+						Position        Path2Prompt(GetLeft,Position)
+										Path2Prompt(GetBottom,Position) + $vGap *3
+										<StaticTextWidth> $ButtonHeight  
+						RightJustified	TRUE 
+
+			Define: LutField Using DDWinCtrlDef AsSymbol LutField         
+				Fields: TypeName		EditText
+						Position        LutPrompt(GetRight,Position) + $hGap
+										LutPrompt(GetTop,Position) 
+										$PathWidth $ButtonHeight               
+						GenConName		THIS
+						GenConField		~Lut~
+						IActionsText	~[Get]~
+						OActionsText    ~[Save]~
+						Tooltip			Translate( ~Enter the path of the lut you wish to create~ ) ;
+
+			Define: BrowseLutButton Using DDWinCtrlDef AsSymbol BrowseLutButton 
+				Fields:	TEXT			~?~
+						GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( BrowseLut() )
+						Position        LutField(GetRight,Position) + $hGap
+										LutField(GetTop,Position) 
+										20 $ButtonHeight               
+						TOOLTIP			Translate( ~Find the path to the lut you wish to create~ )
+						TYPENAME		BUTTON;
+
+			Define: ViewLutButton Using DDWinCtrlDef AsSymbol ViewLutButton 
+				Fields:	TEXT			~View~
+						GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ViewLut() )
+						Position        BrowseLutButton(GetRight,Position) + $hGap,BrowseLutButton(GetTop,Position) 45 $ButtonHeight               
+						TOOLTIP			Translate( ~Open the lut in a text editor~ )
+						TYPENAME		BUTTON;
+
+			DialogWidth = aDialog(GetMaxRight,Position) + $hGap *3;
+
+			Define: GoButton Using DDWinCtrlDef AsSymbol GoButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( GoButton(FALSE) )
+						POSITION		($DialogWidth/2) - ($ButtonWidth) * 2 - $hGap,
+										LutPrompt(GetBottom,Position) + $vGap*3, 
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Create~ )
+						TOOLTIP			Translate( ~Calculate and save the lut using the current settings~ )
+						TYPENAME		BUTTON
+
+			Define: Testbutton Using DDWinCtrlDef AsSymbol Testbutton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnTestButton(FALSE) )
+						POSITION		GoButton(GetRight,Position) + $hGap,GoButton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Create and Test~ )
+						TOOLTIP			Translate( ~Calculate and save the lut using the current settings. View the results of applying the calculated lut to the test image~ )
+						TYPENAME		BUTTON
+
+
+			Define: TestSepiabutton Using DDWinCtrlDef AsSymbol TestSepiabutton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnTestButton(TRUE) )
+						POSITION		Testbutton(GetRight,Position) + $hGap,Testbutton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Create and Test Sepia~ )
+						TOOLTIP			Translate( ~Calculate and save the lut using the current settings.  View the results of applying the calculated lut as a sepia lut to the test image~ )
+						TYPENAME		BUTTON
+
+			Define: ResetAllButton Using DDWinCtrlDef AsSymbol ResetAllButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ResetAll() )
+						POSITION		TestSepiabutton(GetRight,Position) + $hGap,TestSepiabutton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Reset All~ )
+						TOOLTIP			Translate( ~Reset all controls to their nominal (no effect) values~ )
+						TYPENAME		BUTTON
+
+		}
+
+
+	DialogHeight = aDialog(GetMaxBottom,Position) + $vGap + 30;
+	
+
+	aDialog( Set,Position,~<Left> <Top> <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,aDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DlgData );
+
+	return TRUE;
+}
+
+
+NUMERIC ColorControl( Prompt,Type,x,CurrentY,hGap,MinValue,MaxValue,Units,Nominal )
+{
+	EditTextHeight = 20;
+
+	Define: <Type>Prompt Using DDWinCtrlDef AsSymbol <Type>Prompt
+		Fields:	POSITION		$x $CurrentY 90 20
+				TEXT			~<Prompt>~
+				RightJustified	TRUE
+				TYPENAME		StaticText
+
+
+	Define: <Type>Field Using DDWinCtrlDef AsSymbol <Type>Field
+		Fields:	DACTIONSTEXT	ACTIONS ( Save Update(<Type>Slider) )
+				GENCONFIELD		~<Type>~
+				GENCONNAME		THIS
+				IACTIONSTEXT	ACTIONS ( Get )
+				OACTIONSTEXT	ACTIONS ( Save )
+				POSITION		(<Type>Prompt(GetRight,Position) + $hGap) $CurrentY 40 $EditTextHeight
+				TEXT			~~
+				TOOLTIP			~Apply <Type> correction to the next scan~
+				TYPENAME		MaskedEditText
+				Mask			~####~
+				AllowedChars	~-.~
+				PromptChar		~ ~ ;
+
+	Define: <Type>Slider Using DDWinCtrlDef AsSymbol <Type>Slider
+		Fields:	DACTIONSTEXT	ACTIONS ( Save   Update(<Type>Field) )
+				GENCONFIELD		~<Type>~
+				GENCONNAME		THIS
+				IACTIONSTEXT	~[Get]~
+				OACTIONSTEXT	~[Save]~
+				POSITION		<Type>Field(GetRight,Position) , $CurrentY 415 $EditTextHeight
+				TOOLTIP			~Apply <Type> correction to the next scan~
+				TYPENAME		~SLIDER~ 
+				UNITS			<Units> ;
+
+	Define: <Type>MinusButton Using DDWinCtrlDef AsSymbol <Type>MinusButton
+		Fields:	DACTIONSTEXT	ACTIONS ( Save "Exec(ChangeColor(<Type>,-<Units>,<MinValue>,<MaxValue>,<Nominal>))" Update(<Type>Slider)  )
+				POSITION		<Type>Slider(GetRight,Position)+$hGap * 2, $CurrentY, 20, $EditTextHeight
+				TOOLTIP			~Decrease by 1~
+				TYPENAME		~Button~ 
+				TEXT			~-~;
+
+	Define: <Type>ZeroButton Using DDWinCtrlDef AsSymbol <Type>ZeroButton
+		Fields:	DACTIONSTEXT	ACTIONS ( Save "Exec(ChangeColor(<Type>,0,<MinValue>,<MaxValue>,<Nominal>))" Update(<Type>Slider) )
+				POSITION		<Type>MinusButton(GetRight,Position) + $hGap, $CurrentY, 20, $EditTextHeight
+				TOOLTIP			~Reset to <Nominal>~
+				TYPENAME		~Button~ 
+				TEXT			~0~
+
+	Define: <Type>PlusButton Using DDWinCtrlDef AsSymbol <Type>PlusButton
+		Fields:	DACTIONSTEXT	ACTIONS ( Save "Exec(ChangeColor(<Type>,<Units>,<MinValue>,<MaxValue>,<Nominal>))" Update(<Type>Slider) )
+				POSITION		<Type>ZeroButton(GetRight,Position)+$hGap, $CurrentY, 20, $EditTextHeight
+				TOOLTIP			~Increase by <Units>~
+				TYPENAME		~Button~ 
+				TEXT			~+~;
+
+	CurrentY = $CurrentY + 20;
+
+	return $CurrentY;
+}
+
+VOID ChangeColor( Type,Amount,MinValue,MaxValue,Nominal )
+{
+	sum = (<amount> == 0) ? <Nominal> : dlgData( GetNumeric,<Type> ) + <Amount>;
+
+	sum = Pin( <sum>,<MinValue>,<MaxValue> );
+
+	dlg( SetString,~<sum>~,<Type> );
+}
+
+
+VOID BrowseImage1()
+{
+	Title = ~Find a test image~;
+
+	if ( FileDialog( Title,~<Title>~,Path,Path,Open) )
+	{
+		dlg( SetString,~<Path>~,Image1Path,0 );
+	}
+}
+
+VOID BrowseImage2()
+{
+	Title = ~Find a modified version of the test image~;
+
+	if ( FileDialog( Title,~<Title>~,Path,Path,Open) )
+	{
+		dlg( SetString,~<Path>~,Image2Path,0 );
+	}
+}
+
+
+VOID BrowseOrigLut()
+{
+	StartingDirectory = ~<$App.ShareDirectory>\Tables~;
+
+	Directory( Create,~<StartingDirectory>~ );
+	
+	Title = ~Find a lut you wish to modify~;
+
+	if ( FileDialog( Title,~<Title>~,DefaultDirectory,~<StartingDirectory>~,Path,LutPath,Open) )
+	{
+		dlg( SetString,~<LutPath>~,OrgLut,0 );
+	}
+}
+
+VOID BrowseLut()
+{
+	StartingDirectory = ~<$App.ShareDirectory>\Tables~;
+
+	Directory( Create,~<StartingDirectory>~ );
+
+	Title = ~Specify the Lut you wish to create~;
+
+	if ( FileDialog( Title,~<Title>~,DefaultDirectory,~<StartingDirectory>~,Path,LutPath,Save) )
+	{
+		dlg( SetString,~<LutPath>~,Lut,0 );
+	}
+}
+
+
+NUMERIC ResetAll()
+{
+	return dlg( SetStrings,Density,0,Red,0,Green,0,Blue,0,Contrast,0,Gamma,1.0,Invert,0,Image2Path,~~ );
+}
+
+
+NUMERIC ViewImage1()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DlgData[Image1Path]>~ ) )
+	{
+		return Warning( ~You must specify an image first~ );
+	}
+
+	if ( !Open( Image,~<$con.DlgData[Image1Path]>~ ) )
+	{
+		return Warning( Translate( ~Could not open <$con.DlgData[Image1Path]>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ViewImage2()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DlgData[Image2Path]>~ ) )
+	{
+		return Warning( ~You must specify an image first~ );
+	}
+
+	if ( !Open( Image,~<$con.DlgData[Image2Path]>~ ) )
+	{
+		return Warning( Translate( ~Could not open <$con.DlgData[Image2Path]>~ ) );
+	}
+
+	return TRUE;
+
+}
+
+
+NUMERIC ViewLut()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DlgData[Lut]>~ ) )
+	{
+		return Warning( ~You must specify a lut first~ );
+	}
+
+	if ( !ViewFileInNotepad( ~<$con.DlgData[Lut]>~ ) )
+	{
+		GetLastError( ErrorString,theErr );
+		return Warning( ~Could not open <$con.DlgData[Lut]>. <theErr>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ViewOrgLut()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DlgData[OrgLut]>~ ) )
+	{
+		return Warning( ~You must specify a lut first~ );
+	}
+
+	if ( !ViewFileInNotepad( ~<$con.DlgData[OrgLut]>~ ) )
+	{
+		GetLastError( ErrorString,theErr );
+		return Warning( ~Could not open <$con.DlgData[OrgLut]>. <theErr>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnTestButton( IsSepia )
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DlgData[Image1Path]>~ ) )
+	{
+		return Warning( ~You must specify a test image to apply the lut to~ );
+	}
+
+	if ( !Files( FileExists,~<$con.DlgData[Image1Path]>~ ) )
+	{
+		return Warning( ~<$con.DlgData[Image1Path]> does not exist~ );
+	}
+
+	if ( IsNull( ~<$con.DlgData[Lut]>~ ) )
+	{
+		return Warning( ~You must specify a lut to apply to the image~ );
+	}
+
+	if ( GoButton(<IsSepia>) )
+	{
+		if ( !Files( FileExists,~<$con.DlgData[Lut]>~ ) )
+		{
+			return Warning( ~<$con.DlgData[Lut]> does not exist.  Create the lut first~ );
+		}
+
+		if ( CreateAJob( ~<$App.Directory>\TestLutJob.txt~,<IsSepia> ) )
+		{
+			OpenUseFile( ~<$App.Directory>\TestLutJob.txt~ );
+		
+			Action = STR ( DelayedRemoveAJob( ~<$App.Directory\TestLutJob.txt~ ); );
+
+			return QueueContentsAfter( Action,1000 );
+		}
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC OpenUseFile( LayoutPath )
+{
+	if ( IsNULL( ~<LayoutPath>~ ) )
+	{
+		if ( IsNull( ~<$con.DlgData[UseFile]>~ ) )
+		{
+			return ShowWarning( ~You must specify a file first~ );
+		}
+
+		IsMultiple = FALSE;
+
+		LayoutPath = GetFullLayout( ~<$con.DlgData[UseFile]>~,IsMultiple );
+
+		if ( IsNull( ~<LayoutPath>~ ) )
+			{ return FALSE; }
+	}
+
+	CloseWindowsOfDocument(~<LayoutPath>~);
+
+	Action = STR ( NowOpenTheFile( ~<LayoutPath>~ ); );
+
+	return QueueContentsAfter( Action,100 );
+}
+
+
+NUMERIC NowOpenTheFile( LayoutPath )
+{
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == LayoutView )
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<LayoutPath>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+		}
+	}
+
+	CurrentlyOpen = NumWindows( LayoutOrJob );
+
+	MaxOpenJobsOrLayouts = ~<$[Symbols].MaxOpenJobsOrLayouts[Long]>~;
+
+	if ( <MaxOpenJobsOrLayouts> < 1 )
+	{ 
+		MaxOpenJobsOrLayouts = 1;
+	}
+
+	if ( <CurrentlyOpen> >= <MaxOpenJobsOrLayouts> )
+	{
+		return Warning( ~You cannot have more than 10 jobs or layouts open at once~ );
+	}
+
+	if (!Document( aLayout,Open,~<LayoutPath>~,Layout,~~ ) )
+		{ return ShowWarning( ~Could not open <LayoutPath>~ ); }
+
+	return TRUE;
+}
+
+
+
+VOID DelayedRemoveAJob( Path )
+{
+	Files( Delete,~<Path>~ );
+}
+
+
+NUMERIC CreateAJob( JobPath,IsSepia )
+{
+	if ( !File( Job,Open,~<JobPath>~,Create,Write ) )
+	{
+		Invoke( ExportError,~Could not create the job file <theFile>~  );
+		return FALSE;
+	}
+
+	Job( ~FileType: Job ;~ );
+
+	Job( CRLF,WRITELINE,~UnitOfMeasure: Inches;~ );
+
+	Job( CRLF,WRITELINE,~Main:~ );
+	Job( ~	IWidth:		4;~ );
+	Job( ~	IHeight:	4;~ );
+	Job( ~	IColor:		0 255 255 255;~ );
+	Job( ~	IFile:		|<$con.DlgData[Image1Path]>|;~ );
+
+	if ( <isSepia> )
+	{
+		Job( ~	Sepia:		|<$con.DlgData[Lut]>|;~ );
+	}
+	else
+	{
+		Job( ~	Lut:		|<$con.DlgData[Lut]>|;~ );
+	}
+
+	Job( Close );
+
+	return TRUE;
+}
+
+
+
+NUMERIC GoButton( IsSepia )
+{
+	dlg( GetInput );
+
+	if ( IsNULL( ~<$con.DlgData[Lut]>~ ) )
+	{
+		return Warning( ~You must specify the lut you wish to create~ );
+	}
+
+	
+
+	if ( !aPie( MakeLut,~<$con.DlgData[Lut]>~,OriginalLut,~<$con.DlgData[OrgLut]>~,
+			Gamma,~<$con.DlgData[Gamma]>~,Contrast,~<$con.DlgData[Contrast]>~,
+			ColorBalance,~<$con.DlgData[Density]>~,~<$con.DlgData[Red]>~,~<$con.DlgData[Green]>~,~<$con.DlgData[Blue]>~,
+			Threshold,~<$con.DlgData[Threshold]>~,Invert,~<$con.DlgData[Invert]>~,
+			Image1,~<$con.DlgData[Image1Path]>~,Image2,~<$con.DlgData[Image2Path]>~,Sepia,<IsSepia> ) )
+	{
+		err = GetLastErrorMsg();
+		dlg( SetStatus,0, ~<$con.DlgData[Lut]> was not created~  );
+		return Warning( ~Failed to create lut <$con.DlgData[Lut]>.  <err>~ );
+	}
+	
+	dlg( SetStatus,0, ~<$con.DlgData[Lut]> was created~  );
+
+	return TRUE;
+}
+
+NUMERIC DoCancelButton()
+{
+	dlg( End );
+	Exit();
+}
+
+
+if ( !Pie( aPie ) )
+{
+	Warning( ~There was not enough memory to initialize the virtual memory manager~ );
+}
+else
+{
+	DefineDialog();
+}

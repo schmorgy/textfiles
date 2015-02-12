@@ -1,0 +1,113 @@
+
+//	THIS FILE WILL HANDLE THE CGETORDERLINEITEMS COMMAND
+//
+//	IT GETS THE LIST OF ORDER LINE ITEMS.
+
+char	*NULL ;
+int		 FALSE = 0;
+int		 TRUE  = 1;
+
+
+main()
+{
+	char*	theOrderLineItemWnd;
+	char*	theNewOrderLineItemWnd;
+	char*	theOrderLineItemViewList;
+	char*	theNewOrderLineItemView;
+	char*	PGCList;
+	TCHAR	theQuery[1000];
+	int		result;
+	char*	anObj;
+	TCHAR	value[256];
+	TCHAR	word[256];
+	char*	SelOrdersGC;
+	char*	SelOrdersList;
+	char*	SelectedOrder;
+	char*	anIter;
+
+	//Debug( TRUE ) ;	//	INVOKE THE DEBUGGER !
+
+	//	First, get the orders gen con which contains the list of selected
+	//  orders from the order list.  If we can't get this gen con, then there
+	//  is no need to continue!!
+	SelOrdersGC = GetCCodeGenCon();
+
+	//  Get the selected orders list from the orders gen con.  Again, if we can't
+	//  get this list, then there is no need to continue!!
+	SelOrdersList = GetChildren(SelOrdersGC);
+
+	//  Get the order line item window gen con from the tree.  We will use this
+	//  as the baseline for the window gen con that will be created.
+	theOrderLineItemWnd = GetTreeObject("OrderLineItemWindow", "[UI Windows]");
+
+	//	Create an iterator on the selected orders list; the list
+	//  contains gen cons that include the IDs of
+	//  the orders that the user wants to view line items for.
+	anIter = CreateIterator(SelOrdersList);
+
+	//  Iterate through the selected orders list.
+	SelectedOrder = GetFirst(anIter);
+	while (SelectedOrder)
+	{
+		// Make a copy of the window definition.
+		theNewOrderLineItemWnd = CopyGenCon(theOrderLineItemWnd);
+
+		//  Set the title of the copied window gen con.
+		GetAttrValue(theNewOrderLineItemWnd, "Title", value);
+		strcat(value, " in Order #");
+		strcat(value, GetAttrValue(SelectedOrder, "ID", word));
+		SetAttrValue(theNewOrderLineItemWnd, "Title", value);
+
+		//  Set the name of the copied window gen con.
+		strcpy(value, "LineItemsInOrder");
+		strcat(value, GetAttrValue(SelectedOrder, "ID", word));
+		SetName(theNewOrderLineItemWnd, value);
+
+		//  Get the order line item view list.
+		theOrderLineItemViewList = GetChildren(theNewOrderLineItemWnd);
+
+		// Get the  order line item list view.
+		theNewOrderLineItemView = GetItemByName(theOrderLineItemViewList, "OrderLineItemListView");
+
+		// Create a new UPGENCONLIST.
+		PGCList = NewPGenConList(GetKPISConnection());
+
+		// Get the order line items from the database.
+		strcpy(theQuery, "Select ID, OrderID, ProductID,");
+		strcat(theQuery, " Quantity, Priority, JobPath,");
+		strcat(theQuery, " Status, SpecialInstructions ");
+		strcat(theQuery, " From OrderItems Where (");
+		strcat(theQuery, "(OrderID='");
+		strcat(theQuery, GetAttrValue(SelectedOrder, "ID", word));
+		strcat(theQuery, "')) Order By ID");
+
+		result = Query(PGCList, theQuery, "Optmistic", "Dynamic");
+		if (result == 1)
+		{
+			// Set the view data attribute in the view to the new view data object.
+			SetLongValue(theNewOrderLineItemView, "ViewData", PGCList);
+		}
+			
+		// Hang the copied window definition on the tree.
+		HangTreeObject(theNewOrderLineItemWnd, "[GenCons]");
+
+		//  Set up the action to open the window and call the function
+		//  that will cause the window to be opened.
+		strcpy(value, "[Window(");
+		strcat(value, GetName(theNewOrderLineItemWnd));
+		strcat(value, " [GENCONS])]");
+		HandleActions(value);
+
+		SelectedOrder = GetNext(anIter);
+	}
+
+	//  Delete the iterator.
+	anIter = Delete( anIter ) ;
+
+	//  Remove the selected orders gen con from the tree and delete it.
+	if (SelOrdersGC != NULL)
+	{
+		anObj = PluckTreeObject(GetName(SelOrdersGC), "[GenCons]");
+		Delete(anObj);
+	}
+}

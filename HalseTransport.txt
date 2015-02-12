@@ -1,0 +1,2601 @@
+
+// Revision: 3
+
+//Include: ~HalseGlueDLL.txt~;
+
+
+
+// Public Transport Interface
+// 
+// NUMERIC <TransportName>_FilmDriveSelected( )
+// NUMERIC <TransportName>_OpenFilmDrive()
+// NUMERIC <TransportName>_Tension( Tension )
+// NUMERIC <TransportName>_NextFrame( XOffset, YOffset, ScanMode )
+// NUMERIC <TransportName>_PrevFrame( XOffset, YOffset, ScanMode )
+// NUMERIC <TransportName>_SeekPunch( CurrentPunch, SeekPunch, XOffset, YOffset, FirstPunch, LastPunch, ScanMode )
+// NUMERIC <TransportName>_Rewind()
+// NUMERIC <TransportName>_HandleFastForward()
+// NUMERIC <TransportName>_MoveDeltaX( Delta, IgnoreAdjustment )
+// NUMERIC <TransportName>_Stop( )
+// STR     <TransportName>_FormatPunchNumber( PunchNumber )
+// VOID    <TransportName>_ForgetGlobals()
+// VOID    <TransportName>_OverrideFrame()
+// NUMERIC <TransportName>_SetupScanningControls( value )
+// NUMERIC <TransportName>_RefreshScanAreaSettings( reason,loadSettings,SetupTable )
+// NUMERIC <TransportName>_TranslateMoveToFrameDelta( Movement)
+// NUMERIC <TransportName>_AdjustFrameLocation( Percent, Edge, Frame )
+
+
+// NUMERIC <TransportName>_FindPunchNumber( CurrentPunchNumber, SeekPunchNumber, FilmFirstPunchNumber, FilmLastPunchNumber, XOffSet )
+// NUMERIC <TransportName>_VerifyPunchNumber( ExpectedPunchNumber, FilmFirstPunchNumber, FilmLastPunchNumber )
+// NUMERIC <TransportName>_ValidPunchNumber( PunchNumber )
+// NUMERIC <TransportName>_ValidPunchRange( PunchNumber )
+
+
+gScanCount = 0;
+gCurrentFrame = 0;
+gMaxScannedFrame = 0;
+gJustPerformedEvaluationOnCurrentFrame = FALSE;
+gCurrentTransportType = <DRIVE_NONE>;
+gFirstFrame = TRUE;
+gLastFrame = FALSE;
+gEjectDone = FALSE;
+gFilmDriveBusy = FALSE;
+gUseRollNumberOnStartup = TRUE;
+
+gSkippingBlankFilm = FALSE;
+gSkippedLastBlank = FALSE;
+gAligningFrame = FALSE;
+gFirstFrameAligned = FALSE;
+gStoppingFilmDrive = FALSE;
+gFrameOverridden = FALSE;
+gPositioningForFocus = FALSE;
+
+gLastSensorState = 99;
+gLoadDistance = 40;
+
+gSetOverScanEnabled = FALSE;
+gOverScanDisplayed  = FALSE;
+
+// Constants
+kClampOn 	= 1;
+kClampOff 	= 0;
+
+kWaitForCompletion = 1;
+kDontWaitForCompletion = 0;
+
+kNegativeSensitivity = 40;
+kPositiveSensitivity = 200;
+kBlackWhiteSensitivity = 100;
+kMidpointSensitivity = 120;
+
+PreFocusFrameStatus = FALSE;
+
+gLastMoveDirection = 0;
+HALSE_MOVE_FORWARD = 1;
+HALSE_MOVE_REVERSE = -1;
+
+// Enums defined in the DLL
+EVAULATION_NEVER_COMPLETED = -100;
+
+NO_IMAGE = -2;				// bad / no image -- unlikely
+BLANK_FRAME_FILM_BASE = -1; // evaluation suggests leader / trailer
+NO_GAPS_FOUND = 0;			// nothing that might be an inter-frame gap(IFG)
+EDGES_OK = 1;				// found certain inter-frame gap,
+EDGES_BAD = 2;				// fragmented scene. Many gaps found
+SKIP_BLANKS = 3;			// auto skipping blanks
+
+//enum { DRIVE_NONE = 0, DRIVE_135 = 1, DRIVE_120 = 2, DRIVE_SLIDE = 3};
+DRIVE_NONE = 0;
+DRIVE_135 = 1;
+DRIVE_120 = 2;
+DRIVE_SLIDE = 3;
+
+
+// enum {unloaded = 0, loading = 1, moving = 2, loaded = 3,
+//	     unloading = 4, clamping = 5, evaluating = 6};
+HALSE_FILM_UNLOADED = 0;
+HALSE_FILM_LOADING = 1;
+HALSE_FILM_MOVING = 2;
+HALSE_FILM_LOADED = 3;
+HALSE_FILM_UNLOADING = 4;
+HALSE_FILM_CLAMPING = 5;
+HALSE_FILM_EVALUATING = 6;
+
+//enum { optimistic = 0, pessimistic = 1, automistic = 2};
+HALSE_FDA_PESSIMISTIC = 0;	//from left edge
+HALSE_FDA_OPTIMISTIC = 1;	//from right edge
+HALSE_FDA_AUTOMISTIC = 2;	//auto edge selection
+
+// Other Constants 
+kResetWhenComplete 		= 1;
+kDontResetWhenComplete 	= 0;
+
+//*********************************************************************
+// Pre and Post scan callback functions
+//*********************************************************************
+
+NUMERIC Halse_PreScanCallbackFunction( )
+{
+	// Turn on the clamp before any scanning
+
+	result = FilmDrive( Clamp,<kClampOn>,<kWaitForCompletion> );
+	if ( <result> )
+	{
+		SizzleControl( Set, OverScan, TRUE);
+
+		SFSFile = ~<$con.DlgData[SFSFile]>~;
+		FilmType = ~<$con.DlgData[FilmType]>~;
+		if ( ~<SFSFile>~ == ~~ )
+		{
+			SFSFile = ~<$App.Directory>\Scan\HR500\kcdfs.satdef~;
+		}
+		filmClass = 0.0;
+		FilmTermsFile = ~<$App.ShareDirectory>\Scan\<$con.dlgData[ScannerType]>\FilmTerms\<FilmType>.flt~;
+		if ( !Scanner( GetFilmClass,filmClass,~<FilmType>~,~<SFSFile>~ ) )
+		{ 
+			return Halse_ReportError( ~Film Class could not be determined for StartEvaluation... ~ ); 
+		}
+		overscanFilmType = ( ( <filmClass> == 2.0 ) ? TRUE : FALSE );
+		SizzleControl( Set,OverscanFilmType,<overscanFilmType> );
+
+		sensitivity = Halse_UpdateEdgeSensitivity( <filmClass> );
+		SizzleControl( Set,EdgeSensitivity,<sensitivity> );
+
+		gap = Halse_GetMinInterframeGap();
+		gap = <DisplayUnits>ToLines( <gap> );
+		gap = Round( <gap> );
+		SizzleControl( Set,MinGap,<gap>);
+
+		filmPosition = FilmDrive( GetCurrentPosition );
+		SizzleControl( Set,FilmPosition,<filmPosition> );
+
+		SizzleControl( Set,SkippingBlankFilm,<gSkippingBlankFilm> );
+		gSkippedLastBlank = <gSkippingBlankFilm>;
+
+		PrevEvalResult = SizzleControl( GetNumeric,FDAErrorOnCurrent );
+		SizzleControl( Set,FDAErrorOnPrevious,<PrevEvalResult> );
+
+		IgnoreErrors = DlgData( GetNumeric,IgnoreFdaErrors );
+		SizzleControl( Set,IgnoreFdaErrors,<IgnoreErrors> );
+
+		useAdjustedFrames = DlgData( GetNumeric,UseAdjustedFrames );
+		SizzleControl( Set,UseAdjustedFrames,<useAdjustedFrames> );
+
+		twinCheck = DlgData( GetNumeric,TwinCheck );
+		SizzleControl( Set,TwinCheck,<twinCheck> );
+
+		filmStatus = FilmDrive( FilmStatus );
+		SizzleControl( Set,FilmStatus,<filmStatus> );
+
+		position = Scanner( GetFramePosition,<gCurrentFrame> );
+		SizzleControl( Set,FramePosition,<position> );
+
+		disableFrameDetect = DlgData( GetNumeric,DisableFrameDetect );
+		SizzleControl( Set,DisableFrameDetect,<disableFrameDetect> );
+
+		Scanner( SetCurrentFrame,<gCurrentFrame> );
+		SizzleControl( Set,LastMoveDirection,<gLastMoveDirection> );
+
+		SizzleControl( Set,FilmDriveType,<gCurrentTransportType> );
+	
+		gOverScanDisplayed = FALSE;
+	}
+	
+	return <result>;
+}
+
+
+NUMERIC Halse_PostScanCallbackFunction( evalResult )
+{
+	++gScanCount;
+	result = FilmDrive( Clamp,<kClampOff>,<kWaitForCompletion> );
+	
+	gJustPerformedEvaluationOnCurrentFrame = TRUE;
+	return Halse_AnalyzeFDAResults( <evalResult>,FALSE,FALSE );
+}
+
+
+NUMERIC Halse_AnalyzeFDAResults( evalResult,GapsAnalyzed,BypassFda )
+{
+	disableFrameDetect = DlgData( GetNumeric,DisableFrameDetect );
+	IgnoreErrors = DlgData( GetNumeric,IgnoreFdaErrors );
+	gSkippingBlankFilm = SizzleControl( GetNumeric,skippingBlankFilm );
+
+	if ( DlgData( GetNumeric,UseAdjustedFrames ) && (<gCurrentFrame> <= <gMaxScannedFrame>) )
+	{
+		DlgData( SetValues, AutoSkipBlankFrame, FALSE );
+		dlg( SetCheck, FALSE, AutoSkipBlankFrameBox );
+		dlg( Save,AutoSkipBlankFrameBox );
+		if ( <gCurrentFrame> < <gMaxScannedFrame> )
+		{	
+			IgnoreErrors = TRUE;	
+		}
+	}
+
+	if ( SizzleControl( GetNumeric,FilmStatus ) == <HALSE_FILM_UNLOADED> )
+	{
+		FilmDriveCmdInProgress( ~End of Strip... ~ );
+		Halse_ReportError( ~We are at the last frame of the strip...~ );
+	}
+	else if ( !<disableFrameDetect> && 
+			  !<IgnoreErrors> && 
+			  <gSkippedLastBlank> && 
+			  !<gSkippingBlankFilm> &&
+			  SizzleControl( GetNumeric,AutoSkipFDABlankFrame ) &&
+			  SizzleControl( GetNumeric,AutoFDAErrorHandlingEnabled ) &&
+			  <gLastMoveDirection> >= 0 && 
+			  !<LastScanIsTestScan> )
+	{
+		SizzleControl( SetValues,WaitingForOverScan,TRUE );
+		Warning( Translate( ~Blank film has been skipped. Please align frame <gCurrentFrame> by either\n  - Using the Align button\n  - Or checking the Adjust Frame Position box and rescanning.~ ) );
+		OnAutoSkipBlankFrame();
+
+		EnableScanningControls( FALSE );
+		SetTransportControlsRunning();
+
+		showOverScan = DlgData( GetNumeric,AdjustFramePosition );
+		if ( !<showOverScan> )
+		{
+			gOverScanDisplayed = TRUE;
+			DlgData( SetValues, AdjustFramePosition, TRUE );
+			dlg( SetCheck, TRUE, AdjustFramePositionBox );
+			dlg( Save,AdjustFramePositionBox );
+			RemoveAdjustFrameOnCompletion = TRUE;
+
+			if ( Scanner( SaveInProgress ) )
+			{
+				msg = ~The Frame Adjustment Window will be displayed after the image has been saved.~;
+				dlg( PopupMsg,Translate( ~<msg>~ ) );
+
+				while ( Scanner( SaveInProgress ) )
+				{
+					Sleep( 200 );
+				}
+			}
+
+			EnableScanningControls( FALSE );
+			SetTransportControlsRunning();
+
+			while ( SizzleControl( GetNumeric,WaitingForDisplay ) )
+			{
+				Sleep( 200 );
+			}
+
+			EnableScanningControls( FALSE );
+			SetTransportControlsRunning();
+
+			HR500RenderOverScan();
+		}
+	}
+
+	if ( <gapsAnalyzed> )
+	{
+//		FrameDetectTime = (SizzleControl( GetNumeric,FrameDetectCompleteTime ) - SizzleControl( GetNumeric,FrameDetectStartTime ));
+//		Log( Session,~Frame Detect Time = <FrameDetectTime> ~ );
+
+		if ( !<disableFrameDetect> && <evalResult> == <EDGES_OK> )
+		{	
+			OnAutoSkipBlankFrame();	
+		}
+
+		showOverScan = DlgData( GetNumeric,AdjustFramePosition );
+		TestScan = SizzleControl( GetNumeric,TestScan );
+		if ( !<gOverScanDisplayed> && 
+		      <showOverScan> && 
+			 !<TestScan> && 
+			  <evalResult> != <EDGES_OK> && 
+			 !<IgnoreErrors> && 
+			 !<BypassFda>)
+		{
+				SizzleControl( SetValues,WaitingForOverScan,TRUE );
+				if ( Scanner( SaveInProgress ) )
+				{
+					msg = ~The Frame Adjustment Window will be displayed after the image has been saved.~;
+					dlg( PopupMsg,Translate( ~<msg>~ ) );
+
+					while ( Scanner( SaveInProgress ) )
+					{
+						Sleep( 200 );
+					}
+				}
+
+				while ( SizzleControl( GetNumeric,WaitingForDisplay ) )
+				{
+					Sleep( 200 );
+				}
+
+				HR500RenderOverScan();
+		}
+		else
+		{
+			Scanner( CleanupLastScan, SizzleControl );
+			dlg( EnableControls,FALSE,ReapplyButton,ReapplySBAButton,ReapplyAdvancedColorButton,ReapplyFiltersButton );
+		}
+	}
+
+	return <evalResult>;
+}
+
+VOID Halse_FrameDetectError( evalResult,fromAnalysis,BypassFda )
+{
+	if ( !SizzleControl( GetNumeric,AutoFDAErrorHandlingEnabled ) )
+	{
+		EnableScanningControls(TRUE);
+		SetTransportControlsStopped();
+		return;
+	}
+
+	GetFilmDriveVendor();
+	ClearAutoFlag( FALSE );
+
+	showOverScan = DlgData( GetNumeric,AdjustFramePosition );
+	if ( <evalResult> == <BLANK_FRAME_FILM_BASE> && SizzleControl( GetNumeric,AutoSkipFDABlankFrame ) )
+	{
+		gSkippingBlankFilm = TRUE;
+		if ( FunctionDefined( ~<FDVendor>_AdvanceOnBlankFilm~ ) )
+		{
+			<FDVendor>_AdvanceOnBlankFilm();
+			return;
+		}
+	}
+
+	gFirstFrame = FALSE;
+
+	if ( !<showOverScan> )
+	{
+		DlgData( SetValues, AdjustFramePosition, TRUE );
+		dlg( SetCheck, TRUE, AdjustFramePositionBox );
+		dlg( Save,AdjustFramePositionBox );
+		RemoveAdjustFrameOnCompletion = TRUE;
+		// Report the error
+		Warning( Translate( ~We were unable to find the edges of the current frame.  Please click on the frame edge in the Frame Adjustment Window.~ ) ); 
+		Halse_AnalyzeFDAResults( <evalResult>,<fromAnalysis>,<BypassFda> );
+	}
+}
+
+
+VOID Halse_CleanUpLastScan()
+{
+	Scanner( CleanupLastScan, SizzleControl );
+	dlg( EnableControls,FALSE,ReapplyButton,ReapplySBAButton,ReapplyAdvancedColorButton,ReapplyFiltersButton );
+
+}
+
+NUMERIC Halse_GetMinInterframeGap()
+{
+	value = DlgData( GetNumeric,MinInterframeGap );
+
+	if ( <value> <= 0 )
+	{
+		value = LinesTo<DisplayUnits>( 40 );
+	}
+
+	dlg( SetStrings,MinInterframeGap,~<value>~ );
+	dlg( Save,MinInterframeGap );
+	
+	return <value>;
+}
+
+
+NUMERIC Halse_UpdateEdgeSensitivity( filmClass )
+{
+	currentSensitivity = DlgData( GetNumeric,EdgeSensitivity );
+	changedValue = FALSE;
+
+//	if ( <filmClass> == 0.0 )	//CN 
+//	{
+//		if ( <currentSensitivity> == 0 || <currentSensitivity> >= <kPositiveSensitivity> )
+//		{
+//			currentSensitivity = <kNegativeSensitivity>;
+//			changedValue = TRUE;
+//		}
+//	}
+//	else if ( <filmClass> == 2.0 )	//REV
+//	if ( <filmClass> == 2.0 )	//REV
+//	{
+//		if ( <currentSensitivity> == 0 || <currentSensitivity> <= <kNegativeSensitivity> )
+//		{
+//			currentSensitivity = <kPositiveSensitivity>;
+//			changedValue = TRUE;
+//		}
+//	}
+//	else if ( <filmClass> != 0.0 ) // BWN
+//	{
+//		if ( <currentSensitivity> == 0 )
+//		{
+//			currentSensitivity = <kBlackWhiteSensitivity>;
+//			changedValue = TRUE;
+//		}
+//	}
+
+	if ( <changedValue> )
+	{
+		DlgData( SetValues,EdgeSensitivity,<currentSensitivity> );
+		dlg( SetStrings,~EdgeSensitivity~,<currentSensitivity> );
+	}
+
+	return <currentSensitivity>;
+}
+
+
+//*********************************************************************
+// Utility functions
+//*********************************************************************
+
+VOID Halse_OverrideFrame( FromTransportControls )
+{
+	// update the current frame on the dialog and in Halse Dll (HS4DP2).
+	dlg( GetInput );
+	if ( RunningVersion( 5.1 ) || !<FromTransportControls> )
+		{	dlg( GetStrings,NewFrameNumber,Frame); }
+	else
+		{	DlgData( Get,OverrideFrameNumber,NewFrameNumber );	}
+	Halse_UpdateFrameNumber( ~<NewFrameNumber>~ );
+	Halse_SetFrame( atof(~<NewFrameNumber>~), TRUE,FALSE,TRUE,FALSE );
+	gFrameOverridden = TRUE;
+}
+
+
+VOID Halse_UpdateFrameNumber( Frame )
+{
+	// update the current frame on the dialog and in Halse Dll (HS4DP2).
+	if ( ~<Frame>~ != ~~)
+	{
+		if ( ~<Frame>~ != ~<gCurrentFrame>~ )
+		{
+			FrameNotInDB = <PreFocusFrameStatus>;
+		}
+		frame = FormatFrameNumber( ~<Frame>~ );
+		dlg( SetString,~<Frame>~,Frame,0 );
+		dlg( Save,Frame );
+	}
+}
+
+VOID Halse_ResetFrameNumber( frame )
+{
+	// update the current frame on the dialog and in Halse Dll (HS4DP2).
+	if ( ~<frame>~ != ~~)
+	{
+		frame = FormatFrameNumber( ~<frame>~ );
+		Halse_SetFrame( ~<frame>~, FALSE,FALSE,FALSE,FALSE );
+	}
+}
+
+NUMERIC Halse_SetFrame( frameNumber,Renumber,PositionChange,UpdateCurrentFrame,CheckQuality )
+{
+	if ( !Halse_ValidPunchNumber( ~<frameNumber>~ ) && ( <frameNumber> >= <MinPunchNumber> ) )
+	{
+		return Warning( Translate( ~Invalid Frame Number: <frameNumber>~ ) );
+	}
+	if ( <Renumber> )
+	{
+		position = FilmDrive( GetCurrentPosition );
+		filmPosition = SizzleControl( GetNumeric,FilmPosition );
+		if ( !Scanner( MarkFrame,<frameNumber>,<position>,<PositionChange>,<CheckQuality>,<filmPosition> ) )
+		{
+			return Warning( Translate( ~Unable to override the frame number to <frameNumber>~ ) );
+		}
+		gCurrentFrame = <frameNumber>;
+	}
+
+	frameNum = Halse_FormatPunchNumber( <gCurrentFrame> );
+	SetCurrentPunchNumber( ~<frameNum>~ );
+
+	frame = FormatFrameNumber( ~<frameNumber>~ );
+	SetCurrentFrameNumber( ~<frame>~ );
+	if ( <UpdateCurrentFrame> )
+	{
+		Scanner( SetCurrentFrame,<frameNumber> );
+	}
+
+	if ( <gCurrentFrame> > <gMaxScannedFrame> )
+	{ 
+		gMaxScannedFrame = <gCurrentFrame>; 
+	}
+
+	return TRUE;
+}
+
+
+VOID Halse_SetFrameStatus( frame,status )
+{
+	SizzleControl( Set,FrameStatus,<status> );
+	Scanner( SetFrameStatus,~<gCurrentFrame>~,<status> );
+}
+
+
+NUMERIC Halse_ReportError( theErr)
+{
+	// Set the current frame in the UI
+	Halse_SetFrame( ~<gCurrentFrame>~, FALSE,FALSE,FALSE,FALSE );
+	
+	// Clear the Auto flag in the UI
+	ClearAutoFlag( TRUE );
+	
+	ClearFilmDriveOperationHandlers();
+
+	// Reenable the controls
+	EnableScanningControls( TRUE );
+	SetTransportControlsStopped( );
+
+	// Report the error
+	return Warning( Translate( ~<theErr>~ ) ); 
+}
+
+
+//*********************************************************************
+// Public Functions called by the rest of Long Roll
+//*********************************************************************
+// Halse LR FILM DRIVE COMMANDS (GENERAL - HIGH LEVEL)
+NUMERIC Halse_SetupScanningControls( value )
+{	
+	dlg( EnableControls,<value>,FastRewindButton );
+	if ( RunningVersion( 5.0 ) && !RunningVersion( 5.1 ) )
+	{
+		dlg( EnableControls,<value>,OverrideFrameButton,OverrideFrameTextBox);
+	}
+	dlg( EnableControls,<value>,EnableFilmDriveBox );
+	dlg( EnableControls,<value>,ViewFilmDriveControlsBox );
+	dlg( EnableControls,<value>,EditVendorButton );
+	dlg( EnableControls,<value>,GetStripSensorStateButton );
+	dlg( EnableControls,<value>,UseAdjustedFramesCheckBox );
+	dlg( EnableControls,<value>,SetFrameOverrideButton );
+	dlg( EnableControls,<value>,TwinCheckCheckBox );
+	dlg( EnableControls,TRUE,DisableFrameDetectCheckbox );
+
+	if ( DlgData(GetNumeric,AutoScan) )
+	{
+		dlg( EnableControls,FALSE,AdjustFramePositionBox );
+	}
+	else
+	{
+		dlg( EnableControls,TRUE,AdjustFramePositionBox );
+	}
+
+	if ( DlgData( GetNumeric, IgnoreFdaErrors ) )
+	{
+		dlg( EnableControls,FALSE,AutoSkipBlankFrameBox );
+		dlg( EnableControls,FALSE,AdjustFramePositionBox );
+	}
+	else
+	{
+		dlg( EnableControls,TRUE,AutoSkipBlankFrameBox );
+	}
+
+	if ( DlgData( GetNumeric, DisableFrameDetect ) )
+	{
+		dlg( EnableControls,FALSE,IgnoreFdaErrorsCheckBox );
+		dlg( EnableControls,FALSE,FastForwardButton );
+		dlg( EnableControls,FALSE,AutoSkipBlankFrameBox );
+	}
+	else
+	{
+		dlg( EnableControls,TRUE,IgnoreFdaErrorsCheckBox );
+		dlg( EnableControls,<value>,FastForwardButton );
+	}
+	return TRUE;
+}	
+
+NUMERIC Halse_FilmDriveSelected( SetupTable )
+{
+	// Change the UI as appropriate for the Halse film drive
+	dlg( SetCheck,FALSE,FrameToPunchCheckBox );
+	dlg( SetCheck,FALSE,SequentialPunchesCheckBox );
+	dlg( SetCheck,FALSE,ScanFromDataBaseButton );
+	dlg( SetCheck,TRUE,ScanToDataBaseButton );
+	dlg( Save,ScanFromDataBaseButton );
+	dlg( Save,ScanToDataBaseButton );
+	
+	// Change labels as appropriate
+	dlg( SetControlTitle, GoTo_Button, Translate( ~Go To Frame~ ));
+	dlg( SetControlTitle, CurrentPunchNumberText, Translate( ~Frame~ ));
+	dlg( SetControlTitle, FastForwardButton, Translate( ~Align~ ));
+	dlg( SetControlTitle, FastRewindButton, Translate( ~Eject~ ));	
+	dlg( SetValueInCtrlDef, ContinueFrameNumCheckBox,~Tooltip~,Translate( ~If checked, the frame numbers will continue incrementing across strips.~ ));
+	dlg( SetValueInCtrlDef, AutoIncRollNumbersCheckBox,~Tooltip~,Translate( ~If checked, the roll number will automatically increment when a strip is loaded.~ ));	
+	dlg( SetValueInCtrlDef, TwinCheckCheckBox,~Tooltip~,Translate( ~If checked, frame detection will ignore an area consistent with a twin check at the beginning of a strip.~ ));
+	dlg( SetValueInCtrlDef, AutoSkipBlankFrameBox,~Tooltip~,Translate( ~Automatically skip over blank frames on a strip~ ));
+
+	Halse_SetupScanningControls( TRUE );
+	if ( !DlgData( GetNumeric,FilmDriveEnabled ) )
+	{
+		dlg( EnableControls,FALSE,FastRewindButton );
+		dlg( EnableControls,FALSE,FastForwardButton );
+		dlg( EnableControls,FALSE,DisableFrameDetectCheckbox );
+	}
+
+	// Change the film format selections
+	CurrentFormat = ~<$con.DlgData[Format]>~;
+	StringList( HalseFilmSizeChoices,New,InListOrder,AddStrings,~35mm~,~62mm_6x4.5~,~62mm_6x6~,~62mm_6x7~,~62mm_6x8~ );
+	dlg( SetControlFromStringList, ~FilmFormatComboBox~, HalseFilmSizeChoices, Update );
+	dlg( SetValueInCtrlDef, GotoPunchNumberTextBox,~Tooltip~,Translate( ~Enter the frame number to go to~ ));
+	dlg( SetValueInCtrlDef, GoTo_Button,~Tooltip~,Translate( ~Go To Frame #~ ));
+	dlg( SetValueInCtrlDef, FastForwardButton,~Tooltip~,Translate( ~Align the frame~ ));
+	dlg( SetValueInCtrlDef, FastRewindButton,~Tooltip~,Translate( ~Eject the film~ ));
+	
+	defaultGap = LinesTo<DisplayUnits>( 40 );
+    dlg( SetValueInCtrlDef, MinGapTextBox,~Tooltip~,Translate( ~Enter the minimum interframe gap (default value is <defaultGap> <DisplayUnits>).~ ));
+
+	// Disable any controls that don't apply
+	if ( RunningVersion( 5.1) )
+	{
+		dlg( EnableControls,FALSE,FdaSetupStaticText,FdaSetupComboBox,EditFdaButton );
+	}
+
+	dlg( EnableControls,FALSE,EditFilmEditorsButton );
+	dlg( EnableControls,FALSE,EditorStaticText );
+	dlg( EnableControls,FALSE,EditorComboBox );
+	dlg( EnableControls,FALSE,FrameToPunchCheckBox,FrameToPunchPaddingField );
+	dlg( EnableControls,FALSE,SequentialPunchesCheckBox );
+	dlg( EnableControls,FALSE,ScanFromDataBaseButton );
+	dlg( EnableControls,FALSE,VendorYOffsetStaticText );
+	dlg( EnableControls,FALSE,VendorYOffsetTextBox );
+	dlg( EnableControls,FALSE,VendorYOffsetClearButton );
+	dlg( EnableControls,FALSE,IgnoreXAdjustmentsCheckBox );
+	dlg( EnableControls,FALSE,CutNegPromptCheckBox );
+	dlg( EnableControls,TRUE,AutoSkipBlankFrameBox );
+	dlg( EnableControls,TRUE,VendorXOffsetStaticText );
+	dlg( EnableControls,TRUE,VendorXOffsetTextBox );
+	dlg( EnableControls,TRUE,XSliderIFactorField );
+	dlg( EnableControls,TRUE,XSliderIFactorStaticText );
+	dlg( EnableControls,TRUE,VendorXOffsetClearButton );
+	dlg( EnableControls,TRUE,VendorXOffsetZeroButton );
+	dlg( EnableControls,TRUE,IgnoreFdaErrorsCheckBox );
+	dlg( EnableControls,TRUE,VendorSetupComboBox );
+	dlg( EnableControls,TRUE,EditVendorButton );
+	dlg( EnableControls,TRUE,ContinueFrameNumCheckBox,AutoIncRollNumbersCheckBox );
+	dlg( EnableControls,TRUE,FocusEveryFrameCheckBox );
+	dlg( EnableControls,TRUE,GoTo_Button );
+	dlg( EnableControls,TRUE,GoToPunchNumberTextBox );
+	dlg( EnableControls,TRUE,EdgeSensitivityStaticText );
+	dlg( EnableControls,TRUE,MinGapStaticText,MinGapLabel );
+	dlg( EnableControls,TRUE,VendorXOffsetStaticText );
+	dlg( EnableControls,TRUE,XSliderIFactorStaticText );
+	dlg( EnableControls,TRUE,FixedAdvanceStaticText,FixedAdvanceLabel );
+
+	dlg( ShowControls,  FALSE,CutNegPromptCheckBox );
+	dlg( ShowControls,  TRUE,PrevScanButton );
+	ShowFilmDriveControls();
+
+	unitsAbbrev = <DisplayUnits>Abbrev();
+	dlg( SetControlValue,~FixedAdvanceLabel~,~<unitsAbbrev>~ );
+	dlg( SetControlValue,~MinGapLabel~,~<unitsAbbrev>~ );
+
+	gap = DlgData( GetNumeric,MinInterframeGap );
+	if ( <gap> <= 0 )
+	{
+		gap = LinesTo<DisplayUnits>( 40 );
+	}
+	dlg( SetStrings,MinInterframeGap,~<gap>~ );
+	dlg( Save,MinInterframeGap );
+	
+	if ( ~<CurrentFormat>~ != ~~ )
+	{
+		if ( !dlg( SelectString,FilmFormatComboBox,~<CurrentFormat>~ ) )
+		{
+			dlg( SelectString,FilmFormatComboBox,0 );
+		}
+	}
+
+	// Set the overscan flag
+	SizzleControl( Set, OverScan, TRUE);
+
+	// We are going to replace the following global variables
+	ForgetGlobal( MagNames);
+	ForgetGlobal( FullFrameWidths);
+	ForgetGlobal( FullFrameHeights);
+	ForgetGlobal( OverScanFrameHeights);
+	ForgetGlobal( MinMagnifications);
+	ForgetGlobal( MaxMagnifications);
+
+	// Change all the control strings
+	NewString( MagNames,Set,		~Undefined,35mm,62mm_6x4.5,62mm_6x6,62mm_6x7,62mm_6x8~,Delimiters,~,~ );
+	NewString( FullFrameWidths, Set, ~0,26,57,57,57,57~,Delimiters,~,~ );
+	NewString( OverScanFrameHeights, Set, ~0,49.4,58.5,74.1,84,84~,Delimiters,~,~ ); // overscan
+	NewString( FullFrameHeights, Set, ~0,38,45,57,70,76~,Delimiters,~,~ );			 // without overscan
+	NewString( MinMagnifications,Set,~0,0.5,0.5,0.5,0.5,0.5~,Delimiters,~,~ );
+	NewString( MaxMagnifications,Set,~0,2.0,1.26,1.23,1.15,1.15~,Delimiters,~,~ );	 // overscan
+	
+	// Reglobalize the control string variables
+	Global( MagNames);
+	Global( FullFrameWidths);
+	Global( OverScanFrameHeights);
+	Global( FullFrameHeights);
+	Global( MinMagnifications);
+	Global( MaxMagnifications);
+
+	ChangeEnableSetOverscanArea( TRUE );
+	OnFrameRollNumbering();
+	Halse_RefreshScanAreaSettings( 0, FALSE, ~<SetupTable>~ );
+
+	return TRUE;
+}
+
+NUMERIC Halse_VerifyFormatMatchesDrive( filmFormat )
+{
+	dlg( GetInput );
+    DlgData( Get,FilmDriveSetup,FilmDriveSetup );
+
+	Query = ~Select * From HalseFilmDrive Where Name = '<FilmDriveSetup>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+	}
+
+	if ( !List( GetFirst,Setup ) )
+	{
+		return Warning( Translate( ~Could not find a setup named <FilmDriveSetup>~ ) );
+	}
+
+	transportType =  ~<$pcon.Setup[TransportType]>~;
+
+	if ( ~<transportType>~ == ~135~ && ~<FilmFormat>~ == ~35mm~ )
+		{	return TRUE;	}
+	if ( ~<transportType>~ != ~135~ && ~<FilmFormat>~ != ~35mm~ )
+			{	return TRUE;	}
+
+	return FALSE;
+}
+
+NUMERIC Halse_RefreshScanAreaSettings( reason, loadSettings, SetupTable )
+{
+	OkToUpdate = FALSE;
+	Dlg( GetInput );
+	filmFormat = ~<$con.DlgData[Format]>~;
+	SetupName = ~<$con.dlgData[ScanSetup]>~;
+
+	if ( <reason> == 3 ) // film format changed
+	{
+		if ( !Halse_VerifyFormatMatchesDrive( ~<filmFormat>~ ) )
+		{
+			Warning( Translate( ~The film format does not match the Film Drive Type. Change either the Film Drive Setup or the Film Format.~ ) );
+		}
+	}
+
+	if ( ~<SetupName>~ == ~~ )
+	{
+		OkToUpdate = TRUE;
+		if ( <loadSettings> )
+		{
+			return FALSE;
+		}
+	}
+	else
+	{
+		Key = ~Name = '<SetupName>' AND ScannerType = '<$con.DlgData[ScannerType]>'~;
+		Query = ~Select * from <SetupTable> Where <Key>~;
+
+		savedYPos = DlgData( GetNumeric,YPos );
+		savedHeight = DlgData( GetNumeric,ScanLength );
+		savedFilmFormat = ~<gCurrentFilmFormat>~;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+		{
+			OkToUpdate = TRUE;
+		}
+		else if ( !List( GetFirst,Setup ) )
+		{
+			OkToUpdate = TRUE;
+		}
+		else if ( <loadSettings> )
+		{
+			savedYPos = atof(~<$pcon.Setup[YPos]>~);
+			savedHeight = atof(~<$pcon.Setup[ScanLength]>~);
+			savedFilmFormat = ~<$pcon.Setup[format]>~;
+		}
+
+		if ( <loadSettings> || (!DlgData( GetNumeric,FilmDriveEnabled )) )
+		{
+			// keep the saved settings on load settings
+			dlg( SetStrings,YPOS,~<savedYPos>~,ScanLength,~<savedHeight>~ );
+		}
+
+		if ( ~<savedFilmFormat>~ != ~<filmFormat>~ )
+		{
+			OkToUpdate = TRUE;
+		}
+		else if ( (<savedYPos> == 50) && (<savedHeight> == 100) )
+		{
+			OkToUpdate = TRUE;
+		}
+		else if ( <loadSettings> )
+		{
+			currentYPos = DlgData( GetNumeric, YPos );
+			currentHeight = DlgData( GetNumeric, ScanLength );
+
+			if ( (<currentYPos> != <savedYPos>) || (<currentHeight> != <savedHeight>) )
+			{
+				OkToUpdate = TRUE;
+			}
+		}
+	}
+
+	if ( <OkToUpdate> )
+	{
+		Index = MagNames( IndexOf,~<filmFormat>~ );
+		if ( ~<Index>~ == ~~ )
+		{
+			Index = 1;
+		}
+
+		ZoomValue = dlgData( GetNumeric,OpticalZoom );
+		if ( <ZoomValue> < 0 )
+		{
+			CheckOverScanAdjustment( <ZoomValue> );
+		}		
+		
+		if ( <loadSettings> )
+		{
+			osYPos = atof(~<$pcon.Setup[OverScanYPos]>~);
+			osHeight = atof(~<$pcon.Setup[OverScanLength]>~);
+			osXPos = atof(~<$pcon.Setup[OverScanXPos]>~);
+			osWidth = atof(~<$pcon.Setup[OverScanWidth]>~);
+		}
+		else
+		{
+			osYPos = DlgData( GetNumeric,OverScanYPos );
+			osHeight = DlgData( GetNumeric,OverScanLength );
+			osXPos = DlgData( GetNumeric,OverScanXPos );
+			osWidth = DlgData( GetNumeric,OverScanWidth );
+		}
+
+		if ( <osYPos> == 0. )
+		{
+			osYPos = 50.0;
+		}
+		if ( <osXPos> == 0. )
+		{
+			osXPos = 50.0;
+		}
+		if ( <osHeight> == 0. )
+		{
+			osHeight = 100.0;
+		}
+		if ( <osWidth> == 0. )
+		{
+			osWidth = 100.0;
+		}
+		
+		// Set the overscan area to what's in our setup
+		DlgData( SetValues,OverScanYPos,<osYPos>,OverScanLength,<osHeight>,
+						   OverScanXPos,<osXPos>,OverScanWidth,<osWidth> );
+
+		SizzleControl( SetValues,OverScanYPos,<osYPos>,OverScanHeight,<osHeight>,
+							     OverScanXPos,<osXPos>,OverScanWidth,<osWidth> );
+		
+		heightAdjustment = <osHeight> / 100.0;
+		FrameHeight = atof(FullFrameHeights(ValueOf,$Index)) * <heightAdjustment>;
+		OverScanFrameHeight = atof(OverScanFrameHeights(ValueOf,$Index)) * <heightAdjustment>;
+
+		cL = (<FrameHeight> / <OverScanFrameHeight>) * 100.0;
+		cY = 100.0 * (<OverScanFrameHeight> - (<FrameHeight> / 2.0) ) / <OverScanFrameHeight>;
+
+		ScanY = ntoa( Pin( <cY>,2,98 ),~%f~ );
+		ScanL = ntoa( Pin( <cL>,0,100 ),~%f~ );
+
+		dlg( SetStrings,YPOS,~<scanY>~,ScanLength,~<scanL>~,ScanWidth );
+	}
+	else
+	{
+		Index = MagNames( IndexOf,~<filmFormat>~ );
+		if ( ~<Index>~ == ~~ )
+		{
+			Index = 1;
+		}
+		osHeight = DlgData( GetNumeric,OverScanLength );
+		heightAdjustment = <osHeight> / 100.0;
+		return FALSE;
+	}
+	return TRUE;
+
+}
+
+NUMERIC Halse_OpenFilmDrive( UpdateStatus,SkipCalCheck )
+{
+	dlg( GetInput );
+    DlgData( Get,FilmDriveSetup,FilmDriveSetup );
+
+	if ( ~<FilmDriveSetup>~ == ~~ )
+	{
+		return Warning( Translate( ~You must select a film drive setup first~ ) );
+	}
+
+	Query = ~Select * From HalseFilmDrive Where Name = '<FilmDriveSetup>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+	}
+
+	if ( !List( GetFirst,Setup ) )
+	{
+		return Warning( Translate( ~Could not find a setup named <FilmDriveSetup>~ ) );
+	}
+
+	MinPunchNumber = 0;
+	MaxPunchNumber = 32767;
+
+	if ( !FindScanner(FALSE) ) { return FALSE; }
+
+	// Get the scanner object to keep around the last scan's raw data
+	Scanner( ActivateLastRawImageInfo, TRUE);
+	
+	portNumber = ~<$pcon.Setup[Port]>~;
+	transportType =  ~<$pcon.Setup[TransportType]>~;
+	Global( ScanLengthPercentSetup );
+
+	MaxXIncrementsInInches = 30.00000;  //for no particular reason
+	TXOffsetIncrementUnit = 1.0 / 254.0; // inches per 10 mm
+	MaxXIncrements = <MaxXIncrementsInInches>/<TXOffsetIncrementUnit>;
+
+	if (~<transportType>~ == ~135~ || ~<transportType>~ == ~35mm~)
+	{
+		gCurrentTransportType = <DRIVE_135>;
+	}
+	else if (~<transportType>~ == ~120~ || ~<transportType>~ == ~120mm~)
+	{
+		gCurrentTransportType = <DRIVE_120>;
+	}
+	else
+	{
+		gCurrentTransportType = <DRIVE_NONE>;
+		// We should probably return an error
+		return Warning( Translate( ~There is an unsupported drive type selected in the setup table.~ ) );
+	}
+	FilmDriveCmdInProgress( ~Connecting to and initializing film drive~ );
+	
+
+	ForgetGlobal( FilmDrive );
+
+	if ( !Defined( FilmDrive ) )
+	{
+		HalseStripDrive( FilmDrive );
+		if ( !FilmDrive( Connect,~<portNumber>~,~<gCurrentTransportType>~,SizzleControl ) )
+		{
+			FilmDriveCmdInProgress( ~Film drive not connected~ );
+			return Warning( Translate( ~Failed to open a connection to the Halse film drive.~ ) );
+		}
+
+		Global( FilmDrive );
+	}
+
+	FilmDriveCmdInProgress( ~Film drive connected~ );
+	Global( FilmDrive );
+	
+	if (! FilmDrive( AdvanceOnLoadDistance,<gLoadDistance> ) )
+	{
+		return Warning( Translate( ~Failed to set distance to move film on load.~ ) );
+	}
+
+	SizzleControl( Set,AutoFDAErrorHandlingEnabled,TRUE );
+
+	// Set our pre and post scan call back functions
+    SizzleControl( Set, PreScanNotification, ~Halse_PreScanCallbackFunction();~ );
+	SizzleControl( Set, ScanCompleteNotification, ~Halse_PostScanCallbackFunction(%ld);~ );
+	SizzleControl( Set, FrameDetectErrorNotification, ~Halse_FrameDetectError(%ld,%ld,%ld);~ );
+
+	dlg( SetStrings,GotoPunchNumberTextBox,~~,CurrentPunchPosition,~0~ );
+	DlgData( SetValues,TXOffsetIncrementUnit,<TXOffsetIncrementUnit> );
+
+	SetDialogVendorXOffsetInfo( 0, 0.0 );
+	EnableScanningControls( TRUE );
+	SetTransportControlsStopped();
+
+	DlgData( SetValues,UseAdjustedFrames,FALSE );
+	dlg(SetCheck, FALSE, UseAdjustedFramesCheckBox);
+	dlg(SetCheck, FALSE, ScanFromDataBaseButton);
+	dlg(SetCheck, TRUE, ScanToDataBaseButton);
+	dlg(Save, ScanFromDataBaseButton);
+	dlg(Save, ScanToDataBaseButton);
+
+	gStoppingFilmDrive = FALSE;
+	gFirstFrame = TRUE;
+	//SizzleControl( Set, AutoSkipFDABlankFrame, TRUE ); 
+	SizzleControl( Set, AutoSkipFDABlankFrame, FALSE ); 
+	gLastMoveDirection = 0;
+	gEjectDone = FALSE;
+	gSkippedLastBlank = FALSE;
+	gSkippingBlankFilm = FALSE;
+	Halse_ResetStopFlag();
+
+	SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_PESSIMISTIC>~ );
+	Scanner( InitFrameList,SizzleControl );
+
+	gMaxScannedFrame = 0;
+	gUseRollNumberOnStartup = TRUE;
+
+	filmFormat = ~<$Con.DlgData[Format]>~;
+	if ( !Halse_VerifyFormatMatchesDrive( ~<filmFormat>~ ) )
+	{
+		Warning( Translate( ~The film format does not match the Film Drive Type. Please select the correct the Film Format.~ ) );
+	}
+	else
+	{
+		if ( !CheckStoredCalibration( TRUE,FALSE,FALSE ) && !<SkipCalCheck> )
+		{
+				OnHR500CalibrateButton( FALSE,FALSE,TRUE );
+		}
+	}
+	return TRUE;
+}
+
+
+NUMERIC Halse_IsFilmDriveTensioned( UpdateStatus )
+{
+	dlg( GetInput );
+	_LogMessage( ~Halse_IsFilmDriveTensioned~ );
+	sensorState = Halse_GetStripSensorState();
+	Halse_UpdateSensorState( <sensorState> );
+
+	Tension = FilmDrive( FilmStatus );
+	gLastFrame = FilmDrive( IsEndOfStrip );
+	newStrip = FilmDrive( IsNewStrip );
+
+	if ( <Tension> == <HALSE_FILM_UNLOADED> && !<gLastFrame> )
+	{
+		SizzleControl( Set,AutoFDAErrorHandlingEnabled,TRUE );
+		msg = ~~;
+		gAligningFrame = FALSE;
+		FilmDrive( FilmInhibit,FALSE );
+		Halse_ResetStopFlag();
+
+		if ( <gMaxScannedFrame> > <MinPunchNumber> && <gCurrentFrame> == <gMaxScannedFrame> )
+		{
+			gFirstFrame = FALSE;
+			SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_OPTIMISTIC>~ );
+
+			result = TRUE;
+		}
+		else
+		{
+			DlgData( SetValues,UseAdjustedFrames,FALSE );
+			dlg(SetCheck, FALSE, UseAdjustedFramesCheckBox);
+			gFirstFrame = TRUE;
+			gFirstFrameAligned = FALSE;
+			//SizzleControl( Set, AutoSkipFDABlankFrame, TRUE ); 
+			SetDialogVendorXOffsetInfo( 0, 0.0 );
+			SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_PESSIMISTIC>~ );
+
+			if ( <sensorState> == 4 )
+			{
+				msg = ~Film unloaded.~;
+				Warning( Translate( ~Please load the film.~ ) );
+				result = FALSE;
+			}
+			result = FALSE;
+		}
+	}
+	else if ( <Tension> == <HALSE_FILM_UNLOADED> && <gLastFrame> && !<gEjectDone> )
+	{
+		SizzleControl( Set,AutoFDAErrorHandlingEnabled,FALSE );
+		msg = ~Last frame~;
+		gFirstFrame = FALSE;
+		SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_OPTIMISTIC>~ );
+
+		gAligningFrame = FALSE;
+		result = TRUE;
+		if ( <sensorState> == 4 )
+		{
+			msg = ~Film unloaded.~;
+			result = FALSE;
+		}
+	}
+	else if ( <Tension> == <HALSE_FILM_UNLOADED> && <gLastFrame> )
+	{
+		SizzleControl( Set,AutoFDAErrorHandlingEnabled,FALSE );
+		msg = ~Film unloaded~;
+		gFirstFrame = TRUE;
+		gLastFrame = FALSE;
+		SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_PESSIMISTIC>~ );
+		gAligningFrame = FALSE;
+		result = FALSE;
+	}
+	else if ( <Tension> == <HALSE_FILM_LOADING> )
+	{
+		SizzleControl( Set,AutoFDAErrorHandlingEnabled,TRUE );
+		msg = ~Loading film~;
+		gScanCount = 0;
+		gLastFrame = FALSE;
+		gFirstFrame = TRUE;
+		gFirstFrameAligned = FALSE;
+		//SizzleControl( Set, AutoSkipFDABlankFrame, TRUE ); 
+		SetDialogVendorXOffsetInfo( 0, 0.0 );
+		SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_PESSIMISTIC>~ );
+
+		gAligningFrame = FALSE;
+		result = FALSE;
+		Scanner( InitFrameList,SizzleControl );
+		//gMaxScannedFrame = 0;
+		DlgData( SetValues,UseAdjustedFrames,FALSE );
+		dlg(SetCheck, FALSE, UseAdjustedFramesCheckBox);
+	}
+	else if ( <Tension> == <HALSE_FILM_UNLOADING> )
+	{
+		SizzleControl( Set,AutoFDAErrorHandlingEnabled,TRUE );
+		msg = ~Unloading film~;
+		gScanCount = 0;
+		gLastFrame = FALSE;
+		gFirstFrame = TRUE;
+		gFirstFrameAligned = FALSE;
+		//SizzleControl( Set, AutoSkipFDABlankFrame, TRUE ); 
+		Scanner( InitFrameList,SizzleControl );
+
+		//gMaxScannedFrame = 0;
+		SetDialogVendorXOffsetInfo( 0, 0.0 );
+		SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_PESSIMISTIC>~ );
+
+		gAligningFrame = FALSE;
+		result = FALSE;
+		DlgData( SetValues,UseAdjustedFrames,FALSE );
+		dlg(SetCheck, FALSE, UseAdjustedFramesCheckBox);
+	}
+	else if ( <Tension> == <HALSE_FILM_MOVING> )
+	{
+		msg = ~Moving film~;
+		result = TRUE;
+	}
+	else if ( <Tension> == <HALSE_FILM_CLAMPING> )
+	{
+		msg = ~Clamping film~ ;
+		result = TRUE;
+	}
+	else
+	{
+		msg = ~Film ready~;
+		if ( <newStrip> )
+		{
+			Scanner( InitFrameList,SizzleControl );
+
+			gMaxScannedFrame = 0;
+			gFirstFrame = TRUE;
+			gFirstFrameAligned = FALSE;
+			//SizzleControl( Set, AutoSkipFDABlankFrame, TRUE ); 
+
+			dlg( GetInput,GetStrings,Order,Order,Roll,Roll );
+			if ( !<gFrameOverridden> && DlgData( GetNumeric,ContinueFrameNumber ) && ~<LastOrderID>~ == ~<Order>~  && ~<LastRoll>~ == ~<Roll>~ )
+			{	
+				gCurrentFrame = <gCurrentFrame> + 1;
+			}
+			else if ( !<gFrameOverridden> )
+			{
+				gCurrentFrame = 1;
+			}
+
+			SetCurrentPunchNumber( ~<gCurrentFrame>~ );
+			SetCurrentFrameNumber( FormatFrameNumber( ~<gCurrentFrame>~ ) );
+
+
+			if ( DlgData( GetNumeric,AutoIncRollNumber ) && !<gUseRollNumberOnStartup> )
+			{
+				dlg( GetStrings,Roll,Roll);
+				if ( !IsNumeric( ~<Roll>~ ) )
+				{
+					Warning( Translate( ~Unable to automatically increment the Roll Number <Roll>~ ) );	
+				}
+				else
+				{
+					nextroll = atof( ~<Roll>~ ) + 1;
+					nextroll = FormatRollNumber( ~<nextroll>~ );
+					dlg( SetStrings,Roll,~<nextroll>~ );
+				}
+			}
+
+			gUseRollNumberOnStartup = FALSE;
+			position = FilmDrive( GetCurrentPosition );
+			filmPosition = SizzleControl( GetNumeric,FilmPosition );
+			if ( !Scanner( MarkFrame,~<gCurrentFrame>~,<position>,FALSE,FALSE,<filmPosition> ) )
+			{
+				return Warning( Translate( ~Unable to override the frame number to <gCurrentFrame>~ ) );
+			}
+		}
+		result = TRUE;
+	}
+	gFrameOverridden = FALSE;
+
+	if ( <UpdateStatus> )
+	{
+		FilmDriveCmdInProgress( ~<msg> ~ );
+	}
+
+	return <result>;
+}
+
+
+NUMERIC Halse_NextFrame( XOffset, YOffset, ScanMode, DoPunchWaitOverride, FrameToPunch, UseAdjustedFramePosition, IgnoreFdaErrors, BypassFda, AutoSkipFDABlank )
+{
+	Halse_ResetStopFlag();
+
+	NoFDA = <BypassFDA>;
+	// Make sure that a scan has ocurred; otherwise we can't proceed
+	if ( ~<gScanCount>~ == ~0~ )
+	{ 
+		Invoke( Halse_ReportError,~You must scan first~ );
+		return False;
+	}
+		
+	// If this is the last frame, return a warning that this can't be done
+	if ( FilmDrive( IsEndOfStrip ) || <gLastFrame> )
+	{ 
+		Invoke( FilmDriveCmdInProgress,~End of Strip... ~ );
+		Invoke( Halse_ReportError, ~We are at the last frame of the strip.  You cannot advance any further.~ ); 
+		return FALSE;
+	}
+
+	// If we are at the maximum scanned frame and they did not just perform an evaluation
+	// then alert the user that they will need to scan this frame again to advance.
+	if ((<gCurrentFrame> == <gMaxScannedFrame>) && !<gJustPerformedEvaluationOnCurrentFrame> && !<IgnoreFdaErrors> && !<BypassFda> )
+	{ 
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Failed... (did not perform evaluation on current frame~ );
+		Invoke( Halse_ReportError,~You must rescan the current frame before proceeding to the next frame.~ ); 
+		return FALSE;
+	}
+
+	// Clear the jog count
+	Invoke( SetDialogVendorXOffsetInfo, 0, 0.0 );
+		
+	// If we have performed an evaluation of the current frame that we are on then 
+	// we want to call the Halse_NextFrame_Glue function to advance the film;
+	// otherwise we want to call Halse_MoveRelative_Glue to advance the film.
+
+	evalResult = FALSE;
+	result = FALSE;
+
+	gLastSensorState = Halse_GetStripSensorState();
+	Invoke( Halse_UpdateSensorState, <gLastSensorState> );
+
+	if ( <gAligningFrame> )
+	{
+		SizzleControl( SetValues,AlignmentFlag,~<HALSE_FDA_PESSIMISTIC>~,AdjustingNextFrame,FALSE );
+		nextFrameNumber = <gCurrentFrame>;
+	}
+	else
+	{
+		SizzleControl( SetValues,AlignmentFlag,~<HALSE_FDA_OPTIMISTIC>~,AdjustingNextFrame,TRUE );
+		nextFrameNumber = <gCurrentFrame> + 1;
+	}
+
+	if ( <UseAdjustedFramePosition> && (<nextFrameNumber> <= <gMaxScannedFrame>) )
+	{
+		return Halse_SeekPunch( <gCurrentFrame>, <nextFrameNumber>, <XOffset>, <YOffset>, 1, <gMaxScannedFrame>, <ScanMode>, <DoPunchWaitOverride> );
+	}
+
+	showOverScan = DlgData( GetNumeric,AdjustFramePosition );
+
+	if ( <gJustPerformedEvaluationOnCurrentFrame> || <IgnoreFdaErrors> || <BypassFda> )
+	{ 		
+		// If they have just evaluated the current frame then verify that the
+		// evaluation gave us a clean edge.  If it did not then report an appropriate
+		// error and return false.
+		if ( <gJustPerformedEvaluationOnCurrentFrame> )
+		{	
+			evalResult = Scanner( FindNextFrame,<IgnoreFdaErrors>,<BypassFda>,<gFirstFrame>,SizzleControl );
+			if ( <evalResult> == <EDGES_OK> )
+			{
+				Invoke( Halse_AnalyzeFDAResults,<evalResult>,TRUE,<BypassFda> );
+			}
+			//result1 = Scanner( EvaluationOutcome,<kResetWhenComplete> );
+			LogMessage( ~Evaluation outcome = <evalResult> ~ );	
+		}
+
+		if ( <BypassFda> || (<IgnoreFdaErrors> && (<evalResult> != <EDGES_OK> )) )
+		{
+		// get distance to move
+			NoFDA = TRUE;
+			distance = Halse_GetDistanceToMove();
+			result = FilmDrive( MoveDeltaX,<distance>,FALSE,SizzleControl );
+			LogMessage( ~Moving to next estimated frame position (<distance>) to <nextFrameNumber>~ );
+		}
+		else if (<evalResult> == <BLANK_FRAME_FILM_BASE> || <evalResult> == <SKIP_BLANKS> )
+		{
+			if ( !<gAligningFrame> )
+			{
+				DlgData( Get,Frame,expectedFrame );
+				revertFrame = atof( ~<expectedFrame>~ ) - 1;
+				Invoke( SetFormattedFrameNumber, <revertFrame> );
+			}
+			// Clear the just aligning frame flag
+			gAligningFrame = FALSE;
+			SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_PESSIMISTIC>~ );
+		
+			// Report the error
+			Invoke( UserFrameErrorMessage,~Detected blank film...~, TRUE, FALSE, SizzleControl( GetNumeric,AutoSkipFDABlankFrame ) );
+			return FALSE;
+		}
+		else if (<evalResult> != <EDGES_OK>)
+		{ 
+			Log( Session,~evalResult = <evalResult>, showOverscan = <showOverscan>, gAligningFrame = <gAligningFrame>~);
+			if ( !<gAligningFrame> )
+			{
+				DlgData( Get,Frame,expectedFrame );
+				revertFrame = atof( ~<expectedFrame>~ ) - 1;
+				Invoke( SetFormattedFrameNumber, <revertFrame> );
+			}
+			// Clear the just aligning frame flag
+			gAligningFrame = FALSE;
+		
+			// Set the max scaned frame to the current frame
+			if (<gCurrentFrame> > <gMaxScannedFrame>)
+			{ 
+				gMaxScannedFrame = <gCurrentFrame>; 
+			}
+
+			if ( <showOverscan> ) 
+			{ 
+				Invoke( FilmDriveOperationError, ~move to next frame~ ); 
+			}
+			Invoke( UserFrameErrorMessage,~Frame Movement Failed ... (edges not OK)~, TRUE, FALSE );
+			return FALSE;
+		}
+		else
+		{ 
+			LogMessage( ~Moving to next detected frame edge (<nextFrameNumber>)~ );
+			distance = Scanner( GetDetectedAdjustment ) * 10.0;
+			result = FilmDrive( MoveDeltaX,<distance>,FALSE,SizzleControl );
+		}
+	}
+	else if ( !<gJustPerformedEvaluationOnCurrentFrame> )
+	{ 
+		// Note that because of our earlier check for the condition where we had
+		// not just evaluated the current frame and the current frame is the max
+		// scanned frame we don't need to worry about that here...(e.g. the user
+		// had moved backwards and rescanned some prior frame and then started
+		// advancing the film without scanning it).
+		Invoke( Halse_CleanUpLastScan );
+		Log( Session,~moving from <gCurrentFrame> to next frame~ );
+		distance = Halse_MoveRelative( <gCurrentFrame> + 1 );
+		result = FilmDrive( MoveDeltaX,<distance>,FALSE,SizzleControl );
+
+		status = Scanner( GetFrameStatus,<gCurrentFrame> + 1 );
+		if ( <status> == -1 )
+		{	
+			BypassFda = TRUE;
+			NoFDA = FALSE;
+		}
+	}
+
+	Halse_ResetStopFlag();
+
+	if ( !<result>)
+	{
+		// Clear the just aligning frame flag
+		gAligningFrame = FALSE;
+		
+		Invoke( UserFrameErrorMessage,~Frame Movement Failed... (MoveDeltaX Next Frame)~, TRUE, FALSE );
+		if ( <ScanMode> ) 
+		{ 
+			Invoke( FilmDriveOperationError, ~move to next frame~ ); 
+		}
+			
+		// Clear the Auto flag in the UI
+		Invoke( ClearAutoFlag, FALSE );
+
+		// Set the current frame in the UI
+		Invoke( Halse_UpdateFrameNumber,~<gCurrentFrame>~ );
+		Invoke( Halse_SetFrame,~<gCurrentFrame>~, FALSE, <NoFDA>,FALSE,FALSE );
+
+		return FALSE;
+	}
+	else
+	{
+		// If we are not aligning the frame then increment the current frame count
+		gLastMoveDirection = <HALSE_MOVE_FORWARD>;
+
+		if ( !<gAligningFrame> )
+		{ 
+			++gCurrentFrame; 
+		}
+		else
+		{
+			// Clear the just aligning frame flag
+			gAligningFrame = FALSE;
+		}
+		
+		gFirstFrame = FALSE;
+		gFirstFrameAligned = TRUE;
+
+		// Determine if we need to update the max scanned frame
+		if (<gCurrentFrame> > <gMaxScannedFrame>)
+			{ gMaxScannedFrame = <gCurrentFrame>; }
+
+		Invoke( RestoreAutoScanFlag );
+	}
+			
+	if ( <ContinueRunning> )
+	{
+		Invoke( Halse_UpdateFrameNumber,~<gCurrentFrame>~ );
+		Invoke( Halse_SetFrame,~<gCurrentFrame>~, TRUE, <NoFDA>,TRUE,FALSE );
+		if ( <BypassFda> || (<IgnoreFdaErrors> && (<evalResult> != <EDGES_OK> )) )
+		{
+			Halse_SetFrameStatus( ~<gCurrentFrame>~,-1 );
+		}
+		else
+		{
+			Halse_SetFrameStatus( ~<gCurrentFrame>~,1 );
+		}
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Complete~ );
+		SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_OPTIMISTIC>~ );
+
+		if ( <ScanMode> ) 
+		{ 
+			Invoke( Halse_SetPunchStatus );
+			Invoke( FilmDriveOperationComplete, ~<gCurrentFrame>~ ); 
+		}
+		else
+		{
+			Invoke( EnableScanningControls, TRUE );
+			Invoke( SetTransportControlsStopped );
+		}
+		return TRUE;
+	}
+	SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_PESSIMISTIC>~ );
+
+	Invoke( UserFrameErrorMessage,~Frame Movement Aborted~, TRUE, FALSE );
+	if ( <ScanMode> ) 
+	{ 
+		Invoke( FilmDriveOperationStopped );
+		Invoke( EnableScanningControls, TRUE );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC Halse_SetPunchStatus()
+{
+	SizzleControl( Set,Punch,!SizzleControl(GetNumeric,FDAErrorOnPrevious) );
+	return TRUE;
+}
+
+NUMERIC Halse_PrevFrame( XOffset, YOffset, ScanMode, DoPunchWaitOverride, FrameToPunch )
+{
+	Halse_ResetStopFlag();
+	Invoke( Halse_CleanUpLastScan );
+
+	// Make sure that a scan has ocurred; otherwise we can't proceed
+	if ( ~<gScanCount>~ == ~0~ )
+	{ 
+		Invoke( Halse_ReportError, ~You must scan first~ );
+		return FALSE;
+	}
+
+	// If this is the first frame then let the user know we can't do that
+	firstFrame = Halse_GetFirstFrameNumber();
+	if (<gCurrentFrame> == <MinPunchNumber> || <gCurrentFrame> == <firstFrame> )
+	{ 
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Aborted... You are at first frame of strip ~ );
+		Invoke( Halse_ReportError,~We are at the first frame of the strip and therefore cannot move to the previous frame.~ ); 
+		return FALSE;
+	}
+
+	// Clear the jog count
+	Invoke( SetDialogVendorXOffsetInfo, 0, 0.0 );
+	gSkippedLastBlank = FALSE;
+	gSkippingBlankFilm = FALSE;
+		
+	LogMessage( ~Previous Frame~ );
+	gLastSensorState = Halse_GetStripSensorState();
+	Invoke( Halse_UpdateSensorState, <gLastSensorState> );
+
+	distance = Halse_MoveRelative( <gCurrentFrame> - 1 );
+	result = FilmDrive( MoveDeltaX,<distance>,FALSE,SizzleControl );
+
+	gLastSensorState = Halse_GetStripSensorState();
+	Invoke( Halse_UpdateSensorState, <gLastSensorState> );
+
+	if ( !<result> )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Failed... (MoveDeltaX PrevFrame) ~, TRUE, FALSE );
+		if ( <ScanMode> ) 
+		{ 
+			Invoke( FilmDriveOperationError, ~move to previous frame~ );
+		}
+		return FALSE;
+	}
+	else if ( <gLastSensorState> <= 8 )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Failed... (Film may be unloaded on PrevFrame)~, TRUE, FALSE );
+		if ( <ScanMode> ) 
+		{ 
+			Invoke( FilmDriveOperationError, ~move to previous frame~ );
+		}
+		return FALSE;
+	}
+	else
+	{
+		--gCurrentFrame; 
+	}
+
+	gLastMoveDirection = <HALSE_MOVE_REVERSE>;
+	// Clear the gJustPerformedEvaluationOnCurrentFrame flag
+
+	if ( <ContinueRunning> )
+	{
+		gLastFrame = FilmDrive( IsEndOfStrip );
+		SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_OPTIMISTIC>~ );
+		gJustPerformedEvaluationOnCurrentFrame = FALSE;
+
+		Invoke( Halse_UpdateFrameNumber,~<gCurrentFrame>~ );
+		Invoke( Halse_SetFrame,~<gCurrentFrame>~, FALSE,FALSE,TRUE,FALSE );
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Complete~ );
+		if ( <ScanMode> ) 
+		{ 
+			Invoke( FilmDriveOperationComplete, ~<gCurrentFrame>~ );
+		}
+		else
+		{
+			Invoke( EnableScanningControls, TRUE );
+			Invoke( SetTransportControlsStopped );
+		}
+
+		return TRUE;
+	}
+	Invoke( UserFrameErrorMessage,~Frame Movement Aborted~, TRUE, FALSE );
+	if ( <ScanMode> ) 
+	{ 
+		Invoke( FilmDriveOperationStopped ); 
+	}
+	return FALSE;
+}
+
+
+NUMERIC Halse_SeekPunch( CurrentPunch, SeekPunch, XOffset, YOffset, FirstPunch, LastPunch, ScanMode, DoPunchWaitOverride, FrameToPunch )
+{
+	Halse_ResetStopFlag();
+	FilmDriveCmdInProgress( ~Seeking Frame <SeekPunch>...~ );
+
+	gSkippedLastBlank = FALSE;
+	gSkippingBlankFilm = FALSE;
+	// Clear the jog count
+	Invoke( SetDialogVendorXOffsetInfo, 0, 0.0 );
+	Invoke( Halse_CleanUpLastScan );
+
+	// Make sure that a scan has ocurred; otherwise we can't proceed
+	if ( ~<gScanCount>~ == ~0~ )
+	{ 
+		Invoke( Halse_ReportError,~You must scan first~ );
+		return FALSE;
+	}
+
+	LogMessage( ~Seek Frame <SeekPunch>~ );
+	// If non scanning mode then default to max ranges - to allow manual
+	// frame movement
+	if ( !<ScanMode> )
+	{
+		FirstPunch = Halse_GetFirstFrameNumber( );
+		FirstPunch = Halse_FormatPunchNumber( <FirstPunch> );
+		LastPunch  = Halse_FormatPunchNumber( 32767 );
+	}
+
+	gLastSensorState = Halse_GetStripSensorState();
+	Invoke( Halse_UpdateSensorState, <gLastSensorState> );
+
+	result = Halse_FindPunchNumber( ~<CurrentPunch>~,~<SeekPunch>~,~<FirstPunch>~,~<LastPunch>~, ~<XOffset>~ );
+
+	gLastSensorState = Halse_GetStripSensorState();
+	Invoke( Halse_UpdateSensorState, <gLastSensorState> );
+
+	if ( !<result> )
+	{
+		Invoke( EnableScanningControls, TRUE );
+		Invoke( SetTransportControlsStopped );
+		if ( <ScanMode> ) 
+		{ 
+			Invoke( FilmDriveOperationError, ~seek frame [<SeekPunch>]~ );
+		}
+		return FALSE;
+	}
+	else if ( (<SeekPunch> < <gMaxScannedFrame>) && (FilmDrive( FilmStatus ) == <HALSE_FILM_UNLOADED>) )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Failed... (Film Unloaded on Seek) ~, TRUE, FALSE );
+		if ( <ScanMode> ) 
+		{ 
+			Invoke( FilmDriveOperationError, ~seek frame [<SeekPunch>]~ );
+		}
+		return FALSE;
+	}
+	else
+	{
+		if ( <SeekPunch> > <CurrentPunch> )
+		{
+			gLastMoveDirection = <HALSE_MOVE_FORWARD>;
+		}
+		else
+		{
+			gLastMoveDirection = <HALSE_MOVE_REVERSE>;
+		}
+
+		gCurrentFrame = $SeekPunch;
+		if ( <gCurrentFrame> < <gMaxScannedFrame> )
+		{
+			gLastFrame = FALSE;
+		}
+	}
+
+	if ( <ContinueRunning> )
+	{
+		SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_OPTIMISTIC>~ );
+
+		Invoke( Halse_UpdateFrameNumber,~<gCurrentFrame>~ );
+		Invoke( Halse_SetFrame,~<gCurrentFrame>~, FALSE,FALSE,TRUE,FALSE );
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Complete~ );
+
+		if ( <ScanMode> ) 
+		{ 
+			Invoke( FilmDriveOperationComplete, ~<gCurrentFrame>~ );
+		}
+		else
+		{
+			Invoke( EnableScanningControls, TRUE );
+			Invoke( SetTransportControlsStopped );
+		}
+
+		return TRUE;
+	}
+	SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_PESSIMISTIC>~ );
+	Invoke( UserFrameErrorMessage,~Frame Movement Aborted~, TRUE, FALSE );
+	if ( <ScanMode> ) 
+	{ 
+		Invoke( FilmDriveOperationStopped );
+	}
+	return TRUE;
+}
+
+
+
+NUMERIC Halse_MoveDeltaX( Delta, IgnoreAdjustment  )
+{
+	dlg( GetInput );
+	Halse_ResetStopFlag();
+
+	AllowedDelta = 0;
+	if ( <FrameNotInDB> )
+	{	UseImageOverrides = FALSE;	}
+
+	if ( <Delta> == 0 )
+	{
+		return TRUE;
+	}
+
+	DlgData( GetValues,TXOffsetPositionInUnits,CurrentXOffset,
+			 TXOffsetIncrementUnit,TXOffsetIncrementUnit );
+
+	if ( <IgnoreAdjustment> )
+	{
+		AllowedDelta = <Delta>;
+	}
+
+	_LogMessage( ~Move Delta X Offset by <AllowedDelta>~ );
+
+	if ( <CurrentXOffset> >= 0 )
+	{
+		sign = ~+~;
+		DeltaAvailable =  <MaxXIncrements>;
+		AllowedDelta = pin( <Delta>,-<MaxXIncrements>,<DeltaAvailable> );
+	}
+	else
+	{
+		sign = ~-~;
+		DeltaAvailable =  (-<MaxXIncrements>);
+		AllowedDelta = pin( <Delta>,<DeltaAvailable>,<MaxXIncrements> );
+		gLastFrame = FALSE;
+	}
+
+	if ( <AllowedDelta> == 0 )
+	{
+		Warning( Translate( ~Film Offset at end of limit of <sign><MaxXIncrementsInDisplayUnits> <DisplayUnits>.~ ) );
+		return TRUE;
+	}
+
+	Actions = ACTION Doc ( OverScanImage "DoCancelButton();" );
+	PerformActions( Actions );
+
+	FilmDriveCmdInProgress( ~Moving film ~ );
+
+	gLastSensorState = Halse_GetStripSensorState();
+	Halse_UpdateSensorState( <gLastSensorState> );
+
+	Routine = Halse_MoveDistance;
+	SetTransportControlsRunning();
+	EnableScanningControls( FALSE );
+
+	TheThread( New,<Routine>,<AllowedDelta>,<CurrentXOffset>,<IgnoreAdjustment>,<TXOffsetIncrementUnit> );
+
+	return TRUE;
+}
+
+
+NUMERIC Halse_MoveDistance( distance,CurrentXOffset,IgnoreAdjustment,TXOffsetIncrementUnit )
+{
+	result = FilmDrive( MoveDeltaX,<distance>,FALSE,SizzleControl );
+	FilmDrive( FilmInhibit,TRUE );
+	Invoke( Halse_MoveDistanceDone,<result>,<distance>,<CurrentXOffset>,<IgnoreAdjustment>,<TXOffsetIncrementUnit> );
+	return TRUE;
+}
+
+NUMERIC Halse_MoveDistanceDone( success,distance,CurrentXOffset,IgnoreAdjustment,TXOffsetIncrementUnit )
+{
+	Sleep( 50 );
+	if ( !<success> )
+	{
+		if ( <gStoppingFilmDrive> )
+		{ 
+			UserFrameErrorMessage( ~Film movement stopped ~,FALSE, FALSE ); 
+		}
+		else
+		{ 
+			Halse_Stop();
+			if ( Halse_IsFilmDriveTensioned( TRUE ) )
+			{
+				ReportFilmDriveError( ~MoveDeltaX~ );
+			}
+		}
+		return FALSE; 
+	}
+
+	FilmDrive( FilmInhibit,TRUE );
+	if ( <distance> > 0 )
+	{
+		gLastMoveDirection = <HALSE_MOVE_FORWARD>;
+	}
+	else
+	{
+		gLastMoveDirection = <HALSE_MOVE_REVERSE>;
+	}
+
+	currentSensorState = Halse_GetStripSensorState();
+	Halse_UpdateSensorState( <currentSensorState> );
+
+	if ( <distance> < 0 && <currentSensorState> == 0 && <gLastSensorState> == 0 )
+	{
+		FilmDrive( FilmInhibit,TRUE );
+		FilmDriveCmdInProgress( ~Frame Movement completed... ~ );
+		Warning( Translate( ~Film may not have fed correctly.~ ) );
+		SetDialogVendorXOffsetInfo( 0,0.0 );
+		EnableScanningControls( TRUE );
+		SetTransportControlsStopped();
+		return FALSE;
+	}
+	else if ( <distance> > 0 && (<currentSensorState> == 0 || <currentSensorState> == 8) && <gLastSensorState> == 12 )
+	{
+		FilmDriveCmdInProgress( ~Frame Movement completed... ~ );
+		Warning( Translate( ~Check to see if film is still loaded.~ ) );
+		EnableScanningControls( TRUE );
+		SetTransportControlsStopped();
+		SetDialogVendorXOffsetInfo( 0,0.0 );
+		return FALSE;
+	}
+	else if ( <distance> < 0 && <currentSensorState> == 0 && <gLastSensorState> == 12 )
+	{
+		FilmDrive( FilmInhibit,TRUE );
+		UserFrameErrorMessage( ~Frame Movement completed... ~, TRUE, FALSE );
+		Warning( Translate( ~Film has been unloaded from the drive.~ ) );
+		SetDialogVendorXOffsetInfo( 0,0.0 );
+		Halse_SetFrame( ~<gCurrentFrame>~, FALSE,FALSE,FALSE,TRUE );
+		return FALSE;
+	}
+	else if ( <distance> > 0 && <currentSensorState> == 0 && (<gLastSensorState> == 0 || <gLastSensorState> == 8) )
+	{
+		FilmDriveCmdInProgress( ~Frame Movement completed... ~ );
+		Warning( Translate( ~Check to see if film is still loaded.~ ) );
+		SetDialogVendorXOffsetInfo( 0,0.0 );
+		EnableScanningControls( TRUE );
+		SetTransportControlsStopped();
+		return FALSE;
+	}
+	else if ( <currentSensorState> == 4 )
+	{
+		FilmDrive( FilmInhibit,TRUE );
+		UserFrameErrorMessage( ~Frame Movement completed... ~, TRUE, FALSE );
+		Warning( Translate( ~Film has been unloaded from the drive.~ ) );
+		SetDialogVendorXOffsetInfo( 0,0.0 );
+		Halse_SetFrame( ~<gCurrentFrame>~, FALSE,FALSE,FALSE,TRUE );
+		return FALSE;
+	}
+
+	EnableScanningControls( TRUE );
+	SetTransportControlsStopped();
+
+	if ( !<IgnoreAdjustment> )
+	{
+		SetDialogVendorXOffsetInfo( <CurrentXOffset> + Numeric( <distance> ),<TXOffsetIncrementUnit> );
+	}
+	FilmDriveCmdInProgress( ~Film movement complete ~ );
+
+	return TRUE;
+}
+
+
+NUMERIC Halse_Stop( )
+{
+	ContinueRunning = FALSE;
+	gStoppingFilmDrive = TRUE;
+	ClearAutoFlag( FALSE );
+
+	result = FilmDrive( Stop,SizzleControl );
+
+	if ( Defined( Scanner ) )
+	{
+		if ( Scanner( IsScannerBusy ) )
+		{
+			return <result>;
+		}
+	}
+
+	EnableScanningControls( TRUE );
+	SetTransportControlsStopped();
+
+	return <result>;
+}
+
+
+NUMERIC Halse_TranslateMoveToFrameDelta( Movement)
+{
+	// If we are aligning the frame then return 0 for the frame delta.
+	FrameDelta = 0;
+
+	if (<gAligningFrame> == TRUE)
+		{ FrameDelta = 0; }
+	else
+		{ FrameDelta = <Movement>; }
+	return <FrameDelta>;
+}
+
+
+NUMERIC Halse_HandleFastForward()
+{
+	EnableScanningControls( FALSE );
+	SetTransportControlsRunning();
+
+	Halse_ResetStopFlag();
+
+	if ( ~<gScanCount>~ == ~0~ || SizzleControl( GetNumeric,TestScan ) )
+		{ return Halse_ReportError( ~You must scan first~ ); }
+
+	// Make sure AutoScan is off and Set our aligning frame flag
+	ClearAutoFlag( TRUE );
+	gAligningFrame = TRUE;
+
+	if ( <FrameNotInDB> )
+	{	UseImageOverrides = FALSE;	}
+	gSkippedLastBlank = FALSE;
+	gSkippingBlankFilm = FALSE;
+	SizzleControl( Set,AutoFDAErrorHandlingEnabled,TRUE );
+	ScanButtonDisabled = FALSE;
+
+	// Perform the normal advance and scan processing
+	SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_PESSIMISTIC>~ );
+	OnScanButtonSetup();
+	result = OnScanButton(1,FALSE);
+
+	return <result>;
+}
+
+
+NUMERIC Halse_HandleRewind()
+{
+	Halse_ResetStopFlag();
+
+	result = FALSE;
+
+	Actions = ACTION Doc ( OverScanImage "DoCancelButton();" );
+	PerformActions( Actions );
+
+	SizzleControl( Set,AutoFDAErrorHandlingEnabled,TRUE );
+	EnableScanningControls( FALSE );
+	SetTransportControlsRunning();
+	dlg( EnableControls,TRUE,StopButton );
+	ClearAutoFlag( FALSE );
+
+	gSkippingBlankFilm = FALSE;
+	gSkippedLastBlank = FALSE;
+	gLastMoveDirection = 0;
+
+	Routine = ~Halse_Eject~;
+	TheThread( New,<Routine> );
+
+	return TRUE;
+}
+
+NUMERIC Halse_Eject()
+{
+	Invoke( FilmDriveCmdInProgress,~Ejecting film ~ );
+	Halse_LogFramePositions();
+	result = FilmDrive( Eject );
+
+	Invoke( Halse_EjectDone,<result> );
+	return TRUE;
+}
+
+NUMERIC Halse_EjectDone( result )
+{
+	Sleep( 50 );
+	calStatus = TRUE;
+	filmStatus = Halse_GetStripSensorState();
+	Halse_UpdateSensorState( <filmStatus> );
+
+	if ( (!<result> && <filmStatus> > 4) || (<filmStatus> > 4) )
+	{
+		gEjectDone = FALSE;
+		if ( <gStoppingFilmDrive> && <filmStatus> > 0 )
+		{ 
+			Halse_ResetStopFlag();
+			UserFrameErrorMessage( ~Eject stopped ~,FALSE, FALSE ); 
+		}
+		else
+		{ 
+			UserFrameErrorMessage( ~Failed to eject film ~,FALSE, FALSE ); 
+			Warning( Translate( ~The film was not ejected. Please try Eject again or genlty pull the film out of the drive.~ ) );
+		}
+		dlg( SetCheck, TRUE, EnableFilmDriveBox );
+		DlgData( SetValues, FilmDriveEnabled, TRUE );
+		dlg( Save,FilmDriveEnabled );
+	}
+	else
+	{
+		FilmDriveCmdInProgress( ~Film ejected ~ );
+		SetDialogVendorXOffsetInfo( 0, 0.0 );
+		gScanCount = 0;
+		if ( DlgData( GetNumeric,ContinueFrameNumber ) )
+		{
+			gCurrentFrame = <gMaxScannedFrame>;
+		}
+		//gMaxScannedFrame = 0;
+		Scanner( InitFrameList,SizzleControl );
+		gLastFrame = FALSE;
+		gEjectDone = TRUE;
+		// check for expired calibration when film is ejected
+		calStatus = CalibrationOk( TRUE,TRUE,FALSE,TRUE );
+	}
+
+	gFirstFrame = TRUE;
+	Halse_ResetStopFlag();
+
+	//SizzleControl( Set, AutoSkipFDABlankFrame, TRUE ); 
+	SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_PESSIMISTIC>~ );
+	gAligningFrame = FALSE;
+	gFirstFrameAligned = FALSE;
+	EnableScanningControls( TRUE );
+	SetTransportControlsStopped();
+	DlgData( SetValues,UseAdjustedFrames,FALSE,DisableFrameDetect,FALSE );
+	dlg(SetCheck, FALSE, UseAdjustedFramesCheckBox);
+	SetDialogVendorXOffsetInfo( 0, 0.0 );
+
+	if ( !<calStatus> )
+	{
+		OnHR500CalibrateButton( FALSE,FALSE,TRUE );
+	}
+	return <result>;
+}
+
+
+//*********************************************************************
+// More Utility functions
+//*********************************************************************
+// Halse FILM DRIVE COMMANDS (THREADED UTILITIES - LOW LEVEL - CALLED BY HIGH LEVEL)
+
+NUMERIC Halse_FindPunchNumber( CurrentPunchNumber, SeekPunchNumber, FilmFirstPunchNumber, FilmLastPunchNumber, XOffSet )
+{
+	InvalidParameter = ~BLANK~;
+	if ( !Halse_ValidPunchNumber( ~<SeekPunchNumber>~ ) )
+	{
+		InvalidParameter = ~Seek~;
+	}
+	if ( ~<InvalidParameter>~ != ~BLANK~ && !Halse_ValidPunchNumber( ~<FilmFirstPunchNumber>~ ) )
+	{
+		InvalidParameter = ~Film Start~;
+	}
+	if ( ~<InvalidParameter>~ != ~BLANK~ && !Halse_ValidPunchNumber( ~<FilmLastPunchNumber>~ ) )
+	{
+		InvalidParameter = ~Film End~;
+	}
+	if ( ~<InvalidParameter>~ != ~BLANK~ )
+	{
+		Invoke( FilmDriveCmdInProgress, ~Frame Movement Aborted... Invalid <InvalidParameter> Frame Number Specified~ );
+		Invoke( EnableScanningControls, TRUE );
+		Invoke( SetTransportControlsStopped );
+
+		return FALSE;
+	}
+	if ( <FilmFirstPunchNumber> > <FilmLastPunchNumber> )
+	{
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Aborted... Invalid Film Frame Numbers Specified~ );
+		Invoke( EnableScanningControls, TRUE );
+		Invoke( SetTransportControlsStopped );
+
+		return FALSE;
+	}
+	if ( <SeekPunchNumber> < <FilmFirstPunchNumber> || <SeekPunchNumber> > <FilmLastPunchNumber> )
+	{
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Aborted... Seek Frame Number Out of Range~ );
+		Invoke( EnableScanningControls, TRUE );
+		Invoke( SetTransportControlsStopped );
+
+		return FALSE;
+	}
+
+
+	// Verify that where they are trying to go has already been scanned
+	if ( <SeekPunchNumber> > <gMaxScannedFrame>)
+	{
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Aborted...You can only seek frames that have already been scanned.~ );
+		Invoke( EnableScanningControls, TRUE );
+		Invoke( SetTransportControlsStopped );
+
+		return FALSE;
+	}
+	
+	Retries = 0;
+	FoundPunchNumber = ~<CurrentPunchNumber>~;
+
+	if ( <ContinueRunning> )
+	{
+		// Clear the gJustPerformedEvaluationOnCurrentFrame flag
+		gJustPerformedEvaluationOnCurrentFrame = FALSE;
+
+		LogMessage( ~moving to <SeekPunchNumber>~ );
+		//if ( !Halse_MoveRelative_Glue( <SeekPunchNumber> ) )
+		//if ( !Halse_MoveToFrame_Glue( <SeekPunchNumber> ) )
+		distance = Halse_MoveRelative( <SeekPunchNumber> );
+		if ( !FilmDrive( MoveDeltaX,<distance>,FALSE,SizzleControl ) )
+		{
+			if ( <gStoppingFilmDrive> )
+				{ Invoke( UserFrameErrorMessage, ~Film movement stopped ~,FALSE, FALSE ); }
+			return FALSE;
+		}
+		FoundPunchNumber = <SeekPunchNumber>;
+	}
+
+	if ( !<ContinueRunning> )
+	{
+		return TRUE;
+	}
+
+	if ( <FoundPunchNumber> != <SeekPunchNumber> )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+// Halse FILM DRIVES COMMANDS (CONFIGURATION - HIGH LEVEL)
+
+// NONE
+
+// Halse FILM DRIVES COMMANDS (MISCELLANEOUS - HIGH LEVEL)
+
+NUMERIC Halse_ValidPunchNumber( PunchNumber )
+{
+	if ( strlen( ~<PunchNumber>~ ) == 0 ||
+	   !IsNumeric( ~<PunchNumber>~ ) ||
+	   ( Numeric( ~<PunchNumber>~ ) < <MinPunchNumber> ) )
+	{
+		return FALSE;
+	}
+	return TRUE;
+}
+
+STR Halse_FormatPunchNumber( PunchNumber )
+{
+	return Format( Numeric( ~<PunchNumber>~ ), ~%d~ );
+}
+
+NUMERIC Halse_ValidPunchRange( PunchNumber )
+{
+	if ( !IsNumeric( ~<PunchNumber>~ ) ||
+	   ( Numeric( ~<PunchNumber>~ ) < <MinPunchNumber> ) )
+	{
+		return FALSE;
+	}
+	return TRUE;
+}
+
+
+NUMERIC Halse_GetFirstFrameNumber()
+{
+	return Scanner( GetFirstFrame );
+}
+
+NUMERIC Halse_ForgetGlobals( UpdateStatus,ClosingDialog )
+{
+	FilmDriveCmdInProgress( ~Ejecting film ~ );
+	if ( <gFilmDriveBusy> )
+	{
+		return FALSE;
+	}
+
+	if ( !<gEjectDone> )
+	{
+		Halse_ResetStopFlag();
+
+		Actions = ACTION Doc ( OverScanImage "DoCancelButton();" );
+		PerformActions( Actions );
+
+		SizzleControl( Set,AutoFDAErrorHandlingEnabled,TRUE );
+		EnableScanningControls( FALSE );
+		SetTransportControlsRunning();
+		ClearAutoFlag( FALSE );
+
+		gSkippingBlankFilm = FALSE;
+		gSkippedLastBlank = FALSE;
+		gLastMoveDirection = 0;
+
+		result = FilmDrive( Eject );
+		gCurrentFrame = 0;
+		gFirstFrame = TRUE;
+
+		SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_PESSIMISTIC>~ );
+
+		gAligningFrame = FALSE;
+		gFirstFrameAligned = FALSE;
+		EnableScanningControls( TRUE );
+		SetTransportControlsStopped();
+
+	}
+	return Halse_DisconnectFilmDrive( <UpdateStatus>,<ClosingDialog> );
+}
+
+
+NUMERIC Halse_DisconnectFilmDrive( UpdateStatus,ClosingDialog )
+{
+	if ( Halse_GetStripSensorState() > 4 )
+	{
+		Warning( Translate( ~The film did not eject completely. Please try the Eject button again or gently pull the film out of the drive. ~ ) );
+	}
+	FilmDriveCmdInProgress( ~Film drive disabled.~ );
+	dlg( SetCheck, FALSE, AdjustFramePositionBox );
+	dlg( SetCheck, FALSE, AutoSkipBlankFrameBox );
+	dlg( SetCheck, FALSE, IgnoreFdaErrorsCheckBox );
+	HR500_NoFilmDriveSelected();	
+	dlg( EnableControls,TRUE,EnableFilmDriveBox );
+	dlg( EnableControls,TRUE,VendorSetupComboBox );
+	dlg( EnableControls,TRUE,EditVendorButton );
+	dlg( EnableControls,TRUE,ViewFilmDriveControlsBox );
+	Halse_ResetStopFlag();
+
+	FilmDrive( DisConnect );
+	ForgetGlobal( FilmDrive );
+
+	SizzleControl( Set, FrameDetectErrorNotification, ~~ );
+	ChangeEnableSetOverscanArea( FALSE );
+	OnAllScanArea();
+
+	return CloseFilmDriveComplete( <UpdateStatus>,<ClosingDialog> );
+}
+
+
+VOID Halse_ResetStopFlag()
+{
+	gStoppingFilmDrive = FALSE;
+	if ( Defined( FilmDrive ) )
+	{
+		FilmDrive( Reset );
+	}
+}
+
+
+NUMERIC Halse_AdjustFrameLocation( Percent, Edge, Frame )
+{
+	Halse_ResetStopFlag();
+	dlg( GetInput );
+
+	SizzleControl( Set,AutoFDAErrorHandlingEnabled,TRUE );
+	scanHeight = atof(~<$con.dlgData[ScanLength]>~) / 100.;
+	if ( <FrameNotInDB> )
+	{	UseImageOverrides = FALSE;	}
+
+	if ( ~<Edge>~ == ~Top~ )
+	{
+		Percent = <Percent> - <scanHeight>;
+	}
+		
+
+	if ( (~<Frame>~ != ~~) )
+	{
+		if ( ~<gCurrentFrame>~ != ~<Frame>~ )
+		{
+			FrameNotInDB = FALSE;
+			UseImageOverrides = FALSE;
+		}
+		gCurrentFrame = ~<Frame>~;
+	}
+	
+	gLastSensorState = Halse_GetStripSensorState();
+	Halse_UpdateSensorState( <gLastSensorState> );
+	_LogMessage( ~Moving Percent to <gCurrentFrame>~ );
+
+	Routine = Halse_MovePercent;
+	TheThread( New,<Routine>,<Percent> );
+
+	return TRUE;	
+}
+
+NUMERIC Halse_MovePercent( percent )
+{
+	Invoke(	SetTransportControlsRunning );
+
+	result = FilmDrive( MoveDeltaX,<percent>,TRUE,SizzleControl );
+
+	if ( <result> )
+	{
+		if ( <percent> > 0 )
+		{
+			gLastMoveDirection = <HALSE_MOVE_FORWARD>;
+		}
+		else
+		{
+			gLastMoveDirection = <HALSE_MOVE_REVERSE>;
+		}
+	}
+	
+	Invoke( Halse_AdjustFrameLocationDone,<result> );
+	return TRUE;
+}
+
+NUMERIC Halse_AdjustFrameLocationDone( success )
+{
+	Sleep( 50 );
+	if ( !<success> )
+	{ 
+		if ( <gStoppingFilmDrive> )
+		{ 
+			UserFrameErrorMessage( ~Film movement stopped ~,FALSE, FALSE ); 
+		}
+		else
+		{ 
+			UserFrameErrorMessage( ~Film movement failed ~,TRUE, FALSE ); 
+			Halse_Stop();
+		}
+		return FALSE; 
+	}
+
+	currentSensorState = Halse_GetStripSensorState();
+	Halse_UpdateSensorState( <currentSensorState> );
+
+	if ( <gLastMoveDirection> < 0 && <currentSensorState> == 0 && <gLastSensorState> == 0 )
+	{
+		FilmDrive( FilmInhibit,TRUE );
+		FilmDriveCmdInProgress( ~Frame Movement completed... ~ );
+		Warning( Translate( ~Film may not have fed correctly.~ ) );
+		SetDialogVendorXOffsetInfo( 0,0.0 );
+		EnableScanningControls( TRUE );
+		SetTransportControlsStopped();
+		return FALSE;
+	}
+	else if ( <gLastMoveDirection> > 0 && (<currentSensorState> == 0 || <currentSensorState> == 8) && <gLastSensorState> == 12 )
+	{
+		FilmDriveCmdInProgress( ~End of Strip... ~ );
+		SetDialogVendorXOffsetInfo( 0,0.0 );
+		EnableScanningControls( TRUE );
+		SetTransportControlsStopped();
+	}
+	else if ( <gLastMoveDirection> < 0 && <currentSensorState> == 0 && <gLastSensorState> == 12 )
+	{
+		FilmDrive( FilmInhibit,TRUE );
+		UserFrameErrorMessage( ~Frame Movement completed... ~, TRUE, FALSE );
+		Warning( Translate( ~Film has been unloaded from the drive.~ ) );
+		SetDialogVendorXOffsetInfo( 0,0.0 );
+		return FALSE;
+	}
+	else if ( <gLastMoveDirection> > 0 && <currentSensorState> == 0 && (<gLastSensorState> == 0 || <gLastSensorState> == 8) )
+	{
+		FilmDriveCmdInProgress( ~End of Strip... ~ );
+		SetDialogVendorXOffsetInfo( 0,0.0 );
+		EnableScanningControls( TRUE );
+		SetTransportControlsStopped();
+		if ( <gSkippingBlankFilm> )
+		{ 
+			return Halse_ReportError( ~We are at the last frame of the strip.  You cannot advance any further.~ ); 
+		}
+	}
+	else if ( <currentSensorState> == 4 )
+	{
+		FilmDrive( FilmInhibit,TRUE );
+		UserFrameErrorMessage( ~Frame Movement completed... ~, TRUE, FALSE );
+		Warning( Translate( ~Film has been unloaded from the drive.~ ) );
+		SetDialogVendorXOffsetInfo( 0,0.0 );
+		return FALSE;
+	}
+
+	Halse_UpdateFrameNumber( ~<gCurrentFrame>~ );
+	Halse_SetFrame( ~<gCurrentFrame>~, TRUE,TRUE,TRUE,TRUE );
+	Halse_SetFrameStatus( ~<gCurrentFrame>~,2 );
+//	EnableScanningControls( TRUE );
+//	SetTransportControlsStopped();
+	
+	// Perform the normal advance and scan processing
+	if ( !<gSkippingBlankFilm> )
+	{	
+		gAligningFrame = TRUE;
+		gFirstFrameAligned = TRUE;	
+	}
+
+	if ( <gSkippingBlankFilm> )
+	{ 
+		SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_PESSIMISTIC>~ );
+	}
+	else
+	{
+		SizzleControl( Set,AlignmentFlag,~<HALSE_FDA_OPTIMISTIC>~ );
+	}
+
+	OnScanButtonSetup();
+	result = OnScanButton(0,FALSE);
+
+	gAligningFrame = FALSE;
+	gFirstFrame = FALSE;
+
+	return <result>;
+}
+
+NUMERIC	Halse_AdvanceOnBlankFilm()
+{
+	FilmDriveCmdInProgress( ~Skipping blank film~ );
+	SizzleControl( Set,FrameStatus,0 );
+	if ( <FrameNotInDB> )
+	{	UseImageOverrides = FALSE;	}
+
+	if ( <gStoppingFilmDrive> )
+	{
+		FilmDriveCmdInProgress( ~Stopping film drive~ );
+		EnableScanningControls( TRUE );
+		SetTransportControlsStopped();
+		Halse_ResetStopFlag();
+		return TRUE;
+	}
+
+	Tension = FilmDrive( FilmStatus );
+	gLastFrame = FilmDrive( IsEndOfStrip );
+
+	if ( <Tension> == <HALSE_FILM_UNLOADED> && <gLastFrame> )
+	{
+		FilmDriveCmdInProgress( ~End of Strip~ );
+		EnableScanningControls( TRUE );
+		SetTransportControlsStopped();
+		gSkippingBlankFilm = FALSE;
+		return TRUE;
+	}
+
+	// assume that a valid frame was in position before blank found
+	if ( !<gSkippedLastBlank> )
+	{
+		if ( !<gFirstFrame> )
+		{
+			++gCurrentFrame;
+		}
+		FrameNotInDB = FALSE;
+		UseImageOverrides = FALSE;
+		Halse_UpdateFrameNumber( ~<gCurrentFrame>~ );
+		Halse_SetFrame( <gCurrentFrame>,FALSE,FALSE,TRUE,FALSE );
+		SizzleControl( Set,FrameStatus,-1 );
+
+	}
+	return Halse_AdjustFrameLocation( 0.90, ~Bottom~, <gCurrentFrame> );
+}
+
+NUMERIC Halse_GetStripSensorState()
+{
+	currentState = FilmDrive( ReadSensors );
+	return <currentState>;
+}
+
+VOID Halse_UpdateSensorState( sensorState )
+{
+	stateText = ~Unknown~;
+
+	if ( <sensorState> == 0 )
+	{
+		stateText = ~No Film~;
+	}
+	else if ( <sensorState> == 4 )
+	{
+		gEjectDone = FALSE;
+		stateText = ~Film at Entry~;
+	}
+	else if ( <sensorState> == 8 )
+	{
+		gEjectDone = FALSE;
+		stateText = ~Film In Gate~;
+	}
+	else if ( <sensorState> == 12 )
+	{
+		gEjectDone = FALSE;
+		stateText = ~Film Present~;
+	}
+
+	dlg( SetString,Translate( ~<stateText>~ ),StripSensorState );
+
+}
+
+VOID Halse_LogFramePositions()
+{
+	frameNumber = Scanner( GetFirstFrame );
+	if ( <frameNumber> < <gMaxScannedFrame> )
+	{	
+		avg = Scanner( GetAverageFrameAdvance,<frameNumber>,<gMaxScannedFrame> );	
+	}
+	else
+	{	
+		avg = 0;	
+	}
+
+	Log( Session,~Average frame advance from <frameNumber> to <gMaxScannedFrame> = <avg> mm~ );
+
+	top = <gMaxScannedFrame> - 1;
+	if ( <frameNumber> < <top> )
+	{	
+		avg = Scanner( GetAverageFrameAdvance,<frameNumber>,<top> );	
+	}
+	else
+	{	
+		avg = 0;
+	}
+
+	_LogMessage( ~Average frame advance from <frameNumber> to <top> = <avg> mm~ );
+	
+	while ( <frameNumber> <= <gMaxScannedFrame> )
+	{
+		position = Scanner( GetFramePosition,<frameNumber> );
+		status = Scanner( GetFrameStatus,<frameNumber> );
+		if ( <position> >= 0 )
+		{
+			status = Scanner( GetFrameStatus,<frameNumber> );
+			if ( <status> != 0 )
+			{
+				Log( Session,~Frame = <frameNumber> at Position = <position> mm, status = <status>~ );
+			}
+		}
+		frameNumber = <frameNumber> + 1;
+	}
+
+}
+
+NUMERIC Halse_GetNominalFrameHeight()
+{
+	FrameHeight = -1.0;
+
+	if ( Defined( Scanner ) )
+	{
+		FrameHeight = Scanner( GetNominalFrameHeight );
+	}
+
+	if ( <FrameHeight> < 0 )
+	{
+		filmFormat = ~<$con.DlgData[Format]>~;
+		Index = MagNames( IndexOf,~<filmFormat>~ );
+		if ( ~<Index>~ == ~~ )
+		{
+			Index = 1;
+		}
+
+		osHeight = DlgData( GetNumeric,OverScanLength );
+		scanLength = DlgData( GetNumeric,ScanLength );
+
+		scanAdjustment = <osHeight> / 100.0;
+		frameAdjustment = <scanLength> / 100.0;
+
+		OverScanFrameHeight = atof(OverScanFrameHeights(ValueOf,$Index)) * <scanAdjustment>;
+		FrameHeight = <OverScanFrameHeight> * <frameAdjustment>;
+
+	//	Log( Session,~Nominal Frame Height from Halse_GetNominalFrameHeight= <FrameHeight>~ );
+	}
+		
+	return <FrameHeight>;	
+}
+
+
+NUMERIC Halse_GetDistanceToMove()
+{
+	fixedAdvance = DlgData( GetNumeric,FixedNonFDAAdvance );
+	FixedNonFdaAdv = <DisplayUnits>ToInches( <fixedAdvance> );
+	fixedAdvance = <FixedNonFdaAdv> / DlgData( GetNumeric,TXOffsetIncrementUnit );
+	if ( <fixedAdvance> != 0 )
+	{
+		return <fixedAdvance>;
+	}
+
+	distance = Scanner( GetDetectedAdjustment );
+
+	if ( <distance> == 0 || <gPositioningForFocus>)
+	{
+		distance = Halse_GetNominalFrameHeight();
+	}
+
+	return <distance> * 10.0;
+
+}
+
+NUMERIC Halse_MoveRelative( destinationFrame )
+{
+	currentPosition = 0;
+	currentPosition = FilmDrive( GetCurrentPosition );
+	distance = Scanner( DistanceToFrame,<destinationFrame>,<currentPosition> );
+
+	LogMessage( ~moving <distance> from frame <gCurrentFrame> to <destinationFrame>~ );
+
+	return <distance> * 10.0;
+
+}
+
+NUMERIC Halse_NeedsAlignment()
+{
+	distance = Scanner( GetDetectedAdjustment );
+	_LogMessage( ~Distance to next edge = <distance>~ );
+
+	nominalHeight = Halse_GetNominalFrameHeight();
+	if ( <distance> > 0 && <distance> < <nominalHeight> )
+		{	return TRUE;	}
+	else
+		{	return FALSE;	}
+
+}
+
+
+NUMERIC Halse_PositionForFocus( FocusOnly )
+{
+	FirstPunchNumber = <MinPunchNumber>;
+	LastPunchNumber = <gMaxScannedFrame>;
+	PreFocusFrameStatus = <FrameNotInDB>;
+
+	if ( ~<FinishScanCommand>~ == ~~ )
+	{
+		if ( <FocusOnly> )
+		{
+			dlg( SetStrings,GotoPunchNumber,~<gCurrentFrame>~ );
+			dlg( Save,GotoPunchNumber );
+
+			FinishScanCommand = STR ( OnGotoButton( FALSE,FALSE ); );
+		}
+		else
+		{
+			ClearAutoFlag( FALSE );
+			gJustPerformedEvaluationOnCurrentFrame = FALSE;
+			FinishScanCommand = STR ( GotoFrameAndScan( <gCurrentFrame> ); );
+		}
+	}
+	OnFilmDriveOperationComplete = STR ( OnFocusButton( FALSE,~~ ); );
+
+	return OnNextFrameButton( TRUE,FALSE,TRUE );
+}
+
+NUMERIC Halse_PositionForFocusNeeded()
+{
+	// check drive type -- do for 120 only
+	dlg( GetInput);
+	Format = ~<$Con.DlgData[Format]>~;
+	if ( ~<Format>~ == ~35mm~ )
+	{	return FALSE;	}
+
+	if ( DlgData( GetNumeric,FocusEveryFrame ) )
+	{
+		return FALSE;
+	}
+
+	// check current position -- True if < gate width
+	if ( FilmDrive( GetCurrentPosition ) >= 125. )
+	{	
+		return FALSE;
+	}
+
+	gPositioningForFocus = TRUE;
+	return TRUE;
+}
+
+
+VOID Halse_SetTraceCallsFlag( TraceCalls )
+{
+	FilmDrive( SetTraceCallsFlag,~<TraceCalls>~ );
+}
+
+
+VOID Halse_SetTimeCallsFlag( TimeCalls )
+{
+	FilmDrive( SetTimeCallsFlag,~<TimeCalls>~ );
+}
+
+

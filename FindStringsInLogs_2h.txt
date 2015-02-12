@@ -1,0 +1,599 @@
+
+//	C:\AppsV2\ScriptTools\FindStringsInLogs\FindStringsInLogs_2.h
+
+
+
+void Run()
+{
+	gDataGC->SetLongValue( _T("Stopping"), 0L ) ;
+	StartThread() ;
+}
+
+void DoCancel()
+{
+	if( gThread )
+		{ gThread->PostThreadMessage( WM_QUIT, 0L, 0L ) ; }
+
+	Cancel() ;
+}
+
+void Stop()
+{
+	gDataGC->SetLongValue( _T("Stopping"), 1L ) ;
+	gDataGC->SetAttrValue( _T("SearchStringList"), _T("Stopping...") ) ;
+	DisplayControlValues( gDlg ) ;
+}
+
+void Source_Folder()
+{
+	TCHAR	FolderPath[2048] ;
+	TCHAR	StartFolder[2048] ;
+	int AllowNewFolder = FALSE ;
+
+	SelectFolder( FolderPath, StartFolder, AllowNewFolder ) ;
+	if( FolderPath[0]  )
+	{
+		strcat( FolderPath, _T("\\*.txt")) ;
+		gDataGC->SetAttrValue( _T("EditSourceFolder"), FolderPath ) ;
+		DisplayControlValues( gDlg ) ;
+	}
+}
+
+void Destination_File()
+{
+	long Write = TRUE ;
+	TCHAR	FileName[2048] ;
+
+	int Result = GetFileName( FileName, _T("Select the output file:"), Write ) ;
+
+	if( Result )
+	{
+		gDataGC->SetAttrValue( _T("EditDstFileName"), FileName ) ;
+		DisplayControlValues( gDlg ) ;
+	}
+}
+
+void Add_String()
+{
+	UList	*StringList = gDataGC->GetLongValue( _T("StringList")) ;
+	if( StringList == NULL )
+	{
+		StringList = new UList ;
+		gDataGC->SetLongValue( _T("StringList"), (long) StringList ) ;
+	}
+
+	TCHAR *theString = gDataGC->GetStringValue( _T("AddString")) ;
+	if( theString )
+	{
+		if( *theString )
+		{
+			TCHAR	Token[2048] ;
+
+			UParser	*aParser = new UParser ;
+			aParser->SetText( theString ) ;
+
+			aParser->GetToken( Token ) ;
+			while( *Token )
+			{
+				AddAString( StringList, Token ) ;
+				aParser->GetToken( Token ) ;
+			}
+
+			aParser->SetText( NULL ) ;
+			delete aParser ;
+		}
+	}
+
+	gDataGC->SetAttrValue( _T("AddString"), _T("")) ;
+	UpdateTheStrings( StringList ) ;
+}
+
+void AddAString( UList *StringList, TCHAR *theString )
+{
+	long	Length = strlen( theString ) ;
+	if( Length > 0 )
+	{
+		UGenCon *aGC = new UGenCon( GetDataDictionary( _T("DDFindInFile"))) ;
+		if( aGC )
+		{
+			aGC->SetAttrValue( _T("String"), theString ) ;
+			aGC->SetLongValue( _T("Length"), Length ) ;
+			StringList->InsertBack( aGC ) ;
+		}
+	}
+}
+
+
+void UpdateTheStrings( UList *StringList )
+{
+	TCHAR	*aString = NULL ;
+	UGenCon	*aGC ;
+
+	if( StringList == NULL )		{ return ; }
+
+	long	NumEntries = StringList->GetNumEntries() ;
+	if( NumEntries > 0 )
+	{
+		long	TotalLength = GetTotalStringLength( StringList ) ;
+		if( TotalLength <= 0 )		{ return ; }
+
+		TCHAR	*StringBuffer = (TCHAR *) malloc( TotalLength * 2 ) ;
+		if( StringBuffer == NULL )	{ return ; }
+
+		memset( StringBuffer, 0, TotalLength * 2 ) ;
+
+		long	loop ;
+		for( loop = 0L ; loop < NumEntries ; loop++ )
+		{
+			aGC = (UGenCon *) StringList->GetAt( loop ) ;
+			if( aGC )
+			{
+				aString = aGC->GetStringValue( _T("String")) ;
+				strcat( StringBuffer, aString ) ;
+				strcat( StringBuffer, _T("\r\n")) ;
+			}
+		}
+
+		gDataGC->SetAttrValue( _T("SearchStringList"), StringBuffer ) ;
+		DisplayControlValues( gDlg ) ;
+
+		free( StringBuffer ) ;
+	}
+}
+
+long	GetTotalStringLength( UList *StringList )
+{
+	long	TotalLength = 0L ;
+	long	NumEntries  = StringList->GetNumEntries() ;
+	UGenCon	*aGC ;
+
+	long	loop ;
+	for( loop = 0L ; loop < NumEntries ; loop++ )
+	{
+		aGC = StringList->GetAt( loop ) ;
+		if( aGC )
+		{
+			TotalLength += aGC->GetLongValue( _T("Length")) + 10L ;
+		}
+	}
+	return( TotalLength ) ;
+}
+
+
+void Reset_Strings()
+{
+	UList	*StringList = gDataGC->GetLongValue( _T("StringList")) ;
+	if( StringList )
+	{
+		long	NumEntries  = StringList->GetNumEntries() ;
+		UGenCon	*aGC ;
+		long	loop ;
+
+		for( loop = 0L ; loop < NumEntries ; loop++ )
+		{
+			aGC = (UGenCon *) StringList->GetAt( loop ) ;
+			if( aGC )
+			{
+				delete aGC ;
+			}
+		}
+		StringList->RemoveAll() ;
+	}
+
+	gDataGC->SetAttrValue( _T("SearchStringList"), _T(" ") ) ;
+	DisplayControlValues( gDlg ) ;
+}
+
+
+void Initialize()
+{
+	UGenCon	*aGC = NULL ;
+	TCHAR	*aString = NULL ;
+
+	UList	*StringList = gDataGC->GetLongValue( _T("StringList")) ;
+	if( StringList )
+	{
+		long	NumEntries = StringList->GetNumEntries() ;
+		if( NumEntries )
+		{
+			UFindInFile *FindInFiles = gDataGC->GetLongValue( _T("FindInFilesObj")) ;
+			if( FindInFiles == NULL )
+			{
+				FindInFiles = new UFindInFile ;
+				gDataGC->SetLongValue( _T("FindInFilesObj"), FindInFiles ) ;
+
+				long	loop ;
+				for( loop = 0L ; loop < NumEntries ; loop++ )
+				{
+					aGC = StringList->GetAt( loop ) ;
+					if( aGC )
+					{
+						aString = aGC->GetStringValue( _T("String")) ;
+						if( aString )
+						{
+							FindInFiles->AddString( aString ) ;
+						}
+					}
+				}
+				gThisThread->PostThreadMessage( 0x9004, 0L, 0L ) ;
+			}
+		}
+	}
+	else
+	{
+		MessageBox( _T("Please add strings to search for."), _T("MB_OK")) ;
+	}
+}
+
+void DoNextFile()
+{
+	TCHAR	 FullPath[2048] ;
+	TCHAR	 Path[2048] ;
+	TCHAR	 File[ 260] ;
+	TCHAR	 Extn[  32] ;
+	TCHAR	*SrcFile = NULL ;
+	TCHAR	*FileText = NULL ;
+
+	TCHAR	*SrcFolder = gDataGC->GetStringValue( _T("EditSourceFolder")) ;
+	if( SrcFolder == NULL )
+	{
+		MessageBox( _T("Please supply a source folder."), _T("MB_OK")) ;
+		gThisThread->PostThreadMessage( WM_QUIT, 0L, 0L ) ;
+		return ;
+	}
+
+	FileText = (TCHAR *) gDataGC->GetLongValue( _T("WorkingText")) ;
+	gDataGC->SetLongValue( _T("WorkingText"), 0L ) ;
+
+	if( FileText )	{ free( FileText ) ; }
+
+	UList	*FileList = gDataGC->GetLongValue( _T("FileList")) ;
+	if( FileList == NULL )
+	{
+		sprintf( FullPath, _T("%s"), SrcFolder ) ;
+		FileList = GetFileList( FullPath ) ;
+		gDataGC->SetLongValue( _T("FileList"), FileList ) ;
+		gDataGC->SetLongValue( _T("FileNumber"), 0L ) ;
+	}
+
+	long	FileNumber = gDataGC->GetLongValue( _T("FileNumber")) ;
+	UGenCon	*aFile = FileList->GetAt( FileNumber ) ;
+	if( aFile )
+	{
+		GetFilePathNameAndExt( SrcFolder, Path, File, Extn ) ;
+
+		SrcFile = aFile->GetStringValue( _T("FileName")) ;
+		sprintf( FullPath, _T("%s\\%s"), Path, SrcFile ) ;
+
+		char	*fp = gDataGC->GetLongValue( _T("FilePtr")) ;
+		if( fp == NULL )
+		{
+			TCHAR	*OutFile = gDataGC->GetStringValue( _T("EditDstFileName")) ;
+			fp = fopen( OutFile, _T("w")) ;
+			gDataGC->SetLongValue( _T("FilePtr"), fp ) ;
+		}
+
+		fprintf( fp, _T("\n\n\n\t\t%s\n\n"), FullPath ) ;
+
+		TCHAR	ThisFilePath[2048] ;
+		TCHAR	ThisFileName[260] ;
+		TCHAR	ThisFileExtn[32] ;
+		TCHAR	NewPath[2048] ;
+
+		GetFilePathNameAndExt( FullPath, ThisFilePath, ThisFileName, ThisFileExtn ) ;
+
+		strncpy( NewPath, FullPath, 32 ) ;
+		NewPath[32] = 0x00 ;
+		strcat( NewPath, _T("...  ")) ;
+		strcat( NewPath, ThisFileName ) ;
+		strcat( NewPath, _T(".")) ;
+		strcat( NewPath, ThisFileExtn ) ;
+
+		gDataGC->SetAttrValue( _T("WorkingFile"), NewPath ) ;
+
+		DisplayControlValues( gDlg ) ;
+
+		FileText = GetFile( FullPath ) ;
+		if( FileText )
+		{
+			if( *FileText )
+			{
+				gDataGC->SetLongValue( _T("WorkingText"), (long) FileText ) ;
+			}
+		}
+	}
+	else
+	{
+		gThisThread->PostThreadMessage( 0x9005, 0L, 0L ) ;
+		return ;
+	}
+
+	FileNumber++ ;
+	gDataGC->SetLongValue( _T("FileNumber"), FileNumber ) ;
+
+	if( FileText )
+	{
+		if( *FileText )
+		{
+			UFindInFile *FindInFiles = gDataGC->GetLongValue( _T("FindInFilesObj") ) ;
+			FindInFiles->Init( FileText ) ;
+			gThisThread->PostThreadMessage( 0x9003, 0L, 0L ) ;
+			return ;
+		}
+	}
+
+	gThisThread->PostThreadMessage( 0x9004, 0L, 0L ) ;
+
+}
+
+
+long	gLastLine = 0L ;
+
+void FindNextString()
+{
+	TCHAR	ImportantLine[2048] ;
+
+	UFindInFile *FindInFiles = gDataGC->GetLongValue( _T("FindInFilesObj") ) ;
+
+	int Result = FindInFiles->GetImportantLine( ImportantLine ) ;
+
+	long LineNumber = FindInFiles->GetLineNumber() ;
+	gDataGC->SetLongValue( _T("LineNumber"), LineNumber ) ;
+	DisplayControlValues( gDlg ) ;
+
+	if( gLastLine != LineNumber && *ImportantLine )
+	{
+		char	*fp = gDataGC->GetLongValue( _T("FilePtr")) ;
+		RemoveTrailingCRLFs( ImportantLine ) ;
+		fprintf( fp, _T("%6ld: %s\n"), LineNumber, ImportantLine ) ;
+	}
+
+	gLastLine = LineNumber ;
+
+	if( Result )
+	{
+		gThisThread->PostThreadMessage( 0x9003L, 0L, 0L ) ;
+	}
+	else
+	{
+		gThisThread->PostThreadMessage( 0x9004L, 0L, 0L ) ;
+	}
+}
+
+
+void RemoveTrailingCRLFs( TCHAR *ImportantLine )
+{
+	
+	long	Pos = strlen( ImportantLine ) - 1 ;
+	int		theChar = ImportantLine[Pos] ;
+	while( theChar == 0x0A || theChar == 0x0D )
+	{
+		Pos-- ;
+		theChar = ImportantLine[Pos] ;
+	}
+	ImportantLine[Pos+1] = 0x00 ;
+	
+//	OutputLineInHex( ImportantLine ) ;
+}
+
+void OutputLineInHex( TCHAR *ImportantLine )
+{
+	FILE	*ImportantFP = fopen( _T("C:\\Temp\\ImportantLines.txt"), _T("a")) ;
+	long Pos = 0L ;
+	int  theChar = ImportantLine[Pos] ;
+	while( theChar )
+	{
+		fprintf( ImportantFP, _T("0x%02X  "), theChar ) ;
+//		fprintf( ImportantFP, _T("%c 0x%02X  "), theChar, theChar ) ;
+		Pos++ ;
+		theChar = ImportantLine[Pos] ;
+	}
+	fprintf( ImportantFP, _T("\n") ) ;
+	fclose( ImportantFP ) ;
+}
+
+
+void CleanUp()
+{
+	UList	*FileList = gDataGC->GetLongValue( _T("FileList")) ;
+	if( FileList )
+	{
+		delete FileList ;
+		gDataGC->SetLongValue( _T("FileList"), NULL ) ;
+	}
+
+	gDataGC->SetLongValue( _T("FileNumber"), 0L ) ;
+
+	UFindInFile *FindInFiles = gDataGC->GetLongValue( _T("FindInFilesObj") ) ;
+	if( FindInFiles )
+	{
+		delete FindInFiles ; 
+		gDataGC->SetLongValue( _T("FindInFilesObj"), 0L ) ;
+	}
+
+	char	*fp = gDataGC->GetLongValue( _T("FilePtr")) ;
+	if( fp )
+	{
+		fclose( fp ) ;
+		gDataGC->SetLongValue( _T("FilePtr"), 0L ) ;
+	}
+
+	TCHAR		*FileText = (TCHAR *) gDataGC->GetLongValue( _T("WorkingText")) ;
+	if( FileText )		
+	{
+		free( FileText ) ;
+		gDataGC->SetLongValue( _T("WorkingText"), 0L ) ;
+	}
+
+	TCHAR	ProgramPath[1024] ;  
+	GetSystemDirectory( ProgramPath, 1024 ) ;  
+	strcat( ProgramPath, _T("\\Notepad.exe")) ;  
+
+	TCHAR	*DstFileName = gDataGC->GetStringValue( _T("EditDstFileName")) ;
+
+	LaunchProgram( ProgramPath, DstFileName ) ;
+}
+
+//=============================================================================
+//	BROWSE FOR A FOLDER
+//=============================================================================
+//	ON EXIT, FolderPath WILL CONTAIN THE ENTIRE PATH TO THE SELECTED FOLDER
+//			 FolderDisplayName WILL CONTAIN THE DEEPEST FOLDER NAME ONLY (NOT THE PATH)
+
+TCHAR	*SelectFolder( TCHAR *FolderPath, TCHAR *StartFolder, int AllowNewFolder )
+{
+	TCHAR	FolderDisplayName[2048] ;
+
+	*FolderPath = 0x00 ;
+
+	BrowseFolder( _T("Select Folder"), _T("CtrlTitle"), FolderDisplayName,
+						FolderPath, AllowNewFolder, StartFolder ) ;
+
+	return( FolderPath ) ;
+}
+
+
+int GetFileName( TCHAR *FileName, TCHAR *Message, long Write )
+{
+	int Result = FileDialog( Write == 0L, NULL, FileName, "", NULL, Message ) ;
+	return( Result ) ;
+}
+
+
+UList *GetFileList(TCHAR *Path)
+{
+	long	*FileHandle ;
+	char	 FileData[2048] ;
+	TCHAR	 FileName[2048] ;
+	TCHAR	 FileDate[1024] ;
+	int		 Result ;
+	long	 FileAttr ;
+	long	 longHandle ;
+	UGenCon	*FileDataGC ;
+
+	UList	*theList = new UList ;
+
+	strcpy( FileName, Path ) ;
+	FileHandle = FindFirstFile( FileName, FileData ) ;
+	longHandle = FileHandle ;
+	if( longHandle != 0xFFFFFFFF )
+	{
+		FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+		Result = FindFileConvToGC( FileData, FileDataGC ) ;
+		FindFileConvTime( FileDataGC, _T("ACCESSED"), FileDate ) ;
+
+		theList->InsertBack(FileDataGC) ;
+
+		FileAttr = FileDataGC->GetLongValue(_T("FileAttributes")) ;
+		while( Result )
+		{
+			Result = FindNextFile( FileHandle, FileData ) ;
+			if( Result )
+			{
+				FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+				FindFileConvToGC( FileData, FileDataGC ) ;
+				theList->InsertBack(FileDataGC) ;
+			}
+		}
+
+		Result = FindClose( FileHandle ) ;
+	}
+	return( theList ) ;
+}
+
+
+//=============================================================================
+//	LAUNCH A PROGRAM
+//=============================================================================
+int LaunchProgram( TCHAR *AppPath, TCHAR *parm )  
+{  
+	TCHAR	*verb = _T("open") ;  
+	TCHAR	*file = AppPath ;  
+	TCHAR	 AppDir[2048] ;  
+  
+	GetAppDirectory( AppPath, AppDir ) ;  
+  
+	TCHAR	*defaultDirectory = AppDir ;  
+	TCHAR	*cmd = _T("SW_SHOW") ;  
+  
+	long Result = ShellExecute(verb, file, parm, defaultDirectory, cmd ) ;  
+}  
+
+//=============================================================================
+//	GET THE APPLICATIONS DIRECTORY
+//=============================================================================
+
+//		_T("GetExeDirectory"),			call_GetExeDirectory,
+//		_T("GetEnvironmentVariable"),	call_GetEnvironmentVariable,
+
+int	GetAppDirectory( TCHAR *FullPath, TCHAR *Directory )  
+{  
+	strcpy( Directory, FullPath ) ;  
+	long	loop ;  
+	long	length = strlen( FullPath ) ;  
+  
+	while( length > 0 )  
+	{  
+		if( Directory[length] == '\\' )  
+		{  
+			Directory[length] = 0 ;  
+			length = 0 ;  
+		}  
+		length-- ;  
+	}  
+}  
+
+
+void GetFilePathNameAndExt( TCHAR *Source, TCHAR *FilePath, TCHAR *FileName, TCHAR *FileExtn )
+{
+	TCHAR	Src[2048] ;
+	strcpy( Src, Source ) ;
+
+	FileExtn[0] = 0 ;
+	FileName[0] = 0 ;
+	FilePath[0] = 0 ;
+
+	if( strchr( Src, 0x2E ) )
+	{
+		GetLastToken( Src, FileExtn, 0x2E ) ;	//	"." GET THE EXTENSION
+	}
+
+	if( strchr( Src, 0x5C ) )
+	{
+		GetLastToken( Src, FileName, 0x5C ) ;	//	"\" GET THE BASE FILE NAME
+		strcpy( FilePath, Src ) ;				//		GET THE PATH
+	}
+	else
+	{
+		strcpy( FileName, Src ) ;
+	}
+
+}
+
+void GetLastToken( TCHAR *Source, TCHAR *Dst, int SrchChar )
+{
+	long	SrcPos = strlen( Source ) - 1L ;
+	long	DstPos = 0L ;
+
+	Dst[DstPos] = 0x00 ;
+
+	while( SrcPos >= 0L && Source[SrcPos] != SrchChar )
+	{
+		SrcPos-- ;
+	}
+
+	if( SrcPos >= 0L )
+	{
+		Source[SrcPos] = 0x00 ;
+		SrcPos++ ;
+
+		while( Source[SrcPos] )
+		{
+			Dst[DstPos] = Source[SrcPos] ;
+			SrcPos++ ;
+			DstPos++ ;
+		}
+		Dst[DstPos] = 0x00 ;
+	}
+}
+//-----------------------------------------------------------------------------

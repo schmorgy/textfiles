@@ -1,0 +1,1413 @@
+Include: ~AlterTablesForRetouching.txt~;
+Include: ~AlterTablesForKDSba.txt~;
+Include: ~AlterTablesForUserManagement.txt~;
+IncludeClass(BaseHtml);
+IncludeClass( BaseHTMLWin );
+IncludeClass( BaseThread );
+
+Class( MyThread,Extends,BaseThread );
+
+NUMERIC MyThread::HandleThread(TableName)
+{
+	if (SimilarStr(~<TableName>~ ,OrderItems))
+	{
+		UpdateOrderItemsTable();
+	}
+	else if (SimilarStr(~<TableName>~ ,Images))
+	{
+		UpdateImagesTable();
+	}
+	return TRUE;
+}
+
+
+
+
+
+NUMERIC MyThread::UpdateImagesTable()
+{
+	if (!Ado( db,Connect))
+	{
+		Log(Session,~Could not get ADO object when updating images table~);
+		return FALSE;
+	}
+
+	AppStartupObj.AddColumn( db,~Images~,~ExternalGS~ );
+	AppStartupObj.AddColumn( db,~Images~,~AutoBalance~ );
+	AppStartupObj.AddColumn( db,~Images~,~LutIndex~ );
+	AppStartupObj.AddColumn( db,~Images~,~Reconverting~ );
+	AppStartupObj.AddColumn( db,~Images~,~RedEye~ );
+	AppStartupObj.AddColumn( db,~Images~,~ColorType~ );
+	AppStartupObj.AddColumn( db,~Images~,~OpRestrictions~ );
+	AppStartupObj.AddColumn( db,~Images~,~ApplyShasta~ );
+	AppStartupObj.AddColumn( db,~Images~,~ShastaHighlight~ );
+	AppStartupObj.AddColumn( db,~Images~,~ShastaMidTone~ );
+	AppStartupObj.AddColumn( db,~Images~,~ShastaShadow~ );
+	AppStartupObj.AddColumn( db,~Images~,~PostKPTPBrt~ );
+	AppStartupObj.AddColumn( db,~Images~,~PostKPTPRed~ );
+	AppStartupObj.AddColumn( db,~Images~,~PostKPTPGrn~ );
+	AppStartupObj.AddColumn( db,~Images~,~PostKPTPBlu~ );
+	AppStartupObj.AddColumn( db,~Images~,~PostKPTPCon~ );
+	AppStartupObj.AddColumn( db,~Images~,~PostKPTPGam~ );
+	AppStartupObj.AddColumn( db,~Images~,~PreAE_ICCProfile~ );
+	AppStartupObj.AddColumn( db,~Images~,~Subsequence~ );
+//	AppStartupObj.AddColumn( db,~Images~,~TintRemoval~);
+	AppStartupObj.DropColumn( db,~Images~,~TintRemoval~ );	
+
+	AppStartupObj.AddColumn( db,~Images~,~ShadowContrast~ );
+	AppStartupObj.AddColumn( db,~Images~,~MidtoneContrast~ );
+	AppStartupObj.AddColumn( db,~Images~,~HighlightContrast~ );
+
+	return TRUE;
+
+}
+
+NUMERIC MyThread::UpdateOrderItemsTable()
+{
+	if (!Ado( db,Connect))
+	{
+		Log(Session,~Could not get ADO object when updating order items table~);
+		return FALSE;
+	}
+	ReturnOnFailure( GenCon( TableDefinitions,GetFrom,~TableDefinitions~,~[Database]~ ) );
+
+	AppStartupObj.AddColumn( db,~OrderItems~,~ProdType~ );
+	AppStartupObj.AddColumn( db,~OrderItems~,~PackageID~ );
+	AppStartupObj.AddColumn( db,~OrderItems~,~PackageGroup~ );
+		
+	AppStartupObj.AddColumn( db,~OrderItems~,~Subsequence~ );
+	AppStartupObj.ChangeOIConstraint(db);
+
+	AppStartupObj.AddColumn( db,~OrderItems~,~GroupID~ );	
+	if ( PGenConList( SchemaColumnsList,Connection,db,Cursor,Keyset,Schema,Columns ) )
+	{ 
+		if ( TableDefinitions( GetByName,OrderItems,OrderItems ) )
+		{
+			// If CHARACTER_MAXIMUM_LENGTH comes back as non-zero then we know the field
+			// is currently a character type field and therefore we need to modify the
+			// field data type.
+			columnValue = AppStartupObj.ColumnsEntries( SchemaColumnsList, ~OrderItems~, ~GroupID~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+			if ( ( ~<columnValue>~ != ~0~ ) && ( ~<columnValue>~ != ~~ ) )
+			{
+				// Drop the OrderItemsGroupIDIndex index so that we can modify the type of the field.
+				db( DropIndex,~OrderItems~,~OrderItemsGroupIDIndex~ );
+
+				// Delete the data from the group ID column first because it could result in an error
+				// in SQL Server/MSDE if the column contains character data.
+				db( Cmd,~Update OrderItems Set GroupID = ''~ );
+
+				AppStartupObj.DropColumn( db,~OrderItems~,~GroupID~ );
+				AppStartupObj.AddColumn( db,~OrderItems~,~GroupID~ );
+
+				// Rebuild the index on the group ID column.
+				db( Cmd,~CREATE INDEX OrderItemsGroupIDIndex ON OrderItems (GroupID)~ );
+			}	
+		}
+	}
+
+	AppStartupObj.AddColumn( db,~OrderItems~,~Routing~ );
+	AppStartupObj.AddColumn( db,~OrderItems~,~ProductCode~ );
+	AppStartupObj.DropColumn( db,~OrderItems~,~ImagesOrderID~ );
+	AppStartupObj.DropColumn( db,~OrderItems~,~ImagesSubjectID~ );
+
+	AppStartupObj.AddColumn( db,~OrderItems~,~Spotlit~ );
+
+	return TRUE;
+}
+
+VOID BaseStartup::StartThread(TableName)
+{ 
+//	aThread.DebugThread();
+	aThread.NewOneShot(~<TableName>~);
+}
+
+NUMERIC BaseStartup::AreWeDoneYet()		
+{ 
+	if (aThread.Processing())
+	{ 
+		Sleep(500);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+
+MyThread( New,aThread );
+
+
+NUMERIC BaseStartup::UpdateCropsTable()
+{
+	if (!Ado( db,Connect))
+	{
+		Log(Session,~Could not get ADO object when updating crops table~);
+		return FALSE;
+	}
+
+	AppStartupObj.AddColumn( db,~Crops~,~HeadX~ );
+	AppStartupObj.AddColumn( db,~Crops~,~HeadY~ );
+	AppStartupObj.AddColumn( db,~Crops~,~HeadWidth~ );
+	AppStartupObj.AddColumn( db,~Crops~,~HeadLength~ );
+	AppStartupObj.AddColumn( db,~Crops~,~AspectRatioWidth~ );
+	AppStartupObj.AddColumn( db,~Crops~,~AspectRatioLength~ );
+	AppStartupObj.AddColumn( db,~Crops~,~CropMethod~ );
+
+	return TRUE;
+}
+
+
+NUMERIC BaseStartup::AlterExistingTables(&dBase)	// SO WE WON'T ALWAYS HAVE TO CREATE A NEW DATABASE
+{
+	UpdateStatus( TR( AppStartupStrings,UpdatingTables ) );
+
+	// Load the SQL commands to do the various table/column alterations.
+	AddColumnStmt = ~<$[DATABASE/Connections].KPIS_DB_CONNECTION[AddColumnStmt]>~;
+	Global( AddColumnStmt );
+	AddColumnNoConstraintsStmt = ~<$[DATABASE/Connections].KPIS_DB_CONNECTION[AddColumnNoConstraintsStmt]>~;
+	Global( AddColumnNoConstraintsStmt );
+	DropColumnStmt = ~<$[DATABASE/Connections].KPIS_DB_CONNECTION[DropColumnStmt]>~;
+	Global( DropColumnStmt );
+	AlterColumnTypeStmt = ~<$[DATABASE/Connections].KPIS_DB_CONNECTION[AlterColumnTypeStmt]>~;
+	Global( AlterColumnTypeStmt );
+	AlterColumnConstraintStmt = ~<$[DATABASE/Connections].KPIS_DB_CONNECTION[AlterColumnConstraintStmt]>~;
+	Global( AlterColumnConstraintStmt );
+
+	ReturnOnFailure( GenCon( TableDefinitions,GetFrom,~TableDefinitions~,~[Database]~ ) );
+
+	UpdateStatus( ~<$Date.time> Checking ImageRestoreSetups table...~  );
+
+	AddColumn( dBase,~ImageRestoreSetups~,~RefreshThumbnails~ );
+	AddColumn( dBase,~ImageRestoreSetups~,~UnwriteProtect~ );
+
+	if ( Authorized( ~KEXDSS~ ) )
+	{
+		UpdateStatus( ~<$Date.time> Checking PrintChannels table...~  );
+		AddColumn( dBase,~PrintChannels~,~SurfaceDesc~);
+		AddColumn( dBase,~PrintChannels~,~IsInstalled~);
+	}
+	
+	UpdateStatus( ~<$Date.time> Checking Printers table...~  );
+	AddColumn( dBase,~Printers~,~RollToRoll~ );
+	AddColumn( dBase,~Printers~,~Resolution~ );
+	AddColumn( dBase,~Printers~,~ModelType~ );
+
+if (RunningVersion(9.1))
+{
+	AddColumn( dBase,~Printers~,~SpotColorMaskType~ );
+	AddColumn( dBase,~Printers~,~SpotColorMaskPath~ );
+	AddColumn( dBase,~Printers~,~EnableNoiseReduction~ );
+	AddColumn( dBase,~Printers~,~CreateSpotColorMaskFile~ );
+}
+
+	AddColumn( dBase,~RImage~,~MaxBuilds~ );
+	AddColumn( dBase,~RImage~,~SoftwareVersion~ );
+	
+
+if ( RunningVersion( 6.1 ) && 0 )
+{
+	AddColumn( dBase,~RImage~,~CDMediaAvailable~ );
+	AddColumn( dBase,~RImage~,~CDMediaStorageCapacity~ );
+	AddColumn( dBase,~RImage~,~DVDMediaAvailable~ );
+	AddColumn( dBase,~RImage~,~DVDMediaStorageCapacity~ );
+}
+
+	AddColumn( dBase,~RImageTemplates~,~Span~ );
+	AddColumn( dBase,~RImageTemplates~,~MediaType~ );
+	AddColumn( dBase,~RImageTemplates~,~FileSystem~ );
+	AddColumn( dBase,~RImageTemplates~,~XMLGenerator~ );
+	AddColumn( dBase,~RImageTemplates~,~MergeData~ );
+	AddColumn( dBase,~RImageTemplates~,~NeedMergeFileHeader~ );
+
+if ( RunningVersion( 6.1 ) && 0 )
+{
+	AddColumn( dBase,~RImageEditListTemplates~,~OnAllDiscs~ );
+}
+
+	AddColumn( dBase,~RImageOrders~,~Span~ );
+	AddColumn( dBase,~RImageOrders~,~MediaType~ );
+	AddColumn( dBase,~RImageOrders~,~FileSystem~ );
+	AddColumn( dBase,~RImageOrders~,~XMLGenerator~ );
+	AddColumn( dBase,~RImageOrders~,~NeedMergeFileHeader~ );
+
+if ( RunningVersion( 6.1 ) && 0 )
+{
+	AddColumn( dBase,~RImageEditList~,~OnAllDiscs~ );
+}
+
+	UpdateStatus( ~<$Date.time> Checking Customers table...~  );
+	AddColumn( dBase,~Customers~,~Passwrd~ );
+	DropColumn( dBase,~Customers~,~<$str.Password.QuoteFieldName>~ );
+	AlterColumn( dBase,~Customers~,~State~ );
+	AlterColumn( dBase,~Customers~,~County~ );
+	AddColumn( dBase,~Customers~,~AlternateID~ );
+	AddColumn( dBase,~Customers~,~Sepia~ );
+	AddColumn( dBase,~Customers~,~DPOSEnabled~ );
+	AddColumn( dBase,~Customers~,~DPOSKey~ );
+//	AddColumn( dBase,~Customers~,~TintRemovalPref~ );
+	DropColumn( dBase,~Customers~,~TintRemovalPref~ );	
+	AddColumn( dBase,~Customers~,~LutIndex~ );
+	AddColumn( dBase,~Customers~,~AbstractProfile~ );
+
+	UpdateStatus( ~<$Date.time> Checking Users table...~  );
+	AddColumn( dBase,~Users~,~DPOSKeyCreation~ );
+	AddColumn( dBase,~Users~,~OrderItemResequencing~ );
+	AddColumn( dBase,~Users~,~ProductResequencing~ );
+
+
+	// This is for backward compatibility to DP2 5.0.  Alter the orders
+	// table for Proxy Order delivery.
+	UpdateStatus( ~<$Date.time> Checking Orders table...~  );
+	AddColumn( dBase,~Orders~,~Delivery~ );
+	DropColumn( dBase,~Orders~,~TintRemovalPref~ );	
+
+	AddColumn( dBase,~Orders~,~OrderName~ );
+	AddColumn( dBase,~Orders~,~ParentOrderID~ );
+	AddColumn( dBase,~Orders~,~AbstractProfile~ );
+	if ( Authorized( ~KEXDSS~ ) )
+	{
+		AppStartupObj.AddColumn( dBase,~Orders~,~Token~ );
+	}
+//	AddColumn( dBase,~Orders~,~TintRemovalPref~ );
+	AddColumn( dBase,~LabInfo~,~KNumber~ );
+	AddColumn( dBase,~LabInfo~,~EMail~ );
+
+
+
+	Cmd = ~Select Count(*) From OrderItems~;
+	numOrderItemRecords = dBase( RecordCountFor,~<Cmd>~ );
+	StartThread(~OrderItems~);
+
+
+	while (TRUE)
+	{
+		UpdateStatus( ~<$Date.time> Updating <numOrderItemRecords> order item records.  Waiting for updates to complete....~  );
+		if (AreWeDoneYet())
+			break;
+	}
+	UpdateStatus( ~<$Date.time> Updating <numOrderItemRecords> order item records completed.~  );
+
+	Cmd = ~Select Count(*) From Images~;
+	numImagesRecords = dBase( RecordCountFor,~<Cmd>~ );
+	aThread.HandleThread( ~Images~ );
+	while (TRUE)
+	{
+		UpdateStatus( ~<$Date.time> Updating <numImagesRecords> image records.  Waiting for updates to complete....~  );
+		if (AreWeDoneYet())
+			break;
+	}
+
+	UpdateStatus( ~<$Date.time> Checking CropServices table...~  );
+	AddColumn( dBase,~CropServices~,~Roll~ );
+	AddColumn( dBase,~CropServices~,~Frame~ );
+	AddColumn( dBase,~CropServices~,~Code~ );
+	AddColumn( dBase,~CropServices~,~ProductID~ );
+	AddColumn( dBase,~CropServices~,~OrderItemID~ );
+	
+	UpdateStatus( ~<$Date.time> Checking Crop table...~  );
+	UpdateCropsTable();
+
+	UpdateStatus( ~<$Date.time> Checking OrderServices table...~  );
+	AddColumn( dBase,~OrderServices~,~Code~ );
+	
+	UpdateStatus( ~<$Date.time> Checking ImagesServices table...~  );
+	AddColumn( dBase,~ImagesServices~,~Code~ );
+
+	UpdateStatus( ~<$Date.time> Checking OrderItemsServices table...~  );
+	AddColumn( dBase,~OrderItemsServices~,~Code~ );
+
+	UpdateStatus( ~<$Date.time> Checking PLSSettings table...~  );
+	AddColumn( dBase,~PLSSettings~,~InterfaceSW~ );
+	AddColumn( dBase,~PLSSettings~,~CatalogType~ );
+	AddColumn( dBase,~PLSSettings~,~DigitalCatalogName~ );
+	AddColumn( dBase,~PLSSettings~,~ProofOrdersAutoStart~ );
+	AddColumn( dBase,~PLSSettings~,~CrossRefFile~ );
+	AddColumn( dBase,~PLSSettings~,~SetAutoBalance~ );
+	AddColumn( dBase,~PLSSettings~,~AlwaysAssignOrderID~ );
+
+	// Added for Changes to Order report
+	AddColumn( dBase,~PLSSettings~,~ShowTotalOrderStudioSummary~ );
+	AddColumn( dBase,~PLSSettings~,~ShowTotalOrderImageServices~ );
+	AddColumn( dBase,~PLSSettings~,~ShowStudioSummary~ );
+	AddColumn( dBase,~PLSSettings~,~ShowOrderServices~ );
+	AddColumn( dBase,~PLSSettings~,~ShowImageServices~ );
+	AddColumn( dBase,~PLSSettings~,~ShowRetouchServices~ );
+	AddColumn( dBase,~PLSSettings~,~ShowCropServices~ );
+	AddColumn( dBase,~PLSSettings~,~ShowOrderItemServices~ );
+
+	// New proof book sizes
+	UpdateStatus( ~<$Date.time> Checking ProofBook table...~  );
+	AddColumn( dBase,~ProofBook~,~FourPerPage~ );
+	AddColumn( dBase,~ProofBook~,~NinePerPage~ );
+
+	UpdateStatus( ~<$Date.time> Checking JobServices table...~  );
+	AddColumn( dBase,~JobServices~,~ServiceCategory~ );
+	AddColumn( dBase,~JobServices~,~LookupLUT~ );
+	AddColumn( dBase,~JobServices~,~ColorMatrix~ );
+	AddColumn( dBase,~JobServices~,~UnitOfMeasure~ );
+
+	UpdateStatus( ~<$Date.time> Checking PrintServices table...~  );
+	AddColumn( dBase,~PrintServices~,~ServiceCategory~ );
+	AddColumn( dBase,~PrintServices~,~LookupLUT~ );
+	AddColumn( dBase,~PrintServices~,~ColorMatrix~ );
+	AddColumn( dBase,~PrintServices~,~UnitOfMeasure~ );
+
+	UpdateStatus( ~<$Date.time> Checking NegativeServices table...~  );
+	AddColumn( dBase,~NegativeServices~,~ServiceCategory~ );
+	AddColumn( dBase,~NegativeServices~,~LookupLUT~ );
+	AddColumn( dBase,~NegativeServices~,~ColorMatrix~ );
+	AddColumn( dBase,~NegativeServices~,~UnitOfMeasure~ );
+
+	UpdateStatus( ~<$Date.time> Checking CropServiceCodes table...~  );
+	AddColumn( dBase,~CropServiceCodes~,~ServiceCategory~ );
+	AddColumn( dBase,~CropServiceCodes~,~UnitOfMeasure~ );
+
+	UpdateStatus( ~<$Date.time> Checking ProShotsProducts table...~  );
+	AddColumn( dBase,~ProShotsProducts~,~UnitOfMeasure~ );
+	AddColumn( dBase,~ProShotsProducts~,~AlterMethod~ );
+	AddColumn( dBase,~ProShotsProducts~,~IsProof~ );
+	AddColumn( dBase,~ProShotsProducts~,~Sequence~ );
+	AddColumn( dBase,~ProShotsProducts~,~Category~ );
+
+	UpdateStatus( ~<$Date.time> Checking ScanSetups table...~  );
+	AddColumn( dBase,~ScanSetups~,~EmbedProfile~ );
+	AddColumn( dBase,~ScanSetups~,~DigitalIceType~ );
+
+	UpdateStatus( ~<$Date.time> Checking JobQueueSettings table...~  );
+	AddColumn( dBase,~JobQueueSettings~,~PrintWidth~ );
+
+	UpdateStatus( ~<$Date.time> Checking RawImages table...~  );
+	AddColumn( dBase,~RawImages~,~WhiteBalance~ );
+	AddColumn( dBase,~RawImages~,~Exposure~ );
+	AddColumn( dBase,~Templates~,~Sequence~ );
+	AddColumn( dBase,~Templates~,~DeviceType~ );
+
+	AddColumn( dBase,~TemplateOverridesSetup~,~DeviceType~ );
+	AddColumn( dBase,~TemplateOverridesSetup~,~OverrideType~ );
+	AddColumn( dBase,~TemplateOverrides~,~OverrideType~ );
+
+	AddColumn( dBase,~ImagesMetadata~,~FileName~ );
+	AddColumn( dBase,~ImagesMetadata~,~FolderName~ );
+	AddColumn( dBase,~ImagesMetadata~,~GroupID~ );
+	
+	AddColumn( dBase,~IF36PixMaster~,~NeedsCutOrderStatus~ );
+	AddColumn( dBase,~IF36PixMaster~,~OnCutOrderStatus~ );
+	AddColumn( dBase,~IF36PixMaster~,~CutCompleteOrder~ );
+	AddColumn( dBase,~IF36PixMaster~,~AgingDays~ );
+	AddColumn( dBase,~IF36PixMaster~,~SendDelay~ );
+	AddColumn( dBase,~IF36PixMaster~,~URLof36PIX~ );
+		
+	AlterTablesOrderDlvr(dBase);
+	AlterTablesForRetouching( dBase );
+	UpdateStatus( ~<$Date.time> Checking MacroCategories table...~  );
+	AlterTablesMacroCatg(dBase);		// macro categories
+	UpdateStatus( ~<$Date.time> Checking MacroItems table...~  );
+	AlterTablesMacroItems(dBase);		// macro items
+	UpdateStatus( ~<$Date.time> Checking Macros table...~  );
+	AlterTablesForMacros( dBase );
+	UpdateStatus( ~<$Date.time> Checking ExportImageSetups table...~  );
+	AlterTablesForExportImages( dBase );
+	UpdateStatus( ~<$Date.time> Checking QueueDefinition table...~  );
+	AlterTablesForPrinterQueueDefinition( dBase ) ;
+	UpdateStatus( ~<$Date.time> Checking KDSba...~  );
+	AlterTablesForKDSba( dBase );
+	UpdateStatus( ~<$Date.time> Checking User management...~  );
+	AlterTablesForUserManagement(dBase);
+	UpdateStatus( ~<$Date.time> Checking JobQueue table...~  );
+	AlterTablesForJobQueue( dBase ) ;
+	UpdateStatus( ~<$Date.time> Checking HeadAlignment table...~  );
+	AlterTablesForHeadAlignment( dBase ) ;
+	UpdateStatus( ~<$Date.time> Checking Products table...~  );
+	AlterTablesForProducts( dBase);
+	UpdateStatus( ~<$Date.time> Checking Books table...~  );
+	AlterBooksTable( dBase);
+	UpdateStatus( ~<$Date.time> Checking Books table...~  );
+	AlterBookProductsForNexpressTbl( dBase);
+	UpdateStatus( ~<$Date.time> Checking BookProductsForNexpress table...~  );
+	AlterInksTable( dBase);
+	UpdateStatus( ~<$Date.time> Checking Inks table...~  );
+	AlterViewProfiles(dBase);
+	UpdateStatus( ~<$Date.time> Checking ViewProfiles table...~  );
+	AlterCompositeTable(dBase);
+	UpdateStatus( ~<$Date.time> Checking Composite table...~  );
+	AlterBookDescriptionTable( dBase );
+	UpdateStatus( ~<$Date.time> Checking BookDescription table...~  );
+
+	if ( Authorized( ~KEXDSS~ ) )
+	{
+		AlterPrintsInfoTable( dBase );
+		UpdateStatus( ~<$Date.time> Checking PrintsInfo table...~  );
+		AlterPrintSummaryTable( dBase );
+		UpdateStatus( ~<$Date.time> Checking PrintSummary table...~  );
+		AlterPrintOptionsTable( dBase );
+		UpdateStatus( ~<$Date.time> Checking PrintOptions table...~  );
+	}
+
+	AlterTablesForBackgrounds( dBase ) ;
+	
+	AlterTablesForAnimoto( dBase ) ;
+
+	UpdateStatus( ~<$Date.time> Checking ReportQueue table...~  );
+	AlterColumn( dBase, ~ReportQueue~, ~URL~ );
+	
+	if ( !PGenConList( SchemaIndexesList,Connection,dBase,Cursor,Keyset,Schema,Indexes ) )
+	{ 
+		SchemaIndexesList( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query Schema of type Indexes.  <theErr>~ ) );
+	}
+
+	if ( IndexExists( SchemaIndexesList, ~CropServices~, ~CropServicesPrimaryKey~ ) )
+	{
+		dBase( IgnoreErrors,Cmd,~Alter Table CropServices Drop Constraint CropServicesPrimaryKey~,ReportErrors );
+		dBase( IgnoreErrors,Cmd,~Alter Table CropServices Add Constraint CropServicesPrimaryKeys Primary Key (OrderID,Roll,Frame,Crop,ServicesID)~,ReportErrors );
+	}
+
+	if ( !IndexExists( SchemaIndexesList, ~Orders~, ~OrdersParentOrderIDIndex~ ) )
+	{
+		dBase( IgnoreErrors,Cmd,~CREATE INDEX OrdersParentOrderIDIndex ON Orders (ParentOrderID)~,ReportErrors );
+	}
+
+	if ( !IndexExists( SchemaIndexesList, ~OrderItemImages~, ~OII_OrderIDIndex~ ) )
+	{
+		dBase( IgnoreErrors,Cmd,~Create Index OII_OrderIDIndex on OrderItemImages(OrderID)~,ReportErrors );
+	}
+
+	if ( !IndexExists( SchemaIndexesList, ~OrderItemImages~, ~OII_ItemOrderIDIndex~ ) )
+	{
+		dBase( IgnoreErrors,Cmd,~Create Index OII_ItemOrderIDIndex on OrderItemImages(ItemOrderID)~,ReportErrors );
+	}
+
+	if ( !IndexExists( SchemaIndexesList, ~JobQueue~, ~JobQueueCoveringIndex~ ) )
+	{
+		dBase( IgnoreErrors,Cmd,~Create Index JobQueueCoveringIndex on JobQueue(QueueName,PrinterName,SubmitDate,Priority,PrintStatus,BatchID)~,ReportErrors );
+	}
+
+
+	if ( !PGenConList( SchemaTableConstraintsList,Connection,dBase,Cursor,Keyset,Schema,TableConstraints ) )
+	{ 
+		SchemaTableConstraintsList( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query Schema of type TableConstraints.  <theErr>~ ) );
+	}
+
+	if ( TableConstraintExists( SchemaTableConstraintsList, ~OrderItemImages~, ~RefOIIToItemOrderID~ ) )
+	{
+		dBase( IgnoreErrors,Cmd,~Alter Table OrderItemImages Drop Constraint RefOIIToItemOrderID~,ReportErrors );
+	}
+
+	if ( TableConstraintExists( SchemaTableConstraintsList, ~OrderItemImages~, ~RefOIIToOrderID~ ) )
+	{
+		dBase( IgnoreErrors,Cmd,~Alter Table OrderItemImages Drop Constraint RefOIIToOrderID~,ReportErrors );
+	}
+
+	if ( TableConstraintExists( SchemaTableConstraintsList, ~KparsSetupCodeCrossRef~, ~KparsSetupCodeCrossRefConstraints~ ) )
+	{
+		dBase( IgnoreErrors,Cmd,~Alter Table KparsSetupCodeCrossRef Drop Constraint KparsSetupCodeCrossRefConstraints~,ReportErrors );
+	}
+
+	if ( TableConstraintExists( SchemaTableConstraintsList, ~RetouchBatchSetup~, ~RetouchBatchSetupTableConstraints~ ) )
+	{
+		dBase( IgnoreErrors,Cmd,~Alter Table RetouchBatchSetup Drop Constraint RetouchBatchSetupTableConstraints~,ReportErrors );
+	}
+
+	if ( TableConstraintExists( SchemaTableConstraintsList, ~FilmtermAdjustment~, ~FilmtermAdjustmentTableConstraints~ ) )
+	{
+		dBase( IgnoreErrors,Cmd,~Alter Table FilmtermAdjustment Drop Constraint FilmtermAdjustmentTableConstraints~,ReportErrors );
+	}
+
+	if ( TableConstraintExists( SchemaTableConstraintsList, ~HR500AFDFilmDrive~, ~HR500AFDFilmDriveTableConstraints~ ) )
+	{
+		dBase( IgnoreErrors,Cmd,~Alter Table HR500AFDFilmDrive Drop Constraint HR500AFDFilmDriveTableConstraints~,ReportErrors );
+	}
+
+	UpdateStatus( ~<$Date.time> Checking Logo table.~  );
+
+	if ( TableDefinitions( GetByName,Logo,Logo ) )
+	{
+		if ( ColumnExists( ~Logo~,~File~,dBase ) )
+		{
+			Logo( CreateColumnDefinition,Definition,LogoFile,dBase );
+			dBase( IgnoreErrors,Cmd,~Alter Table Logo Add [LogoFile] <Definition>~,ReportErrors );
+			Query = ~Select * From Logo Order By Code~;
+			if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+			{ 
+				List( GetErrorDescription,0,theErr );
+				Warning( Translate( ~Unable to Access Logo Table\n\n<Query>\n\n<theErr>~ ) ); 
+				return TRUE;
+			}
+	
+			while ( List( GetNext,LogoSetting ) )
+			{
+				SQLCommand = ~UPDATE Logo SET LogoFile = '<$pcon.LogoSetting[File]>' Where Code = '<$pcon.LogoSetting[Code]>'~;
+				if (!dBase(Cmd, ~<SQLCommand>~) )
+				{
+					Warning( Translate( ~Unable to update LogoFile field.~ ) );
+					return FALSE;
+				}
+			}
+
+			DropColumn( dBase,~Logo~,~File~ );
+		}
+	}
+
+	DropColumn( dBase,~ExportYBSetups~,~PoseField~ );
+	DropColumn( dBase,~ExportYBSetups~,~PoseValue~ );
+	AddColumn( dBase,~ExportYBSetups~,~AutoCropSrcX~ );
+	AddColumn( dBase,~ExportYBSetups~,~AutoCropSrcX~ );
+	AddColumn( dBase,~ExportYBSetups~,~AutoCropSrcY~ );
+	AddColumn( dBase,~ExportYBSetups~,~AutoCropDstX~ );
+	AddColumn( dBase,~ExportYBSetups~,~AutoCropDstY~ );
+	AddColumn( dBase,~ExportYBSetups~,~AutoCropWidth~ );
+	AddColumn( dBase,~ExportYBSetups~,~AutoCropLength~ );
+	
+	AddColumn( dBase,~ExportYBSetups~,~ChromaKeyBGIDOption~ );
+	AddColumn( dBase,~ExportYBSetups~,~DP2BGId~ );
+	AddColumn( dBase,~ExportYBSetups~,~ProductType~ );
+	AddColumn( dBase,~ExportYBSetups~,~CustomerBGId~ );
+	AddColumn( dBase,~ExportYBSetups~,~BGRed~ );
+	AddColumn( dBase,~ExportYBSetups~,~BGGreen~ );
+	AddColumn( dBase,~ExportYBSetups~,~BGBlue~ );
+
+	DropColumn( dBase,~YearbookDefs~,~CropAdjustment~ );
+
+	AddColumn( dBase,~ImportImagesSetups~,~LutIndex~ );
+
+	// 11/04/03 DPT
+	// Changed the following line to get a new connection rather than using the dBase connection we
+	// already have.  I found a problem with Jet where the application would hang on this line if
+	// another instance of the application was running on another workstation with both pointing to
+	// the same database.
+	if ( !PGenConList( SchemaColumnsList,Connect,Cursor,Keyset,Schema,Columns ) )
+	{ 
+		SchemaColumnsList( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query Schema of type Columns.  <theErr>~ ) );
+	}
+
+	UpdateStatus( ~<$Date.time> Checking Orders table.~  );
+	if ( TableDefinitions( GetByName,Orders,Orders ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~Orders~, ~OrderName~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ( ~<columnValue>~ == ~31~ ) || ( ~<columnValue>~ == ~64~ ) )
+		{
+			// 10/23/03 DPT
+			// Drop the OrdersNameTypeIndex index so that we can modify the length of the field.
+			dBase( DropIndex,~Orders~,~OrdersNameTypeIndex~ );
+
+			Orders( CreateColumnDefinition,Definition,OrderName,dBase );
+			dBase( IgnoreErrors,Cmd,~Alter Table Orders Alter Column [OrderName] <Definition>~,ReportErrors );
+
+			dBase( IgnoreErrors,Cmd,~CREATE INDEX OrdersNameTypeIndex ON Orders (OrderName)~,ReportErrors );
+		}	
+
+	}
+	
+	UpdateStatus( ~<$Date.time> Checking CustomerBackgrounds table.~  );
+	
+	if ( TableDefinitions( GetByName,CustomerBackgrounds,CustomerBackgrounds ) )
+	{
+		MaxLength = ColumnsEntries( SchemaColumnsList,~CustomerBackgrounds~,~InfoType~,~CHARACTER_MAXIMUM_LENGTH~ );
+		
+		if ( ( ~<MaxLength>~ != ~23~ ) )
+		{
+			dBase( IgnoreErrors,Cmd,~Alter Table CustomerBackgrounds Drop Constraint CustomerBackgroundsPrimaryKey~,ReportErrors );
+			
+			CustomerBackgrounds( CreateColumnDefinition,Definition,InfoType,dBase );
+			dBase( IgnoreErrors,Cmd,~Alter Table CustomerBackgrounds Alter Column [InfoType] <Definition>~,ReportErrors );
+
+			dBase( IgnoreErrors,Cmd,~Alter Table CustomerBackgrounds Add Constraint CustomerBackgroundsPrimaryKey Primary Key (CustomerID,ProgramID,InfoType,BackgroundType,CustBackgroundID)~,ReportErrors );
+		}	
+
+	}
+	
+	UpdateStatus( ~<$Date.time> Database updates complete.~  );
+
+	return TRUE;
+}
+
+NUMERIC BaseStartup::ChangeOIConstraint(&dbase)
+{
+	// if the Subsequence field does not have "Not Null" as a constraint, drop the column and re-add it
+	PGenConList( SchemaList,Connect,Cursor,Keyset,Schema,~Columns~ );
+	SchemaList( Filter,~Table_Name = 'OrderItems' AND Column_Name = 'SubSequence'~ );
+	if ( SchemaList( GetFirst,Rec ) )
+	{
+		if (Rec(GetNumeric,Is_Nullable))
+		{
+			DropColumn(dbase,OrderItems,Subsequence);
+			AddColumn(dbase,OrderItems,Subsequence);
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC BaseStartup::AlterTablesForExportImages( &dBase )
+{
+	// 11/04/03 DPT
+	// Changed the following line to get a new connection rather than using the dBase connection we
+	// already have.  I found a problem with Jet where the application would hang on this line if
+	// another instance of the application was running on another workstation with both pointing to
+	// the same database.
+	if ( !PGenConList( SchemaColumnsList,Connect,Cursor,Keyset,Schema,Columns ) )
+	{ 
+		return FALSE;
+	}
+
+	UpdateStatus( ~<$Date.time> Checking ExportImageSetups table...~  );
+	if ( ColumnExists( ~ExportImageSetups~, ~OutputDirectory~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~OutputDirectory~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ != ~0~ && ~<columnValue>~ != ~2147483647~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~OutputDirectory~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~FileName~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~FileName~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ != ~0~ && ~<columnValue>~ != ~2147483647~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~FileName~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~LutFile~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~LutFile~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ != ~0~ && ~<columnValue>~ != ~2147483647~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~LutFile~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~ColorMatrix~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~ColorMatrix~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ != ~0~ && ~<columnValue>~ != ~2147483647~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~ColorMatrix~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~UseFile~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~UseFile~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ != ~0~ && ~<columnValue>~ != ~2147483647~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~UseFile~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~ProcessAfter~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~ProcessAfter~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ != ~0~ && ~<columnValue>~ != ~2147483647~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~ProcessAfter~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~TextAlignment1~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~TextAlignment1~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ == ~0~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~TextAlignment1~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~TextAlignment2~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~TextAlignment2~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ == ~0~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~TextAlignment2~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~TextJustification1~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~TextJustification1~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ == ~0~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~TextJustification1~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~TextJustification2~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~TextJustification2~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ == ~0~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~TextJustification2~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~TextColor1~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~TextColor1~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ == ~0~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~TextColor1~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~TextColor2~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~TextColor2~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ == ~0~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~TextColor2~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~ShadowColor1~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~ShadowColor1~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ == ~0~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~ShadowColor1~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~ShadowColor2~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~ShadowColor2~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ == ~0~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~ShadowColor2~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~Font1~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~Font1~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ == ~0~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~Font1~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~Font2~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~Font2~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ == ~0~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~Font2~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~CharacterSet1~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~CharacterSet1~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ == ~0~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~CharacterSet1~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~CharacterSet2~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~CharacterSet2~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ == ~0~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~CharacterSet2~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~TextStrokeColor1~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~TextStrokeColor1~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ != ~0~ && ~<columnValue>~ != ~2147483647~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~TextStrokeColor1~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~TextStrokeColor2~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~TextStrokeColor2~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ != ~0~ && ~<columnValue>~ != ~2147483647~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~TextStrokeColor2~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~LogoImage1~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~LogoImage1~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ != ~0~ && ~<columnValue>~ != ~2147483647~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~LogoImage1~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~LogoMask1~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~LogoMask1~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ != ~0~ && ~<columnValue>~ != ~2147483647~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~LogoMask1~ );
+		}
+	}
+
+	if ( ColumnExists( ~ExportImageSetups~, ~LogoColorOverride1~,dBase ) )
+	{
+		columnValue = ColumnsEntries( SchemaColumnsList, ~ExportImageSetups~, ~LogoColorOverride1~,  ~CHARACTER_MAXIMUM_LENGTH~ );
+		if ( ~<columnValue>~ != ~0~ && ~<columnValue>~ != ~2147483647~ )
+		{
+			AlterColumn( dBase,~ExportImageSetups~,~LogoColorOverride1~ );
+		}
+	}
+
+	AddColumn( dBase,~ExportImageSetups~,~CompressionQuality~ );
+	AddColumn( dBase,~ExportImageSetups~,~OutputProfileEnabled~ );
+	AddColumn( dBase,~ExportImageSetups~,~ICCProfile~ );
+	AddColumn( dBase,~ExportImageSetups~,~EmbedProfile~ );
+	AddColumn( dBase,~ExportImageSetups~,~ForceColorManagementOff~ );
+	AddColumn( dBase,~ExportImageSetups~,~DefaultInputProfile~ );
+	AddColumn( dBase,~ExportImageSetups~,~ChooseProfiles~ );
+	AddColumn( dBase,~ExportImageSetups~,~WorkingSpaceProfile~ );
+	AddColumn( dBase,~ExportImageSetups~,~ProcessAfterFile~ );
+	AddColumn( dBase,~ExportImageSetups~,~ScaleFactor~ );
+
+	AddColumn( dBase,~ExportImageSetups~,~ChromaKeyBGIDOption~ );
+	AddColumn( dBase,~ExportImageSetups~,~DP2BGId~ );
+	AddColumn( dBase,~ExportImageSetups~,~ProductType~ );
+	AddColumn( dBase,~ExportImageSetups~,~CustomerBGId~ );
+	AddColumn( dBase,~ExportImageSetups~,~OrientationOption~ );
+	
+	AddColumn( dBase,~ExportImageSetups~,~NoCorrections~ );
+
+	MaxFieldIndex = 0;
+	FieldName<++MaxFieldIndex> = Text;
+	FieldName<++MaxFieldIndex> = BoldText;
+	FieldName<++MaxFieldIndex> = WordWrapText;
+	FieldName<++MaxFieldIndex> = ItalicText;
+	FieldName<++MaxFieldIndex> = TextTranslucence;
+	FieldName<++MaxFieldIndex> = TextColor;
+	FieldName<++MaxFieldIndex> = ShadowColor;
+	FieldName<++MaxFieldIndex> = ShadowStrength;
+	FieldName<++MaxFieldIndex> = ShadowBlur;
+	FieldName<++MaxFieldIndex> = ShadowEnable;
+	FieldName<++MaxFieldIndex> = Angle;
+	FieldName<++MaxFieldIndex> = TextXPercent;
+	FieldName<++MaxFieldIndex> = TextYPercent;
+	FieldName<++MaxFieldIndex> = TextWidthPercent;
+	FieldName<++MaxFieldIndex> = TextHeightPercent;
+	FieldName<++MaxFieldIndex> = TextRotation;
+	FieldName<++MaxFieldIndex> = CharacterSet;
+	FieldName<++MaxFieldIndex> = Font;
+	FieldName<++MaxFieldIndex> = TextAlignment;
+	FieldName<++MaxFieldIndex> = TextJustification;
+	FieldName<++MaxFieldIndex> = TextStrokeEnable;
+	FieldName<++MaxFieldIndex> = TextStrokeAntialias;
+	FieldName<++MaxFieldIndex> = TextStrokeWidth;
+	FieldName<++MaxFieldIndex> = TextStrokeOpacity;
+	FieldName<++MaxFieldIndex> = TextStrokeColor;
+	FieldName<++MaxFieldIndex> = TextBevel;
+	FieldName<++MaxFieldIndex> = TextBevelSize;
+	FieldName<++MaxFieldIndex> = TextBevelLightAngle;
+	FieldName<++MaxFieldIndex> = TextBevelStrength;
+	FieldName<++MaxFieldIndex> = TextBevelSoftness;
+
+	index  = 1;
+	while (<index> < 3)
+	{
+		FieldIndex = 1;
+		while (<FieldIndex> <= <MaxFieldIndex>)
+		{
+			AddColumn( dBase,~ExportImageSetups~,~<FieldName<FieldIndex>><index>~ );
+			FieldIndex = <FieldIndex> + 1;
+		}
+		index = <index> + 1;
+	}
+	
+	
+	AddColumn( dBase,~ExportImageSetups~,~DesiredLogoSize1~ );
+	AddColumn( dBase,~ExportImageSetups~,~LogoRotation1~ );
+	AddColumn( dBase,~ExportImageSetups~,~LogoAutoRotate1~ );
+	AddColumn( dBase,~ExportImageSetups~,~LogoImage1~ );
+	AddColumn( dBase,~ExportImageSetups~,~LogoMask1~ );
+	AddColumn( dBase,~ExportImageSetups~,~LogoColorOverride1~ );
+	AddColumn( dBase,~ExportImageSetups~,~LogoShiftX1~ );
+	AddColumn( dBase,~ExportImageSetups~,~LogoShiftY1~ );
+	AddColumn( dBase,~ExportImageSetups~,~LogoPosition1~ );
+
+	return TRUE;
+
+}
+
+NUMERIC BaseStartup::AlterTablesForMacros(&dbase)
+{
+	DropColumn( dBase,~Macros~,~DescriptionFile~ );
+	DropColumn( dBase,~Macros~,~DescriptionFile~ );
+	DropColumn( dBase,~Macros~,~DescriptionTag~ );
+	DropColumn( dBase,~Macros~,~ComplexityLevel~ );
+	DropColumn( dBase,~Macros~,~SubTag~ );
+	DropColumn( dBase,~Macros~,~SubCategory~ );
+	return TRUE;
+}
+
+// macro items
+NUMERIC BaseStartup::AlterTablesMacroItems(&dbase)
+{
+	DropColumn( dBase,~MacroItems~,~IsNodeMacro~ );
+	AddColumn( dBase,~MacroItems~,~RefersToDataTable~ );
+	DropColumn( dBase,~MacroItems~,~TableName~ );
+	AddColumn( dBase,~MacroItems~,~FieldName~ );
+	AddColumn( dBase,~MacroItems~,~DataTable~ );
+	return TRUE;
+}
+
+// macro categories
+NUMERIC BaseStartup::AlterTablesMacroCatg(&dbase)
+{
+	AddColumn( dBase,~MacroCategories~,~IsNodeCategory~ );
+	return TRUE;
+}
+
+NUMERIC BaseStartup::AlterTablesOrderDlvr(&dbase)
+{
+	AddColumn( dBase,~OrderDlvrbl~,~JobPopulationScript~ );	
+	AddColumn( dBase,~OrderDlvrbl~,~MergeWithSubjectPackages~ );	
+	return TRUE;
+}
+
+
+
+NUMERIC BaseStartup::AlterTablesForPrinterQueueDefinition( &dBase )
+{
+	AddColumn( dBase,~QueueDefinition~,~QualityOR~ );
+	AddColumn( dBase,~QueueDefinition~,~Configuration~ );
+	AddColumn( dBase,~QueueDefinition~,~UseOverrides~ );
+	AddColumn( dBase,~QueueDefinition~,~ChannelOR~ );
+	AddColumn( dBase,~QueueDefinition~,~DeltaRotation~ );
+	AddColumn( dBase,~QueueDefinition~,~ResolutionOR~ );
+	AlterColumn( dBase,~QueueDefinition~,~ResolutionOR~ );
+	AddColumn( dBase,~QueueDefinition~,~DeltaSharpen~ );
+	AddColumn( dBase,~QueueDefinition~,~PaperWidthOR~ );
+	AddColumn( dBase,~QueueDefinition~,~PaperSurfaceOR~ );
+	AddColumn( dBase,~QueueDefinition~,~PrinterResizeOR~ );
+	AddColumn( dBase,~QueueDefinition~,~ResponseFolder~ );
+	AddColumn( dBase,~QueueDefinition~,~EmbedProfile~ );
+	AddColumn( dBase,~QueueDefinition~,~ReverseSeq~ );
+	AddColumn( dBase,~QueueDefinition~,~BookCollation~ );
+	AddColumn( dBase,~QueueDefinition~,~ForcePDFOutput~ );
+
+	AddColumn( dBase,~QueueDefinition~,~FirstOrderSize~ );
+	AddColumn( dBase,~QueueDefinition~,~MaximumOrderSize~ );
+	AddColumn( dBase,~QueueDefinition~,~OrderSizeTimeout~ );
+
+	AddColumn( dBase,~QueueDefinition~,~NoiseReduction~ );
+
+	AddColumn( dBase,~QueueDefinition~,~SpotColorMaskType~ );
+	AddColumn( dBase,~QueueDefinition~,~SpotColorMaskPath~ );
+
+	AddColumn( dBase,~QueueDefinition~,~PrintingRenderingIntent~ );
+	AddColumn( dBase,~QueueDefinition~,~SoftProofRenderingIntent~ );
+	AddColumn( dBase,~QueueDefinition~,~NeutralizeGrayscale~ );
+	dbase( Cmd,~Update QueueDefinition Set PrintingRenderingIntent = 0 Where PrintingRenderingIntent IS NULL ~ );
+	dbase( Cmd,~Update QueueDefinition Set SoftProofRenderingIntent = 0 Where SoftProofRenderingIntent IS NULL~ );
+
+	// These values could have been set to NULL in previous db updates.  NULL is not valid
+	// and could cause problems, thus make sure they are set to 0.
+	cmd = ~Update QueueDefinition Set ReverseSeq = 0 Where ReverseSeq IS NULL~;
+	if ( !dbase( CMD,~<Cmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Log( Session, ~Unable to update queuedefinition, <cmd>, <theErr>~ );
+		return FALSE;
+	}
+
+	cmd = ~Update QueueDefinition Set PaperAdvance = 0 Where PaperAdvance IS NULL~;
+	if ( !dbase( CMD,~<Cmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Log( Session, ~Unable to update queuedefinition, <cmd>, <theErr>~ );
+		return FALSE;
+	}
+
+	cmd = ~Update QueueDefinition Set NoiseReduction = 0 Where NoiseReduction IS NULL~;
+	if ( !dbase( CMD,~<Cmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Log( Session, ~Unable to update queuedefinition, <cmd>, <theErr>~ );
+		return FALSE;
+	}
+
+	cmd = ~Update QueueDefinition Set NeutralizeGrayscale = 0 Where NeutralizeGrayscale IS NULL~;
+	if ( !dbase( CMD,~<Cmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Log( Session, ~Unable to update queuedefinition, <cmd>, <theErr>~ );
+		return FALSE;
+	}
+	cmd = ~Update Printers Set EnableNoiseReduction = 0 Where EnableNoiseReduction IS NULL~;
+	if ( !dbase( CMD,~<Cmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Log( Session, ~Unable to update queuedefinition, <cmd>, <theErr>~ );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC BaseStartup::AlterTablesForJobQueue( &dBase )
+{
+	AddColumn( dBase,~JobQueue~,~GroupID~ );
+	AlterColumn( dBase,~JobQueue~,~GroupID~ );
+
+	AddColumn( dBase,~JobQueue~,~GroupQty~ );
+	AlterColumn( dBase,~JobQueue~,~GroupQty~ );
+
+	AddColumn( dBase,~JobQueue~,~MultiStep~ );
+
+	return TRUE ;
+}
+
+
+NUMERIC BaseStartup::AlterTablesForBackgrounds( &dBase )
+{
+	AddColumn( dBase,~Backgrounds~,~Category~ );
+
+	AddColumn( dBase,~Backgrounds~,~CustomerID~ );
+	
+	AddColumn( dBase,~Backgrounds~,~OrderID~ );
+
+	return TRUE ;
+}
+
+
+NUMERIC BaseStartup::AlterTablesForAnimoto( &dBase )
+{
+	AddColumn( dBase,~AnimotoMovie~,~ProductCode~ );
+
+	return TRUE ;
+}
+
+
+NUMERIC BaseStartup::AlterTablesForHeadAlignment( &dBase )
+{
+	AddColumn( dBase,~HeadAlignment~,~MinFaceSize~ );
+	AddColumn( dBase,~HeadAlignment~,~EdgeFindingStrength~ );
+	AddColumn( dBase,~HeadAlignment~,~BalanceAlgorithm~ );
+	AddColumn( dBase,~HeadAlignment~,~UseFleshSlopeAdjustments~ );	
+
+	cmd = ~Update HeadAlignment Set BalanceAlgorithm = 0 Where BalanceAlgorithm IS NULL~;
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Log( Session, ~Unable to update HeadAlignment, <cmd>, <theErr>~ );
+	}
+
+	return TRUE ;
+}
+
+NUMERIC BaseStartup::AlterBookProductsForNexpressTbl( &dBase )
+{
+	AddColumn( dBase,~BookProductsForNexpress~,~Bleed~ );
+	AddColumn( dBase,~BookProductsForNexpress~,~DontRenderBleed~);
+	AddColumn( dBase,~BookProductsForNexpress~,~DontOverrideTemplateBleed~);
+	return TRUE;
+}
+
+
+NUMERIC BaseStartup::AlterBooksTable( &dBase )
+{
+	DropColumn( dBase,~Books~,~BannerText~ );
+	AddColumn( dBase,~Books~,~Banner~ );
+	AddColumn( dBase,~Books~,~Inkname~ );
+	AddColumn( dBase,~Books~,~Bleed~ );
+	AddColumn( dBase,~Books~,~DeviceType~ );
+	AddColumn( dBase,~Books~,~SourceType~ );
+	AddColumn( dBase,~Books~,~SourceFile~ );
+	AddColumn( dBase,~Books~,~DontRenderBleed~);
+	AddColumn( dBase,~Books~,~DontOverrideTemplateBleed~);
+	AddColumn( dBase,~Books~,~MovieID~);
+	return TRUE ;
+}
+
+
+NUMERIC BaseStartup::AlterInksTable( &dBase )
+{
+	AddColumn( dBase,Inks,DeviceType);
+	DropColumn( dBase,~Inks~,~Sequence~ );
+	return TRUE ;
+}
+
+NUMERIC BaseStartup::AlterCompositeTable(&dBase)
+{
+	AddColumn( dBase,Composite,WhoGetsFeatured);
+	AddColumn( dBase,Composite,ShuffleStaff);
+	AddColumn( dBase,Composite,TypeOfComposite);
+	AddColumn( dBase,Composite,StaffField); // field name in a subject info table
+	AddColumn( dBase,Composite,FeaturedField); // field name in a subject info table
+	AddColumn( dBase,Composite,StaffRestriction); 
+	AddColumn( dBase,Composite,FeaturedRestriction); 
+	return TRUE;
+}
+
+NUMERIC BaseStartup::AlterViewProfiles(&dbase)
+{
+	AddColumn( dBase,ViewProfiles,PrintingRenderingIntent);
+	AddColumn( dBase,ViewProfiles,SoftProofRenderingIntent);
+	dbase( Cmd,~Update ViewProfiles Set PrintingRenderingIntent = 0 Where PrintingRenderingIntent IS NULL~ );
+	dbase( Cmd,~Update ViewProfiles Set SoftProofRenderingIntent = 0 Where SoftProofRenderingIntent IS NULL~ );
+
+	return TRUE;
+}
+
+NUMERIC BaseStartup::AlterPrintsInfoTable( &dBase )
+{
+	AddColumn( dBase,~PrintsInfo~,~RoutingType~);
+	AddColumn( dBase,~PrintsInfo~,~Hidden~);
+	AddColumn( dBase,~PrintsInfo~,~BookBasePrice~);
+	AddColumn( dBase,~PrintsInfo~,~ProductID~);
+
+	AddColumn( dBase,~PrintsInfo~,~Description~);
+	AddColumn( dBase,~PrintsInfo~,~ProductSubType~);
+	AddColumn( dBase,~PrintsInfo~,~BindingType~);
+	AddColumn( dBase,~PrintsInfo~,~SpineSize~);
+	AddColumn( dBase,~PrintsInfo~,~SpineSizeGrowth~);
+	AddColumn( dBase,~PrintsInfo~,~PageMarginLeft~);
+	AddColumn( dBase,~PrintsInfo~,~PageMarginTop~);
+	AddColumn( dBase,~PrintsInfo~,~PageMarginRight~);
+	AddColumn( dBase,~PrintsInfo~,~PageMarginBottom~);
+	AddColumn( dBase,~PrintsInfo~,~CoverPageWidth~);
+	AddColumn( dBase,~PrintsInfo~,~CoverPageHeight~);
+	AddColumn( dBase,~PrintsInfo~,~CoverPageBindingType~);
+	AddColumn( dBase,~PrintsInfo~,~CoverPageMarginLeft~);
+	AddColumn( dBase,~PrintsInfo~,~CoverPageMarginTop~);
+	AddColumn( dBase,~PrintsInfo~,~CoverPageMarginRight~);
+	AddColumn( dBase,~PrintsInfo~,~CoverPageMarginBottom~);
+	AddColumn( dBase,~PrintsInfo~,~MaxNumberOfPages~);
+	AddColumn( dBase,~PrintsInfo~,~GridLocation~);
+	AddColumn( dBase,~PrintsInfo~,~DoubleSided~);
+	
+
+	numRecs = dBase( RecordCountFor, ~Select * From PrintsInfo Where Item = 'Book' AND BookBasePrice IS NULL~ );
+
+	if ( <numRecs> > 0 )
+	{
+		Cmd = ~Update PrintsInfo Set BookBasePrice = PricePerPage Where Item = 'Book'~;
+		if ( !dBase(CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Log( Session, ~Failed to update PrintsInfo with BookBasePrice. <theErr>~ );
+		}
+		else
+		{
+			Cmd = ~Update PrintsInfo Set PricePerPage = '0' Where Item = 'Book'~;
+			if ( !dBase(CMD,~<Cmd>~ ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				Log( Session, ~Failed to update PrintsInfo with PricePerPage = 0. <theErr>~ );
+			}
+		}
+	}
+
+	numRecs = 0;
+	numRecs = dBase( RecordCountFor, ~Select * From PrintsInfo Where Hidden IS NULL~ );
+
+	if ( <numRecs> > 0 )
+	{
+		Cmd = ~Update PrintsInfo Set Hidden = 0~;
+		if ( !dBase(CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Log( Session, ~Failed to update PrintsInfo setting Hidden = 0. <theErr>~ );
+		}
+	}
+
+	return TRUE ;
+}
+
+NUMERIC BaseStartup::AlterBookDescriptionTable( &dBase )
+{
+	AddColumn( dBase,~BookDescription~,~CoverPageCreated~);
+	AddColumn( dBase,~BookDescription~,~BackgroundThemeName~);
+	AddColumn( dBase,~BookDescription~,~ProductID~);
+	AddColumn( dBase,~BookDescription~,~ProductSubType~);
+	AddColumn( dBase,~BookDescription~,~CalendarDuration~);
+	AddColumn( dBase,~BookDescription~,~StartMonth~);
+	AddColumn( dBase,~BookDescription~,~StartYear~);
+
+	AddColumn( dBase,~BookDescription~,~SpineSize~);
+	AddColumn( dBase,~BookDescription~,~SpineSizeGrowth~);
+	AddColumn( dBase,~BookDescription~,~PageMarginLeft~);
+	AddColumn( dBase,~BookDescription~,~PageMarginTop~);
+	AddColumn( dBase,~BookDescription~,~PageMarginRight~);
+	AddColumn( dBase,~BookDescription~,~PageMarginBottom~);
+	AddColumn( dBase,~BookDescription~,~CoverPageWidth~);
+	AddColumn( dBase,~BookDescription~,~CoverPageHeight~);
+	AddColumn( dBase,~BookDescription~,~CoverPageBindingType~);
+	AddColumn( dBase,~BookDescription~,~CoverPageMarginLeft~);
+	AddColumn( dBase,~BookDescription~,~CoverPageMarginTop~);
+	AddColumn( dBase,~BookDescription~,~CoverPageMarginRight~);
+	AddColumn( dBase,~BookDescription~,~CoverPageMarginBottom~);
+	AddColumn( dBase,~BookDescription~,~MaxNumberOfPages~);
+
+	AddColumn( dBase,~BookDescription~,~ProductCode~ );
+
+	return TRUE ;
+}
+
+NUMERIC BaseStartup::AlterPrintSummaryTable( &dBase )
+{
+	AddColumn( dBase,~PrintSummary~,~CLOID~);
+	AddColumn( dBase,~PrintSummary~,~KEXTotalPrice~);
+
+	return TRUE ;
+}
+
+NUMERIC BaseStartup::AlterPrintOptionsTable( &dBase )
+{
+	AddColumn( dBase,~PrintOptions~,~NoLongerUsed~ );
+
+	return TRUE ;
+}
+
+NUMERIC BaseStartup::AlterTablesForProducts( &dBase )
+{
+	AddColumn( dBase,~Products~,~ImageNodeAmount~ );	// theme album
+	AddColumn( dBase,~Products~,~LastUpdateTime~ );		// theme album
+	AddColumn( dBase,~Products~,~Book~ );				// books
+	//DropColumn( dBase,~Products~,~TemplateName~ );	// Dropping this column caused a problem in a customer site running mixed 9.0 and 9.1 versions
+	AddColumn( dBase,~Products~,~DeviceType~ );	
+	AddColumn( dBase,~Products~,~SubSequence~ );		// The subsequence field in the products table used for resequencing
+	AddColumn( dBase,~ProductTree~,~LabelSubSequence~ ); // The subsequence field in the products table used for resequencing
+	AddColumn( dBase,~Products~,~ProdType~ );			// Used for Chroma key background substitution
+	return TRUE;
+}
+
+NUMERIC BaseStartup::AddColumn( &dBase,TableName,ColumnName )
+{
+	ReturnOnFailure( GenCon( TableDefinitions,GetFrom,~TableDefinitions~,~[Database]~ ) );
+
+	if ( ColumnExists( ~<TableName>~,~<ColumnName>~,dBase ) )
+	{
+		return TRUE;
+	}
+	
+	if ( !TableDefinitions( GetByName,~<TableName>~,TableDef ) )
+	{
+		return FALSE;
+	}
+	
+	if ( !GenCon( Fields,Is,TableDef(GetNumeric,Fields)) )
+	{
+		return FALSE;
+	}
+	
+	if ( !Fields( GetByName,~<ColumnName>~,ColumnDef ) )
+	{
+		return FALSE;
+	}
+
+	ColumnDef( GetValue,~Definition~,Definition );
+	ColumnDef( GetValue,~Constraints~,Constraints );
+	if ( DefinedAndNotNull( Constraints ) )
+	{
+		theSQL = FormatStringArgs( ~<AddColumnStmt>~,~<TableName>~,~<ColumnName>~,~<Definition>~,~<Constraints>~ );
+	}
+	else
+	{
+		theSQL = FormatStringArgs( ~<AddColumnNoConstraintsStmt>~,~<TableName>~,~<ColumnName>~,~<Definition>~ );
+	}
+	result = ExecSQL( dBase,~<theSQL>~ );
+
+	return <result>;
+}
+
+NUMERIC BaseStartup::DropColumn( &dBase,TableName,ColumnName )
+{
+	if ( !ColumnExists( ~<TableName>~,~<ColumnName>~,dBase ) )
+	{
+		return TRUE;
+	}
+	
+	// For SQL Server/MSDE we need to make sure any default constraint is removed before we
+	// can drop the column.
+	DatabaseType = ~<$[DATABASE/Connections].KPIS_DB_CONNECTION[DatabaseType]>~;
+	if ( SimilarStr( ~<DatabaseType>~,~SqlServer~ ) || SimilarStr( ~<DatabaseType>~,~Msde~ ))
+	{
+		if ( dBase( GetValuesFor,~Select ID From SysObjects Where Name = '<TableName>'~,TableID ) )
+		{
+			if ( dBase( GetValuesFor,~Select CDefault From SysColumns Where ID = <TableID> And Name = '<ColumnName>'~,CDefault ) )
+			{
+				if ( dBase( GetValuesFor,~Select Name From SysObjects Where ID = <CDefault>~,DefaultName ) )
+				{
+					dBase( IgnoreErrors,Cmd,~Alter Table <TableName> Drop Constraint <DefaultName>~,ReportErrors );
+				}
+			}
+		}
+	}
+
+	theSQL = FormatStringArgs( ~<DropColumnStmt>~,~<TableName>~,~<ColumnName>~ );
+	result = ExecSQL( dBase,~<theSQL>~ );
+
+	return <result>;
+}
+
+NUMERIC BaseStartup::AlterColumn( &dBase,TableName,ColumnName )
+{
+
+	result = TRUE;
+
+	ReturnOnFailure( GenCon( TableDefinitions,GetFrom,~TableDefinitions~,~[Database]~ ) );
+
+	if ( !ColumnExists( ~<TableName>~,~<ColumnName>~,dBase ) )
+	{
+		return FALSE;
+	}
+	
+	if ( !TableDefinitions( GetByName,~<TableName>~,TableDef ) )
+	{
+		return FALSE;
+	}
+	
+	if ( !GenCon( Fields,Is,TableDef(GetNumeric,Fields)) )
+	{
+		return FALSE;
+	}
+	
+	if ( !Fields( GetByName,~<ColumnName>~,ColumnDef ) )
+	{
+		return FALSE;
+	}
+	
+	ColumnDef( GetValue,~Definition~,Definition );
+	ColumnDef( GetValue,~Constraints~,Constraints );
+
+	// Handle the column constraints.
+	if ( DefinedAndNotNull( Constraints ) )
+	{
+		if ( SimilarStr( ~<Constraints>~, ~NOT NULL~ ) )
+		{
+			// Alter the column type with the NOT NULL constraint.
+			theSQL = FormatStringArgs( ~<AlterColumnTypeStmt>~,~<TableName>~,~<ColumnName>~,~<Definition> <Constraints>~ );
+			result = ExecSQL( dBase,~<theSQL>~ );
+		}
+		else
+		{
+			numTokens = GetTokens( ~<Constraints>~,~ ~ );
+			if ( <numTokens> )
+			{
+				// Handle the DEFAULT column constraint.
+				if ( SimilarStr( ~<Token1>~,~DEFAULT~ ) )
+				{			
+					theSQL = FormatStringArgs( ~<AlterColumnConstraintStmt>~,~<TableName>~,~<ColumnName>~,~<Definition>~,~<Constraints>~,~<Token1>~ );
+					result = ExecSQL( dBase,~<theSQL>~ );
+				}
+			}
+		}
+	}
+	else
+	{
+		// Alter the column type.
+		theSQL = FormatStringArgs( ~<AlterColumnTypeStmt>~,~<TableName>~,~<ColumnName>~,~<Definition>~ );
+		result = ExecSQL( dBase,~<theSQL>~ );
+	}
+	
+	return <result>;
+}

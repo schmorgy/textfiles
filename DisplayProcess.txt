@@ -1,0 +1,95 @@
+NUMERIC PerformTask( SelectedTask )
+{
+	if ( ~<SelectedTask>~ == ~~ )	{ return FALSE; }
+
+	if ( !PGenConList( TaskList,Connect,CursorLocation,Client,Cursor,Static,Lock,BatchOptimistic,QUERY,~Select * From Tasks Where Name = '<SelectedTask>'~ ) )	
+		{ return Warning( Translate( ~Failed to query the Tasks table~ ) ); }
+
+	if ( !TaskList( GetFirst,Task )  )	{ return Warning( Translate( ~Failed to find <SelectedTask> in the Tasks table~ ) ); }
+
+	if ( !Task( GetNumeric,Enabled ) )	{ return Warning( Translate( ~Sorry, "<SelectedTask>" has been disabled by the adminstrator~ ) ); }
+
+	if ( ~<$pcon.Task[Type]>~ == ~ACTION~ )		// one or more KPL statements
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		PerformActions( Process );
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~DOC~ )		// execute an action
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		PerformDocActions( Process );
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~KPL~ )		// one or more KPL statements
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		<Process> ;
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~Open~ )		// a script to run
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		Open( Any,~<Process>~ ) ;
+		return TRUE;
+	}
+
+	Process = ~<$pcon.Task[Process]>~;
+	
+	if ( ~<Process>~ == ~~ )
+		{ return Warning( ~There is no process defined for this task~ ); }
+		
+	ParseDelayed( Process );
+
+	Process = ContentsOf( Process, 1 );	// Parse any macros before doing the UserTasks
+
+	Actions = ACTION Doc ( ~UserTasks~ OpenOnce <$pcon.Task[Type]>Doc 
+							"Init( ~<$pcon.Task[Description]>~,~<Process>~ );" );
+
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+NUMERIC DisplayProcesses( Purpose,X,Y )
+{
+	Query = ~Select Name From Tasks Where Purpose = '<Purpose>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Products table: <Query>. <theErr>~ );
+	}
+
+	Count = List( NumEntries );
+
+	if ( !<Count> )
+		{ return Warning( ~You don't have any processes defined.~ ); }
+
+	Define:	ListMenu Using DDMenuDef AsSymbol ListMenu
+		Fields:		Position	(-1)		
+		Contains:	INLISTORDER
+		{
+			Count = 0;
+			while ( List( GetNext,Item ) )
+			{
+				Define:	Process<++Count> using	DDMenuItemDef
+					Fields:	Text		~&<Count>)  <$pcon.Item[Name]>~
+							IDText		~ID~
+							ActionsText  ACTION Exec ( PerformTask( ~<$pcon.Item[Name]>~ ); )
+			}
+		}
+
+	GenCon( View,GetActiveView );
+
+	View( DisplayMenu,ListMenu,<x>,<y> );
+
+	return TRUE;
+}

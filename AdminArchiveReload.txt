@@ -1,0 +1,1067 @@
+IncludeClass(BaseClass);
+IncludeClass(BaseRImage);
+
+Include: ~DBFixOrders~;
+
+Class( AdminArchiveReload,Extends,BaseClass,
+		Member,fDb,Object,ADO,
+		Member,fArchiveDirectory,Str,~~,
+		Member,fDoArchive,Numeric,1,
+		Member,fRunning,Numeric,0 );
+
+VOID AdminArchiveReload::AdminArchiveReload()
+{
+	BaseHtml::LoadTranslationFile( ~Administration\Archiving~,ArchiveStrings,Archiving );
+}
+
+NUMERIC AdminArchiveReload::Init( doArchive )
+{
+	// If doArchive is 1, then we are doing an archive.  If doArchive is 0, then
+	// we are reloading an archive.
+	fDoArchive = <doArchive>;
+	
+	// This sets up fHtmlView.
+	HtmlView( fHtmlView,FromActiveView,Private );
+	
+	// Get the last used archive directory.
+	Enabled = FALSE;
+	if ( GetWorkstationSettings( ~Archiving~,~ArchiveDirectory~,LastArchiveDir,Enabled ) )
+	{
+		if ( <fDoArchive> )
+		{
+			fHtmlView( Set, ~ArchiveDirectory~, 0, value, ~<LastArchiveDir>~ );
+		}
+		else
+		{
+			fHtmlView( Set, ~ReloadArchiveDirectory~, 0, value, ~<LastArchiveDir>~ );
+		}
+	}
+
+	// Create the list of tables 
+	PopulateTablesList();
+
+	// Select all entries in the table list.
+	if ( <fDoArchive> )
+	{
+		fHtmlView( Execute, ~OnArchiveSelectAll()~ );
+	}
+	else
+	{
+		fHtmlView( Execute, ~OnReloadArchiveSelectAll()~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC AdminArchiveReload::PopulateTablesList()
+{
+	// Get the list of table definitions.
+	ReturnOnFailure( GenCon( TableDefinitions,GetFrom,~TableDefinitions~,~[Database]~ ) );
+
+	// Create a new string list to hold that table names.
+	StringList( TablesList,New,NoDuplicateValues,InAlphaOrder );
+
+	// Add each table name to the string list.
+	while ( TableDefinitions( GetNext,Table ) )
+	{
+		TableName = ~<$con.Table[TableName]>~;
+
+		if ( SimilarStr( ~<TableName>~,~DatabaseInfo~ ) )
+		{
+			continue;
+		}
+
+		TablesList( InsertString,~<TableName>~ );
+	}
+
+	// Add the list of table names to the select control.
+	if ( <fDoArchive> )
+	{
+		fHtmlView( CreateOptionsFromStringList, ~ArchiveTablesList~, 0, TablesList);
+	}
+	else
+	{
+		fHtmlView( CreateOptionsFromStringList, ~ReloadArchiveTablesList~, 0, TablesList);
+	}
+
+	return TRUE;
+}
+
+VOID AdminArchiveReload::GetArchiveDir( currentDir )
+{
+	StartingDirectory = ~<currentDir>~;
+
+	Title = TR( ArchiveStrings,ArchiveDirBrowseTitle );
+	SubTitle = TR( ArchiveStrings,ArchiveDirBrowseSubtitle );
+
+	// Prompt the user for the archiving directory.
+	if ( GetFolder( ~<Title>~,~<SubTitle>~,Path,TRUE,~<StartingDirectory>~ ) )
+	{
+		if ( <fDoArchive> )
+		{
+			fHtmlView( Set, ~ArchiveDirectory~, 0, value, ~<Path>~ );
+		}
+		else
+		{
+			fHtmlView( Set, ~ReloadArchiveDirectory~, 0, value, ~<Path>~ );
+		}
+	}
+}
+
+VOID AdminArchiveReload::UpdateNumTablesLabel(allSelected)
+{
+	numTotalTables = 0;
+	
+	// Get the total number of tables in the list.
+	if ( <fDoArchive> )
+	{
+		numTotalTables = fHtmlView( GetSelectOptionsLength,ArchiveTablesList,0 );
+	}
+	else
+	{
+		numTotalTables = fHtmlView( GetSelectOptionsLength,ReloadArchiveTablesList,0 );
+	}
+
+	// Determine the number of selected tables.	
+	numSelectedTables = 0;
+	if ( <allSelected> )
+	{
+		numSelectedTables = <numTotalTables>;
+	}
+	else
+	{
+		i = 0;
+		
+		while ( <i> < <numTotalTables> )
+		{
+			isSelected = FALSE;
+			if ( <fDoArchive> )
+			{
+				fHtmlView( GetSelectOption,ArchiveTablesList,0,<i>,tableValue,tableText,isSelected );
+			}
+			else
+			{
+				fHtmlView( GetSelectOption,ReloadArchiveTablesList,0,<i>,tableValue,tableText,isSelected );
+			}
+
+			if ( <isSelected> )
+			{
+				numSelectedTables = <numSelectedTables> + 1;
+			}
+			
+			i = <i> + 1;
+		}
+	}
+
+	// Update the label with the number of selected/number of total tables.
+	if ( <fDoArchive> )
+	{
+		msg = TR( ArchiveStrings,NumTables,<numSelectedTables>,<numTotalTables> );
+		fHtmlView( SetInnerHTML,~NumTablesLabel~,0,~<msg>~ );
+	}
+	else
+	{
+		msg = TR( ArchiveStrings,NumTables,<numSelectedTables>,<numTotalTables> );
+		fHtmlView( SetInnerHTML,~NumReloadTablesLabel~,0,~<msg>~ );
+	}
+}
+
+NUMERIC AdminArchiveReload::DoArchive()
+{
+	// Delete the current thread, if there is one.
+	if ( Defined( archiveThread ) )
+	{
+		ForgetGlobal( archiveThread );
+	}
+
+	// Delete the selected tables list, if there is one.
+	if ( Defined( SelectedTables ) )
+	{
+		ForgetGlobal( SelectedTables );
+	}
+
+	// Create a string list to hold the the selected table names.
+	StringList( SelectedTables,New,NoDuplicateValues );
+
+	// Get the total number of tables in the list
+	numTotalTables = fHtmlView( GetSelectOptionsLength,ArchiveTablesList,0 );
+
+	// Get the selected table names and add them to the list.
+	tableNum = 0;
+	numSelectedTables = 0;
+	while ( <tableNum> < <numTotalTables> )
+	{
+		fHtmlView( GetSelectOption,ArchiveTablesList,0,<tableNum>,tableValue,tableText,isSelected );
+		
+		if ( <isSelected> )
+		{
+			SelectedTables( AddString,~<tableText>~ );
+			numSelectedTables = <numSelectedTables> + 1;
+		}
+		
+		tableNum = <tableNum> + 1;
+	}
+
+	// Get the directory to archive the database to.
+	fHtmlView( Get,~ArchiveDirectory~,0,value,fArchiveDirectory );
+
+	// Give the user a chance to back out if they want to.
+	msg = TR( ArchiveStrings,ArchiveWarning,~<fArchiveDirectory>~,<numSelectedTables> );
+	if ( MessageBox(~<msg>~,YESNO ) != YES )
+	{
+		fHtmlView( Execute,~ArchiveComplete()~ );
+		
+		return FALSE;
+	}
+
+	// Save the archive directory in the workstation settings.
+	SetWorkstationSettings( ~Archiving~,~ArchiveDirectory~,~<fArchiveDirectory>~,TRUE );
+
+	// Set the state of the controls.
+	SetArchivingControls();
+	
+	fRunning = 1;
+
+	// Create the thread.  Make sure the thread and the selected tables string list are global
+	// so that they don't get deleted when we exit this function.
+	Thread( archiveThread );
+	Global( archiveThread );
+	Global( SelectedTables );
+	archiveThread( New,ArchiveSelectedThread,SelectedTables,~<fArchiveDirectory>~ );
+
+	return TRUE;
+}
+
+VOID AdminArchiveReload::SetArchivingControls()
+{
+	fHtmlView( Set,~BrowseButton~,0,disabled,1);
+	fHtmlView( Set,~SelectAllButton~,0,disabled,1);
+	fHtmlView( Set,~BackToAdminButton2~,0,disabled,1);
+	fHtmlView( Set,~ArchiveDirectory~,0,disabled,1);
+	fHtmlView( Set,~ArchiveTablesList~,0,disabled,1);
+
+	buttonText = TR( ArchiveStrings,Stop );
+	fHtmlView( SetInnerHTML,~ArchiveSelectedButton~,0,~<buttonText>~ );
+}
+
+NUMERIC AdminArchiveReload::StopArchive()
+{
+	// Ask the user just in case they accidentally hit the Stop button.
+	msg = TR( ArchiveStrings,StopArchiveWarning );
+	if ( MessageBox(~<msg>~,YESNO ) == NO )
+	{
+		return FALSE;
+	}
+
+	fHtmlView( Set,~ReloadArchiveSelectedButton~,0,disabled,1);
+
+	// Set the stopping flag to TRUE.
+	SetStopping(TRUE);
+
+	UpdateInfoStatus( TR( ArchiveStrings,Stopping ) );
+
+	return TRUE;
+}
+
+NUMERIC AdminArchiveReload::DoReloadArchive()
+{
+	// Delete the current thread, if there is one.
+	if ( Defined( reloadThread ) )
+	{
+		ForgetGlobal( reloadThread );
+	}
+
+	// Delete the selected tables list, if there is one.
+	if ( Defined( SelectedTables ) )
+	{
+		ForgetGlobal( SelectedTables );
+	}
+
+	// Create a string list to hold the the selected table names.
+	StringList( SelectedTables,New,NoDuplicateValues );
+
+	// Get the total number of tables in the list
+	numTotalTables = fHtmlView( GetSelectOptionsLength,ReloadArchiveTablesList,0 );
+
+	// Get the selected table names and add them to the list.
+	tableNum = 0;
+	numSelectedTables = 0;
+	while ( <tableNum> < <numTotalTables> )
+	{
+		fHtmlView( GetSelectOption,ReloadArchiveTablesList,0,<tableNum>,tableValue,tableText,isSelected );
+		
+		if ( <isSelected> )
+		{
+			SelectedTables( AddString,~<tableText>~ );
+			numSelectedTables = <numSelectedTables> + 1;
+		}
+		
+		tableNum = <tableNum> + 1;
+	}
+
+	// Get the directory to archive the database to.
+	fHtmlView( Get,~ReloadArchiveDirectory~,0,value,fArchiveDirectory );
+
+	// Give the user a chance to back out if they want to.
+	msg = TR( ArchiveStrings,ReloadWarning,~<fArchiveDirectory>~,<numSelectedTables> );
+	if ( MessageBox(~<msg>~,YESNO ) != YES )
+	{
+		ReloadArchiveComplete();
+		return FALSE;
+	}
+
+	// Save the archive directory in the workstation settings.
+	SetWorkstationSettings( ~Archiving~,~ArchiveDirectory~,~<fArchiveDirectory>~,TRUE );
+
+	// Set the state of the controls.
+	SetReloadingControls();
+
+	fRunning = 1;
+
+	// Create the thread.  Make sure the thread and the selected tables string list are global
+	// so that they don't get deleted when we exit this function.
+	Thread( reloadThread );
+	Global( reloadThread );
+	Global( SelectedTables );
+	reloadThread( New,ReloadSelectedThread,SelectedTables,~<fArchiveDirectory>~ );
+
+	return TRUE;
+}
+
+VOID AdminArchiveReload::SetReloadingControls()
+{
+	fHtmlView( Set,~ReloadBrowseButton~,0,disabled,1);
+	fHtmlView( Set,~SelectAllReloadButton~,0,disabled,1);
+	fHtmlView( Set,~ReloadArchiveDoneButton~,0,disabled,1);
+	fHtmlView( Set,~ReloadArchiveDirectory~,0,disabled,1);
+	fHtmlView( Set,~ReloadArchiveTablesList~,0,disabled,1);
+
+	buttonText = TR( ArchiveStrings,Stop );
+	fHtmlView( SetInnerHTML,~ReloadArchiveSelectedButton~,0,~<buttonText>~ );
+}
+
+NUMERIC AdminArchiveReload::StopReloadArchive()
+{
+	// Ask the user just in case they accidentally hit the Stop button.
+	msg = TR( ArchiveStrings,StopReloadWarning );
+	if ( MessageBox(~<msg>~,YESNO ) == NO )
+	{
+		return FALSE;
+	}
+
+	fHtmlView( Set,~ReloadArchiveSelectedButton~,0,disabled,1);
+
+	// Abort the operation.
+	if ( Defined( CurrentArchiveList ) )
+	{
+		CurrentArchiveList( SetAbort,TRUE );
+	}
+
+	// Set the stopping flag to TRUE.
+	SetStopping(TRUE);
+
+	UpdateInfoStatus( TR( ArchiveStrings,Stopping ) );
+
+	return TRUE;
+}
+
+NUMERIC ArchiveSelectedThread(&SelectedTables,ArchiveDirectory)
+{
+	// Set the stopping flag to FALSE.
+	SetStopping(FALSE);
+
+	// Determine if there are any files in the current archive directory.
+	copyOldArchive = FALSE;
+	if ( Files( DirectoryExists,~<ArchiveDirectory>~ ) )
+	{
+		copyOldArchive = TRUE;
+	}
+
+	// Copy any files in the current archive directory to a new directory.
+	app( Application );
+	if ( <copyOldArchive> )
+	{
+		n = 1;
+		OldArchiveDir = ~<ArchiveDirectory>~ + ~Old~;
+		while ( Application( FileOrDirExists, ~<OldArchiveDir>~ ) )
+		{
+			OldArchiveDir = ~<ArchiveDirectory>~ + ~Old~ + ~<n>~;
+			n = <n> + 1;
+		}
+
+		Invoke( UpdateInfoStatus,TR( ArchiveStrings,MoveOldArchiveDir,~<OldArchiveDir>~ ) );
+
+		RImage( RImageFileCopy );
+		DirectoryLevels = GetTokens( ~<ArchiveDirectory>~,~\~ );
+		RImageFileCopy( CopyFilesRecursively,~<OldArchiveDir>~,~<ArchiveDirectory>~,TRUE,~<DirectoryLevels>~ );
+	}
+
+	// Now delete all of the files in the archive directory.
+	Directory( DeleteRecursive,~<ArchiveDirectory>~,~*.*~ );
+
+	// Create the directory to archive the database to.	
+	if ( !Directory( Create,~<ArchiveDirectory>~ ) )
+	{
+		Log( Session,~Could not create directory <ArchiveDirectory>.  <$Func.GetLastErrorMsg()>~ );
+		msg = TR( ArchiveStrings,UnableToCreateDirectory,~<ArchiveDirectory>~ );
+		Invoke( UpdateErrorStatus,~<msg>~ );
+		
+		// Call the function to complete the archiving operation.
+		Invoke( ArchiveComplete );
+		
+		return FALSE;
+	}
+
+	// Get the number of selected tables.
+	numSelectedTables = SelectedTables( NumEntries );
+
+	// Archive each selected table.  The user can interrupt the operation by selecting the stop button,
+	// so we need to check the state of the stopping flag on each iteration.	
+	tableCount = 0;
+	More = SelectedTables( GetFirstString,TableName );
+	while ( <More> && !<Stopping> )
+	{
+		if ( !CreateArchive( ~<TableName>~,~Select * From <TableName>~,~<ArchiveDirectory>~,~~,<tableCount>,<numSelectedTables> ) )
+		{
+			// Call the function to complete the archiving operation.
+			Invoke( ArchiveComplete );
+			
+			return FALSE;
+		}
+
+		++tableCount;
+
+		ArchiveSubjectInfoDefinition( ~<TableName>~ );
+		More = SelectedTables( GetNextString,TableName );
+	}
+
+	// Write out a file that indicates the product and database version that the files were archived from.
+	VerFileName = ~<ArchiveDirectory>\ArchiveVersion.txt~;
+
+	Files( Delete, ~<VerFileName>~ );
+	if ( File( VerFile,OPEN,~<VerFileName>~,Create,Write ) )
+	{
+		Version = ~0~;
+		Version = ~<$[Symbols].Version[Value]>~;
+		GetTokens( ~<Version>~,~ ~,Junk,Version );
+		VerFile( WriteLine,~ProductVersion=<Version>;~ );
+
+		DatabaseVersion = ~0~;
+		if ( ado( dBase,CONNECT ) )
+		{ 
+			dBase( GetValuesFor,~Select Version From DatabaseInfo~,DatabaseVersion );
+		}
+		VerFile( WriteLine,~DatabaseVersion=<DatabaseVersion>;~ );
+	}
+
+	msg = TR( ArchiveStrings,ArchivingComplete,<tableCount> );
+	Log( Session,~Archiving complete.  <tableCount> tables were archived.~ );
+	Invoke( UpdateInfoStatus,~<msg>~ );
+
+	// Call the function to complete the archiving operation.
+	Invoke( ArchiveComplete );
+
+	return TRUE;
+}
+
+NUMERIC CreateArchive( TableName,Query,ArchiveDirectory,Format,tableCount,numSelectedTables )
+{
+	tableMsg = TR( ArchiveStrings,TableCount,<tableCount>+1,<numSelectedTables>  );
+	
+	ADO( dbase,Connect );
+	if ( !PGenConList( SchemaList,Connection,dbase,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		Log( Session,~Unable to archive the database.  Failed to query Schema of type Tables.  <theErr>~ );
+		
+		Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToArchive ) ); 
+		return FALSE;
+	}
+
+	SchemaList( Filter,~TABLE_NAME = '<TableName>'~ );
+	if ( !SchemaList( GetFirst,Table ) )
+	{
+		Log( Session,~Skipping table <TableName> because it does not exist in the database.~ );
+		msg = ~<tableMsg>~ + TR( ArchiveStrings,SkippingTableNotExists,~<TableName>~ );
+		Invoke( UpdateInfoStatus,~<msg>~ ); 
+		return TRUE;
+	}
+
+	DesiredChunkSize = ChunkSize = 5000;
+
+	FileName = ~<ArchiveDirectory>\<TableName>~;
+	if ( Files( DirectoryExists,~<FileName>~ ) )
+	{
+		Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToArchiveFileIsDir,~<FileName>~ ) ); 
+		return FALSE;
+	}
+
+	if ( SimilarStr(~<TableName>~,~OrderItems~) )
+	{
+		FirstPrimaryField = ~OrderID~;	// Until we can fix the primary key definition in the database
+	}
+	else
+	{
+		PrimaryKey = GetPrimaryKeyForTable( dbase,~<TableName>~ );
+		NumPrimaryFields = GetTokens( ~<PrimaryKey>~,~ ~,FirstPrimaryField,SecondPrimaryField,ThirdPrimaryField,FourthPrimaryField );
+	}
+
+	OrgFileName = ~<FileName>~;
+	count = 0;
+
+	Query = ~Select count(*) From <TableName>~;
+
+	if ( !PGenConList( CountList,Connection,dBase,Cursor,Static,Lock,ReadOnly,QUERY,~<Query>~ ) )
+	{
+		return ReportRecordsetError( CountList );
+	}
+
+	CountList( GetFirst,Record );
+
+	TotalRecordCount = ~<$pcon.Record[#0]>~;
+
+	ForgetLocal( CountList );
+
+	if ( <TotalRecordCount> == 0 )
+	{
+		Log( Session,~Skipping table <TableName> because it is empty~ );
+		msg = ~<tableMsg>~ + TR( ArchiveStrings,SkippingTableEmpty,~<TableName>~ );
+		Invoke( UpdateInfoStatus,~<msg>~ ); 
+		return TRUE;
+	}
+
+	if ( <TotalRecordCount> <= <ChunkSize> )
+	{
+		if ( !PGenConList( List,Connection,dBase,Cursor,Keyset,Lock,Optimistic,QUERY,~Select * from <TableName>~ ) )
+		{
+			return ReportRecordsetError( List );
+		}
+	
+		Log( Session,~Archiving <TotalRecordCount> records from <TableName> to <FileName>~ );
+		msg = ~<tableMsg>~ + TR( ArchiveStrings,ArchivingStatus,<TotalRecordCount>,~<TableName>~,~<FileName>~ );
+		Invoke( UpdateInfoStatus,~<msg>~ ); 
+
+		if ( !List( Save,~<FileName>~,~<Format>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			Log( Session,~Unable to archive the database.  Save to file failed: <FileName>. <theErr>~ );
+			
+			Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToArchive ) ); 
+			return FALSE;
+		}
+
+		return TRUE;
+	}
+
+	Query = ~Select Distinct <FirstPrimaryField> From <TableName> Order By <FirstPrimaryField>~;
+
+	Log( Session,~Analyzing <TableName>~ );
+	msg = ~<tableMsg>~ + TR( ArchiveStrings,AnalyzingTable,~<TableName>~ );
+	Invoke( UpdateInfoStatus,~<msg>~ ); 
+
+	if ( !dbase( GetFieldQuoteChar,~<TableName>~,~<FirstPrimaryField>~,QC ) )
+	{
+		Log( Session,~Unable to archive the database.  Could not get the quote character for Table <TableName>, Field <FirstPrimaryField>.  <$Func.GetLastErrorMsg()>~ );
+			
+		Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToArchive ) );
+		return FALSE;
+	}
+
+	if ( !PGenConList( KeyList,Connection,dBase,Cursor,Static,Lock,ReadOnly,QUERY,~<Query>~ ) )
+	{
+		return ReportRecordsetError( KeyList );
+	}
+
+	keyCount = KeyList( Count );
+
+	if ( <keyCount> == 0 )
+	{
+		Log( Session,~Unable to archive the database.  Table <TableName> has no records for FirstPrimaryField <FirstPrimaryField>~ );
+			
+		Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToArchive ) );
+		return FALSE;
+	}
+
+	if ( <TotalRecordCount> < <ChunkSize> )
+	{
+		ChunkSize = <TotalRecordCount>;
+	}
+
+	AveRecordsPerKey = <TotalRecordCount> / <keyCount>;
+
+	while ( TRUE )
+	{
+		RecordsPerChunk = <Chunksize> * <AveRecordsPerKey>;
+
+		if ( <RecordsPerChunk> <= <DesiredChunkSize> )
+			break;
+
+		ChunkSize = floor(<ChunkSize> / 2);
+
+		if ( <ChunkSize> < 1 )
+		{
+			ChunkSize = 1;
+			break;
+		}
+	}
+
+	Position = Recordcount = RecordPosition = 0;
+
+	Log( Session,~<TableName>: Selection Field=<FirstPrimaryField>, Size=<ChunkSize>.  Selection Entries=<TableCount>. Total Records=<TotalRecordCount>.  Field Quote is <QC>~ );
+
+	while ( (<Recordcount> < <TotalRecordCount>)  && !<Stopping> )
+	{
+		if ( !KeyList( SetPosition,<Position> ) )
+		{
+			Log( Session,~Unable to archive the database.  Failed to set to position <Position> for table <TableName>~ );
+				
+			Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToArchive ) );
+			return FALSE;
+		}
+
+		if ( !KeyList( GetRecord,Record ) )
+		{
+			Log( Session,~Unable to archive the database.  Failed to get the record at position <Position> for table <TableName>~ );
+				
+			Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToArchive ) );
+			return FALSE;
+		}
+
+		StartKey = ~<$pcon.Record[<FirstPrimaryField>]>~;
+
+		LastPosition = <Position> + <ChunkSize> - 1;
+
+		if ( <LastPosition> >= <keyCount> )
+		{
+			LastPosition = <keyCount> - 1;
+		}
+
+		if ( !KeyList( SetPosition,<LastPosition> ) )
+		{
+			Log( Session,~Unable to archive the database.  Failed to set to position <Position> for table <TableName>~ );
+				
+			Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToArchive ) );
+			return FALSE;
+		}
+
+		if ( !KeyList( GetRecord,Record ) )
+		{
+			Log( Session,~Unable to archive the database.  Failed to get the record at position <Position> for table <TableName>~ );
+				
+			Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToArchive ) );
+			return FALSE;
+		}
+
+		EndKey = ~<$pcon.Record[<FirstPrimaryField>]>~;
+
+		Query = ~Select * From <Tablename> where <FirstPrimaryField> >= <QC><StartKey><QC> AND <FirstPrimaryField> <= <QC><EndKey><QC>~;
+
+		Files( Delete,~<FileName>~ );
+
+		if ( Files( FileExists,~<FileName>~ ) )
+		{
+			Log( Session,~Unable to archive the database.  Could not delete <FileName>.  <$Func.GetLastErrorMsg()>~ );
+				
+			Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToArchive ) );
+			return FALSE;
+		}
+
+		if ( !PGenConList( ChunkList,Connect,Cursor,Keyset,Lock,Optimistic,QUERY,~<Query>~ ) )
+		{
+			return ReportRecordsetError( ChunkList );
+		}
+
+		FetchedRecords = ChunkList( Count );
+
+		LastRecordPosition = <RecordPosition> + <FetchedRecords> - 1;
+	
+		Log( Session,~Archiving <RecordPosition>-<LastRecordPosition> (<FetchedRecords> records) of <TotalRecordCount> Records (<StartKey>-<EndKey>) From <TableName> to <FileName>~ ); 
+		msgPart1 = TR( ArchiveStrings,ArchivingTableChunks1,<RecordPosition>,<LastRecordPosition>,<FetchedRecords>,<TotalRecordCount> );
+		msgPart2 = TR( ArchiveStrings,ArchivingTableChunks2,~<StartKey>~,~<EndKey>~,~<TableName>~,~<FileName>~ );
+		msg = ~<tableMsg>~ + ~<msgPart1>~ + ~<msgPart2>~;
+		Invoke( UpdateInfoStatus,~<msg>~ ); 
+
+		if ( !ChunkList( Save,~<FileName>~,~<Format>~ ) )
+		{
+			ChunkList( GetErrorDescription,0,theErr );
+			Log( Session,~Unable to archive the database.  Save to file failed: <FileName>. <theErr>~ );
+				
+			Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToArchive ) );
+			return FALSE;
+		}
+
+		ForgetLocal( ChunkList );
+
+		FileName = ~<OrgFileName>.<++count>~;
+
+		Position = <LastPosition> + 1;
+
+		RecordCount += <FetchedRecords>;
+		RecordPosition = <RecordPosition> + <FetchedRecords>;
+	}
+
+	return TRUE;
+}
+
+STR GetPrimaryKeyForTable( &dBase,Table )
+{
+	if ( !dBase( MakePrimaryKeyFrom,~<Table>~,NULL,Key ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session,~Warning.  The database will not respond to a request for the primary key of <Table>.  <theErr>~ );
+				
+		return ~~;
+	}
+
+	return ~<Key>~;
+}
+
+NUMERIC ArchiveSubjectInfoDefinition( ArchiveDirectory,Name )
+{
+	FromPath = ~<$App.ShareDirectory>\Scripts\UserTableDefinitions\<Name>.txt~;
+
+	if ( !Files( FileExists,~<FromPath>~ ) )
+	{
+		return TRUE;
+	}
+
+	ToPath = ~<ArchiveDirectory>\UserTableDefinitions~;
+
+	Directory( Create,~<ToPath>~ );
+
+	if ( !Files( Copy,~<FromPath>~,~<ToPath>\<Name>.txt~ ) )
+	{
+		Log( Session,~Could not copy <FromPath> to <ToPath>\<Name>.txt.  <$Func.GetLastErrorMsg()>~ );
+				
+		Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToArchive ) );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC ReloadSelectedThread(&SelectedTables,ArchiveDirectory)
+{
+	// Set the stopping flag to FALSE.
+	SetStopping(FALSE);
+
+	// Get the number of selected tables.
+	numSelectedTables = SelectedTables( NumEntries );
+
+	// Initialize the Macros, Macros and CheckOrderData variables.  This will be used
+	// later to determine whether tasks and macros need to be reloaded and whether an
+	// additional database fixup needs to be done.
+	Macros = Tasks = FALSE;
+	CheckOrderData = FALSE;
+
+	// Initialize the timer.	
+	Start = Ticks();
+
+	// Reload each selected table.  The user can interrupt the operation by selecting the stop button,
+	// so we need to check the state of the stopping flag on each iteration.	
+	tableCount = 0;
+	More = SelectedTables( GetFirstString,TableName );
+	while ( <More> && !<Stopping> )
+	{
+		if ( Files( FileExists,~<ArchiveDirectory>\<TableName>~ ) )
+		{
+			if ( !LoadArchiveFancy( ~<ArchiveDirectory>\<TableName>~,~<TableName>~ ) )
+			{ 
+				Log( Session,Translate( ~Errors occured loading Table <TableName> from <ArchiveDirectory>\<TableName>~ ) );
+
+				Invoke( UpdateErrorStatus,TR( ArchiveStrings,ReloadError,~<TableName>~,~<ArchiveDirectory>~,~<TableName>~ ) ); 
+
+				// Call the script function to complete the archiving operation.
+				Invoke( ReloadArchiveComplete );
+				
+				return FALSE;
+			}
+
+			if ( SimilarStr( ~<TableName>~,~Orders~ ) )
+			{
+				if ( File( VerFile, OPEN,~<ArchiveDirectory>\ArchiveVersion.txt~,READ ) )
+				{ 
+					if ( VerFile( ReadTextFile,buffer ) )
+					{
+						DatabaseVersion = ~~;
+						DatabaseVersion = String( GetParameter,buffer,~DatabaseVersion=~,~;~ );
+					}
+				}
+				else
+				{
+					// This case assumes we are loading an archive from a previous version of DP2
+					// that did not write out an ArchiveVersion.txt file - thus is earlier, so fix
+					CheckOrderData = TRUE;
+				}
+			}
+
+			if ( SimilarStr( ~<TableName>~,~Macros~ ) )		{ ++Macros; }
+
+			if ( SimilarStr( ~<TableName>~,~Tasks~ ) )		{ ++Tasks; }
+
+			++tableCount;
+		}
+		else
+		{
+			Log( Session,Translate( ~<TableName> was skipped because there is no file at <ArchiveDirectory>\<TableName>~ ) );
+			Invoke( UpdateInfoStatus,TR( ArchiveStrings,ReloadSkipTableNoFile,~<TableName>~,~<ArchiveDirectory>~,~<TableName>~ ) ); 
+		}
+
+		More = SelectedTables( GetNextString,TableName );
+	}
+
+	if ( <CheckOrderData> )
+	{
+		if ( FixOrdersAndSubjectInfo() )
+		{
+			Log( Session,Translate( ~Changes may have been made to the Orders Data and/or SubjectInfo Data.\nSee Session Log for details.~ ) );
+		}
+	}
+
+	Duration = (Ticks() - <Start>) / 1000 / 60;
+
+	Log( Session,Translate( ~Loaded Database from <TableCount> Files in <Duration> minutes~ ) );
+	Invoke( UpdateInfoStatus,TR( ArchiveStrings,ReloadComplete ) );
+
+	// Call the script function to complete the archiving operation.
+	Invoke( ReloadArchiveComplete );
+
+	return TRUE;
+}
+
+NUMERIC LoadArchiveFancy( Path,Table )
+{
+	FileVersionCount = 0;
+
+	OrgPath = ~<Path>~;
+
+	while ( Files( FileExists,~<Path>~ ) && !<Stopping>  )
+	{
+		if ( !PGenConList( CurrentArchiveList,Cursor,Forward,File,~<Path>~ ) )
+		{
+			CurrentArchiveList( GetErrorDescription,0,theErr );		
+			Log( Session,~Failed to load data from <Path>.  <theErr>~ ); 
+			
+			Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToReload,~<Path>~ ) ); 
+			return FALSE;
+		}
+
+		CurrentArchiveList( SetUpdateStatusNotification, ~LoadArchiveStatus(%ld,%ld,`%s`,`%s`);~ );
+		
+		Total = CurrentArchiveList( NumEntries );
+		if ( !<Total> )
+		{
+			return TRUE;
+		}
+
+		Global( CurrentArchiveList );
+
+		if ( ~<Table>~ == ~HR500FilmDrive~ )
+		{
+			LoadHR500FilmDriveTable();
+		}
+		else
+		{
+			if ( !Ado( dBase,Connect ) )
+			{
+				ForgetGlobal( CurrentArchiveList );
+				dBase( GetErrorDescription,theErr );
+				Log( Session,~Could not connect to the database.  <theErr>~ ); 
+				
+				Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToReload,~<Path>~ ) ); 
+				return FALSE;
+			}
+
+			while ( CurrentArchiveList( GetNext,Item ) && !<Stopping> )
+			{
+				AddCount = 0;
+				if ( !CurrentArchiveList( UpdateTableFromList,dBase,~<Table>~,AddCount ) )
+				{
+					Log( Session,~Update of database table <Table> from file <Path> had errors.  Loaded <AddCount> of <Total> records.~ ); 
+					Invoke( UpdateErrorStatus,TR( ArchiveStrings,ReloadPartialError,~<Table>~,~<Path>~,<AddCount>,<Total> ) ); 
+				}
+				else
+				{
+					Log( Session,~Loaded <AddCount> records into database table <Table> from file <Path>~ ); 
+					Invoke( UpdateInfoStatus,TR( ArchiveStrings,ReloadedTable,<AddCount>,~<Table>~,~<Path>~ ) ); 
+				}
+			}
+		}
+
+		ForgetGlobal( CurrentArchiveList );
+
+		path = ~<OrgPath>.<++FileVersionCount>~;
+	}
+
+	return TRUE;
+}
+
+// Needed for transition from a version earlier than 4.1.7
+NUMERIC LoadHR500FilmDriveTable()
+{
+	TableName = ~HR500FilmDrive~;
+	Path = ~<CurrentDirectory>\<TableName>~;
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	Count = ErrorCount = 0; 
+	while ( CurrentArchiveList( GetNext,Item ) && !<Stopping> )
+	{
+		<++Count>;
+
+		if ( !Defined( TableRecord ) )
+		{
+			if ( !PGenConList( TableRecord,Connect,Cursor,Keyset,QUERY,~Select * From <TableName>~ ) )
+			{
+				TableRecord( GetErrorDescription,0,theErr );
+				return Warning( ~Failed to Query <TableName> to determine it's fields.\n\nNo updates occured.\n\n<theErr>~ );
+			}
+		}
+
+		TableRecord( GenerateInsertsFor,Item,Fields,Values );
+
+		if ( ~<$pcon.Item[ScannerSerialNo]>~ == ~~ )
+		{
+			Field1 = ~<$ContentsOf.Fields>,ScannerSerialNo~;
+			Value1 = ~<$ContentsOf.Values>,0~;
+			Cmd	= STR ( Insert Into <TableName>(<Field1>) Values(<Value1>) );
+		}
+		else
+		{
+			Cmd	= STR ( Insert Into <TableName>(<$ContentsOf.Fields>) Values(<$ContentsOf.Values>) );
+		}
+
+		if ( !dBase( CmdIn,Cmd ) )
+		{
+			++ErrorCount;
+
+			dBase( GetErrorDescription,theErr,GetErrorNumber,ErrNum,GetErrorNative,NativeError );
+
+			Log( Session,~Insert Cmd failed for <TableName> (<ErrNum>, NativeError is <NativeError>): <TheErr>~ );
+			Log( SessionFrom,Cmd );
+				
+			if ( MessageBox( ~Database update failed on record <Count>. (Native Error is <NativeError>):\n\n<theErr>.\n\nDo you want to continue?~,YESNO ) != YES )
+				break;
+		}
+	}
+	
+	return TRUE;
+}
+
+NUMERIC ReportRecordsetError( &List,Msg )
+{
+	List( GetErrorNumber,0,errNum );
+
+	if ( <errNum> == -2147217865 )	// TABLE DOES NOT EXIST
+	{
+		return TRUE;
+	}
+
+	List( GetErrorDescription,0,theErr );
+	List( GetCommandText,theQuery );
+
+	Log( Session,~<Msg>. Query: <theQuery>. Error: <theErr>~ );
+	Invoke( UpdateErrorStatus,TR( ArchiveStrings,UnableToArchive ) ); 
+
+	return FALSE;
+}
+
+VOID SetStopping( Value )
+{
+	Stopping = <Value>;
+	Global( Stopping );
+}
+
+VOID AdminArchiveReload::UpdateInfoStatus( msg )
+{
+	if ( Defined( fHtmlView ) )
+	{
+		fHtmlView( Execute, ~UpdateInfoSection('<$str.$msg.cpath>')~ );
+	}
+}
+
+VOID AdminArchiveReload::UpdateErrorStatus( msg )
+{
+	if ( Defined( fHtmlView ) )
+	{
+		fHtmlView( Execute, ~UpdateErrorSection('<$str.$msg.cpath>')~ );
+	}
+}
+
+VOID AdminArchiveReload::ArchiveComplete()
+{
+	fRunning = 0;
+	
+	if ( Defined( fHtmlView ) )
+	{
+		fHtmlView( Execute,~ArchiveComplete()~ );
+	}
+}
+
+VOID AdminArchiveReload::ReloadArchiveComplete()
+{
+	fRunning = 0;
+	
+	if ( Defined( fHtmlView ) )
+	{
+		fHtmlView( Set, ~ReloadBrowseButton~, 0, disabled, ~~ );
+		fHtmlView( Set, ~SelectAllReloadButton~, 0, disabled, ~~ );
+		fHtmlView( Set, ~ReloadArchiveDoneButton~, 0, disabled, ~~ );
+		fHtmlView( Set, ~ReloadArchiveDirectory~, 0, disabled, ~~ );
+		fHtmlView( Set, ~ReloadArchiveTablesList~, 0, disabled, ~~ );
+		fHtmlView( Set, ~ReloadArchiveSelectedButton~, 0, disabled, ~~ );
+
+		buttonText = TR( ArchiveStrings,ReloadSelected );
+		fHtmlView( SetInnerHTML,~ArchiveSelectedButton~,0,~<$str.buttonText.NoCRLF>~ );
+
+		fHtmlView( Execute,~ReloadArchiveComplete()~ );
+	}
+}
+
+NUMERIC AdminArchiveReload::IsRunning()
+{
+	return <fRunning>;
+}
+
+VOID AdminArchiveReload::Execute( command )
+{
+	if ( Defined( fHtmlView ) )
+	{
+		fHtmlView( Execute,~<command>~ );
+	}
+}
+
+VOID UpdateInfoStatus( msg )
+{
+	ArchiveDBObj.UpdateInfoStatus( ~<msg>~ );
+}
+
+VOID UpdateErrorStatus( msg )
+{
+	ArchiveDBObj.UpdateErrorStatus( ~<msg>~ );
+}
+
+VOID ArchiveComplete()
+{
+	ArchiveDBObj.ArchiveComplete();
+}
+
+VOID ReloadArchiveComplete()
+{
+	ArchiveDBObj.ReloadArchiveComplete();
+}
+
+VOID LoadArchiveStatus( count, total, file, table )
+{
+	msg = TR( ArchiveStrings,LoadArchiveStatus,<count>,<total>,~<file>~,~<table>~ );
+	ArchiveDBObj.UpdateInfoStatus( ~<msg>~ );
+}
+
+VOID Execute( command )
+{
+	ArchiveDBObj.Execute( ~<command>~ );
+}

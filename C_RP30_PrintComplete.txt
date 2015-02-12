@@ -1,0 +1,1100 @@
+//	C_RP30_PrintComplete.txt
+
+/*
+	Paper Surfaces
+
+	 1 = Other
+	 2 = Matte
+	 3 = Semi Matte
+	 4 = Glossy
+	 5 = Smooth / Luster
+	 6 = Ultra Smooth / Hi Luster
+	 7 = Fine Grained / Luster
+	 8 = Silk
+	 9 = Luster
+	10 = Deep Matte
+	11 = High Gloss
+*/
+
+/*
+Dictionary:	DDFSOrder
+	Fields:	Name		~CUSTOMERID~			Type	Text
+	Fields:	Name		~VENDORORDERNUMBER~		Type	Text
+	Fields:	Name		~OrderStatus~			Type	long
+	Fields:	Name		~PrinterSetup~			Type	long
+	Fields:	Name		~OrderID~				Type	Text
+	Fields:	Name		~BatchID~				Type	Text
+	Fields:	Name		~TotalPrints~			Type	Long
+	Fields:	Name		~Batch~					Type	Long
+	Fields:	Name		~ErrorCode~				Type	Long
+	Fields:	Name		~ErrorMsg~				Type	Text
+	Fields:	Name		~ErrorType~				Type	Long
+	Fields:	Name		~NumberErrorPrints~		Type	Long
+;
+
+Dictionary:	DDFSPrint
+	Fields:	Name		~PRODUCTDESC~			Type	Text
+	Fields:	Name		~SHORTDIMENSION~		Type	Double
+	Fields:	Name		~LONGDIMENSION~			Type	Double
+	Fields:	Name		~UNITS~					Type	Text
+	Fields:	Name		~QUANTITY~				Type	Long
+	Fields: Name		~IMAGEPATH~				Type	Text
+	Fields:	Name		~FILEFORMAT~			Type	Text
+	Fields:	Name		~COLORSPACE~			Type	Text
+	Fields:	Name		~DELETEONCOMPLETE~		Type	Long
+	Fields:	Name		~BACKPRINTMESSAGE1~		Type	Text
+	Fields:	Name		~BACKPRINTMESSAGE2~		Type	Text
+	Fields:	Name		~PrintStatus~			Type	Long
+	Fields:	Name		~RenderPage~			Type	Long
+	Fields:	Name		~OrderItemID~			Type	Long
+	Fields:	Name		~OrderItemSeq~			Type	Long
+	Fields:	Name		~JobID~					Type	Long
+	Fields:	Name		~OEMPrinterChannel~		Type	Long
+	Fields:	Name		~OEMPrinterSurface~		Type	Long
+	Fields:	Name		~ReproMode~				Type	Long
+	Fields:	Name		~PrinterResize~			Type	Long
+	Fields:	Name		~ResponsePage~			Type	Long
+	Fields:	Name		~ResponseText~			Type	Text
+	Fields:	Name		~ResponseCode~			Type	Long
+	Fields:	Name		~OutputNode~			Type	Long
+	Fields:	Name		~Resolution~			Type	Double
+	Fields:	Name		~PrintNumber~			Type	Long
+	Fields:	Name		~PaperWidth~			Type	Double
+	Fields:	Name		~CommandSent~			Type	Long
+	Fields:	Name		~ExpandedCDSaveName~	Type	Text
+;
+*/
+
+ExecC() ;
+
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+char	*NULL ;
+
+
+//FOR DEBUG without a printer, go to C:\appsv2\ScriptTools\IA_Simulator, and drag 
+//IA_Simulator_1.txt onto DP2.  Also set gTesting = TRUE in C_RP30_Startup.txt
+//This lets you simulate a printer for debugging script changes
+
+
+//double	 gSpillOverAmt = 1.01 ; 
+//changed back to 1.04 that we started with in V7.  Also changing back a few lines below
+//that had be changed at the same time.  They didn't account for spillover in <4.75 and >7.0
+//paper widths when determining what to set the paper advance to.  Commented out and marked with **KJA below.
+double	 gSpillOverAmt = 1.04 ;
+long	 gPaperWidth ;
+double   gdPaperWidth;
+long	 gLongPaperLength;
+double	 gdLongPaperLength;
+double	 gShortDimension ;
+double	 gLongDimension ;
+
+UGenCon	*gRELookAhead	= NULL ;
+long	 gLogAmount		= 0L ;
+UList	*gMultiPageProductList = NULL ;
+
+main()
+{
+	Debug(0) ;
+	gRELookAhead = GetTreeObject(_T("RELookAhead"),_T("[GenCons]")) ;
+	gLogAmount	= gRELookAhead->GetLongValue(_T("RELogLevel")) ;
+}
+
+int Advertize()
+{
+	SessionLogDirect( _T("C_RP30_PrintComplete.Advertize: (V2.00)")) ;
+	return( TRUE ) ;
+}
+
+int Init( UGenCon *fSOrder, UGenCon *CompletePrint )
+{
+	TCHAR	CmdPath[2048] ;
+	TCHAR	NewImgPath[2048] ;
+	int		isDirectory ;
+	int		Result ;
+	int		RestartNumber = 500 ;
+	TCHAR	*EndOfOrder = _T("FALSE") ;
+
+//Debug(1) ;
+
+	UGenCon	*StatusGC		= fSOrder->GetLongValue(_T("StatusGC")) ;
+	UGenCon	*PrinterSetup	= fSOrder->GetLongValue(_T("PrinterSetup")) ;
+	TCHAR	*ControlFolder	= PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+//	UGenCon *CompletePrint	= GetCompletePrint(fSOrder) ;
+
+	long	 PageID			= CompletePrint->GetLongValue(_T("JobID")) ;
+
+	fSOrder->SetLongValue(_T("ErrorCode"), 0L ) ;
+	fSOrder->SetAttrValue(_T("ErrorMsg"),  _T("") ) ;
+
+	//	VERIFY WE HAVE A VALID PRINT !
+	if( ValidPrint( fSOrder, CompletePrint, PrinterSetup ) == FALSE )
+	{
+		//	HANDLE THE ERROR HERE !
+		//	UPDATE THE ORDER GENCON
+
+		TCHAR	*ResponseText = CompletePrint->GetStringValue(_T("ResponseText")) ;
+		long ResponseCode = CompletePrint->GetLongValue(_T("ResponseCode")) ;
+//		UpdateJobQueueTable( PageID, ResponseCode ) ;
+
+		fSOrder->SetLongValue(_T("ErrorType"),  2L ) ;
+		fSOrder->SetLongValue(_T("ErrorCode"), ResponseCode ) ;
+		fSOrder->SetAttrValue(_T("ErrorMsg"),  ResponseText ) ;
+
+		//	SHOULD WE LEAVE THE IMAGE OR DELETE IT HERE?
+
+		//	DECREMENT THE TOTAL PRINTS SO WE KNOW WHEN WE HIT
+		//	THE END OF ORDER.
+		long TotalPrints = fSOrder->GetLongValue(_T("TotalPrints")) ;
+		fSOrder->SetLongValue( _T("TotalPrints"), TotalPrints - 1L ) ;
+
+		//	SAY WE LOOKED AT THIS PRINT BUT IT HAD AN ERROR.
+		CompletePrint->SetLongValue(_T("CommandSent"), -1L ) ;
+
+		long PrintNumber = CompletePrint->GetLongValue(_T("PrintNumber")) ;
+		if( PrintNumber == TotalPrints )
+		{
+			//	THIS IS THE LAST PRINT, WE HAVE TO FORCE AN END OF ORDER
+			WriteAction( PrinterSetup, _T("004.act"), _T("ACTION: 0004"))  ;
+		}
+
+		return( TRUE ) ;	//	WAS FALSE
+	}
+
+
+	TCHAR	*CustomerID		= fSOrder->GetStringValue(_T("CUSTOMERID")) ;
+	TCHAR	*BatchID		= fSOrder->GetStringValue(_T("BatchID")) ;
+	TCHAR	*OrderID		= fSOrder->GetStringValue(_T("OrderID")) ;
+	long	 OrderItemID	= CompletePrint->GetLongValue(_T("OrderItemID")) ;
+	long	 TotalPrints	= fSOrder->GetLongValue(_T("TotalPrints")) ;
+	long	 PrintNumber	= CompletePrint->GetLongValue(_T("PrintNumber")) ;
+
+	if( gLogAmount >= 6 )
+	{
+		SessionLogDirect( _T("C_RP30_PrintComplete: Batch: \"%s\", Order: \"%s\", OrderItem: %ld, PageID: P%09ld, PrintNumber: %ld"), 
+				BatchID, OrderID, OrderItemID, PageID, PrintNumber ) ;
+	}
+
+	long	DoAction = PrintNumber % 10 ;
+	if( DoAction == 1 )
+	{
+		WriteAction( PrinterSetup, _T("101.act"), _T("ACTION: 0005")) ;
+	}
+
+	CleanUpActionReply( PrinterSetup ) ;
+
+	long	 Qty = CompletePrint->GetLongValue(_T("Quantity")) ;
+	TCHAR	*ImagePath	= CompletePrint->GetStringValue(_T("ImagePath")) ;
+	TCHAR	*BPString1	= CompletePrint->GetStringValue(_T("BackPrintMessage1")) ;
+	TCHAR	*BPString2	= CompletePrint->GetStringValue(_T("BackPrintMessage2")) ;
+
+	RemoveTrailingNewLine( BPString1 ) ;
+	RemoveTrailingNewLine( BPString2 ) ;
+
+	TCHAR	*ReproMode	= _T("FALSE") ;
+	if( CompletePrint->GetLongValue(_T("ReproMode")))
+		{ ReproMode	= _T("TRUE") ; }
+
+	TCHAR	*PrinterResize = _T("TRUE") ;
+	if( CompletePrint->GetLongValue(_T("PrinterResize")) == 0L )
+		{ PrinterResize = _T("FALSE") ; }
+
+	RenameFile( ImagePath, NewImgPath ) ;
+
+	TCHAR	NewBatchID[1024] ;
+	TCHAR	NewOrderID[1024] ;
+	ValidateString( BatchID, NewBatchID ) ;
+	ValidateString( OrderID, NewOrderID ) ;
+
+	sprintf( CmdPath, _T("%s\\B%s%s_%03ld.cmd"), ControlFolder, NewBatchID, NewOrderID, ((PrintNumber - 1) % RestartNumber) + 1 ) ;
+
+	if( gLogAmount >= 7 )
+	{
+		SessionLogDirect( _T("C_RP30_PrintComplete.Init: Writing Command File: \"%s\""), CmdPath ) ;
+	}
+	long	PaperSurface;
+	long	NumPrinterJobs;
+	long	 CurrentPage;
+	long	 LastPage;
+	long	 GroupQty;
+
+	CurrentPage = CompletePrint->GetLongValue(_T("ProductPageSeqCurrent")) ;
+	LastPage	 = CompletePrint->GetLongValue(_T("ProductPageSeqLast")) ;
+	GroupQty		= CompletePrint->GetLongValue(_T("GroupQty")) ;
+	if(GroupQty == 0)
+	{
+		GroupQty = 1;
+	}
+
+	long QueueBookCollation = PrinterSetup->GetLongValue(_T("BookCollation")) ;
+	if(( QueueBookCollation == 1) && (GroupQty > 1))
+	{
+		CompletePrint->SetLongValue(_T("BookCollation"), TRUE);
+	}
+	if( gLogAmount > 3 )
+	{		
+		SessionLogDirect( _T("C_RP30_PrintComplete.Init: QueueBookCollation = %ld, page BookCollation = %ld"), QueueBookCollation, CompletePrint->GetLongValue(_T("BookCollation"))  ) ;
+	}
+
+	if( ( PrintNumber == TotalPrints ) && (GroupQty == 1) ||
+		( PrintNumber % RestartNumber == 0 ) && (GroupQty == 1) )	
+		{ EndOfOrder = _T("TRUE") ; }
+	else 
+		{ EndOfOrder = _T("FALSE") ; }
+
+//	Sleep( 3000 ) ;
+
+	TCHAR	IOBuff[1024] ;
+
+	char	*fp = fopen( CmdPath, _T("wb")) ;
+	if( fp )
+	{
+		IOBuff[0] = 0xFEFF ;
+		IOBuff[1] = 0x0000 ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("ORDER_ID: B%s%s"), BatchID, OrderID ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("PAGE_ID: %ld"), PageID ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("CUSTOMER_ID: %s"), CustomerID ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("FILENAME: %s"), NewImgPath ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		if( QueueBookCollation != 1 )
+		{ //no collation requested, so honor group qty here
+			sprintf( IOBuff, _T("COPIES: %ld"), (Qty*GroupQty) ) ;
+		}
+		else
+		{ //collation below will get al the copies of book (group qty) printed
+			sprintf( IOBuff, _T("COPIES: %ld"), Qty ) ;
+		}
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("EOO: %s"), EndOfOrder ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		if( (LastPage != 1) && (GroupQty > 1) )
+		{ 
+			sprintf( IOBuff, _T("DELETEFILE: FALSE")) ;
+		}
+		else
+		{
+			sprintf( IOBuff, _T("DELETEFILE: TRUE")) ;
+		}
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("REPROMODE: %s"), ReproMode) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("SCALING: %s"), PrinterResize) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		if( strlen( BPString1 ) > 0 )
+			{ sprintf( IOBuff, _T("BACKPRINTSTRING_L1: %s"), BPString1 ) ; }
+		else
+			{ sprintf( IOBuff, _T("BACKPRINTSTRING_L1: ") ) ; }
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		if( strlen( BPString2 ) > 0 )
+			{ sprintf( IOBuff, _T("BACKPRINTSTRING_L2: %s"), BPString2 ) ; }
+		else
+			{ sprintf( IOBuff, _T("BACKPRINTSTRING_L2: ") ) ; }
+
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("PAPERWIDTH: %04ld"), gPaperWidth ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		gLongPaperLength = gdLongPaperLength * 254 ;
+
+		sprintf( IOBuff, _T("PAPERLENGTH: %04ld"), gLongPaperLength ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+		
+//		SessionLogDirect( _T("C_RP30_PrintComplete.Init: PaperWidth: %ld, PaperLength: %ld"), gPaperWidth, gLongPaperLength ) ;
+
+		PaperSurface = CompletePrint->GetLongValue( _T("OEMPrinterSurface")) ;
+		sprintf( IOBuff, _T("PAPERSURFACE: %02ld"), PaperSurface ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		fclose(fp) ;
+
+		CompletePrint->SetLongValue(_T("CommandSent"), 1L ) ;
+
+		//	INCREMENT THE NUMBER OF JOBS AT THE PRINTER
+		NumPrinterJobs = StatusGC->GetLongValue(_T("NumPrinterJobs")) + 1L ;
+		StatusGC->SetLongValue( _T("NumPrinterJobs"), NumPrinterJobs ) ;
+		if( gLogAmount >= 6 )
+		{
+			SessionLogDirect( _T("C_RP30_PrintComplete.Init: NumPrinterJobs %ld."), NumPrinterJobs ) ;
+		}
+	}
+
+
+	//new to handle multiple qty's of books
+	gMultiPageProductList	= fSOrder->GetLongValue(_T("MultiPageProductList")) ;
+
+	SessionLogDirect( _T("C_RP30_PrintComplete.Init: PageID: P%09ld, Page: %ld of %ld"), PageID, CurrentPage, LastPage ) ;
+	if( (LastPage != 1) && (GroupQty > 1) && (QueueBookCollation == 1) )
+	{ //really a multipage product (not 1 of 1) and qty >1, so have to insert into multiPageProductList for book collation
+
+		if( CurrentPage && LastPage )
+		{
+			if( CurrentPage == 1L && gMultiPageProductList )
+			{
+				//	WE HAVE AN ERROR: LAST MULTIPAGE PRODUCT WAS NOT COMPLETED.
+				SessionLogDirect( _T("C_RP30_PrintComplete: ERROR: Last Multi-Page Product was not completed.")) ;
+				DumpMultiPageIDs() ;
+				
+				//	SHOULD WE GENERATE ERROR RESPONSES FOR PAGES THAT SHOWED UP HERE ?
+				UListIterator	*anIter = new UListIterator( gMultiPageProductList ) ;
+				UGenCon			*aPage  = (UGenCon *) anIter->GetFirst() ;
+				while( aPage )
+				{
+					sprintf( Msg, _T("ERROR: Last Multi-Page Product was not completed. JobID: P%09ld"), aPage->GetLongValue(_T("JobID"))) ;
+					aPage->SetLongValue(_T("ResponseCode"), -101L ) ;
+					aPage->SetAttrValue(_T("ResponseText"), Msg ) ;
+					WriteErrorResponseFile( fSOrder, aPage, -101, ErrorType, Msg ) ;
+					ErrorType = 5L ;	//	SAY WE HAVE ALREADY OUTPUT THE MESSAGE.
+					aPage  = (UGenCon *) anIter->GetNext() ;
+				}
+				delete anIter ;
+				
+				CleanMultiPageProductList(fSOrder) ;
+			}
+			
+			if( CurrentPage < LastPage )
+			{
+				if( gMultiPageProductList == NULL )
+				{
+					gMultiPageProductList = new UList ; 
+					fSOrder->SetLongValue(_T("MultiPageProductList"), gMultiPageProductList ) ;
+				}
+				gMultiPageProductList->InsertBack( CompletePrint ) ;
+				
+				SessionLogDirect( _T("C_RP30_PrintComplete.Init: PageID: P%09ld, Page: %ld of %ld, Number of Entries In Queue: %ld"),
+					PageID, CurrentPage, LastPage, gMultiPageProductList->GetNumEntries() ) ;
+				return( TRUE ) ;
+			}
+			
+			SessionLogDirect( _T("C_RP30_PrintComplete.Init: PageID: P%09ld, Page: %ld of %ld"), PageID, CurrentPage, LastPage ) ;
+
+			if( CurrentPage == LastPage )
+			{
+				if( gMultiPageProductList )
+				{
+					gMultiPageProductList->InsertBack( CompletePrint ) ;
+					
+					SessionLogDirect( _T("C_RP30_PrintComplete.Init: PageID: P%09ld, Page: %ld of %ld, Number of Entries In Queue: %ld"),
+						PageID, CurrentPage, LastPage, gMultiPageProductList->GetNumEntries() ) ;
+
+					if( gMultiPageProductList->GetNumEntries() != LastPage )
+					{
+						//	WE HAVE AN ERROR NOT ENOUGH PAGES WERE RENDERED.
+						HandleIncompleteError(fSOrder,CompletePrint, _T("Is Missing Page(s)."));
+						return( FALSE ) ;
+					}
+				}
+				else
+				{
+					HandleIncompleteError(fSOrder,CompletePrint, _T("Is Missing First Page.")) ;
+					return( FALSE ) ;
+				}
+			}
+
+			//if we get here, we have sent cmd file for last page in book, now we need to
+			//send all the pages in the book again, once for every book copy requested (GroupQty)
+
+			UListIterator	*anIter = new UListIterator( gMultiPageProductList ) ;
+			UGenCon			*aPage;
+			long bookTime;
+			long BookCopyCount = 0;
+
+			while ( BookCopyCount < (GroupQty-1) ) 
+			{
+				aPage  = (UGenCon *) anIter->GetFirst() ;
+				bookTime = clock(); //each copy of book will have a different time in filename
+				while ( aPage )
+				{
+					if( ValidPrint( fSOrder, aPage, PrinterSetup ) == TRUE )
+					{
+						PrintNumber	= aPage->GetLongValue(_T("PrintNumber")) ;
+						Qty			= aPage->GetLongValue(_T("Quantity")) ;
+						ImagePath	= aPage->GetStringValue(_T("ImagePath")) ;
+						BPString1	= aPage->GetStringValue(_T("BackPrintMessage1")) ;
+						BPString2	= aPage->GetStringValue(_T("BackPrintMessage2")) ;
+						PageID		= aPage->GetLongValue(_T("JobID")) ;
+
+						RemoveTrailingNewLine( BPString1 ) ;
+						RemoveTrailingNewLine( BPString2 ) ;
+
+						ReproMode	= _T("FALSE") ;
+						if( aPage->GetLongValue(_T("ReproMode")))
+							{ ReproMode	= _T("TRUE") ; }
+
+						PrinterResize = _T("TRUE") ;
+						if( aPage->GetLongValue(_T("PrinterResize")) == 0L )
+							{ PrinterResize = _T("FALSE") ; }
+
+						RenameFile( ImagePath, NewImgPath ) ;
+
+						ValidateString( BatchID, NewBatchID ) ;
+						ValidateString( OrderID, NewOrderID ) ;
+
+						CurrentPage = aPage->GetLongValue(_T("ProductPageSeqCurrent")) ;
+						LastPage	 = aPage->GetLongValue(_T("ProductPageSeqLast")) ;
+						if( gLogAmount > 3 )
+						{
+							SessionLogDirect( _T("C_RP30_PrintComplete.Init: PrintNumber = %d, TotalPrints = %d"), PrintNumber, TotalPrints ) ;
+							SessionLogDirect( _T("C_RP30_PrintComplete.Init: LastPage = %d, CurrentPage = %d"), LastPage, CurrentPage ) ;
+							SessionLogDirect( _T("C_RP30_PrintComplete.Init: BookCopyCount = %d, GroupQty = %d"), BookCopyCount, GroupQty ) ;
+						}
+						if( LastPage == CurrentPage )	
+							{ EndOfOrder = _T("TRUE") ; } //last page of book, seperate book copies into orders
+						else
+							{ EndOfOrder = _T("FALSE") ; } 
+
+						sprintf( CmdPath, _T("%s\\B%s%s_%ld_%03ld.cmd"), ControlFolder, NewBatchID, NewOrderID, bookTime, PrintNumber ) ;
+
+						fp = fopen( CmdPath, _T("wb")) ;
+						if( fp )
+						{
+							IOBuff[0] = 0xFEFF ;
+							IOBuff[1] = 0x0000 ;
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+							sprintf( IOBuff, _T("ORDER_ID: B%s%s"), BatchID, OrderID ) ;
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+							sprintf( IOBuff, _T("PAGE_ID: %ld"), PageID ) ;
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+							sprintf( IOBuff, _T("CUSTOMER_ID: %s"), CustomerID ) ;
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+							sprintf( IOBuff, _T("FILENAME: %s"), NewImgPath ) ;
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+							sprintf( IOBuff, _T("COPIES: %ld"), Qty ) ;
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+							sprintf( IOBuff, _T("EOO: %s"), EndOfOrder ) ;
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+	//				SessionLogDirect( _T("C_RP30_PrintComplete.Init: BookCopyCount = %d, GroupQty = %d"), BookCopyCount, GroupQty ) ;
+							if ( BookCopyCount == (GroupQty - 2) )
+							{
+								sprintf( IOBuff, _T("DELETEFILE: TRUE")) ;
+							}
+							else
+							{
+								sprintf( IOBuff, _T("DELETEFILE: FALSE")) ;
+							}
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+							sprintf( IOBuff, _T("REPROMODE: %s"), ReproMode) ;
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+							sprintf( IOBuff, _T("SCALING: %s"), PrinterResize) ;
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+							if( strlen( BPString1 ) > 0 )
+								{ sprintf( IOBuff, _T("BACKPRINTSTRING_L1: %s"), BPString1 ) ; }
+							else
+								{ sprintf( IOBuff, _T("BACKPRINTSTRING_L1: ") ) ; }
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+							if( strlen( BPString2 ) > 0 )
+								{ sprintf( IOBuff, _T("BACKPRINTSTRING_L2: %s"), BPString2 ) ; }
+							else
+								{ sprintf( IOBuff, _T("BACKPRINTSTRING_L2: ") ) ; }
+
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+							sprintf( IOBuff, _T("PAPERWIDTH: %04ld"), gPaperWidth ) ;
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+							gLongPaperLength = gdLongPaperLength * 254 ;
+
+							sprintf( IOBuff, _T("PAPERLENGTH: %04ld"), gLongPaperLength ) ;
+							WriteUnicodeFile( fp, IOBuff ) ;
+							
+					//		SessionLogDirect( _T("C_RP30_PrintComplete.Init: PaperWidth: %ld, PaperLength: %ld"), gPaperWidth, gLongPaperLength ) ;
+
+							PaperSurface = aPage->GetLongValue( _T("OEMPrinterSurface")) ;
+							sprintf( IOBuff, _T("PAPERSURFACE: %02ld"), PaperSurface ) ;
+							WriteUnicodeFile( fp, IOBuff ) ;
+
+							fclose(fp) ;
+
+							aPage->SetLongValue(_T("CommandSent"), 1L ) ;
+
+							if( gLogAmount >= 7 )
+							{
+								SessionLogDirect( _T("C_RP30_PrintComplete.Init: Writing Command File (again for book copies): PageID: %ld, Path: \"%s\""), PageID, CmdPath ) ;
+							}
+
+							//	INCREMENT THE NUMBER OF JOBS AT THE PRINTER
+							NumPrinterJobs = StatusGC->GetLongValue(_T("NumPrinterJobs")) + 1L ;
+							StatusGC->SetLongValue( _T("NumPrinterJobs"), NumPrinterJobs ) ;
+							if( gLogAmount >= 6 )
+							{
+								SessionLogDirect( _T("C_RP30_PrintComplete.Init: NumPrinterJobs %ld."), NumPrinterJobs ) ;
+							}
+							aPage  = (UGenCon *) anIter->GetNext() ;
+						}
+						else
+						{
+							SessionLogDirect( _T("C_RP30_PrintComplete.Init: Could not create \"%s\"."), CmdPath ) ;
+							aPage = 0; //get out of loop
+						}
+					}
+					else
+					{ //not valid page, try rest of book
+						aPage  = (UGenCon *) anIter->GetNext() ;
+					}
+				}//while(aPage)
+				BookCopyCount++;
+			}//while (BookCopyCount < GroupQty-1)
+			
+			delete anIter ;
+		
+			CleanMultiPageProductList(fSOrder) ;
+
+		}
+	} 
+	else
+	{ //null out multipage list, not really multipage (1 of 1) or qty = 1, so just treat as any non-book page
+		gMultiPageProductList = NULL;
+	}
+
+	return( TRUE ) ;
+}
+
+
+//	SessionLogDirect(_T("C_RP30_PrintComplete: Input Stuff:")) ;
+//	PrintGC( PrinterSetup ) ;
+//	PrintGC( fSOrder ) ;
+//	PrintGC( CompletePrint ) ;
+//	UGenCon *RP30Setup = PrinterSetup->GetLongValue(_T("RP30Setup")) ;
+//	if( RP30Setup )
+//	{
+//		PrintGC( RP30Setup ) ;
+//	}
+
+
+/*
+UGenCon *GetCompletePrint(UGenCon *Order)
+{
+	UList			*thePrints = Order->GetChildren() ;
+	UListIterator	*anIter = new UListIterator( thePrints ) ;
+	UGenCon			*aPrint = (UGenCon *) anIter->GetFirst() ;
+	long			 CommandSent ;
+
+	while( aPrint )
+	{
+		CommandSent = aPrint->GetLongValue(_T("CommandSent")) ;
+		if( CommandSent == FALSE )
+		{
+			delete anIter ;
+			return( aPrint ) ;
+		}
+
+		aPrint = (UGenCon *) anIter->GetNext() ;
+	}
+	
+	if( aPrint == NULL )
+	{
+		aPrint = (UGenCon *) anIter->GetLast() ;
+	}
+
+	delete anIter ;
+	return( aPrint ) ;
+}
+*/
+
+//	CALL WITH 001.ACT, ACTION: 0005
+WriteAction( UGenCon *PrinterSetup, TCHAR *FileName, TCHAR *Text )
+{
+	TCHAR	 FilePath[2048] ;
+	TCHAR	*ControlFolder = PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+
+	if( gLogAmount > 3 )
+	{
+		SessionLogDirect( _T("RP30_PrintComplete: WriteAction: \"%s\""), Text ) ;
+	}
+
+	sprintf( FilePath, _T("%s\\%s"), ControlFolder, FileName ) ;
+	char	*fp = fopen( FilePath, _T("wb")) ;
+	if( fp )
+	{
+		short	IOBuff[8] ;
+		IOBuff[0] = 0xFEFF ;
+		IOBuff[1] = 0x0000 ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		WriteUnicodeFile( fp, Text ) ;
+		fclose(fp) ;
+	}
+}
+
+WriteUnicodeFile( char *fp, TCHAR *Text )
+{
+	long	Length = strlen( Text ) ;
+	fwrite( Text, 2, Length, fp ) ;
+
+	long	EndOfLine = 0x000A000D ;
+	fwrite( &EndOfLine, 2, 2, fp ) ;
+}
+
+CleanUpActionReply( UGenCon *PrinterSetup )
+{
+	int		 isDirectory = 0 ;
+
+	TCHAR	 FilePath[2048] ;
+	TCHAR	*ResponseFolder = PrinterSetup->GetStringValue(_T("ResponseFolder")) ;
+
+	sprintf( FilePath, _T("%s\\%s"), ResponseFolder, _T("101.sta") ) ;
+
+	int FileExists = FileOrDirectoryExists( FilePath, &isDirectory ) ;
+	if( FileExists )
+	{
+		unlink( FilePath ) ;
+	}
+}
+
+RemoveTrailingNewLine( TCHAR *String )
+{
+	TCHAR	Temp[2] ;
+
+//	PrintString( String ) ;
+
+	long	Length = strlen( String ) - 1L ;
+	if( String[Length] == 0x0A )
+	{
+		String[Length] = *Temp ;
+	}
+
+//	PrintString( String ) ;
+}
+
+PrintString( TCHAR *String )
+{
+	int		loop ;
+	for( loop = 0 ; loop < 10 ; loop++ )
+	{
+		printf( _T("%X "), String[loop] ) ;
+	}
+	printf( _T("\r\n")) ;
+}
+
+
+void RenameFile( TCHAR *ImagePath, TCHAR *NewImgPath )
+{
+	long	SrcPos, DstPos ;
+	SrcPos = 0L ;
+	DstPos = 0L ;
+
+	while( ImagePath[SrcPos] )
+	{
+		if( IsLegalFileChar( ImagePath[SrcPos] ))
+		{
+			NewImgPath[DstPos] = ImagePath[SrcPos] ;
+			DstPos++ ;
+		}
+		SrcPos++ ;
+	}
+
+	if( gLogAmount > 7 )
+	{
+		SessionLogDirect( _T("Original File: \"%s\""), ImagePath ) ;
+		SessionLogDirect( _T("New File: \"%s\""), NewImgPath ) ;
+	}
+
+	if( stricmp( ImagePath, NewImgPath ) == 0 )
+	{
+//		return ;
+		return(NewImgPath) ;
+	}
+
+	//	SOMETIMES IMA STILL HAS THE FILE.
+	//	SO DO SOME WAITING AND TRY AGAIN.
+	int Result = rename( ImagePath, NewImgPath ) ;
+	long	StartClock = Clock() ;
+	long	EndClock ;
+	while( Result )
+	{
+		Result = rename( ImagePath, NewImgPath ) ;
+		if( gLogAmount >= 5 )
+		{
+			SessionLogDirect( _T("New File: \"%s\" Result = %ld\r\n"), NewImgPath, Result ) ;
+		}
+
+		EndClock = Clock() ;
+		if( EndClock - StartClock > 10000 )
+		{
+			Result = 0 ;
+		}
+		else
+		{
+			Sleep( 500 ) ;
+		}
+	}
+
+//	return ;
+	return(NewImgPath) ;
+}
+
+int IsLegalFileChar( TCHAR aChar )
+{
+	if( aChar >= 'A' && aChar <= 'Z' )	{ return( TRUE ) ; }
+	if( aChar >= 'a' && aChar <= 'z' )	{ return( TRUE ) ; }
+	if( aChar >= '0' && aChar <= '9' )	{ return( TRUE ) ; }
+	if( aChar == '_' || aChar == '.' )	{ return( TRUE ) ; }
+	if( aChar == ':' || aChar == '\\' )	{ return( TRUE ) ; }
+	if( aChar == ' ' || aChar == '-'  )	{ return( TRUE ) ; }
+	return( FALSE ) ;
+}
+
+long GetPaperWidth( double Inches )
+{
+	if( Inches >=  3.2 && Inches <  3.3 )	{ return(  820L ) ; }
+	if( Inches >=  3.4 && Inches <  3.6 )	{ return(  890L ) ; }
+	if( Inches >=  3.6 && Inches <  3.8 )	{ return(  950L ) ; }
+	if( Inches >=  3.9 && Inches <  4.1 )	{ return( 1020L ) ; }
+	if( Inches >=  4.6 && Inches <  4.8 )	{ return( 1200L ) ; }
+	if( Inches >=  4.9 && Inches <  5.1 )	{ return( 1270L ) ; }
+	if( Inches >=  5.9 && Inches <  6.1 )	{ return( 1520L ) ; }
+	if( Inches >=  6.9 && Inches <  7.1 )	{ return( 1780L ) ; }
+	if( Inches >=  7.9 && Inches <  8.1 )	{ return( 2030L ) ; }
+	if( Inches >=  8.1 && Inches <  8.3 )	{ return( 2100L ) ; }
+	if( Inches >=  8.4 && Inches <  8.6 )	{ return( 2160L ) ; }
+	if( Inches >=  9.9 && Inches < 10.1 )	{ return( 2540L ) ; }
+	if( Inches >= 10.9 && Inches < 11.1 )	{ return( 2790L ) ; }
+	if( Inches >= 11.9 && Inches < 12.1 )	{ return( 3050L ) ; }
+	return( 0L ) ;
+}
+
+
+
+void ValidateString( TCHAR *CmdPath, TCHAR *NewCmdPath )
+{
+	long	loop = 0 ;
+	while( CmdPath[loop] )
+	{
+		if( IsLegal( CmdPath[loop] ) == FALSE )
+		{
+			NewCmdPath[loop] = 'u' ;
+		}
+		else
+		{
+			NewCmdPath[loop] = CmdPath[loop] ;
+		}
+		loop++ ;
+	}
+	NewCmdPath[loop] = 0x00 ;
+}
+
+int IsLegal( TCHAR aChar )
+{
+	if( aChar >= 'A' && aChar <= 'Z' )	{ return( TRUE ) ; }
+	if( aChar >= 'a' && aChar <= 'z' )	{ return( TRUE ) ; }
+	if( aChar >= '0' && aChar <= '9' )	{ return( TRUE ) ; }
+	return( FALSE ) ;
+}
+
+
+int ValidPrint( UGenCon *fSOrder, UGenCon *CompletePrint, UGenCon *PrinterSetup )
+{
+	//	GET THE RP30 SETUP FROM THE TREE INSTEAD OF THE CURRENT PRINTER SETUP.
+	TCHAR	*PrinterName = PrinterSetup->GetStringValue(_T("PrinterName")) ;
+	UGenCon	*TreePrinterSetup = (UGenCon *) GetTreeObject( PrinterName, _T("[Renderers]")) ;
+	if( TreePrinterSetup == NULL )	{ TreePrinterSetup = PrinterSetup ; }
+
+	UGenCon *RP30Setup = (UGenCon *) TreePrinterSetup->GetLongValue(_T("RP30Setup")) ;
+	if( RP30Setup )
+	{
+		double advance;
+		gLongDimension		= CompletePrint->GetDoubleValue(_T("LONGDIMENSION")) ;
+		gShortDimension		= CompletePrint->GetDoubleValue(_T("SHORTDIMENSION")) ;
+		if( gShortDimension > gLongDimension )	{ advance = gShortDimension ; }
+		else { advance = gLongDimension; } 
+
+//SessionLogDirect( _T("C_RP30_PrintComplete: gShortDimension: %lf, gLongDimension: %lf, advance: %lf"),
+//											gShortDimension, gLongDimension, advance ) ;
+
+		if( advance > 18.0 )
+		{
+			TCHAR	Msg[1024] ;
+			sprintf( Msg, _T("Error: Print to long. Length = %lf inches, Max = 18.0 inches."), advance ) ;
+			CompletePrint->SetLongValue(_T("ResponseCode"), 103L ) ;
+			CompletePrint->SetAttrValue(_T("ResponseText"), Msg ) ;
+			return( FALSE ) ;
+		}
+
+		gdPaperWidth = CompletePrint->GetDoubleValue(_T("PaperWidth")) ;
+		
+//SessionLogDirect( _T("C_RP30_PrintComplete: gdPaperWidth: %lf"), gdPaperWidth ) ;
+
+		if( gdPaperWidth < 2.0 )
+		{
+			gPaperWidth = CompletePrint->GetLongValue(_T("OEMPrinterChannel")) ;
+			gdPaperWidth = gPaperWidth ;
+			gdPaperWidth = gdPaperWidth / 10.0 ;
+			
+			if( gLogAmount >= 6 )
+			{
+				SessionLogDirect( _T("C_RP30_PrintComplete.txt: ValidPrint: gdPaperWidth < 2.0 (= %lf)"), gdPaperWidth);
+			}
+		}
+		
+		gPaperWidth = GetPaperWidth( gdPaperWidth ) ;
+
+		double	dPaperWidthSpillOver = gdPaperWidth * gSpillOverAmt ;
+		
+//SessionLogDirect( _T("C_RP30_PrintComplete: dPaperWidthSpillOver: %lf"), dPaperWidthSpillOver ) ;
+
+		if((gdPaperWidth < 4.75) || (gdPaperWidth > 7))
+		{ //min adv = 4.75
+			if( (gLongDimension - gdPaperWidth) <= (dPaperWidthSpillOver - gdPaperWidth) )
+//**KJA			double	Delta = gdPaperWidth - gLongDimension ;
+//**KJA			if( Delta >= 0.0 )
+			{
+				//	USE THE SHORT DIMENSION AS THE PAPER LENGTH if it's not too short
+				if(gShortDimension >= 4.75)
+				{gdLongPaperLength = gShortDimension;}
+				else { gdLongPaperLength = 4.75; }
+
+//SessionLogDirect( _T("C_RP30_PrintComplete.txt: ValidPrint: gdLongPaperLength = %lf, gLongDimension = %lf, gShortDimension = %lf, gPaperWidth = %ld, gdPaperWidth = %lf"),
+//													gdLongPaperLength, gLongDimension, gShortDimension, gPaperWidth, gdPaperWidth) ;
+
+			}
+			else { gdLongPaperLength = gLongDimension; } //can't fit long dim on width, use long as adv
+
+			if(gdLongPaperLength < 4.75)
+			{
+				TCHAR	Msg[1024] ;
+				sprintf( Msg, _T("Error: Print too short. Length = %lf inches, Min length = 4.75 inches for paper width less than 4.75 inches or greater than 7.00."), gdLongPaperLength ) ;
+				CompletePrint->SetLongValue(_T("ResponseCode"), 104L ) ;
+				CompletePrint->SetAttrValue(_T("ResponseText"), Msg ) ;
+				return(FALSE);
+			}
+		}
+		else
+		{ //width 4.75 to 7, min adv - 3.25
+			if( (gLongDimension  - gdPaperWidth) <= (dPaperWidthSpillOver - gdPaperWidth) )
+			{
+				//	USE THE SHORT DIMENSION AS THE PAPER LENGTH if it's not too short
+				if(gShortDimension >= 3.25)
+				{gdLongPaperLength = gShortDimension;}
+				else { gdLongPaperLength = 3.25; }	
+			}
+			else { gdLongPaperLength = gLongDimension; } //can't fit long dim on width, use long as adv
+
+			if(gdLongPaperLength < 3.25)
+			{
+				TCHAR	Msg[1024] ;
+				sprintf( Msg, _T("Error: Print too short. Length = %lf inches, Min length = 3.25 inches for paper widths between 4.75 and 7.00 inches"), gdLongPaperLength ) ;
+				CompletePrint->SetLongValue(_T("ResponseCode"), 105L ) ;
+				CompletePrint->SetAttrValue(_T("ResponseText"), Msg ) ;
+				return(FALSE);
+			}
+		}
+
+		if( gLogAmount >= 6 )
+		{
+			SessionLogDirect( _T("C_RP30_PrintComplete.txt: ValidPrint: gdLongPaperLength = %lf, gLongDimension = %lf, gShortDimension = %lf, gPaperWidth = %ld, gdPaperWidth = %lf"),
+													gdLongPaperLength, gLongDimension, gShortDimension, gPaperWidth, gdPaperWidth) ;
+		}
+
+		long	RequestedSurface	= CompletePrint->GetLongValue(_T("OEMPrinterSurface")) ;
+		long	LH_PaperWidth		= RP30Setup->GetLongValue(_T("P_Width_LHS:")) ;
+		long	RH_PaperWidth		= RP30Setup->GetLongValue(_T("P_Width_RHS:")) ;
+		long	LH_PaperSurface		= RP30Setup->GetLongValue(_T("L_Surface_LHS:")) ;
+		long	RH_PaperSurface		= RP30Setup->GetLongValue(_T("L_Surface_RHS:")) ;
+
+		int	MatchingWidth	= GetMatchingSide( gPaperWidth, LH_PaperWidth, RH_PaperWidth ) ;
+		int	MatchingSurface	= GetMatchingSide( RequestedSurface, LH_PaperSurface, RH_PaperSurface ) ;
+
+		if( MatchingWidth && MatchingSurface )
+		{
+			int	Width = MatchingWidth % 2 ;
+			int Surface = MatchingSurface % 2 ;
+			if( Width == Surface )
+			{
+				return( TRUE ) ;
+			}
+
+			Width = MatchingWidth / 2 ;
+			Surface = MatchingSurface / 2 ;
+			if( Width == Surface )
+			{
+				return( TRUE ) ;
+			}
+		}
+
+		if( MatchingWidth == 0 )
+		{
+			TCHAR	Msg[1024] ;
+			sprintf( Msg, _T("Error: Paper size %lf not loaded."), gdPaperWidth ) ;
+			CompletePrint->SetLongValue(_T("ResponseCode"), 11L ) ;
+			CompletePrint->SetAttrValue(_T("ResponseText"), Msg ) ;
+		}
+		else
+		{
+			TCHAR	Msg[1024] ;
+			TCHAR	PaperSurface[64] ;
+			GetPaperSurfaceString( RequestedSurface, PaperSurface ) ;
+			sprintf( Msg, _T("Error: Paper surface \"%s\" not loaded."), PaperSurface ) ;
+			CompletePrint->SetLongValue(_T("ResponseCode"), 12L ) ;
+			CompletePrint->SetAttrValue(_T("ResponseText"), Msg ) ;
+		}
+	}
+	else
+	{
+		CompletePrint->SetLongValue(_T("ResponseCode"), 10L ) ;
+		CompletePrint->SetAttrValue(_T("ResponseText"), _T("Error: Could not get printer setup.")) ;
+	}
+
+	return( FALSE ) ;
+}
+
+int	GetMatchingSide( long Requested, long LH, long RH )
+{
+	int	Result = 0x00 ;
+
+	if( Requested == RH )
+	{
+		Result += 0x01 ;
+	}
+	if( Requested == LH )
+	{
+		Result += 0x02 ;
+	}
+	return( Result ) ;
+}
+
+/*
+	Paper Surfaces
+
+	 1 = Other
+	 2 = Matte
+	 3 = Semi Matte
+	 4 = Glossy
+	 5 = Smooth / Luster
+	 6 = Ultra Smooth / Hi Luster
+	 7 = Fine Grained / Luster
+	 8 = Silk
+	 9 = Luster
+	10 = Deep Matte
+	11 = High Gloss
+*/
+
+TCHAR *GetPaperSurfaceString( long Surface, TCHAR *PaperSurface )
+{
+	strcpy( PaperSurface, _T("Unknown")) ;
+	switch( Surface )
+	{
+		case	1	:
+			strcpy( PaperSurface, _T("Other")) ;
+			break ;
+		case	2	:
+			strcpy( PaperSurface, _T("Matte")) ;
+			break ;
+		case	3	:
+			strcpy( PaperSurface, _T("Semi Matte")) ;
+			break ;
+		case	4	:
+			strcpy( PaperSurface, _T("Glossy")) ;
+			break ;
+		case	5	:
+			strcpy( PaperSurface, _T("Smooth / Luster")) ;
+			break ;
+		case	6	:
+			strcpy( PaperSurface, _T("Ultra Smooth / Hi Luster")) ;
+			break ;
+		case	7	:
+			strcpy( PaperSurface, _T("Fine Grained / Luster")) ;
+			break ;
+		case	8	:
+			strcpy( PaperSurface, _T("Silk")) ;
+			break ;
+		case	9	:
+			strcpy( PaperSurface, _T("Luster")) ;
+			break ;
+		case	10	:
+			strcpy( PaperSurface, _T("Deep Matte")) ;
+			break ;
+		case	11	:
+			strcpy( PaperSurface, _T("High Gloss")) ;
+			break ;
+	}
+	return( PaperSurface ) ;
+}
+
+DisplayBackPrintString( TCHAR *String )
+{
+	long	Pos = 0L ;
+
+	while( String[Pos] )
+	{
+		printf( _T("0x%X "), String[Pos] ) ;
+		Pos++ ;
+
+		if( ((Pos + 1) % 10) == 0 )
+		{
+			printf( _T("\r\n")) ;
+		}
+	}
+	printf( _T("\r\n\r\n")) ;
+}
+
+PrintGC( UGenCon *aGC )
+{
+	TCHAR		*AttrName ;
+	TCHAR		 AttrValue[2048] ;
+	long		 Order = 0L ;
+
+	//	GET THE GENCONs DATA DICTIONARY
+	UDataDict *aDD = aGC->GetDataDict() ;
+	if( aDD )
+	{
+		//	PRINT THE GENCON's NAME
+		SessionLogDirect( _T("%s"), aGC->GetName()) ;
+
+		//	FOR EACH ATTRIBUTE IN THE DICTIONARY
+		UAttribute		*anAttr = aDD->GetAttributeByOrder(Order) ;
+
+		while( anAttr )
+		{
+			//	GET THE ATTRIBUTE NAME
+			AttrName = anAttr->GetName() ;
+
+			if( aGC->AttrChanged( AttrName ))
+			{
+				//	GET THE ATTRIBUTE VALUE
+				aGC->GetAttrValue( AttrName, AttrValue ) ;
+
+				//	PRINT THE ATTRIBUTE NAME AND VALUE
+				SessionLogDirect( _T("\t%-20.20s\t%s"), AttrName, AttrValue ) ;
+			}
+
+			//	GET THE NEXT ATTRIBUTE
+			Order++ ;
+			anAttr = aDD->GetAttributeByOrder(Order) ;
+		}
+	}
+}
+
+int CleanMultiPageProductList(UGenCon *fSOrder)
+{
+	gMultiPageProductList->RemoveAll() ;
+	delete gMultiPageProductList ;
+	gMultiPageProductList = NULL ;
+	fSOrder->SetLongValue(_T("MultiPageProductList"), NULL ) ;
+}
+

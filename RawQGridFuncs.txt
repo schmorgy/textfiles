@@ -1,0 +1,185 @@
+// Raw Conversion Queue Grid View Functions
+
+Class( RawQGrid,Extends,BaseGrid,
+		Member, fOrderID,Str,~~ );
+
+
+VOID	RawQGrid::RawQGrid( OrderID )						// CONSTRUCTOR
+{
+	TableName = ~RawQueue~;
+	ConnectionType = ~ConnectLocal~;
+	WhichTableDefinitions = ~LocalTableDefinitions~;
+	DocumentQuery = ~~;
+	Title = ~~;
+	WindowTop = 25;
+	WindowWidth = 50;
+	WindowHeight = 25;
+	HelpPage = ~RawConversion.htm~;
+	SplitterRows = ~1 100~;
+	fOrderID = ~<OrderID>~;
+	FromSplitter = 1;
+}
+
+VOID RawQGrid::DataViewDefinition()
+{
+// General cell attributes
+
+Fields:
+	BGColorRed				~200~
+	BGColorGreen			~200~
+	BGColorBlue				~200~
+	TextColorRed			~0~
+	TextColorGreen			~0~
+	TextColorBlue			~0~
+
+	// Row header attributes
+	RowHdrBGColorRed		~224~
+	RowHdrBGColorGreen		~224~
+	RowHdrBGColorBlue		~224~
+	RowHdrTextColorRed		~0~
+	RowHdrTextColorGreen	~0~
+	RowHdrTextColorBlue		~0~
+
+	// Column header attributes
+	ColHdrBGColorRed		~200~
+	ColHdrBGColorGreen		~200~
+	ColHdrBGColorBlue		~200~
+	ColHdrTextColorRed		~0~
+	ColHdrTextColorGreen	~0~
+	ColHdrTextColorBlue		~0~
+				
+	// The color for modified cells.	
+	ModifiedCellColorRed	~255~
+	ModifiedCellColorGreen	~0~
+	ModifiedCellColorBlue	~0~
+	
+	Draw3DFrame				~2~
+	FontSize				~10~
+	
+	HACTIONSTEXT	ACTION EXEC ( <THIS>.OpenHelpPage(~/RawConversion/RawConversion.kpl#Queue~,~Raw Camera File Conversion Queue~) );
+
+	DataView( AllowRowColResizing,TRUE,TRUE );
+}
+
+STR RawQGrid::GetKey( &Item )
+{
+	return ~SubmitDate = '<$con.Item[SubmitDate]>'~;
+}
+
+NUMERIC RawQGrid::ChangeRecordAudits( &Changed )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNull( ~<$Con.Changed[SubmitDate]>~ ) )
+	{
+		Warning( TR( RawConversion, NoSubmitDate ) );
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+
+NUMERIC RawQGrid::UpdateSelectedRows( VName,ColumnName,Value )
+{
+	if ( !<VName>View( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( ~There was no row selected~ ); }
+
+	Count = SelectedRows( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( TR( RawConversion, NoRowsSelected ) ); }
+
+	if ( !Ado( dBase,<ConnectionType> ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	WaitCursor( Begin );
+
+	while ( SelectedRows( GetNext,Item ) )
+	{
+		Key = GetKey( Item );
+		 
+		Cmd = ~Update <TableName> Set <ColumnName> = <Value> Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Database update failed: <Cmd>  <theErr>~ );
+			WaitCursor( End );
+			break;
+		}
+	}
+	
+	// Get rid of the selected rows gen con before we refresh; otherwise, we crash.
+	ForgetLocal( SelectedRows );
+
+	RefreshView( ~Data~ );
+
+	reutrn WaitCursor( End );
+}
+
+NUMERIC RawQGrid::OnDoubleClick( &Item )
+{
+	if ( IsNull( ~<$con.Item[Path]>~ ) )
+	{
+		return Warning( TR(RawConversion, SubmitDateIsBlank) );
+	}
+	
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )	// TRY TO BRING EXISTING WINDOW TO FRONT
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == ImageView || ~<ViewType>~ == ImageEditView || ~<ViewType>~ == PIEEditView)
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<$con.Item[Path]>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+		}
+	}
+		
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( ~Could not create document info for <Path>~ ); }
+
+	Info( SetValues,OrderID,~<$con.Item[OrderID]>~,Roll,~<$con.Item[Roll]>~,Frame,~<$con.Item[Frame]>~ );
+
+	Document( Doc );
+	
+	if ( !Doc( Open,~<$con.Item[Path]>~,Image,~~,Info ) )
+	{ 
+		return Warning( ~Could not open ~<$con.Item[Path]>~~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC RawQGrid::OnAddRecord( &NewRow )
+{
+	NewRow( SetValues,SubmitDate,~<$Date.SortableDateTime>~,Priority,50,JPEGQuality,100 );
+
+	return TRUE;
+}
+
+NUMERIC RawQGrid::OnDuplicateRecord( &NewRow )
+{
+	NewRow( SetValues,SubmitDate,~<$Date.SortableDateTime>~ );
+
+	return TRUE;
+}
+
+
+VOID	RawQGrid::AddStdNewMenuItems()	{ }		// Don't want New or Duplicate
+VOID	RawQGrid::AddStdChgMenuItems()	{ }		// Don't want Save or Cancel
+
+
+NUMERIC RawQGrid::RefreshListView()	{ return RefreshView( ~Data~ ); }
+
+
+	
+	

@@ -1,0 +1,510 @@
+
+//	THIS FILE WILL HANDLE THE COPENIMAGELIST COMMAND
+//
+//	IT GETS THE LIST OF ORDERS THROUGH THE CCODEGENCON'S
+//	CHILDREN.  THE CHILD LIST IS A LIST OF UPGENCONS.
+//	FOR EACH ENTRY IN THE LIST, LOOK UP THE ACTUAL 
+//	IMAGES FROM THE IMAGES TABLE USING A QUERY.
+
+char*	NULL;
+int		FALSE = 0;
+int		TRUE = 1;
+
+
+main()
+{
+	char*	SelOrdersGC;
+	char*	SelOrdersList;
+	char*	anObj;
+
+	//Debug(TRUE);	//	INVOKE THE DEBUGGER !
+
+	//	First, get the orders gen con which contains the list of selected
+	//  orders from the order list.  If we can't get this gen con, then there
+	//  is no need to continue!!
+	SelOrdersGC = GetCCodeGenCon();
+
+	//  Get the selected orders list from the orders gen con.  Again, if we can't
+	//  get this list, then there is no need to continue!!
+	SelOrdersList = GetChildren(SelOrdersGC);
+
+	//  For each selected order, create the initial gen con on the data
+	//  tree that will hold the information about the categories within
+	//  an order and the images within a category.  Initially, we only
+	//  create the gen con, add the categories for the order to the 
+	//  gen con and open the window.  We will fill in the gen con with
+	//  information about the images after the window is opened.
+	OpenWindows(SelOrdersList);
+
+	PutImageData(SelOrdersList);
+
+	//  Remove the selected orders gen con from the tree and delete it.
+	if (SelOrdersGC != NULL)
+	{
+		anObj = PluckTreeObject(GetName(SelOrdersGC), "[GenCons]");
+		Delete(anObj);
+	}
+}
+
+
+OpenWindows(char* SelOrdersList)
+{
+	char*	theImageWnd;
+	char*	anIter;
+	char*	SelectedOrder;
+	char*	thisImageWnd;
+	TCHAR	value[256];
+	TCHAR	word[32];
+	char*	theCategoryList;
+	char*	theTempWnd;
+
+	//  Get the thumbnail window gen con from the tree.  We will use this
+	//  later as the baseline for the window gen con that will be created
+	//  for each selected order.
+	theImageWnd = GetTreeObject("ThumbnailWindow", "[UI Windows]");
+
+	//	Create an iterator on the selected orders list; the list
+	//  contains gen cons that include the IDs of
+	//  the orders that the user wants to view images for.
+	anIter = CreateIterator(SelOrdersList);
+
+	//  Iterate through the selected orders list.
+	SelectedOrder = GetFirst(anIter);
+	while (SelectedOrder)
+	{
+		//  Make a copy of the thumbnail window gen con.
+		thisImageWnd = CopyGenCon(theImageWnd);
+
+		//  Set the name of the copied window gen con.
+		strcpy(value, "ImagesInOrder");
+		strcat(value, GetAttrValue(SelectedOrder, "ID", word));
+		SetName(thisImageWnd, value);
+
+		//  Set the source window definition.  We need this to get back to the
+		//  window definition that was used to create this gen con so that we
+		//  can get information about the base view when creating new categories.
+		strcpy(value, "ThumbnailWindow");
+		SetAttrValue(thisImageWnd, "SourceWinDef", value);
+
+		//  Set the values that indicate how big the thumbnails will be inside
+		//  this image window.
+		SetLongValue(thisImageWnd, "ImageFrameSize", 110);
+
+		//  Set the title of the copied window gen con.
+		GetAttrValue(thisImageWnd, "Title", value);
+		strcat(value, " in Order #");
+		strcat(value, GetAttrValue(SelectedOrder, "ID", word));
+		SetAttrValue(thisImageWnd, "Title", value);
+
+		//  Determine if the window gen con is already on the tree;  if it is,
+		//  then the window is already open and there is no need to create
+		//  another window gen con.
+		theTempWnd = GetTreeObject(GetName(thisImageWnd), "[GenCons]");
+		if (theTempWnd == NULL)
+		{
+			//  Get the image categories for the order.
+			theCategoryList = GetOrderImageCategories(SelectedOrder);
+			
+			//  Set the children of the window to the newly created
+			//  category list.
+			SetChildren(thisImageWnd, theCategoryList);
+			
+			//  Hang the copied window gen con on the tree.
+			HangTreeObject(thisImageWnd, "[GenCons]");
+
+			//  Get the next selected order.
+			SelectedOrder = GetNext(anIter);
+		}
+		else
+		{	
+			//  Delete the new image window gen con and use the one that is
+			//  already on the tree.
+			Delete(thisImageWnd);
+			thisImageWnd = theTempWnd;
+
+			//  Remove this order from the selected order list so that we don't
+			//  get the data for the order again.
+			RemoveItem(SelOrdersList, SelectedOrder);
+
+			//  Get the current selected order since we removed the previous
+			//  one from the list.
+			SelectedOrder = GetCurrent(anIter);
+		}
+
+		//  Set up the action to open the window and call the function
+		//  that will cause the window to be opened.
+		strcpy(value, "[Window(");
+		strcat(value, GetName(thisImageWnd));
+		strcat(value, " [GENCONS])]");
+		HandleActions(value);
+	}
+
+	//  Delete the iterator.
+	anIter = Delete( anIter ) ;
+
+	return TRUE;
+}
+
+
+GetOrderImageCategories(char* SelectedOrder)
+{
+	char*	theCategoryList;
+	char*	PGCCategoryList;
+	char*	PGCCategory;
+	char*	theQuery;
+	TCHAR	value[256];
+	TCHAR	word[32];
+	int		result;
+	char*	theImageList;
+	char*	thisImageView;
+	char*	theImageView;
+
+	//  Create a new category list.
+	theCategoryList = NewUList();
+
+	//  Get the database connection.
+	PGCCategoryList = NewPGenConList(GetKPISConnection());
+
+	//  Get the thumbnail view gen con from the tree.  We will use this
+	//  later as the baseline for the view gen con that will be created
+	//  for each category in the order.
+	theImageView = GetTreeObject("ThumbnailView", "[UI Windows ThumbnailWindow]");
+
+	//  Make a copy of the thumbnail window gen con.
+	thisImageView = CopyGenCon(theImageView);
+
+	//  Add one image category for each order that will contain all
+	//  of the images in the order; note, that this image category
+	//  is not modifiable.
+	SetName(thisImageView, "All Images");
+	SetAttrValue(thisImageView, "Text", "All Images");
+	SetAttrValue(thisImageView, "IsModifiable", "F");
+	//SetAttrValue(thisImageView, "DropTypes", "OrderImages");
+	InsertBack(theCategoryList, thisImageView);
+
+	//  Set the value in the category gen con that points to the
+	//  image list.
+	theImageList = NewUList();
+	SetChildren(thisImageView, theImageList);
+
+	//  Allocate memory for the query string.
+	theQuery = malloc(1000);
+
+	//	Build the query to get the rest of the image categories
+	//  from the database.
+	strcpy(theQuery, "Select * From ImageCategories Where ");
+	strcat(theQuery, "(OrderID='");
+	strcat(theQuery, GetAttrValue(SelectedOrder, "ID", word));
+	strcat(theQuery, "')");
+	strcat(theQuery, " Order By Indx");
+
+	//  Execute the query.
+	result = Query(PGCCategoryList, theQuery, "ReadOnly", "ForwardOnly");
+	if (result == 1)
+	{
+		//  Iterate through the category list.
+		PGCCategory = GetFirst(PGCCategoryList);
+		while (PGCCategory)
+		{
+			//  Make a copy of the thumbnail window gen con.
+			thisImageView = CopyGenCon(theImageView);
+
+			//  Copy the values to the category gen con.
+			GetAttrValue(PGCCategory, "Name", value);
+			SetAttrValue(thisImageView, "Text", value);
+			SetName(thisImageView, value);
+
+			SetAttrValue(thisImageView, "IsModifiable", "T");
+			//SetAttrValue(thisImageView, "DropTypes", "OrderImages");
+
+			//  Insert the category gen con into the category list.
+			InsertBack(theCategoryList, thisImageView);
+
+			//  Set the value in the category gen con that points to the
+			//  image list.
+			theImageList = NewUList();
+			SetChildren(thisImageView, theImageList);
+
+			PGCCategory = GetNext(PGCCategoryList);
+		}
+	}
+
+	theQuery = free(theQuery);
+	Delete(PGCCategoryList);
+	return theCategoryList;
+}
+
+
+PutImageData(char* SelOrdersList)
+{
+	char*	anIter;
+	char*	SelectedOrder;
+	char*	thisImageWnd;
+	TCHAR	value[256];
+	TCHAR	word[32];
+	int		result;
+
+	//	Create an iterator on the selected orders list; the list
+	//  contains gen cons that include the IDs of
+	//  the orders that the user wants to view images for.
+	anIter = CreateIterator(SelOrdersList);
+
+	//  Iterate through the selected orders list.
+	SelectedOrder = GetFirst(anIter);
+	while (SelectedOrder)
+	{
+		//  Get the name of this thumbnail window gen con.
+		strcpy(value, "ImagesInOrder");
+		strcat(value, GetAttrValue(SelectedOrder, "ID", word));
+
+		//  Get the thumbnail window gen con from the tree.
+		thisImageWnd = GetTreeObject(value, "[GENCONS]");
+
+		//  Get the image data for the order.
+		GetOrderImageData(thisImageWnd, SelectedOrder);
+
+		//  Get the next selected order.
+		SelectedOrder = GetNext(anIter);
+	}
+
+	//  Delete the iterator.
+	anIter = Delete( anIter ) ;
+
+	return TRUE;
+}
+
+
+GetOrderImageData(char* thisImageWnd, char* SelectedOrder)
+{
+	char*	anIter;
+	char*	aCategoryGC;
+	TCHAR	word[32];
+
+	//	Create an iterator on the image window gen con; the image window
+	//  gen con the image categories that the user wants images for.
+	anIter = CreateIterator(GetChildren(thisImageWnd));
+
+	//  Iterate through the category list.
+	aCategoryGC = GetFirst(anIter);
+	while (aCategoryGC)
+	{
+		// Determine if this is the "All Images" category.  If it is, all
+		// images in the order are added to the category; otherwise, we just
+		// add the images that are in the category.
+		GetAttrValue(aCategoryGC, "Text", word);
+		if (strcmp(word, "All Images") == 0)
+		{
+			GetAllImageData(thisImageWnd, SelectedOrder, aCategoryGC);
+		}
+		else
+		{
+			GetCategoryImageData(thisImageWnd, SelectedOrder, aCategoryGC);
+		}
+
+		aCategoryGC = GetNext(anIter);
+	}
+
+	//  Delete the iterator.
+	anIter = Delete( anIter ) ;
+}
+
+
+GetAllImageData(char* theImageWnd, char* SelectedOrder, char* aCategoryGC)
+{
+	char*	theImageList;
+	char*	PGCImageList;
+	char*	theQuery;
+	int		result;
+	char*	PGCImage;
+	char*	anImageGC;
+	char*	anImageDD;
+	TCHAR	value[1024];
+	TCHAR	temp[256];
+	int		ch;
+	char*	pdest;
+	TCHAR	word[32];
+
+	//  Get the data dictionaries that we are going to need.
+	anImageDD = GetDataDictionary("DDICImageDef");
+
+	//  Allocate memory for the query string.
+	theQuery = malloc(1000);
+
+	//  Get the category image list.
+	theImageList = GetChildren(aCategoryGC);
+
+	//  Create the database connection.
+	PGCImageList = NewPGenConList(GetKPISConnection());
+
+	//	Build the query to get the images for the order and add these to the 
+	//  all images category.
+	strcpy(theQuery, "Select * From Images Where ");
+	strcat(theQuery, "(OrderID='");
+	strcat(theQuery, GetAttrValue(SelectedOrder, "ID", word));
+	strcat(theQuery, "')");
+	strcat(theQuery, " Order By OrderID, Roll, Frame");
+
+	//  Eexecute the query.
+	result = Query(PGCImageList, theQuery, "ReadOnly", "ForwardOnly");
+	if (result == 1)
+	{
+		//  Iterate through the image list.
+		PGCImage = GetFirst(PGCImageList);
+		while (PGCImage)
+		{
+			//  Create a new image gen con.
+			anImageGC = CreateGenCon(anImageDD);
+
+			//  Copy the values to the new image gen con.
+			GetAttrValue(PGCImage, "Roll", value);
+			strcpy(temp, value);
+			strcat(temp, " - ");
+			GetAttrValue(PGCImage, "Frame", value);
+			strcat(temp, value);
+			SetAttrValue(anImageGC, "Info1", temp);
+
+			GetAttrValue(PGCImage, "Path", value);
+			ch = 92;
+			pdest = strrchr(value, ch);
+			if (!pdest)
+			{
+				pdest = value;
+			}
+			else
+			{
+				pdest = pdest + 1;
+			}
+			SetAttrValue(anImageGC, "Info2", pdest);
+
+			SetAttrValue(anImageGC, "Info3", value);
+			SetAttrValue(anImageGC, "Path", value);
+
+			strcpy(temp, GetAttrValue(PGCImage, "Roll", value));
+			strcat(temp, "-");
+			strcat(temp, GetAttrValue(PGCImage, "Frame", value));
+			SetName(anImageGC, temp);
+
+			SetLongValue(anImageGC, "IsSelected", 0);
+			SetLongValue(anImageGC, "IsDeleted", 0);
+			SetLongValue(anImageGC, "FDAFailed", 0);
+			SetAttrValue(anImageGC, "DataType", "OrderImages");
+
+			//  Insert the image gen con into the image list.
+			InsertBack(theImageList, anImageGC);
+
+			//  Set up the action and call the function to refresh the view.
+			strcpy(value, "[Refresh(\"");
+			strcat(value, GetName(aCategoryGC));
+			strcat(value, "\" ");
+			strcat(value, GetName(theImageWnd));
+			strcat(value, ")]");
+			HandleActions(value);
+
+			PGCImage = GetNext(PGCImageList);
+		}
+
+		//  Delete the database connection.
+		Delete(PGCImageList);
+	}
+}
+
+
+GetCategoryImageData(char* theImageWnd, char* SelectedOrder, char* aCategoryGC)
+{
+	char*	theImageList;
+	char*	PGCImageList;
+	TCHAR*	theQuery;
+	int		result;
+	char*	PGCImage;
+	char*	anImageGC;
+	char*	anImageDD;
+	TCHAR	value[256];
+	TCHAR	temp[256];
+	int		ch;
+	char*	pdest;
+	TCHAR	word[32];
+
+	//  Get the data dictionaries that we are going to need.
+	anImageDD = GetDataDictionary("DDICImageDef");
+
+	//  Allocate memory for the query string.
+	theQuery = malloc(1000);
+
+	//  Get the category image list.
+	theImageList = GetChildren(aCategoryGC);
+
+	//  Create the database connection.
+	PGCImageList = NewPGenConList(GetKPISConnection());
+
+	//	Build the query to get the images for the order and add these to the 
+	//  all images category.
+	strcpy(theQuery, "Select Images.Roll, Images.Frame, Images.Path From Images, ImagesTOC Where ");
+	strcat(theQuery, "ImagesTOC.CategoryID='");
+	strcat(theQuery, GetAttrValue(aCategoryGC, "Text", word));
+	strcat(theQuery, "' AND Images.OrderID=ImagesTOC.OrderID ");
+	strcat(theQuery, "AND Images.Roll=ImagesTOC.Roll ");
+	strcat(theQuery, "AND Images.Frame=ImagesTOC.Frame Order By ImagesTOC.Indx");
+
+	//  Execute the query.
+	result = Query(PGCImageList, theQuery, "ReadOnly", "ForwardOnly");
+	if (result == 1)
+	{
+		//  Iterate through the image list.
+		PGCImage = GetFirst(PGCImageList);
+		while (PGCImage)
+		{
+			//  Create a new image gen con.
+			anImageGC = CreateGenCon(anImageDD);
+
+			//  Copy the values to the new image gen con.
+			GetAttrValue(PGCImage, "Roll", value);
+			strcpy(temp, value);
+			strcat(temp, " - ");
+			GetAttrValue(PGCImage, "Frame", value);
+			strcat(temp, value);
+			SetAttrValue(anImageGC, "Info1", temp);
+
+			GetAttrValue(PGCImage, "Path", value);
+			ch = 92;
+			pdest = strrchr(value, ch);
+			if (!pdest)
+			{
+				pdest = value;
+			}
+			else
+			{
+				pdest = pdest + 1;
+			}
+			SetAttrValue(anImageGC, "Info2", pdest);
+
+			SetAttrValue(anImageGC, "Info3", value);
+			SetAttrValue(anImageGC, "Path", value);
+
+			strcpy(temp, GetAttrValue(PGCImage, "Roll", value));
+			strcat(temp, "-");
+			strcat(temp, GetAttrValue(PGCImage, "Frame", value));
+			SetName(anImageGC, temp);
+
+			SetAttrValue(anImageGC, "IsSelected", "F");
+			SetAttrValue(anImageGC, "IsDeleted", "F");
+			SetAttrValue(anImageGC, "FDAFailed", "F");
+			SetAttrValue(anImageGC, "DataType", "OrderImages");
+
+			//  Insert the image gen con into the image list.
+			InsertBack(theImageList, anImageGC);
+
+			//  Set up the action and call the function to refresh the view.
+			strcpy(value, "[Refresh(\"");
+			strcat(value, GetName(aCategoryGC));
+			strcat(value, "\" ");
+			strcat(value, GetName(theImageWnd));
+			strcat(value, ")]");
+			HandleActions(value);
+
+			PGCImage = GetNext(PGCImageList);
+		}
+
+		//  Delete the database connection.
+		Delete(PGCImageList);
+	}
+}

@@ -1,0 +1,3282 @@
+IncludeClass(BaseHTML);
+IncludeClass(BaseOrder);
+IncludeClass( BaseHTMLWin );
+IncludeClass( BaseOrderItem );
+
+Include: ~CreateOrderItems~;
+Include: ~Utilities~;
+Include: ~PrintingSequenceWin~;
+
+Class( Comp,Extends,BaseHTML,
+		Member,fOrderID,Str,~~,
+		Member,fOrderItemID,Str,~~,
+		Member,fNumViews,Numeric,0,
+		Member,fF5Load,Numeric,0,
+		Member,fScreenWidth,Numeric,0,
+		Member,fScreenHeight,Numeric,0,
+		Member,fHtmlViewWidth,Numeric,0,
+		Member,fNumberOfTools,Numeric,2,
+		Member,fTool2,Str,CropTool,
+		Member,fCropToolActions,Str,~[ChooseTool(CropTool)]~,
+		Member,fTool1,Str,SelectTool,
+		Member,fSelectToolActions,Str,~[ChooseTool(SelectTool)]~);
+
+
+VOID Comp::Comp(WantStatic,OrderID)
+{
+	WindowLeft = WindowTop = 0;
+	WindowWidth = 80;
+	WindowHeight = 100;
+
+	fScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+	fScreenHeight = App( thisApp,MainWindow,GetClientHeight );
+	fHtmlViewWidth = 500;
+
+	Static(~<WantStatic>~);
+
+//	fOrderID = ~<OrderID>~;	
+}
+
+VOID Comp::HelpRoutine()			
+{ 
+	OpenHelpPage(~/Composition/Composition.kpl~,TR(Composition,HelpPageTitle));
+	
+	
+}
+
+//VOID Comp::ReOpen()
+//{
+//	CheckOrderID( ~~ );
+//	ShowImagesForOrder();
+//	PopulateOrderItemsTable();
+//	BaseHTML::ReOpen();
+//}
+
+VOID Comp::OnLoadComplete()
+{	
+
+	// Count the html views and load the order items and images
+	// into their views.
+
+	++fNumViews;
+
+	if ( <fNumViews> == 3 || <fF5Load> )
+	{
+		ViewImages( SetDelayLoad,FALSE );
+		ViewOrderItems( SetDelayLoad,FALSE );
+		fF5Load = 1;
+	}
+
+}
+
+VOID Comp::LoadCompleteProdLabel()
+{
+	if ( GetAdvancedMode() )
+	{
+		// Tell the Separator view to show the Products Label if Advance mode is on
+		GetViewByName( ViewData );
+		fHtmlView( Execute, ~MakeVisible( GetElement('productLabel') )~ );
+	}
+	else
+	{
+		// Tell the Separator view to hide the Products Label if Advance mode is off
+		GetViewByName( ViewData );
+		fHtmlView( Execute, ~HideElement( GetElement('productLabel') )~ );
+	}
+}
+
+VOID Comp::LoadToolbar()
+{
+	DoPressTool(~SelectTool~);
+	ToggleToolBarButtons( TRUE );
+}
+
+VOID Comp::DefineMessages()
+{
+	BaseHtml::DefineMessages();
+	LoadTranslationFile( Composition,Composition,Composition );
+	LoadTranslationFile( LayoutsAndJobs,LayoutsAndJobs,LayoutsAndJobs );
+	LoadTranslationFile( Products,EditProduct,EditProduct );
+	LoadTranslationFile( Import,ImportImages,ImportImages );
+}
+
+
+VOID Comp::WindowDefinition()
+{
+	Fields:	TypeName			SplitterWnd2
+			SplitterRows		~5 5 5 55 20 15~
+			SplitterColumns		~1~	
+			ViewAsFilmStrip		F
+			HideSplitterBars	1
+			Position			0 0 100 100
+}
+
+
+VOID Comp::DefineViews()
+{ 
+	Defineview();						// Row 1 - Title and Close Button
+	DefineView(Toolbar);
+	DefineSplitter(ImagesOrderItem);	// Row 2 - Splitter for the images and order items
+	DefineView(Data);					// Row 3 - Separater - just gray
+	DefineProductWnd();					// Add a tabbed view for the products - advanced mode
+}
+
+VOID Comp::DefineProductWnd()
+{
+	Define: ChooseProductWnd Using DDWinDef AsSymbol ChooseProductWnd Permanent Private
+		Fields:
+			TypeName					~ImageWnd~
+			//Position					0 75 100 22
+			//IsPositionPercent			T
+			//IsCenteredVertical		F
+			//IsCenteredHorizontal		F
+			//IsMaximized				F
+			ImageFrameSize				85
+			BackgroundColor				~224,224,224~
+			AllowNoViews				1;
+}
+
+VOID Comp::ViewDefinition()
+{
+	Fields:	HTMLCloseBox	<fStatic>;
+	Fields:	HTMLNavBox		<fStatic>;
+}
+
+VOID Comp::ViewToolbarDefinition()
+{
+
+}
+
+VOID Comp::ViewDefinitionBottom()
+{
+	
+		StdProductThumbnailView();
+
+		Fields:	//RefreshActionsText		ACTION Exec ( <THIS>.RefreshThumbNailView(ViewProducts) )
+			//RClickUpActionsText			ACTION Exec ( <THIS>.RightClickInOrderItemsView() )
+			//LClickUpActionsText			ACTION Exec ( <THIS>.LeftClickInProductsView() )
+			//KeyboardActionsText			ACTION Exec ( <THIS>.OnKeyDown() )	
+			//DoubleClickActionsText			ACTION Exec ( <THIS>.DoubleClickProductsView() )
+			//DropActionsText					ACTION Exec ( <THIS>.HandleDrop() )
+			FrameBackgroundColor			~190,190,190~
+			TextBackgroundColor				~190,190,190~
+}
+
+VOID Comp::ImagesOrderItemDefinition()
+{
+	Fields:	SplitterRows		~1~
+			SplitterColumns		~3 30 40 30~
+			HideSplitterBars	1
+			ViewAsFilmStrip		F
+}
+
+VOID Comp::ImagesOrderItemViews()		// Definition of the OrderItemInfo Views
+{
+	DefineView(Images);				// Define the Order Items View
+	DefineView(Product);			// This is really the view for editing the order item.
+	DefineView(OrderItems);			// Define the Order Item Info View
+}
+
+VOID Comp::ViewDefinitionImages()
+{
+	StdImageThumbnailView();
+
+	Fields:	//RefreshActionsText		ACTION Exec ( <THIS>.RefreshThumbNailView(ViewImages) )
+			//RClickUpActionsText		ACTION Exec ( <THIS>.RightClickInOrderItemsView() )
+			LClickUpActionsText			ACTION Exec ( <THIS>.LeftClickImagesView() )
+			//KeyboardActionsText		ACTION Exec ( <THIS>.OnKeyDown() )	
+			DoubleClickActionsText		ACTION Exec ( <THIS>.DoubleClickImagesView() )
+			BackgroundColor				~190,190,190~
+			FrameBackgroundColor		~190,190,190~
+			TextBackgroundColor			~190,190,190~
+			DelayLoad					1
+
+}
+
+VOID Comp::ImagesThumbNailOverride()
+{
+
+	// Override the default tooltip with Click to Select.  Right-click for options.
+	//if ( GetAdvancedMode() )
+//	{
+		Tooltip = TR( Composition, ImageToolTipAdvanced );
+//	}
+//	else
+//	{
+//		Tooltip = TR( Composition, ImageToolTip, ~<$TR.Composition(OrderButton)>~ );
+//	}
+	
+	Fields: Info5				~<Tooltip>~;
+	
+}
+
+VOID Comp::ViewDefinitionProduct()
+{	
+	// Defines the definition for the PIELayoutAndJobView
+	StdJobView();
+}
+
+VOID Comp::StdJobView()
+{
+	Fields:		
+		ViewType ~JobView~
+		UseOwnDocument				TRUE
+		IsPercentOfWindow			1
+		HeightPercentOfMainframe	100			// percentage. -2 is determined by trial and error.  .86 and .82 are percent of splitters defined in this file
+		WidthPercentOfMainframe		100			// percentage
+		WidthCascadeOffsetInPixels	24			// percentage
+		HeightCascadeOffsetInPixels	24			// percentage
+		InitialViewXPosition		0			// in pixels
+		InitialViewYPosition		0			// in pixels
+		BackgroundColor				~128 128 128~ 
+		//		I disabled the right click menu 3/1/07 Paul Forleo
+		//		RClickUpActionsText ~[GETMENU(NodeMenuObj2)]~  // dfined in job.txt; the engine prevents the menu from appearing if there is no layout open
+		DropTypes			~Image OrderItems~
+		TabKeyDnActionsText ~[SelectNextNode]~
+		HActionsText		ACTION DOC ( SampleServerScript OpenOnce SampleServerScript "InitThisObject(~<$App.HTTPServer>/Manual/Products/Products.kpl#EditProducts~,~<$TR.Standard(Help)> - <$TR.EditProduct(Title)>~);" )
+		PreferredUnits	~Inches~
+		IActionsText   ~[
+							EnableTool(CropTool) 
+							EnableTool(SelectTool) 
+						]~
+		DragMenuName	~DragMenuObj2~
+		CopyMenuName	~CopyMenuObj2~
+		OActionsText	~[ <OActions> ]~;
+}
+
+VOID Comp::OrderItemsDataDefinition()
+{
+	Fields:	SplitterRows		~2 80 10~
+			SplitterColumns		~1~
+			HideSplitterBars	1
+}
+
+VOID Comp::OrderItemsDataViews()		// Definition of the OrderItemInfo Views
+{
+	DefineView(OrderItems);			// Define the Order Item Info View
+	DefineView(Data);
+}
+
+VOID Comp::ViewDefinitionOrderItems()
+{
+	//Fields:	ImageFrameSize			(150)
+	StdOrderItemThumbnailView();
+	
+	Fields:	//RefreshActionsText		ACTION Exec ( <THIS>.RefreshThumbNailView(ViewOrderItems) )
+			//RClickUpActionsText			ACTION Exec ( <THIS>.RightClickInOrderItemsView() )
+			LClickUpActionsText			ACTION Exec ( <THIS>.LeftClickInOrderItemsView( FALSE ) )
+			KeyboardActionsText		ACTION Exec ( <THIS>.OnKeyDownOrderItem() )	
+			DoubleClickActionsText	ACTION Exec ( <THIS>.DoubleClickInOrderItemsView() )
+			//DropActionsText				ACTION Exec ( <THIS>.HandleDrop() )
+			DropTypes					~OrderItems~
+			BackgroundColor			~190,190,190~
+			FrameBackgroundColor	~190,190,190~
+			TextBackgroundColor		~190,190,190~
+			UseImageCorrections			~F~  // this shuts off the profile name
+			DelayLoad					1
+}
+
+VOID Comp::OrderItemsThumbNailOverride()
+{
+	MACROSOFF
+		Fields:
+			Info5		TR( Composition,OrderItemTooltip)
+	MACROSON
+}
+
+/**************Click Handlers ***************************************************/
+
+VOID Comp::DoubleClickProductsView()
+{
+	if ( !Authorized( ~CLOEncrypt~ ) )
+	{
+		if ( !CheckPrivilege( ~ProductManagement~ ) )
+		{
+			Warning( Translate(UIMessages,NoPermissionOrPriv, ~Product Management~, ~<$App.UserName>~) );
+			return;
+		}
+	}
+	
+	if ( !ChooseProductWnd( GetActiveViewOfWindow,DstView ) )
+		{ return; }
+
+	if ( !DstView( GetSelected,SelectedProducts ) )
+		{ return; }
+
+	Count = SelectedProducts( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return; }
+		
+	SelectedProducts( GetFirst,Product );
+
+	//Check to see if this product is a package
+	if ( ~<$con.Product[Package]>~ == ~1~ )
+	{
+		return;
+	}
+	else
+	{
+		Action = STR ( EditProductWin OpenOnce EditProductWin "InitStatic(~<$con.Product[ID]>~)" );
+		PerformDocActions( Action );
+	}
+
+	return;
+}
+
+VOID Comp::DoubleClickImagesView()
+{
+	if ( !ViewImages( GetSelected, SelectedImages ) )
+	{
+		Warning( TR( Composition, UnableToGetView ) );
+		return;
+	}
+	
+	childCount = SelectedImages( ChildCount );
+	if ( <childCount> == 0 )
+	{
+		Warning( TR( Composition, NoImagesSelected ) );
+		return;
+	}
+	
+	SelectedImages( GetFirst, Image );
+	Image( Get, OrderID, imageOrderID );
+	Image( Get, Roll, imageRoll );
+	Image( Get, Frame, imageFrame );
+
+	Action = ACTION DOC ( AdjustImagesWin OpenOnce AdjustImagesWin "InitStatic(~<fOrderID>~, ~<imageOrderID>~, ~<imageRoll>~, ~<imageFrame>~)" );
+	PerformActions( Action );
+}
+
+VOID Comp::LeftClickImagesView()
+{
+	if ( !ImagesOrderItemSplitter(GetViewOfWindow,ViewImages,aView ) )
+	{
+		Log( Session, ~Comp::LeftClickImagesView(): Unable to get Images View~ );
+		Warning( TR( Composition, UnableToGetView ) );
+		return;
+	}
+
+	if ( GetViewByName( ViewData,OrderButtonView ) )
+	{
+		OrderButtonView( Set,orderButton,0,disabled, aView(GetSelectedIconCount) ? ~~ : ~disabled~ );
+	}
+}
+
+
+// If FromArrowKey is FALSE, this came from the left click of the mouse and try to open
+// the order item in the view.  If the call was made from using the arrow keys, don't open
+// an order item.  Opening an order item moves the active window to the layout and job
+// view and not the order item thumbnails.
+VOID Comp::LeftClickInOrderItemsView( FromArrowKey )
+{	
+	if ( !ImagesOrderItemSplitter(GetViewOfWindow,ViewOrderItems,aView ) )
+	{
+		Log( Session, ~Comp::LeftClickInOrderItemsView(): Unable to get Orderitems View~ );
+		Warning( TR( Composition, UnableToGetView ) );
+		return;
+	}
+
+	orderItemCount = aView( GetSelectedIconCount );
+
+	if ( !GetViewByName( ViewData ) )
+	{
+		return;
+	}
+
+	if ( <orderItemCount> == 0 )
+	{
+		fHtmlView( Set,'printPreviewButton',0,disabled,~disabled~ );
+		fHtmlView( Set,'ManualPaperFillButton',0,disabled,~disabled~ );
+		fHtmlView( Set,'Quantity',0,disabled,~disabled~ );
+		fHtmlView( Set,'QtyUpdateButton',0,disabled,~disabled~ );
+
+		fHtmlView( SetInnerText, PrintWidth, 0, ~ ~ );
+		fHtmlView( SetInnerText, PrinterName, 0, ~ ~ );
+		fHtmlView( SetInnerText, TimePrinted, 0, ~ ~ );
+
+	}
+	else if ( <orderItemCount> == 1 )
+	{
+		fHtmlView( Set,'printPreviewButton',0,disabled,~~ );
+		fHtmlView( Set,'ManualPaperFillButton',0,disabled,~~ );
+		fHtmlView( Set,'Quantity',0,disabled,~~ );
+		fHtmlView( Set,'QtyUpdateButton',0,disabled,~~ );
+
+		if ( !aView( GetSelected,SelectedOrderItems ) )
+		{
+			return;
+		}
+
+		if ( SelectedOrderItems( GetFirst, OrderItem ) )
+		{
+			// Get the unit of measure
+			if ( !GenCon( PreviewOptions,GetFrom,PreviewOptions,~[GENCONS]~ ) )
+			{ 
+				theUnits = ~Inches~;
+			}
+			else
+			{
+				PreviewOptions( GetValue,  ~PreferredUnits~, theUnits);
+			}
+
+			fHtmlView( Set, Quantity, 0, value, ~<$con.OrderItem[Quantity]>~ );
+
+			// The engine always does everthing in inches, thus if the ui is set to 
+			// metric do the conversion
+			if ( SimilarStr( ~<theUnits>~, ~Centimeters~ ) )
+			{
+				printLength = MakeNumber( ~<$con.OrderItem[PrintLength]>~ ) / 2.54;
+				printWidth = MakeNumber( ~<$con.OrderItem[PrintWidth]>~ ) / 2.54;
+
+				printLength = Format( ~<printLength>~, ~%3.2lf~);
+				printWidth = Format( ~<printWidth>~, ~%3.2lf~);
+			}
+			else if ( SimilarStr( ~<theUnits>~, ~Millimeters~ ) )
+			{
+				printLength = MakeNumber( ~<$con.OrderItem[PrintLength]>~ ) / 25.4;
+				printWidth = MakeNumber( ~<$con.OrderItem[PrintWidth]>~ ) / 25.4;
+
+				printLength = Format( ~<printLength>~, ~%3.2lf~);
+				printWidth = Format( ~<printWidth>~, ~%3.2lf~);
+			}
+			else
+			{
+				printLength = Format( ~<$con.OrderItem[PrintLength]>~, ~%3.2lf~);
+				printWidth = Format( ~<$con.OrderItem[PrintWidth]>~, ~%3.2lf~);
+			}
+
+			fHtmlView( SetInnerText, PrintWidth, 0, ~<printWidth> x <PrintLength> <$TR.LayoutsAndJobs(<theUnits>)>~ );
+			
+			if ( IsNull( ~<$con.OrderItem[PrinterName]>~ ) )
+			{
+				fHtmlView( SetInnerText, PrinterName, 0, ~<$TR.Composition(NotSubmittedForPrinting)>~ );
+			}
+			else
+			{
+				fHtmlView( SetInnerText, PrinterName, 0, ~<$con.OrderItem[PrinterName]>~ );
+			}
+
+			if ( 0 )
+			{
+				if ( IsNull( ~<$con.OrderItem[PrintStatus]>~ ) )
+				{
+					fHtmlView( SetInnerText, PrintingStatus, 0, ~<$TR.Composition(NotSubmittedForPrinting)>~ );
+				}
+				else
+				{
+					fHtmlView( SetInnerText, PrintingStatus, 0, ~<$con.OrderItem[PrintStatus]>~ );
+				}
+			}
+
+			if ( IsNull( ~<$con.OrderItem[TimePrinted]>~ ) )
+			{
+				fHtmlView( SetInnerText, TimePrinted, 0, ~<$TR.Composition(NotPrintedYet)>~ );
+			}
+			else
+			{
+				DateTime( PrintedDateTime,SetFromSortableDateTime,~<$con.OrderItem[TimePrinted]>~ );
+				PrintedDateTime( Format, theDate, ~%Y-%m-%d %H:%M~ );
+				fHtmlView( SetInnerText, TimePrinted, 0, ~<theDate>~ );
+			}
+			
+			// if fLayoutAndJobView, that means that an order item has been placed
+			// in the view and using the arrows should change the order item in the view.
+			//if ( Defined( fLayoutAndJobView ) && !<FromArrowKey> )
+			//{
+			//	OnReplaceLayout(~<$con.OrderItem[JobPath]>~,~<$con.OrderItem[ProductID]>~, ~<$con.OrderItem[LayoutName]>~);
+			//}
+		}
+	}
+	else if ( <orderItemCount> > 1 )
+	{
+		fHtmlView( Set,'printPreviewButton',0,disabled,~~ );
+		fHtmlView( Set,'ManualPaperFillButton',0,disabled,~~ );
+		fHtmlView( Set,'Quantity',0,disabled,~~ );
+		fHtmlView( Set,'QtyUpdateButton',0,disabled,~~ );
+
+		fHtmlView( SetInnerHtml, PrintWidth, 0, ~<span style="color:white"><$tr.Composition(MultipleSelections)></span>~ );
+		fHtmlView( SetInnerHtml, TimePrinted, 0, ~&nbsp;~ );
+		fHtmlView( SetInnerHtml, PrinterName, 0, ~&nbsp;~ );
+	}
+
+//	SelectedOrderItems( GetFirst, OrderItem );
+
+//	GetViewByName( ViewData );
+
+//	maxWidth = ~<$con.OrderItem[PrintWidth]>~;
+//	maxHeight = ~<$con.OrderItem[PrintLength]>~;
+//	previewPath = ~<$con.OrderItem[PreviewPath]>~;
+
+//	fHtmlView( Execute, ~SetOrderItemSRC( '/Render/OrderItem.kpl?OrderID=<$con.OrderItem[OrderID]>&ID=<$con.OrderItem[ID]>&Height=1.5',0, 0 )~ );
+	
+}
+
+
+VOID Comp::DoubleClickInOrderItemsView()
+{
+	if ( !Authorized( ~CLOEncrypt~ ) )
+	{
+		if ( Authorized(DP1) )
+		{
+			if ( !CheckPrivilege( ~ProductManagement~ ) )
+			{
+				Warning( Translate(UIMessages,NoPermissionOrPriv, ~Product Management~, ~<$App.UserName>~) );
+				return;
+			}
+		}
+		else if ( !GetUserPermissions( LayoutEditing ) )
+		{
+			Warning( Translate(UIMessages,NoPermissionOrPriv, ~Layout Editing~, ~<$App.UserName>~) );
+			return;
+		}
+	}
+	
+	if ( !ImagesOrderItemSplitter(GetViewOfWindow,ViewOrderItems,aView ) )
+	{
+		Log( Session, ~Comp::DoubleClickInOrderItemsView(): Unable to get Orderitems View~ );
+		Warning( TR( Composition, UnableToGetView ) );
+		return;
+	}
+
+	if ( !aView( GetSelected,SelectedOrderItems ) )
+	{ 
+		Warning( TR( Composition, AltPreview ) );
+		return;
+	}
+
+	orderItemCount = SelectedOrderItems( ChildCount );
+
+	SelectedOrderItems( GetFirst, OrderItem );
+
+	// ReplaceLayoutorJob is called in the engine to reuse an open layout and job view.
+	OnReplaceLayout(~<$con.OrderItem[JobPath]>~,~<$con.OrderItem[ID]>~, ~<$con.OrderItem[LayoutName]>~);
+	fOrderItemID = ~<$con.OrderItem[ID]>~;
+
+	/*
+		Operation = STR ( OpenAJob( ~<$con.OrderItem[JobPath]>~,~<$con.OrderItem[OrderID]>~,~<$con.OrderItem[ID]>~ ) );
+		QueueContentsOf( Operation );
+	*/
+}
+
+NUMERIC Comp::OnKeyDownOrderItem()
+{
+	if ( !ViewOrderItems( IsThumbNailView ) )
+		{ return FALSE; }
+		
+	key = ViewOrderItems( GetLastKeyStateless,KeyString );
+	KeyString = Upper( ~<KeyString>~ );
+
+	if ( <key> > 32 && <key> <= 40 )			// Arrow keys,Home,End,PageUp&Dn
+		{ 
+			LeftClickInOrderItemsView( TRUE );
+			return TRUE ;
+		}
+
+	if ( <key> == 0x74 )	// F5
+	{
+		PopulateOrderItemsTable();
+		return TRUE;
+	}
+
+	if ( <key> == 0x2E )	// Delete
+		{ return DeleteSelectedOrderItems(); }
+
+	if ( ~<KeyString>~ == ~O~ )	
+		{ return OpenJobForSelectedOrderItem(); }
+
+	if ( ~<KeyString>~ == ~C~ )	
+		{ return CloseJobForSelectedOrderItem(); }
+
+	return TRUE;
+
+}
+
+/******************** Drap and Drop Handling ************************************/
+NUMERIC Comp::HandleOrderItemDrop()
+{
+
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+		{ 
+			Log( Session, ~Comp::HandleOrderItemDrop(): There was no DragDropInfo for the item dragged into the Order Items window~ );
+			return Warning( TR( Composition, NoDragDropInfo ) ); 
+		}
+
+	if ( !GenCon( SrcView,Is,~<$CON.DragDropInfo[SrcView]>~ ) ) 
+		{ return ExternalDrop(DragDropInfo); }
+
+	if ( !GenCon( DstView,Is,~<$CON.DragDropInfo[DstView]>~ ) ) 
+		{ GenCon( DstView,GetActiveView ); }
+
+	if ( ~<$con.DstView[ViewDataType]>~ != OrderItems )
+		{	Log( Session, ~The DstView contains <$con.DstView[ViewDataType]> instead of orders~ );
+			return Warning( TR( Composition, WrongDropType, ~<$con.DstView[ViewDataType]>~ ) ); 
+		}
+
+	if ( !SrcView( GETSELECTED,SelectedItems ) )
+	{ 
+		GenCon( SelectedItems,Is,SrcView(GetCopyOf) );
+	}
+
+	count = SelectedItems( ChildCount );
+
+	if ( <count> <= 0 )
+	{
+		return Warning( ~No items were selected~ );
+	}
+
+	if ( ~<$con.SrcView[ViewDataType]>~ == ~OrderItems~ )		// IS THE ITEM AN ORDERITEM?
+		{ return HandleOrderItemDrop( SelectedItems,SrcView,DstView ); }
+
+//	if ( ~<$con.SrcView[ViewDataType]>~ == ~Products~ )		// IS THE ITEM A PRODUCT?
+//		{ return HandleProductDrop( SelectedItems,SrcView,DstView ); }
+
+//	if ( ~<$con.SrcView[ViewDataType]>~ == ~Text~ )		// IS THE ITEM A LIST OF GENCONS CONTAINING TEXT?
+//		{ return HandleTextDrop( SelectedItems,SrcView,DstView,~<$CON.DragDropInfo[DropLocation]>~ ); }
+	
+//	if ( ~<$con.SrcView[ViewDataType]>~ == ~Image~ )		// IS THE ITEM AN IMAGE FROM AN ORDER?
+//		{ return HandleOrderImageDrop( SelectedItems,SrcView,DstView,~<$CON.DragDropInfo[DropLocation]>~ ); }
+
+	return FALSE;
+}
+
+/******************************************************************************************************************/
+
+VOID Comp::ShowImagesForOrder()
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~ShowOrderItem(): Unable to connect to the database. <theErr>~ );
+		Warning( TR( Standard, DBConnectNo ) );
+		return;
+	}
+	
+	Query = ~Select ImagesOrderID From Orders Where ID = '<fOrderID>'~;
+	dBase( GetValuesFor, ~<Query>~, imagesOrderID );
+
+	orderToSearch = ~OrderID = '<fOrderID>'~;
+	if ( !IsNull( ~<imagesOrderID>~ ) )
+	{
+		orderToSearch = ~OrderID = '<fOrderID>' OR OrderID = '<imagesOrderID>'~;
+	}
+	
+	Query = ~Select * From Images where <orderToSearch> Order By Roll,Frame~;
+	RefreshWindowThumbNailView( ImagesOrderItemSplitter,ViewImages,~<Query>~ );
+}
+
+
+VOID Comp::ShowProductsForCategory(Category)
+{
+	Query = ~Select * From Products Where Category = '<Category>' AND Style = 0 Order By Category,Sequence~;
+	RefreshThumbNailView( ViewBottom,~<Query>~ );
+//	RefreshWindowThumbNailView( ProductsInfoSplitter,ViewProducts,~<Query>~ );
+}
+
+VOID Comp::SetOrder( OrderID )
+{
+
+	// Check for existence order order.
+	Class( OrderClass,Extends,BaseOrder);
+	OrderClass( New,OrderObj );	
+
+	if ( GetActiveView() )
+	{
+		if ( !OrderObj.FindID( ~<OrderID>~ ) )
+		{
+			fHtmlView( Execute,~IDDoesntExist( '<$TR.Composition(NoIDFound,`<OrderID>`)>' )~ );
+		}
+	}
+	
+	if ( !SimilarStr( ~<fOrderID>~, ~<OrderID>~ ) )
+	{
+		fOrderID = ~<OrderID>~;
+
+		// Clear the appropriate fields if the view was already up and data was in the windows
+		
+		if ( <THIS>( HasMember,fLayoutAndJobView ) )
+		{
+			if ( fLayoutAndJobView( GetDocumentInfo, OrderItemID, orderItemID ))
+			{
+				// There is an order item displayed in the layoutandjobview, close it.
+				OnCloseButton();;
+			}
+		}
+		
+		// Reset the data (print width, length, time printed and printer)
+		ResetDataFields();
+
+	}
+}
+
+NUMERIC Comp::ResetDataFields()
+{
+	ReturnOnFailure( GetViewByName( ViewData ) );
+	
+	fHtmlView( SetInnerHtml, PrintWidth, 0, ~&nbsp;~ );
+	fHtmlView( SetInnerHtml, TimePrinted, 0, ~&nbsp;~ );
+	fHtmlView( SetInnerHtml, PrinterName, 0, ~&nbsp;~ );
+	fHtmlView( Set,printPreviewButton,0, disabled,~true~ );
+	fHtmlView( Set,ManualPaperFillButton,0,disabled,~true~ );
+	fHtmlView( Set,Quantity,0,disabled,~true~ );
+	fHtmlView( Set,QtyUpdateButton,0,disabled,~true~ );
+
+	return TRUE;
+}
+VOID Comp::OpenProductsWindow()
+{
+
+	// When advanced mode is on, order button combines images and products
+	// to form order items.  When advanced mode is off, the choose product
+	// window is displayed.
+	if ( GetAdvancedMode() )
+	{
+		HandleDrop( TRUE );
+	}
+	else
+	{
+		if ( !ImagesOrderItemSplitter(GetViewOfWindow,ViewImages,aView ) )
+		{
+			Warning( TR( Composition, UnableToGetView ) );
+			return;
+		}
+
+		if ( !aView( GetSelected,SelectedImages ) )
+			{ return Warning( TR( Composition, NoImagesSelected ) ); }
+		
+		imageCount = SelectedImages( ChildCount );
+		if ( <imageCount> == 0 )
+		{
+			Warning( TR( Composition, NoImagesSelected ) );
+			return;
+		}
+		
+		// If more than 1 image is selected, put up message asking how
+		// to create order items
+		//GetViewByName( ViewOrderItems );
+		
+		// Get the SelectedImages object
+		TheObject = SelectedImages(Permanent,GetObject);
+		if ( <imageCount> > 1 )
+		{
+			DocAction( ~MultipleImageQuestion OpenOnce MultipleImageQuestion "Init( `<TheObject>`, `<fOrderID>` )"~);
+		}
+		else
+		{
+			DocAction(~ChooseProductsWin OpenOnce ChooseProductsWin "InitStatic( `<TheObject>`, `<fOrderID>`, `0` )"~);	
+		}
+	}
+
+}
+
+VOID Comp::InitWindow()
+{
+	
+	ProductsThumbNailDefinition();
+	ProductsThumbNailCategory();
+	ReturnOnFailure( DefineWindow() );
+	
+	Query = ~Select * From Products Where Style = 0 Order By Category,Sequence~;
+	GetCategories( ~<Query>~ );
+	
+	Init();
+
+	Open( ~<$App.HTTPServer>/Ordering/Comp.kpl~ );
+	Open( ~<$App.HTTPServer>/Ordering/CompToolbar.kpl?AllowFullEdit=0~, Toolbar );
+	Open( ~<$App.HTTPServer>/Ordering/CompOrderItems.kpl?ShowProducts=1&AllowManualPaperFill=1~,Data );
+}
+
+VOID Comp::ProductsThumbNailCategory()
+{
+	Define: ProdThumbNailCategory Using DDViewDef AsSymbol ProdThumbNailCategory Private
+		Fields:	Text						~<Category>~
+				ViewType					~ThumbnailView~
+				IsModifiable				~T~
+				IsNameModifiable			~F~
+				DoubleClickActionsText		ACTION Exec ( <THIS>.DoubleClickProductsView() )
+				IActionsText				~~
+				OActionsText				~~
+				DropTypes					~Image~
+				DropNonInsertableTypes		~Image~
+				ViewDataType				Products
+				ViewDataFor					~<Category>~
+				DropActionsText				ACTION Exec ( <THIS>.HandleDrop( FALSE ) )
+				//AddCategoryActionsText		ACTION Exec ( AddCategory() )
+				//RenameCategoryActionsText	ACTION Exec ( RenameCategory() )
+				//RClickUpActionsText			ACTION Exec ( RightClickInImageView() )
+				//LClickUpActionsText			ACTION Exec ( ViewSubjectInfoData(TRUE,TRUE) )
+				//KeyboardActionsText			ACTION Exec ( OnKeyDown() )	
+				//HActionsText				ACTION SHOWHELPPAGE ( KPISHelpFile "OrderImages.htm" )
+				UseImageCorrections			~T~
+				BackgroundColor			~190,190,190~
+				FrameBackgroundColor	~190,190,190~
+				TextBackgroundColor		~190,190,190~
+				ImageOpenFailedMsg		~<$tr.ImageContainerStrings(NoProductIcon)>~
+				NoSamplePreviewMsg		~<$tr.ImageContainerStrings(NoProductIcon)>~;
+}
+
+VOID Comp::GetCategories( Query )
+{
+	RefreshWindowThumbView1( ChooseProductWnd,~<Query>~ );
+}
+
+NUMERIC Comp::RefreshWindowThumbView1(Window,Query)
+{
+	WaitCursor( Begin );
+	
+	if ( ~<Query>~ != ~~ )
+	{
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			WaitCursor( End );
+			List( GetErrorDescription,0,theErr );
+			Log( Session, ~Query Failed: <Query>. <theErr>~ );
+			return Warning( TR( Standard, UnableToQueryDB ) );
+		}
+
+		SetDocumentData( List(GetObject) );
+	}
+	
+	<Window>( CreateThumbNailViews,~ProdThumbNailCategory~,~ProductThumbNailImage~,List,Category,Field );
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+/***************************** Functions for ProductInfo.kpl script **********************/
+
+VOID Comp::LoadCategories()
+{
+
+	if ( !GetViewByName( ViewProdInfo ) )
+	{
+		return;
+	}
+
+	fHtmlView( Execute,~ResetList(GetElement('CategoryList'))~ );
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~LoadCategories(): Unable to connect to the database. <theErr>~ );
+		Warning( TR( Standard, DBConnectNo ) );
+		return FALSE;
+	}
+
+	Query = ~Select DISTINCT Category From Products Where Style = 0~;
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		return Warning( TR( Composition, NoProductCategories ) );
+	}
+	
+	while ( List( GetNext, Category ) )
+	{
+		fHtmlView( Execute,~AddListOption( GetElement('CategoryList'),'<$pcon.Category[Category]>','<$pcon.Category[Category]>')~ );
+	}
+
+}
+
+VOID Comp::OnLoadCompleteView()
+{
+	// Called from OnLoad in Comp.kpl
+	fOrderID = GetCurrentOrder();
+
+	GetViewByName( View );
+	fHtmlView( Set, ~OrderIDText~, 0, value, ~<fOrderID>~ );
+	//ShowImagesForOrder();
+}
+
+VOID Comp::LoadOrderItemList()
+{
+	// This is done at OnLoad from the Page.
+	PopulateOrderItemsTable();
+}
+
+VOID Comp::PopulateOrderItemsTable()
+{
+	Query = ~Select OrderItems.*,Products.LayoutName From OrderItems Left Outer Join Products On (OrderItems.ProductID = Products.ID) where OrderID = '<fOrderID>' Order By OrderItems.Sequence,OrderItems.Subsequence~;
+	RefreshWindowThumbNailView( ImagesOrderItemSplitter,ViewOrderItems,~<Query>~ );
+
+	return;
+}
+
+VOID Comp::AddtoRow( &fHtmlView, ObjectID, Qty, PreviewPath, OrderItemID )
+{
+	fHtmlView( insertHTML, ~<ObjectID>~,0,beforeEnd, ~<Div id="ID<OrderItemID>" style="padding:5;" onClick="SelectOILine(this)"> <Img Width=20 style="margin-bottom:-3" src="<PreviewPath>">&nbsp<Input SIZE=2 MAXLENGTH=2 style="margin-bottom:0" id="Quantity" Type=TEXT value="<Qty>" onChange="UpdateQty(this)">&nbsp <span class="quantityline"> <$TR.Composition(Each)> </span> &nbsp<Input Type=Button style="margin-bottom:0" value="<$TR.Composition(Edit)>" onClick="ShowOrderItemImage(this)">&nbsp&nbsp&nbsp<Input Type=Button style="margin-bottom:0" value="<$TR.Composition(Remove)>" onClick="RemoveOrderItems(this)"></div>~ );
+
+	return;
+}
+
+VOID Comp::EditOrderItem()
+{
+	
+	if ( !<THIS>( HasMember,fLayoutAndJobView ) )
+	{
+		return; 
+	}
+
+	if ( !fLayoutAndJobView( GetDocumentInfo, OrderItemID, orderItemID ))
+	{
+		// There isn't an order item displayed in the layoutandjobview.
+		return;
+	}
+
+	// Save the orderItem before allowing it to be edited.
+	OnSaveButton();
+
+	if ( <orderItemID> != 0 )
+	{
+		DocAction( ~EditOrderItemWin OpenOnce EditOrderItemWin "InitStatic( `<fOrderID>`,`<orderItemID>` )"~);
+	}
+
+}
+
+/*****************************************************************************************/
+
+VOID Comp::ShowOrderItem( ID )
+{
+	GetTokens( ~<ID>~, ~ID~, orderItemID );
+	
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~ShowOrderItem(): Unable to connect to the database. <theErr>~ );
+		Warning( TR( Standard, DBConnectNo ) );
+		return;
+	}
+	
+	Query = ~Select * From OrderItems Where ID = <orderItemID> AND OrderID = '<fOrderID>'~;
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		return;
+	}
+	
+	List( GetNext, OrderItem );
+	
+	if ( !GetViewByName( ViewOrderItems ) )
+	{
+		return;
+	}
+	
+	maxWidth = ~<$pcon.OrderItem[PrintWidth]>~;
+	maxHeight = ~<$pcon.OrderItem[PrintLength]>~;
+	previewPath = ~<$pcon.OrderItem[PreviewPath]>~;
+	
+	if ( <maxWidth> == 0 || <maxHeight> == 0 )
+	{
+		MaintainThisOrderItem( dBase,~<fOrderID>~,~<orderItemID>~,~<$pcon.OrderItem[JobPath]>~ );
+		if (!dBase( GetValuesFor, ~Select PrintWidth,PrintLength From OrderItems Where OrderID = '<fOrderID>' AND ID = '<orderItemID>'~, MaxWidth, MaxHeight ) )
+		{
+			MaxWidth = 0;
+			maxHeight = 0;
+		}
+	}
+
+	if ( <maxWidth> > <maxHeight> )
+	{
+		
+		if ( IsNull( ~<previewPath>~ ) || !Files( FileExists, ~<previewPath>~ ) )
+		{
+			fHtmlView( Execute, ~SetOrderItemSRC( '/Render/OrderItem.kpl?OrderID=<fOrderID>&ID=<orderItemID>&Width=1.5',0, 0 )~ );
+		}
+		else
+		{
+			Width = 108;
+			Height = 108 * ( <maxHeight> / <maxWidth> ); 
+			fHtmlView( Execute, ~SetOrderItemSRC( '<$pcon.OrderItem[PreviewPath].CPath>', <Width>, <Height> )~ ); 
+		}
+	}
+	else if ( <maxHeight> > <maxWidth> )
+	{
+		if ( IsNull( ~<previewPath>~ ) || !Files( FileExists, ~<previewPath>~ ) )
+		{
+			fHtmlView( Execute, ~SetOrderItemSRC( '/Render/OrderItem.kpl?OrderID=<fOrderID>&ID=<orderItemID>&Height=1.5',0, 0 )~ );
+		}
+		else
+		{
+			Height = 108;
+			Width = 108 * ( <maxWidth> / <maxHeight> );
+			fHtmlView( Execute, ~SetOrderItemSRC( '<$pcon.OrderItem[PreviewPath].CPath>',<Width>, <Height>)~ );
+		}
+	
+	}
+	else if ( <maxHeight> == <maxWidth> && <maxHeight> != 0 && <maxWidth> != 0 ) 
+	{
+		if ( ~<previewPath>~ == ~~ || !Files( FileExists, ~<previewPath>~ ) )
+		{
+			fHtmlView( Execute, ~SetOrderItemSRC( '/Render/OrderItem.kpl?OrderID=<fOrderID>&ID=<orderItemID>&Height=1.5',0, 0 )~ );
+		}
+		else
+		{
+			Height = 108;
+			Width = 108;
+			fHtmlView( Execute, ~SetOrderItemSRC( '<$pcon.OrderItem[PreviewPath].CPath>',<Width>, <Height>)~ );
+		}
+	}
+	else
+	{
+		// MaxWidth & MaxHeight are equal to 0.  Preview not available.
+		fHtmlView( Execute, ~SetOrderItemSRC( '/Render/OrderItem.kpl?OrderID=<fOrderID>&ID=<orderItemID>&Height=1.5',0, 0 )~ );
+		maxWidth = TR( Composition, NotAvailable );
+		maxHeight = TR( Composition, NotAvailable );
+	}
+	
+	// Fill in the information fields as well
+//	fHtmlView( SetInnerText, ~infoOrderID~,0, ~<$pcon.OrderItem[OrderID]>~ );
+//	fHtmlView( SetInnerText, ~infoSequence~,0, ~<$pcon.OrderItem[Sequence]>~ );
+//	fHtmlView( SetInnerText, ~infoProductID~,0, ~<$pcon.OrderItem[ProductID]>~ );
+//	fHtmlView( SetInnerText, ~infoStatus~,0, ~<$pcon.OrderItem[Status]>~ );
+//	fHtmlView( SetInnerText, ~infoWidth~,0, ~<maxWidth>~ );
+//	fHtmlView( SetInnerText, ~infoHeight~,0, ~<maxHeight>~ );
+
+}
+
+NUMERIC Comp::DeleteSelectedOrderItems()
+{
+	
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~ShowOrderItem(): Unable to connect to the database. <theErr>~ );
+		Warning( TR( Standard, DBConnectNo ) );
+		return;
+	}
+	
+	// Get the order items selected
+	if ( !ImagesOrderItemSplitter(GetViewOfWindow,ViewOrderItems,aView ) )
+	{
+		Log( Session, ~Comp::DeleteSelectedOrderItems(): Unable to get Orderitems View~ );
+		Warning( TR( Composition, UnableToGetView ) );
+		return;
+	}
+
+	if ( !aView( GetSelected,SelectedOrderItems ) )
+	{ 
+		return Warning( TR( Composition, AltPreview ) );
+	}
+
+	while ( SelectedOrderItems( GetNext, OrderItem ) )
+	{
+
+		Path = ~<$con.OrderItem[PreviewPath]>~;
+		if ( !IsNull( ~<Path>~ ))
+		{
+			if ( !BroadcastMessageToAllViews( CanReleaseImage,~<Path>~ ) )
+			{ 
+				Warning( TR( Composition, UnableToDelete, ~<Path>~ ) );
+				return;
+			}
+
+			MessagePump();
+
+			if ( !BroadcastMessageToAllViews( ReleaseImage,~<Path>~ ) )		
+			{ 
+				Warning( TR( Composition, UnableToDelete, ~<Path>~ ) );
+				return;
+			}
+
+			MessagePump();
+
+			Files( ChMod,~<Path>~,ReadWrite );
+
+			if ( !Files( Delete,~<Path>~ ) )
+			{ 
+				err = GetLastErrorMsg();
+				Log( Session, ~Comp::RemoveOrderItem: Could not delete <Path>.  <err>~ );
+				Warning( TR( Composition, UnableToRemove, ~<Path>~ ) );
+			}
+		}
+
+		Key	= ~ItemOrderID = '<$con.OrderItem[OrderID]>' AND ItemID = <$con.OrderItem[ID]>~;
+
+		cmd = ~DELETE FROM OrderItemImages WHERE <Key>~;
+
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Log( Session, ~Unable to remove order item from Database: <cmd>, <theErr>~ );
+			Warning( TR( Composition, UnableToRemoveDB ) );
+			return; 
+		}
+
+		Key	= ~OrderID = '<$con.OrderItem[OrderID]>' AND ID = <$con.OrderItem[ID]>~;
+
+		cmd = ~DELETE FROM OrderItems WHERE <Key>~;
+
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Log( Session, ~Unable to remove order item from Database: <cmd>, <theErr>~ );
+			Warning( TR( Composition, UnableToRemoveDB ) );
+			return;
+		}
+
+		Files( ChMod,~<$con.OrderItem[JobPath]>~,ReadWrite );
+
+		if ( !Files( Delete,~<$con.OrderItem[JobPath]>~ ) )
+		{ 
+			Log( Session, ~Could not delete <$con.OrderItem[JobPath]>.  <$Func.GetLastErrorMsg()>~ );
+			Warning( TR( Composition, UnableToRemove, ~<$con.OrderItem[JobPath]>~ ) );
+		}
+
+		// Update the count of order items
+		CountQuery = ~Select Count(*) from OrderItems Where ProductID = '<$con.OrderItem[ProductID]>' AND OrderID = '<fOrderID>'~;
+		dBase( GetValuesFor,~<CountQuery>~,numRecs );
+
+		// If the order item is open in the layoutandjobview, close it.
+		if ( SimilarStr( ~<fOrderItemID>~, ~<$con.OrderItem[ID]>~ ) )
+		{
+			if (!ViewProduct( ReplaceLayoutOrJob,~~ ))
+			{
+				return 0;
+			}
+
+			// the render list is no longer valid
+			// forgets the render list
+			OnReplaceLayoutOrJob(~~);	// tells the script to reset itself;
+			fOrderItemID = ~~;
+		}
+
+		// Send a message to the edit order item window in the case that it is open and the order item
+		// we are removing is on the screen.
+		Action = STR ( EditOrderItemWin "AlwaysCloseOrderItem( ~<$con.OrderItem[ID]>~ );" );
+		PerformDocActions( Action );
+	}
+
+	aView(RefreshView);
+	return TRUE;
+}
+
+
+VOID Comp::RemoveOrderItem( ID, GrandParentID )
+{
+
+// Feedback that we shouldn't ask this in a production workflow.  Especially when many
+// are being removed.
+//	if ( MessageBox( TR( Composition, ReallyRemove ), YESNO ) == NO )
+//	{
+//		return;
+//	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~ShowOrderItem(): Unable to connect to the database. <theErr>~ );
+		Warning( TR( Standard, DBConnectNo ) );
+		return;
+	}
+	
+	GetTokens( ~<ID>~, ~ID~, orderItemID );
+	Query = ~Select * From OrderItems Where ID = <orderItemID> AND OrderID = '<fOrderId>'~;
+	
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		return;
+	}
+	
+	List( GetNext, OrderItem );
+	
+	Path = ~<$pcon.OrderItem[JobPath].Path>\Preview\<$pcon.OrderItem[JobPath].Filename>.jpg~;
+	if ( ~<Path>~ != ~~ )
+	{
+		if ( !BroadcastMessageToAllViews( CanReleaseImage,~<Path>~ ) )
+		{ 
+			Warning( TR( Composition, UnableToDelete, ~<Path>~ ) );
+			return;
+		}
+
+		MessagePump();
+
+		if ( !BroadcastMessageToAllViews( ReleaseImage,~<Path>~ ) )		
+		{ 
+			Warning( TR( Composition, UnableToDelete, ~<Path>~ ) );
+			return;
+		}
+
+		MessagePump();
+
+		Files( ChMod,~<Path>~,ReadWrite );
+
+		if ( !Files( Delete,~<Path>~ ) )
+		{ 
+			err = GetLastErrorMsg();
+			Log( Session, ~Comp::RemoveOrderItem: Could not delete <Path>.  <err>~ );
+			Warning( TR( Composition, UnableToRemove, ~<Path>~ ) );
+		}
+	}
+
+	Key	= ~ItemOrderID = '<$pcon.OrderItem[OrderID]>' AND ItemID = <$pcon.OrderItem[ID]>~;
+
+	cmd = ~DELETE FROM OrderItemImages WHERE <Key>~;
+
+	if ( !dBase( CMD,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~Unable to remove order item from Database: <cmd>, <theErr>~ );
+		Warning( TR( Composition, UnableToRemoveDB ) );
+		return; 
+	}
+
+	Key	= ~OrderID = '<$pcon.OrderItem[OrderID]>' AND ID = <$pcon.OrderItem[ID]>~;
+
+	cmd = ~DELETE FROM OrderItems WHERE <Key>~;
+
+	if ( !dBase( CMD,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~Unable to remove order item from Database: <cmd>, <theErr>~ );
+		Warning( TR( Composition, UnableToRemoveDB ) );
+		return;
+	}
+
+	Files( ChMod,~<$pcon.OrderItem[JobPath]>~,ReadWrite );
+
+	if ( !Files( Delete,~<$pcon.OrderItem[JobPath]>~ ) )
+	{ 
+		Log( Session, ~Could not delete <$pcon.OrderItem[JobPath]>.  <$Func.GetLastErrorMsg()>~ );
+		Warning( TR( Composition, UnableToRemove, ~<$pcon.OrderItem[JobPath]>~ ) );
+	}
+
+	// Update the count of order items
+	CountQuery = ~Select Count(*) from OrderItems Where ProductID = '<$pcon.OrderItem[ProductID]>' AND OrderID = '<fOrderID>'~;
+	dBase( GetValuesFor,~<CountQuery>~,numRecs );
+	GetTokens( ~<GrandParentID>~, ~OC~, orderItemCount );
+	fHtmlView( SetInnerText, ~orderitemcount<orderItemCount>~,0,~<numRecs> order items attached~ );	
+	
+	// Refresh View
+	GetViewByName( ViewOrderItems );
+	fHtmlView( Execute, ~RemoveOrderItemDiv( '<ID>' )~ );
+	
+	// Hide order item preview.
+	fHtmlView( Execute, ~HideID( GetElement('oithumbnailandinfo'),'hidden' )~ );
+	
+	// Send a message to the edit order item window in the case that it is open and the order item
+	// we are removing is on the screen.
+	Action = STR ( EditOrderItemWin "AlwaysCloseOrderItem( ~<orderItemID>~ );" );
+	PerformDocActions( Action );
+}	
+	
+VOID Comp::UpdateQuantity( Quantity )
+{
+	if ( IsNull( ~<Quantity>~ ) )
+	{
+		Warning( TR(Composition,QuantityCannotBeNull) );
+		if ( GetViewByName( ViewData ) )
+		{
+			fHtmlView( Set, Quantity, 0, value, 1 );
+		}
+		Quantity = 1;
+	}
+
+	if ( <Quantity> >= 0 )
+	{
+		if ( !Ado( dBase,Connect ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Log( Session, ~UpdateQuantity(): Unable to connect to the database. <theErr>~ );
+			Warning( TR( Standard, DBConnectNo ) );
+			return;
+		}
+		
+		if ( !ViewOrderItems( GetSelected, SelectedOrderItems ))
+		{
+			return;
+		}
+
+		if ( SelectedOrderItems( ChildCount ) == 0 )
+		{
+			return;
+		}
+
+		while ( SelectedOrderItems( GetNext, OrderItem ))
+		{
+
+			Cmd = ~Update OrderItems Set Quantity = '<Quantity>' Where ID = <$con.OrderItem[ID]> AND OrderID = '<fOrderID>'~;
+
+			if ( !dBase( Cmd,~<Cmd>~ ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				Log( Session, ~Update Failed: <Cmd>. <theErr>~ );
+				Warning( TR( Composition, DBUpdateFailed) );
+				return;
+			}
+
+			if ( OrderItem( GetThumbNailInfo,ThumbNail ) )
+			{
+				ThumbNail( Set,Info2,~<$Con.OrderItem[ID]> Q<Quantity> <$Con.OrderItem[Remake].IndexValue__R> <$Con.OrderItem[ProductID]>~ );
+				if ( ThumbNail( GetData,Data ) )
+				{
+					Data( Set,Quantity,<Quantity> );
+				}
+
+				View( RedrawThumbNail,ThumbNail,FALSE );
+			}
+		}
+		ViewOrderItems( RefreshView );
+	}
+}
+	
+VOID Comp::SelectedRow()
+{
+
+	if ( !GetViewByName( ViewOrderItems ) )
+	{
+		return;
+	}
+	
+	Query = ~Select Path from OrderItemImages,Images Where OrderItemImages.OrderID = '<fOrderID>' AND OrderItemID = '<orderItemID>' AND OrderItemImages.Roll = Images.Roll AND OrderItemImages.Frame = Images.Frame~;
+	imagesList = ~~;
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		return Warning( TR( Standard, UnabletoQueryDB ) );
+	}
+	
+	while ( List( GetNext, Category ) )
+	{
+		if ( ~<imagesList>~ == ~~ )
+		{
+			imagesList = ~<$pcon.List[]>~;
+		}
+		else
+		{
+			imagesList = ~<imagesList>~ + ~, <$pcon.List[]>~;
+		}
+	}
+	
+	
+	fHtmlView( Set, ~imageNames~, 0, value, <imagesList> );
+}
+	
+VOID Comp::EnableOrderButton()
+{
+	GetViewByName( ViewData );
+	fHtmlView( Execute,~Enable(GetElement('orderButton'))~ );
+}	
+	
+VOID Comp::SetAdvancedMode( AdvancedMode )
+{
+	SetWorkStationSettings( ~Composition_<$App.Instance>~, ~AdvancedMode~, ~<AdvancedMode>~, TRUE );
+		
+	if ( !GetViewByName( ViewData ) )
+	{
+		return;
+	}
+	
+	if ( <AdvancedMode> )
+	{
+		ChooseProductWnd( SetValues, BackgroundColor, ~190,190,190~, AllowNoViews, 1 );
+		Query = ~Select * From Products Where Style = 0 Order By Category,Sequence~;
+		
+		// Tell the Separator view to show the Products Label if Advance mode is on
+		fHtmlView( Execute, ~MakeVisible( GetElement('productLabel') )~ );
+		fHtmlView( SetInnerHtml, ~productCheckBoxLabel~, 0, TR( Composition, AdvancedMode ) );
+		//Tooltip = TR( Composition, ImageToolTipAdvanced );
+	}
+	else
+	{
+		ChooseProductWnd( SetValues, BackgroundColor, ~224,224,224~, AllowNoViews, 1 );
+		Query = ~~;
+		
+		// Tell the Separator view to hide the Products Label if Advance mode is turning off
+		fHtmlView( Execute, ~HideElement( GetElement('productLabel') )~ );
+		fHtmlView( SetInnerHtml, ~productCheckBoxLabel~, 0, TR( Composition, AdvancedMode ) );
+		//Tooltip = TR( Composition, ImageToolTip, ~<$TR.Composition(OrderButton)>~ );
+	}
+	GetCategories( ~<Query>~ );
+
+	// Modify the tooltip on the images view.
+	Tooltip = TR( Composition, ImageToolTipAdvanced );
+	ImagesThumbNailImage( SetValue, Info5, ~<Tooltip>~ );
+//	ShowImagesForOrder();
+}	
+	
+NUMERIC Comp::GetAdvancedMode()
+{
+	
+	if ( <NumVariableParameters> == 1 )
+	{
+		fromThePage = <P1>;
+	}	
+	else
+	{
+		fromThePage = 0;
+	}
+	
+	Enabled = FALSE;
+	advancedMode = ~~;
+	GetWorkStationSettings( ~Composition_<$App.Instance>~, ~AdvancedMode~, advancedMode, Enabled );
+	
+	if ( IsNULL( ~<advancedMode>~ ) )
+	{
+		SetWorkstationSettings( ~DWSComposition_<$App.Instance>~,~AdvancedMode~,~0~,TRUE );
+	}
+
+	if ( SimilarStr( ~<advancedMode>~,~false~ ) || !<Enabled> )
+	{ 
+		Checked = 0;
+	}
+	else
+	{
+		Checked = 1;
+	}
+
+	if ( <fromThePage> && <Checked> )
+	{
+		if ( !GetViewByName( ViewData ) )
+		{
+			Log( Session, ~GetAdvancedMode(): Unable to get the Data View, thus can't update user interface.~ );
+		}
+		fHtmlView( Execute, ~SetAdvModeCheckBox( <Checked> )~ );
+	}
+
+	return <Checked>;
+}
+	
+NUMERIC Comp::CreateQuickOrderItems(bUserSize,UserWidth,UserHeight,ItemQuantity,PrinterQueue )
+{  
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~LoadCategories(): Unable to connect to the database. <theError>~ );
+		Warning( TR( Standard, DBConnectNo ) );
+		return FALSE;
+	}    
+	
+	OrderID = ~<fOrderID>~ ;
+	
+	//check to see if images are selected	 
+	if ( !ViewImages( GETSELECTED,SelectedImages ) )
+	{ 
+		GenCon( SelectedImages,Is,ViewImages(GetCopyOf) );
+	}
+
+	ImagesCount = SelectedImages( ChildCount );
+
+	if ( <ImagesCount> <= 0 )
+	{
+		return Warning( TR( Composition, NoImagesSelected ) );
+	} 
+		
+	WaitCursor( Begin );   
+	
+	//using predefined layout file instead of user designed product
+	LayoutPath = ~<$App.ShareDirectory>\Layouts\BlankLayout.txt~;
+	ProductID = ~QC~; //quick composition product id
+	Quantity = ~<ItemQuantity>~; 
+
+	if ( !Document( Jobs,ParseFile,~<LayoutPath>~ ) )		//Parsing job file
+	{
+		Log( Session, ~An error occured while parsing the job at <LayoutPath>~ );
+		WaitCursor( End );
+		Warning( TR( Composition, ParseError, ~<LayoutPath>~ ) );
+		return FALSE;
+	}
+
+	if ( !Jobs( GetRenderList,0,theRenderList ) )
+	{ 
+		WaitCursor( End );
+		Log( Session, ~There was no render list for <LayoutPath>~ );
+		return Warning( TR( Composition, SelectAgain ) );
+	}   
+
+	theRenderList( GetMainNode, mainNode);
+	mainNode( Set, ~Ilocation:~,~0 0 1 1~ );
+                   
+	if ( !theRenderList( GetNodeByID,10000,0,TheNode ) )		// DOES THE DESIRED IMAGE NODE EXIST?
+	{
+		theRenderList( AddNode,10000,~IC:~,TheNode );
+		TheNode( Set, ~Ilocation:~,~0 0 1 1~ );
+	}
+
+	if ( <bUserSize> )
+	{
+		mainNode( Set, ~Ilocation:~,~0 0 <UserWidth> <UserHeight>~ );
+		TheNode( Set, ~Ilocation:~,~0 0 <UserWidth> <UserHeight>~ );
+	}
+	else	// use the dimensions of the image
+	{
+		if ( theRenderList( GetNodeByName,~AutoSizeToImage:~,0,AutoSizeToImage ) )	
+		{
+			//AutoSizeToImage( Set,~AutoSize:~,10000 );
+		}
+	}
+
+	if ( !IsNull(~<PrinterQueue>~) )
+	{
+		if ( !PGenConList( QueueList,Connect,Query,~Select PrinterModel From QueueDefinition Where QueueName = '<PrinterQueue>'~) )
+		{
+			return Warning( TR( Standard, UnableToQueryDB ) );
+		}
+		
+		if ( !QueueList( GetNext, FoundQueue) )
+		{
+			Warning( TR( Composition, UnusedQueue ) );
+		}
+		
+		if ( !PGenConList( PrinterList,Connect,Query,~Select PrinterName From Printers Where QueueName = '<PrinterQueue>'~) )
+		{
+			return Warning( TR( Standard, UnableToQueryDB ) );
+		}
+		
+		if ( !PrinterList( GetNext, FoundPrinter) )
+		{
+			Warning( TR( Composition, UnusedQueue ) );
+		}
+		
+		QueueModel = ~<$pcon.FoundQueue[PrinterModel]>~;
+		
+		Model = ~~; IntID= ~~;
+		if ( SimilarStr( ~<QueueModel>~, ~Disk~ ) )
+		{
+			Model = ~Disk~; IntID = ~-9002~;
+			if ( theRenderList( GetNodeByName,~Saveimage:~,0,SaveImageNode ) )	
+			{
+				SaveImageNode( Set,~Queuename:~,~<PrinterQueue>~ );
+			}
+		}
+		else if ( SimilarStr( ~<QueueModel>~, ~Kodak LED~ ) )
+		{
+			Model = ~LED~; IntID = ~-9004~;
+			if ( theRenderList( GetNodeByName,~Outputtoled:~,0,SaveLEDNode ) )	
+			{
+				SaveLEDNode( Set,~Queuename:~,~<PrinterQueue>~ );
+			}
+		}
+		else if ( SimilarStr( ~<QueueModel>~, ~Windows Printer~ ) )
+		{
+			Model = ~Windows~; IntID = ~-9030~;
+			if ( theRenderList( GetNodeByName,~Outputtolaserprinter:~,0,SaveLaserNode ) )	
+			{
+				SaveLaserNode( Set,~Queuename:~,~<PrinterQueue>~ );
+			}
+		}
+		else if ( SimilarStr( ~<QueueModel>~, ~Kodak RP30~ ) )
+		{
+			Model = ~Disk~; IntID = ~-9002~;
+			if ( theRenderList( GetNodeByName,~Saveimage:~,0,SaveImageNode ) )	
+			{
+				SaveImageNode( Set,~Rp30:~,1 );
+				SaveImageNode( Set,~Queuename:~,~<PrinterQueue>~ );
+			}
+		}
+		else
+		{
+			Model = ~Disk~; IntID = ~-9002~;
+		}
+		
+		theRenderList(LogOperation,1,~EnableDevice~,~<Enable<Model>>~,0);
+
+		theRenderList( EnableOutputDevice,~<IntID>~ );
+
+		theRenderList(LogOperation,0,~EnableDevice~,~<Enable<Model>>~,0);
+	}
+	else
+	{
+		Warning( TR( Composition, InvalidQueue ) );
+	}
+	
+	pos=0;   
+	while ( SelectedImages( GetFirst,Image ) )
+	{
+		if ( !<bUserSize> )
+		{
+			Image( Get, Width,ImageWidth); 
+			Image( Get, Length,ImageHeight); 
+			
+			if ( <ImageWidth> < 250 || <ImageHeight> < 250 )
+			{
+				MessageBox( TR( Composition, WidthHeightTooShort ) );
+			}
+			
+			//convert pixel into inches
+			ImageWidth= <ImageWidth>/250;
+			ImageHeight= <ImageHeight>/250;  
+				
+			Image( Get, RotateFromDisk, rotate);
+			if ( (<rotate>==90) || (<rotate>==270) )
+			{	//change the width and height
+				t=<ImageWidth>;
+				ImageWidth=<ImageHeight>;
+				ImageHeight=<t>;
+			}
+			location= ~0 0 ~+~<ImageWidth> ~+~ <ImageHeight> ~;
+			mainNode( Set, ~Ilocation:~, ~<location>~ );
+			TheNode( Set, ~Ilocation:~, ~<location>~ );
+		}
+		
+		TheNode(Set,~IFile:~,~<$con.Image[Path]>~); 
+		
+		OrderItemID = -1;
+
+		OrderItemPreviewPath = MakePreviewPathFromPath( ~<JobPath>~,FALSE ); 
+		
+		BroadcastMessageToAllViews( ReleaseCachedImageChain,~<OrderItemPreviewPath>~ );
+				
+		OrderItemID = WriteOrderItemFromRenderList( dbase,~<OrderID>~,theRenderList,~<ProductID>~,~<JobPath>~,~<OrderItemID>~,~<Quantity>~,~~);
+		
+		if ( !<OrderItemID> )
+		{    
+			Warning( TR( Composition,QuickCompositionFailed) );
+			WaitCursor( End );
+			return FALSE;
+		}
+		 
+		// Add order item without updating the entire list.
+		AddOrderItem( ~<OrderID>~, ~<OrderItemID>~ );
+
+		++pos; 
+
+		SelectedImages(GetAt,0,selectedImage);
+		SelectedImages(Delete,selectedImage);
+	}
+	
+	WaitCursor( End );
+
+	//PopulateOrderItemsTable();
+	
+	return TRUE;
+	
+}
+
+
+
+	
+NUMERIC Comp::HandleDrop( FromOrderButton )
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~LoadCategories(): Unable to connect to the database. <theError>~ );
+		Warning( TR( Standard, DBConnectNo ) );
+		return FALSE;
+	}
+
+	// Copy the products selected
+//	HandleOrderImageDrop( &SelectedImages,&SrcView,&DstView,DropLocation )
+
+	OrderID = ~<fOrderID>~ ;   
+	
+	if ( <FromOrderButton> )
+	{
+		// Check to see if products are selected
+		if ( !ChooseProductWnd( GetActiveViewOfWindow,DstView ) )
+		{ return Warning( ~There was no active view~ ); }
+	}
+	else
+	{
+		if ( !GenCon( DragDropInfo,GetDropInfo ) )
+			{ return Warning( TR( Composition, NoDragDropInfo ) ); }
+
+		if ( !GenCon( DstView,Is,~<$CON.DragDropInfo[DstView]>~ ) ) 
+			{ GenCon( DstView,GetActiveView ); }
+
+		if ( ~<$con.DstView[ViewDataType]>~ != Products )
+		{ 
+			Log( Session, ~The DstView contains <$con.DstView[ViewDataType]> instead of products~ );
+			Warning( TR( Composition, WrongDropType, ~<$con.DstView[ViewDataType]>~ ) );
+			return FALSE;
+		}
+	}
+
+	if ( !ViewImages( GETSELECTED,SelectedImages ) )
+	{ 
+		GenCon( SelectedImages,Is,ViewImages(GetCopyOf) );
+	}
+
+	if ( !DstView( GetSelected,SelectedProducts ) )
+	{
+		MessageBox( TR( Composition, NoProductView ) );
+		return FALSE;
+	}
+
+	Count = SelectedProducts( ChildCount );
+
+	if ( <Count> > 1 )
+	{
+		
+	}
+	else if ( <Count> <= 0 )
+	{
+		return Warning( TR( Composition, FirstSelectItem ) );
+	}
+
+	ImagesCount = SelectedImages( ChildCount );
+
+	if ( <ImagesCount> <= 0 )
+		{ return Warning( TR( Composition, NoImagesSelected ) ); }
+
+	WaitCursor( Begin );
+
+	pos = 0;
+	isPackage = FALSE;
+
+	while ( SelectedProducts( GetNext,Product ) )	// PARSE THE PRODUCTS
+	{
+		if ( Product( GetNumeric,Package ) )
+		{
+			isPackage = TRUE;
+			Query = ~Select * From Packages Where PackageID = '<$con.Product[ID]>' Order By PackageID,Sequence~;
+
+			if ( !PGenConList( PackageList,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+				return -1;
+			}
+
+			while ( PackageList( GetNext,PackageProduct ) )
+			{
+
+				Quantity<pos> = ~<$pcon.PackageProduct[Quantity]>~;
+				ProductID<pos> = ~<$pcon.PackageProduct[ProductID]>~;
+				TargetNode<pos> = ~<$pcon.PackageProduct[TargetNode]>~;
+
+				if ( !dBase( GetValuesFor,~Select ProductType,ProductLayoutPath,PreviewPath From Products Where ID = '<ProductID<pos>>'~,ProductType<pos>,LayoutPath<pos>,PreviewPath<pos> ) )
+				{
+					dBase( GetErrorDescription,theErr );
+					Warning( ~Error getting the layout path for product <ProductID>: <theErr>~ );
+					return -1;
+				}
+
+				if ( !Document( Jobs<pos>,ParseFile,~<LayoutPath<pos>>~ ) )
+				{
+					Log( Session, ~An error occured while parsing the job at <LayoutPath<pos>>~ );
+					Warning( TR( Composition, ParseError, ~<LayoutPath<pos>>~ ) );
+					WaitCursor( End );
+					return FALSE;
+				}
+
+				Index = 0;
+
+				if ( !Jobs<pos>( GetRenderList,<Index++>,RenderList<pos> ) )
+				{ 
+					WaitCursor( End );
+					Log( Session, ~There was no render list for <JobPath<pos>>~ );
+					return Warning( TR( Composition, SelectAgain ) );
+				}
+
+				if ( RenderList<pos>( GetNodeByID,-9032,0,TheNode ) )  // Check for PackageNode
+				{
+					TheNode( Set, ~PackageNode:~, ~<TargetNode<pos>>~ );
+					ForgetLocal( TheNode );
+				}
+				else // Add the node
+				{
+					RenderList<pos>( AddNode, -9032, ~PackageNode:~, PackageNode );
+					PackageNode( Set, ~PackageNode:~, ~<TargetNode<pos>>~ );
+					ForgetLocal( PackageNode );
+				}
+
+				RenderList<pos>( GetNodeByID,-9032,0,MattNode );
+
+				if ( !CheckForQueue( RenderList<pos>, ~<ProductID<pos>>~ ) )
+				{
+					return FALSE;
+				}
+
+				++pos;
+			}
+
+		}
+		else
+		{
+			
+			LayoutPath<pos> = ~<$con.Product[ProductLayoutPath]>~;
+			ProductID<pos> = ~<$con.Product[ID]>~;
+			Quantity<pos> = 1;
+
+			if ( !Document( Jobs<pos>,ParseFile,~<LayoutPath<pos>>~ ) )
+			{
+				Log( Session, ~An error occured while parsing the job at <LayoutPath<pos>>~ );
+				Warning( TR( Composition, ParseError, ~<LayoutPath<pos>>~ ) );
+				WaitCursor( End );
+				return FALSE;
+			}
+
+			Index = 0;
+
+			if ( !Jobs<pos>( GetRenderList,<Index++>,RenderList<pos> ) )
+			{ 
+				WaitCursor( End );
+				Log( Session, ~There was no render list for <JobPath<pos>>~ );
+				return Warning( TR( Composition, SelectAgain ) );
+			}
+
+			if ( !CheckForQueue( RenderList<pos>, ~<ProductID<pos>>~ ) )
+			{
+				return FALSE;
+			}
+
+			++pos;
+		}
+
+	}
+
+
+	MaxPos = <pos>;
+	pos = Count = 0;
+
+	WaitCursor( Begin );
+
+	if ( <MaxPos> > 1 || <isPackage> )	// DO WE HAVE MORE THAN ONE PRODUCT SELECTED?
+	{
+		
+		while ( SelectedImages( GetNext,Image ) )
+		{
+			pos = 0;
+
+			ForgetLocal( TheNode );
+
+			while ( <pos> < <MaxPos> )
+			{
+				if ( RenderList<pos>( GetNodeByName,~PackageNode:~,0,PackageNode ) )
+				{
+					TargetNode = PackageNode(GetNumeric,~PackageNode:~);
+
+					if ( <TargetNode> == 0  )
+					{
+						RenderList<pos>( GetMainNode,theNode );
+					}
+					else
+					{
+						RenderList<pos>( GetNodeByID,~<TargetNode>~,0,TheNode );
+					}
+				}
+				else
+				{
+					// otherwise we will have to use the first IPrompt:
+
+					RenderList<pos>( GetNonNullNode,~IPrompt:~,0,TheNode );
+				}
+
+				if ( Defined( TheNode ) )
+				{
+					TheNode( Set,~IFile:~,~<$Con.Image[Path]>~ );
+
+					//OrderItemID = (<Count> >= <MaxPos>) ? ~-1~ : ~<ID<pos>>~;
+					OrderItemID = -1;
+					OrderItemPreviewPath = MakePreviewPathFromPath( ~<JobPath<pos>>~,FALSE );
+					BroadcastMessageToAllViews( ReleaseCachedImageChain,~<OrderItemPreviewPath>~ );
+					OrderItemID = WriteOrderItemFromRenderList( dbase,~<OrderID>~,RenderList<pos>,~<ProductID<pos>>~,~<JobPath<pos>>~,~<OrderItemID>~,<Quantity<pos>>,~~);
+					if ( !<OrderItemID>  )
+					{ 
+						WaitCursor( End );
+						return FALSE;
+					}
+
+					// Add order item without updating the entire list.
+					AddOrderItem( ~<OrderID>~, ~<OrderItemID>~ );
+
+					++Count;
+
+					ForgetLocal( TheNode );
+				}
+
+				++pos;
+			}
+		}
+	}
+	else
+	{
+		while ( <pos> < <MaxPos> )
+		{
+
+			while ( (FillCount = RenderList<pos>( Fill,SelectedImages )) > 0 )
+			{
+				//OrderItemID = $Count ? ~-1~ : ~<ID<pos>>~;
+				OrderItemID = -1;
+
+				OrderItemPreviewPath = MakePreviewPathFromPath( ~<JobPath<pos>>~,FALSE );
+				BroadcastMessageToAllViews( ReleaseCachedImageChain,~<OrderItemPreviewPath>~ );
+				
+				OrderItemID = WriteOrderItemFromRenderList( dbase,~<OrderID>~,RenderList<pos>,~<ProductID<pos>>~,~<JobPath<pos>>~,~<OrderItemID>~,<Quantity<pos>>,~~);
+				
+				if ( !<OrderItemID> )
+				{ 
+					WaitCursor( End );
+					return FALSE;
+				}
+				
+				// Add order item without updating the entire list.
+				AddOrderItem( ~<OrderID>~, ~<OrderItemID>~ );
+
+				++Count;
+			}
+			++pos;
+		}
+	}
+
+	WaitCursor( End );
+
+	// Update the Order View
+	//PopulateOrderItemsTable();
+
+	return TRUE;
+}	
+	
+// WriteOrderItemFromRenderList must be called with NextOrderItem < 0, otherwise the call to AddOrderItemToDataBase will get a syntax error
+// because newSequence will be undefined
+NUMERIC Comp::WriteOrderItemFromRenderList( &dBase,OrderID,&RenderList,ProductID,SrcJobPath,NextOrderItem,Qty,ItemType )
+{
+	JobPath = ~<SrcJobPath>~;
+	
+	NewItem = $NextOrderItem < 0;
+	if ( <NewItem> )
+	{
+		NextOrderItem=BaseOrderItem::CalcNext( dbase,~<OrderID>~,ID );
+		newSequence=BaseOrderItem::CalcNext( dbase,~<OrderID>~,Sequence );
+		JobPath = CreateJobPath( ~<OrderID>~,<NextOrderItem> );
+	}
+
+	DoStatusBarText( ~Filling Item <NextOrderItem> for Order <OrderID>~ );
+
+	RenderList( SetConnection, dBase );
+	RenderList( SetOrderID, ~<OrderID>~ );
+	RenderList( SetItemID, ~<NextOrderItem>~ );
+
+	OrderItemPreviewPath = MakePreviewPathFromPath( ~<JobPath>~,TRUE );
+	Files( Delete,~<OrderItemPreviewPath>~ );
+	
+	RenderList( CreatePreviewIcon, ~<JobPath>~ );
+
+	if ( !AddOrderItemToDataBase(dBase,<NextOrderItem>,~<OrderID>~,~<ProductID>~,<Qty>,<newSequence>,~<JobPath>~,~<ItemType>~,~~ ) )	
+	{
+		Files( Delete,~<JobPath>~ );	// ON FAILURE, REMOVE THE JOB
+		return FALSE;
+	}
+
+	RenderList( SetFileType,~Job~ );
+
+	if ( !RenderList( WriteJob,~<JobPath>~ ) )
+	{ return DoWarning( ~Failed to write <JobPath>~ ); }
+
+	if (Defined(OpenLayoutAfterCreating))
+	{
+		Open( Any,~<JobPath>~ );
+	}
+
+	// Tell the Print Preview (PrintSequenceWin.txt to update the view if it is open)
+	//Action = STR ( PrintingSequenceWin "AddOrderItem( ~<OrderID>~, <NextOrderItem> );" );
+	//PerformDocActions( Action );
+
+	return <NextOrderItem>;
+}	
+	
+NUMERIC Comp::CheckForQueue( &RenderList, ProductID )
+{
+	status = RenderList( DoesQueueExist );
+	if ( <status> == -1 )
+	{
+		if ( Authorized( ~CLOEncrypt~ ) )
+		{
+			Message = TR(Composition, NoOutputDevice, ~<ProductID>~ ) + TR(Composition, LaunchEditProduct ); 
+			if ( MessageBox(  ~<Message>~, YESNO ) == YES )
+			{
+				Action = STR ( EditProductWin OpenOnce EditProductWin "InitStatic(~<ProductID>~)" );
+				PerformDocActions( Action );
+			}
+		}
+		else
+		{
+			if ( CheckPrivilege( ~ProductManagement~ ) )
+			{
+				Message = TR(Composition, NoOutputDevice, ~<ProductID>~ ) + TR(Composition, LaunchEditProduct ); 
+				if ( MessageBox(  ~<Message>~, YESNO ) == YES )
+				{
+					Action = STR ( EditProductWin OpenOnce EditProductWin "InitStatic(~<ProductID>~)" );
+					PerformDocActions( Action );
+				}
+			}
+			else
+			{
+				Message = TR(Composition, NoOutputDeviceNoPrivilege, ~<ProductID>~, ~<$App.UserName>~ );
+				Warning( ~<Message>~ );
+			}
+		}
+		
+		return FALSE;
+	}
+	else if ( <status> == -2 )
+	{
+		if ( Authorized( ~CLOEncrypt~ ) )
+		{
+			Message = TR(Composition, NoQueue, ~<ProductID>~ ) + TR(Composition, LaunchEditProduct );
+			if ( MessageBox( ~<Message>~, YESNO ) == YES )
+			{
+				Action = STR ( EditProductWin OpenOnce EditProductWin "InitStatic(~<ProductID>~)" );
+				PerformDocActions( Action );
+			}
+		}
+		else
+		{
+			if ( CheckPrivilege( ~ProductManagement~ ) )
+			{
+				Message = TR(Composition, NoQueue, ~<ProductID>~ ) + TR(Composition, LaunchEditProduct );
+				if ( MessageBox( ~<Message>~, YESNO ) == YES )
+				{
+					Action = STR ( EditProductWin OpenOnce EditProductWin "InitStatic(~<ProductID>~)" );
+					PerformDocActions( Action );
+				}
+			}
+			else
+			{
+				Message = TR(Composition, NoOutputDeviceNoPrivilege, ~<ProductID>~, ~<$App.UserName>~ );
+				Warning( ~<Message>~ );
+			}
+		}
+
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC Comp::CloseCheck()
+{
+	return CloseLayoutOrJob();
+}
+	
+VOID Comp::OrderItemPrintSeq()
+{
+	// Open the Printing Sequence and Print Submit Gui
+	DocAction(~PrintingSequenceWin OpenOnce PrintingSequenceWin "InitStatic( `<fOrderID>` )"~);
+}
+
+VOID Comp::PrintNow()
+{
+
+	StatusBarText(~~);
+
+	if ( !ImagesOrderItemSplitter(GetViewOfWindow,ViewOrderItems,aView ) )
+	{
+		Log( Session, ~Comp::PrintNow(): Unable to get Orderitems View~ );
+		Warning( TR( Composition, UnableToGetView ) );
+		return;
+	}
+
+	if ( !aView( GetAll,AllOrderItems ) )
+	{ 
+		return;
+	}
+
+	orderItemCount = AllOrderItems( ChildCount );
+
+	if ( <orderItemCount> == 0 )
+	{
+		return;
+	}
+
+	RunOrder( ~<fOrderID>~, AllOrderItems );
+	
+}
+
+VOID Comp::PrintSelected()
+{
+
+	StatusBarText(~~);
+
+	if ( !ImagesOrderItemSplitter(GetViewOfWindow,ViewOrderItems,aView ) )
+	{
+		Log( Session, ~Comp::PrintSelected(): Unable to get Orderitems View~ );
+		Warning( TR( Composition, UnableToGetView ) );
+		return;
+	}
+
+	if ( !aView( GetSelected,SelectedOrderItems ) )
+	{ 
+		return;
+	}
+
+	orderItemCount = SelectedOrderItems( ChildCount );
+
+	if ( <orderItemCount> == 0 )
+	{
+		return;
+	}
+
+	RunOrder( ~<fOrderID>~, SelectedOrderItems );
+	
+}
+
+VOID Comp::OnManualPaperFill()
+{
+
+	return;
+}
+
+VOID Comp::CheckAdvancedMode()
+{
+
+	if ( GetAdvancedMode() )
+	{
+		ChooseProductWnd( SetValues, BackgroundColor, ~190,190,190~, AllowNoViews, 1 );
+		Query = ~Select * From Products Where Style = 0 Order By Category,Sequence~;
+	}
+	else
+	{
+		ChooseProductWnd( SetValues, BackgroundColor, ~224,224,224~, AllowNoViews, 1 );
+		Query = ~~;
+	}
+	
+	GetCategories( ~<Query>~ );
+	
+}
+
+NUMERIC Comp::CheckOrderID( OrderID )
+{
+	ChangeOrderID = TRUE;
+	// Check if OrderID is blank.  It it is, then check for currentOrder
+	if ( IsNull( ~<OrderID>~ ) )
+	{
+		fOrderID = GetCurrentOrder();
+	}
+	else
+	{
+		SetCurrentOrder( ~<OrderID>~ );
+
+		if ( SimilarStr( ~<fOrderID>~, ~<OrderID>~ ) )
+		{
+			ChangeOrderID = FALSE;
+		}
+
+		fOrderID = ~<OrderID>~;
+	}
+	
+	if ( !IsNull( ~<fOrderID>~ ) )
+	{
+		SetWindowTitle( TR( Composition, Title, ~- <fOrderID>~ ) );
+	}
+	else
+	{
+		SetWindowTitle( TR( Composition, Title ) );
+	}
+	
+	if ( GetViewByName( View ) )
+	{
+		fHtmlView( Set,~OrderIdText~,0,value,~<fOrderID>~ );
+	}
+
+	return <ChangeOrderID>;
+}
+
+VOID Comp::SendStatusMsg( Message )
+{
+
+	if ( !GetViewByName( ViewData ) )
+	{
+		return;
+	}
+	
+	fHtmlView( Execute, ~StatusMessage( 'PrintingStatus', '<Message>' )~ );
+}
+
+VOID BuildOrderItemsTable()
+{
+	CompObj.PopulateOrderItemsTable();
+}	
+	
+VOID EnableButtons()
+{
+	CompObj.EnableOrderButton();
+}	
+
+VOID Comp::SetOrderIDFromCurrentID( OrderID )
+{
+	fOrderID = ~<OrderID>~;
+	
+	if ( GetViewByName( View ) )
+	{
+		fHtmlView( Execute, ~HideElement(GetElement('NoIDFound') )~ );
+	}	
+	
+	GetViewByName( View );
+	fHtmlView( Set,~OrderIdText~,0,value,~<OrderID>~ );
+	ShowImagesForOrder();
+	
+	//Update the list of order items.
+	PopulateOrderItemsTable();
+}
+
+VOID AddProductIconToView(ID)
+{
+	CompObj.AddProductIconToView(~<ID>~);
+}
+
+VOID RenameIconInEditWindow(OriginalID,NewID,Description)		// Called from other scripts
+{ 
+	CompObj.RenameIcon(~<OriginalID>~,~<NewID>~,~<Description>~); 
+}
+
+VOID	RemoveProductIcon(ID)		// Called from other scripts
+{ 
+	CompObj.RemoveProductIcon(~<ID>~); 
+}
+
+NUMERIC Comp::AddProductIconToView(ID)
+{
+
+	if ( !ADO( dBase, connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~AddProductIconToView(): Unable to connect to the database. <theErr>~ );
+		Warning( TR( Standard, DBConnectNo ) );
+		return FALSE;
+	}
+
+	Query = ~Select * From Products Where ID = '<ID>'~;
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		Log( Session, ~Query Failed: <Query>. <theErr>~ );
+		return Warning( TR( Standard, UnableToQueryDB ) );
+	}
+
+	if ( !List( GetFirst,Record ) )	
+	{
+		List( GetErrorDescription,0,theErr );
+		Log( Session, ~Failed to find any records for: <Query>. <theErr>~ );
+		return FALSE;
+	}
+	
+	ChooseProductWnd( ChangeView,~<$pcon.Record[Category]>~ );
+
+	if ( ChooseProductWnd( GetActiveViewOfWindow,currentTabView ) )
+	{
+		currentTabView( SelectAll,FALSE );	// Make sure nothing is selected
+	}
+	
+	GenCon( ThumbNailImage,New,DDICImageDef,SetValues,
+			Info1,		~~ ,
+			Info3,		~ID: <ID>     Name: <$pcon.Record[LayoutName]>~,
+			Info2,		~<ID>~,
+			Path,		~<$pcon.Record[PreviewPath]>~,
+			IsDeleted,	FALSE,
+			IsSelected,	TRUE, 
+			DropTypes,	Products,
+			DataType,	Products, 
+			Table,		Products,
+			Key,		~ID = '<ID>'~ ) ;
+
+	ChooseProductWnd( AddThumbNailToExistingView,ThumbNailImage,~<$pcon.Record[Category]>~,Product,Record );
+	
+	return TRUE;
+}
+
+NUMERIC Comp::RemoveProductIcon(ProductID)
+{	
+	index = -1;
+	
+	While ( ChooseProductWnd( GetViewOfWindowByIndex, ~<++index>~, aProductView ) )
+	{
+		if ( aProductView( FindI,Key,~ID = '<ProductID>'~,Where,TheIcon ) )
+		{
+			aProductView( ReleaseImageByGenCon,TheIcon );
+			aProductView( RefreshView );
+			return TRUE;
+		}
+	}
+	
+	return FALSE;
+}
+
+NUMERIC Comp::RenameIcon(OriginalID,NewID,Description)
+{
+	index = -1;
+	
+	While ( ChooseProductWnd( GetViewOfWindowByIndex, ~<++index>~, theView ) )
+	{
+		if ( theView( FindI,Key,~ID = '<OriginalID>'~,position,ThumbNail ) ) 
+		{
+			ThumbNail(GetData,ThumbNailData);
+			ThumbNailData(SetValues,~ID~,~<NewID>~,LayoutName,~<Description>~);
+							
+			ThumbNail( Set,Info2,~<NewID>~);
+			ThumbNail( Set,Info3,~ID: <NewID>     Name: <Description>~);
+			ThumbNail( Set,Key,~ID = '<NewID>'~ );
+			
+			theView( RedrawThumbNail,ThumbNail,TRUE );
+		}
+	}
+	
+	return TRUE;
+}
+
+VOID CurrentOrderUpdate( OrderID )
+{
+	CompObj.SetOrderIDFromCurrentID( ~<OrderID>~ );
+}
+		
+VOID InitDoc( WantStatic,OrderID )
+{
+	if ( !ObjectAlreadyExists( CompObj ) )
+	{
+		Comp( New,CompObj,~<WantStatic>~,~<OrderID>~ );
+		CompObj( Global );
+		CompObj.InitWindow();
+		CompObj.CheckAdvancedMode();
+		
+	}
+
+	if ( CompObj.CheckOrderID( ~<OrderID>~ ) )
+	{
+		CompObj.PopulateOrderItemsTable();
+		CompObj.ShowImagesForOrder();
+		CompObj.Initialize();
+	}
+}
+
+// Entry Points from other scripts
+
+VOID InitStatic( OrderID )		{ InitDoc( TRUE,~<OrderID>~ ); }
+
+VOID Init( OrderID )			{ InitDoc( FALSE,~<OrderID>~ ); }
+
+
+NUMERIC OpenAJob( JobPath,OrderID,OrderItem )
+{
+	if ( ~<JobPath>~ == ~~ )
+		{ return FALSE; }
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == JobView || ~<ViewType>~ == ImageView )
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<JobPath>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+		}
+	}
+
+	if ( ~<JobPath>~ == ~~ )
+		{ return FALSE; }
+
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( ~Could not create document info for <JobPath>~ ); }
+
+	Info( SetValues,OrderID,~<OrderID>~,OrderItemID,~<OrderItem>~ );
+
+	if ( !Document( aJob,Open,~<JobPath>~,Job,~~,Info ) )
+		{ return Warning( ~Could not open <JobPath>~ ); }
+
+	return TRUE;
+}
+
+// Print the order code
+NUMERIC Comp::RunOrder( OrderID, &SelectedOrderItems )
+{
+
+	WaitCursor( Begin );
+
+	itemCount = 0;
+
+	if ( !Ado( dbLocal,ConnectLocal,BeginTransaction ) )
+	{ 
+		ForgetGlobal( SelectedOrderItemsToRun );
+		dbLocal( GetErrorDescription,theErr );
+		Log( Session, ~Unable to connect to local database: <theErr>~);
+		return Warning( TR(Composition,DBLocalFailed ) ); 
+	}
+
+	BatchID = UniquePrintBatchID();
+
+	Priority = 50;  Owner = ~~;
+	ADO( dBase,Connect,GetValuesFor,~Select Owner,Priority From Orders Where ID = '<OrderID>'~,Owner,Priority );
+
+	if ( IsNull(~<Owner>~) )	
+	{ 
+		Owner = ~<$App.UserName>~;
+	}
+
+	if ( IsNull(~<Priority>~) )	
+	{ 
+		Priority = 50;
+	}
+
+	QueueName = ~~;  PrinterName = ~~; PrintStatus = -1;
+
+	//GetUserOverrides( PrintStatus,Priority,QueueName,PrinterName );
+
+	Now = Time();
+
+	while ( SelectedOrderItems( GetNext,OrderItem ) )
+	{
+		OrderItem(GetValue,OrderID,OrderID);
+		OrderItem(GetValue,ID,ID);
+		OrderItem(GetValue,Sequence,Sequence);
+		OrderItem(GetValue,ProductID,ProductID);
+		OrderItem(GetValue,Quantity,Quantity);
+		OrderItem(GetValue,Status,Status);
+		OrderItem(GetValue,Printable,Printable);
+		OrderItem(GetValue,JobPath,JobPath);
+		OrderItem(GetValue,PreviewPath,PreviewPath);
+		OrderItem(GetValue,JobPath,JobPath);
+		OrderItem(GetValue,Subsequence,Subsequence);
+
+		StatusBarText( TR( Composition, ProcessingItem, <ID> ) );
+
+
+		Fields = STR ( BatchID,OrderID,OrderItemID,Sequence,Priority,Owner,ProductID,Quantity,Status,Printable,
+						JobPath,PreviewPath,SubmitDate,QueueName,PrinterName,PrintStatus,Subsequence );
+		Values = STR ( '<BatchID>','<OrderID>',<ID>,<Sequence>,
+						<Priority>,'<Owner>','<ProductID>',
+						<Quantity>,'<Status>',<Printable>,
+						'<JobPath>','<PreviewPath>','<Now>',
+						'<QueueName>','<PrinterName>',<PrintStatus>,<Subsequence> );
+	
+		Cmd = ~Insert Into OrderItemsToQueue(<Fields>) Values(<Values>)~;
+
+		if ( !dbLocal( Cmd,~<Cmd>~ ) )
+		{
+			ForgetGlobal( SelectedOrderItemsToRun );
+			dbLocal( GetErrorDescription,theErr,RollBackTransaction );
+
+			msg = TR( Composition, ManualPaperFillFailed, <ID> );
+			return Warning( ~<msg>~ );
+		}
+
+		++itemCount;
+	}
+
+	if ( !dbLocal( CommitTransaction ) )
+	{ 
+		dbLocal( GetErrorDescription,theErr );
+		Log( Session, ~Error on commit transaction.  <theErr>~ );
+		return Warning( TR( Composition, DBLocalFailed ) ); 
+	}
+
+	SendStatusMsg( TR( Composition, SubmittedPrints, <itemCount> ) );
+
+	Queue( ~<THIS>.ProcessTheOrders()~ );
+
+	return WaitCursor( End );
+
+}
+
+VOID Comp::ProcessTheOrders()
+{
+	if ( Defined( BackgroundOrderProcessor ) )
+	{
+		RemoteJobServer( BackgroundOrderProcessor,ProcessOrders,TRUE );
+	}
+}
+
+// Called when the user drags a layout into the open gray area
+VOID OnReplaceLayout(Path,OrderItemID, LayoutName)
+{
+	<BaseHtmlObjectName>.OnReplaceLayout(~<Path>~,~<OrderItemID>~, ~<LayoutName>~);
+}
+
+NUMERIC  Comp::OnReplaceLayout(Path,OrderItemID, LayoutName)
+{
+	ToggleToolBarButtons( FALSE );
+
+	if ( GetViewByName( ViewToolbar ) )
+	{
+		fHtmlView( set, ComplexEdit, 0, disabled, ~~ );
+		fHtmlView( set, CloseButton, 0, disabled, ~~ );
+		fHtmlView( set, RefreshJob, 0, disabled, ~~ );
+	}
+
+	if (IsNull(~<Path>~))
+	{
+		OnReplaceLayoutOrJob(~~);
+		return TRUE;
+	}
+	
+	if ( !Authorized( ~CLOEncrypt~ ) )
+	{
+		if ( Authorized(DP1) )
+		{
+			if ( !CheckPrivilege( ~ProductManagement~ ) )
+			{
+				return Warning( Translate(UIMessages,NoPermissionOrPriv, ~Product Management~, ~<$App.UserName>~) );
+			}
+		}
+		else if ( !GetUserPermissions( LayoutEditing ) )
+		{
+			return Warning( Translate(UIMessages,NoPermissionOrPriv, ~Layout Editing~, ~<$App.UserName>~) );
+		}
+	}
+	
+	if (!ValidQueue())
+	{
+		return 0;
+	}	
+	
+	// Create the fLayoutAndJobView and initialize some values
+	Initialize();
+
+	// ReplaceLayoutOrJob is an engine method which is called to reuse a layout or job view to 
+	// display a different layout or job without having to open a new window.
+	parseError = 0;
+	ViewProduct( ReplaceLayoutOrJob,~<Path>~,parseError );
+	if (<parseError>)
+	{
+		return FALSE;
+	}
+	
+	// When we come back from ReplaceLayoutOrJob, our fRenderList points to a render list that
+	// has been deleted.
+	
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( Translate(~EditProduct,CouldNotCreateDocumentInfo, <Path>~ ); }
+
+	Info( SetValues,OrderItemID,~<OrderItemID>~,OrderID,~<fOrderID>~ );
+	fLayoutAndJobView(SetDocumentInfo,Info);
+
+	OnReplaceLayoutOrJob(~<Path>~);
+	fOrderItemID = ~<OrderItemID>~;
+	return TRUE;
+}
+
+VOID Comp::Initialize()
+{
+	if ( !Defined( fLayoutAndJobView ) )
+	{
+		ViewProduct( Get, View, addrOfView);
+
+		if (!LayoutAndJobView( fLayoutAndJobView, Is,<addrOfView>,Private))
+		{
+			return TRUE;
+		}
+	}
+	EnableLayoutViewKeys();
+}
+
+NUMERIC Comp::EnableLayoutViewKeys()
+{	
+	fLayoutAndJobView(EnableKey,0x2E,0);  // disable delete key VK_DELETE
+	fLayoutAndJobView(EnableKey,0x73,0);  // disable f4 key VK_F4
+	return 1;
+}
+
+NUMERIC Comp::ValidQueue()
+{
+	// does the product have an output spec and queue attached to it?
+	if ( !<THIS>( HasMember,fRenderList ) )
+	{
+		return 1; 
+	}
+	
+	if (fRenderList(GetOutputNode,OutputNode))
+	{
+		OutputNode(GetValue,~QueueName:~,queue);
+		if (!SimilarStr(~<queue>~,~~))
+		{
+			count = Ado( db,connect,Recordcountfor,~select count(*) from Queuedefinition where QueueName = '<queue>'~ );
+			if (<count> <= 0)
+			{
+				Choice = MessageBox( ~<$TR.LayoutsAndJobs(InvalidQueue,`<queue>`,`<fOrderItemID>`)>~,YESNO );	
+				if (~<Choice>~ == ~NO~)
+				{
+					return 0;
+				}
+			}
+		}
+		else
+		{
+			Choice = MessageBox( ~<$TR.LayoutsAndJobs(NoQueue,`<fOrderItemID>`)>~,YESNO );	
+			if (~<Choice>~ == ~NO~)
+			{
+				return 0;
+			}
+		}
+		
+	}
+	else 
+	{
+		Choice = MessageBox( ~<$TR.LayoutsAndJobs(NoOutputDevice,`<fOrderItemID>`)>~,YESNO );	
+		if (~<Choice>~ == ~NO~)
+		{
+			return 0;
+		}
+	}
+	return 1;
+}
+
+// Called when the user drags an order item into the open gray area
+VOID OnReplaceLayoutOrJob(Path)
+{
+		//Log(Session,~OnReplaceLayoutOrJob <Path>~);
+	<BaseHtmlObjectName>.OnReplaceLayoutOrJob(~<Path>~);
+}
+
+NUMERIC  Comp::OnReplaceLayoutOrJob(Path)
+{
+	if (IsNull(~<Path>~))
+	{
+		ForgetPrivate( fLayoutAndJobView);
+		ToggleToolBarButtons( TRUE );
+	}
+
+	if ( <THIS>( HasMember,fLayoutAndJobView ) )
+	{
+		EnableLayoutViewKeys();	
+	}
+	return TRUE;
+}
+
+VOID Comp::OnSaveButton()
+{
+	
+	if ( fLayoutAndJobView( FileSave ) )
+	{
+		if ( GetViewByName( ViewToolbar ) )
+		{
+			fHtmlView( set, SaveButton, 0, disabled, ~true~  );
+		}
+	}
+
+	return;
+}
+
+// Called from the engine when a render is complete
+VOID RedrawJobIcon( OrderID,OrderItemID )
+{
+	<BaseHtmlObjectName>.RedrawJobIcon(~<OrderID>~,~<OrderItemID>~ );
+	return;
+}
+
+NUMERIC Comp::RedrawJobIcon( OrderID,OrderItemID )
+{
+
+	if ( !ViewOrderItems( FindI,Key,~OrderID = '<OrderID>' And ID = <OrderItemID>~,position,ThumbNail ) )  { return FALSE; }
+
+	ViewOrderItems( RedrawThumbNail,ThumbNail,TRUE );
+
+	return ViewOrderItems( RefreshView );
+}
+
+VOID OnNodeChange(ID)
+{
+	<BaseHtmlObjectName>.OnNodeChange();
+}
+
+VOID Comp::OnNodeChange()
+{
+	EnableSave();
+}
+
+VOID OnRenderComplete()
+{
+	<BaseHtmlObjectName>.OnRenderComplete();
+}
+
+VOID Comp::OnRenderComplete()
+{
+	EnableSave();
+}
+
+VOID Comp::EnableSave()
+{
+	Dirty = FALSE;
+	
+	if ( MemberDefined(fLayoutAndJobView) )
+	{
+		Dirty = fLayoutAndJobView( IsDirty );
+	}
+	
+	if ( <Dirty> )
+	{
+		if ( GetViewByName( ViewToolbar ) )
+		{
+			fHtmlView( set, SaveButton, 0, disabled, ~~ );
+		}
+	}
+	else
+	{
+		
+		if ( GetViewByName( ViewToolbar ) )
+		{
+			fHtmlView( set, SaveButton, 0, disabled, ~true~ );
+		}
+	}
+}
+
+VOID Comp::OnCloseButton()
+{
+	if ( CloseLayoutOrJob() )
+	{
+		if ( GetViewByName( ViewToolbar ) )
+		{
+			fHtmlView( set, ComplexEdit, 0, disabled, ~true~ );
+			fHtmlView( set, CloseButton, 0, disabled, ~true~ );
+			fHtmlView( set, SaveButton, 0, disabled, ~true~ );
+			fHtmlView( set, RefreshJob, 0, disabled, ~true~ );
+		}
+	}
+}
+
+// returns 1 if we closed the layout or job or 0 if user cancelled
+NUMERIC Comp::CloseLayoutOrJob()
+{
+	
+	if (CurrentlyRendering())
+	{
+		return FALSE;
+	}
+
+	if (!ValidQueue())
+	{
+		return 0;
+	}
+		
+	// ViewProduct( ReplaceLayoutOrJob) will prompt the user to save changes if there are any changes to
+	// the render list.  If the user
+	// decides to cancel the saving of changes, we will return false and we will
+	// not replace the layout/job.
+	if (!ViewProduct( ReplaceLayoutOrJob,~~ ))
+	{
+		return 0;
+	}
+
+	// the render list is no longer valid
+	// forgets the render list
+	OnReplaceLayoutOrJob(~~);	// tells the script to reset itself;
+	fOrderItemID = ~~;
+
+	return 1;
+
+}
+
+NUMERIC	Comp::CurrentlyRendering()
+{
+	if ( !<THIS>( HasMember,fLayoutAndJobView ) )
+	{
+		return FALSE; 
+	}
+	return fLayoutAndJobView(CurrentlyRendering);
+}
+
+VOID Comp::OnInitialUpdate()
+{
+	fLayoutAndJobView( Activate);
+	fLayoutAndJobView( ScriptControlled, 1);
+	fLayoutAndJobView(ScriptInitialUpdateComplete);	
+}
+
+VOID OnInitialUpdate()
+{
+	<BaseHtmlObjectName>.OnInitialUpdate();
+}
+
+// Toolbar setup and action
+
+VOID Comp::DoPressTool(ToolPressed)
+{
+	PressTool( ~<ToolPressed>~ );
+	DoToolActions( ~<ToolPressed>~ );
+	ToggleToolBarButtons( FALSE );
+}
+
+NUMERIC Comp::PressTool(ToolPressed)
+{
+	i = 1;
+	Pressed = 1;
+	NotPressed = 0;
+
+	GetViewByName( ViewToolbar );
+	while (<i> <= <fNumberOfTools>)
+	{
+		if (SimilarStr(~<ToolPressed>~,~<fTool<i>>~))
+		{
+			ID = <fTool<i>>;
+			fHtmlView( Execute,~SetButtonState('<ID>',<Pressed>);~ );
+		}
+		else
+		{
+			ID = <fTool<i>>;
+			fHtmlView( Execute,~SetButtonState('<ID>',<NotPressed>);~ );
+		}
+		i += 1;
+	}
+	return 1;
+}
+
+// called initially for the arrow tool when the load completes, and on initial update of the LayoutAndJobView
+NUMERIC Comp::DoToolActions(ToolPressed)
+{
+	if ( !<THIS>( HasMember,fLayoutAndJobView ) )
+	{
+		return TRUE;  
+	}
+	fLayoutAndJobView( HandleActions, ~<f<ToolPressed>Actions>~);
+	return TRUE;
+}
+
+VOID Comp::ToggleToolBarButtons( Disable )
+{
+	if ( !GetViewByName( ViewToolbar ) )
+	{
+		return;
+	}
+
+	if ( <Disable> )
+	{
+		fHtmlView( Set, SelectTool, 0, src, ~\Artwork\unsel_node.gif~ );
+		fHtmlView( Set, CropTool, 0,  src, ~\Artwork\unmove.gif~ );
+		fHtmlView( Set, SelectTool, 0, disabled, ~true~ );
+		fHtmlView( Set, CropTool, 0, disabled, ~true~ );
+	}
+	else
+	{
+		fHtmlView( Set, SelectTool, 0, src, ~\Artwork\sel_node.gif~ );
+		fHtmlView( Set, CropTool, 0,  src, ~\Artwork\move.gif~ );
+		fHtmlView( Set, SelectTool, 0, disabled, ~~ );
+		fHtmlView( Set, CropTool, 0, disabled, ~~ );
+	}
+
+}
+
+// Manual Paper Fill
+
+VOID Comp::OnRunSelectedToMPF()
+{
+
+	if ( !ImagesOrderItemSplitter(GetViewOfWindow,ViewOrderItems,aView ) )
+	{
+		Log( Session, ~Comp::OnRunSelectedToMPF(): Unable to get Orderitems View~ );
+		Warning( TR( Composition, UnableToGetView ) );
+		return;
+	}
+
+	if ( !aView( GetSelected,SelectedOrderItems ) )
+	{ 
+		return;
+	}
+
+	if ( SelectedOrderItems( ChildCount ) <= 0 )
+	{
+		return;
+	}
+	
+	RunOrderMPF( ~<fOrderID>~, SelectedOrderItems );
+	
+}
+
+NUMERIC Comp::RunOrderMPF( OrderID, &SelectedOrderItems )
+{
+	StatusBarText(~~);
+	WaitCursor( Begin );
+
+	itemCount = 0;
+
+	if ( !Ado( dBase,Connect,BeginTransaction ) )
+	{ 
+		WaitCursor( End );
+
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~Connection failed in RunOrderMPF: <theErr>~ );
+		return Warning( TR( Standard, DBConnectNo ) ); 
+	}
+
+	while ( SelectedOrderItems( GetNext,OrderItem ) )
+	{
+		// Get the order ID, order item ID, quantity and job path from the order item
+		// database record.
+		OrderItem(GetValue,OrderID,OrderID);
+		OrderItem(GetValue,ID,ID);
+		OrderItem(GetValue,Quantity,Quantity);
+		OrderItem(GetValue,JobPath,JobPath);
+
+		StatusBarText( TR( Composition, ProcessingItem, <ID> ) );
+
+		// Get the queue name, print width, print length and number of copies from
+		// the job.
+		QueueName = ~~;
+		PrintWidth = 0;
+		PrintLength = 0;
+		Copies = 0;
+		if ( !GetJobInfo( ~<JobPath>~,PrintWidth,PrintLength,QueueName,Copies ) )
+		{
+			Log( Session, ~Failed to get job information in RunOrderMPF.~ );
+
+			msg = TR( Composition, ManualPaperFillFailed, <ID> );
+			return Warning( ~<msg>~ );
+		}
+
+		updateManualPaperFill = FALSE;
+		currentQuantity = 0;
+		Query = ~Select * From ManualPaperFill Where OrderID = '<OrderID>' And OrderItemID = <ID> And QueueName = '<QueueName>'~;
+		if ( PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			if ( List( GetNext, OrderItem ) )
+			{
+				updateManualPaperFill = TRUE;
+				currentQuantity = ~<$pcon.OrderItem[OrderItemQty]>~;
+			}
+		}
+		
+		// Set the order item quantity to be the quantity from the order item database record
+		// times the number of copies from the job.  Add in the current quantity for an existing
+		// entry in the ManualPaperFill table.
+		OrderItemQty = <Quantity> * <Copies>;
+
+		// Add in the current quantity for an existing entry in the ManualPaperFill table.
+		OrderItemQty = <OrderItemQty> + <currentQuantity>;
+
+		// If the order item already exists in the ManualPaperFill table, update the order item quantity
+		// in the table.  Otherwise, insert a new record in the table.
+		if ( <updateManualPaperFill> )
+		{
+			Cmd = ~Update ManualPaperFill Set OrderItemQty = <OrderItemQty> Where OrderID = '<OrderID>' And OrderItemID = <ID> And QueueName = '<QueueName>'~;
+			if ( !dBase( Cmd,~<Cmd>~ ) )
+			{
+				StatusBarText(~~);
+				WaitCursor( End );
+
+				dBase( GetErrorDescription,theErr,RollBackTransaction );
+				Log( Session, ~Update failed in RunOrderMPF: <theErr>~ );
+
+				msg = TR( Composition, ManualPaperFillFailed, <ID> );
+				return Warning( ~<msg>~ );
+			}
+		}
+		else
+		{
+			Fields = STR ( OrderID,OrderItemID,QueueName,PrintWidth,PrintLength,OrderItemQty );
+			Values = STR ( '<OrderID>',<ID>,'<QueueName>',<PrintWidth>,<PrintLength>,<OrderItemQty> );
+		
+			Cmd = ~Insert Into ManualPaperFill(<Fields>) Values(<Values>)~;
+			if ( !dBase( Cmd,~<Cmd>~ ) )
+			{
+				StatusBarText(~~);
+				WaitCursor( End );
+
+				dBase( GetErrorDescription,theErr,RollBackTransaction );
+				Log( Session, ~Insert failed in RunOrderMPF: <theErr>~ );
+
+				msg = TR( Composition, ManualPaperFillFailed, <ID> );
+				return Warning( ~<msg>~ );
+			}
+		}
+
+		++itemCount;
+	}
+
+	StatusBarText(~~);
+	SendStatusMsg( TR( Composition, SubmittedManualPaperFill, <itemCount> ) );
+
+	if ( !dBase( CommitTransaction ) )
+	{ 
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~Error on commit transaction in RunOrderMPF: <theErr>~ );
+		return Warning( TR( Composition, DBCommitFailed ) ); 
+	}
+
+	return WaitCursor( End );
+}
+
+NUMERIC Comp::GetJobInfo( JobPath,&PrintWidth,&PrintLength,&QueueName,&Copies )
+{
+	PrintWidth = 0;
+	PrintLength = 0;
+	QueueName = ~~;
+	Copies = 0;
+
+	if ( !Document( Job ) )
+	{
+		Log( Session, ~Unable to create document object in GetJobInfo.~ );
+		return FALSE;
+	}
+
+	if ( !Job( Create ) )
+	{
+		Log( Session, ~Unable to create document object in GetJobInfo.~ );
+		return FALSE;
+	}
+
+	Job( SetNoMessageBox,TRUE );
+
+	if ( !Job( ParseFile,~<JobPath>~ ) )
+	{
+		Log( Session, ~Failed to parse job <JobPath> in GetJobInfo.~ );
+		return FALSE;
+	}
+
+	if ( !Job( GetRenderList,0,RenderList ) )
+	{ 
+		Log( Session, ~Failed to get render list for job <JobPath> in GetJobInfo.~ );
+		return FALSE;
+	}
+
+	if ( !RenderList( GetMainNode,TheNode ) )
+	{
+		Log( Session, ~Unable to get the main node for job <JobPath> in GetJobInfo.~ );
+		return FALSE;
+	}
+
+	PrintWidth = TheNode(GetNumeric,~IWidth:~);
+	PrintLength = TheNode(GetNumeric,~IHeight:~);
+
+	if ( !RenderList( GetOutputNode,OutputNode ) )
+	{
+		Log( Session, ~Unable to get the output node for job <JobPath> in GetJobInfo.~ );
+		return FALSE;
+	}
+
+	OutputNode(Get,~QueueName:~,QueueName);
+	Copies = OutputNode(GetNumeric,~Copies:~);
+
+	return TRUE;
+
+}
+
+VOID Comp::OrderBySize()
+{
+	
+	ForgetGlobal( PageObj);
+	OrderBySizeDlg( New,PageObj );
+	Global( PageObj );
+
+	PageObj.CreateModalDialog(~/Ordering/QuickComposition_add.kpl~);		// Create an HTML Window that behaves like a modal dialog
+}
+
+// Order By Size Dialog Code
+
+Class( OrderBySizeDlg,Extends,BaseHTMLWin );
+
+VOID OrderBySizeDlg::OrderBySizeDlg()
+{
+	fTitle = TR( Composition, OrderButton );
+	WindowWidth = 500;
+	WindowHeight = 430;
+	fWindowStyle = ~WS_SIZEBOX~;
+}
+
+VOID OrderBySizeDlg::OnCancelOBS()
+{
+	if ( OkayToCancel() )
+	{
+		ForceClose();
+		OnWindowClose();
+	}
+}
+
+VOID OrderBySizeDlg::CreateQuickOrderItems(bUserSize,UserWidth,UserHeight,ItemQuantity,PrinterQueue)
+{
+	CompObj.CreateQuickOrderItems(~<bUserSize>~,~<UserWidth>~,~<UserHeight>~,~<ItemQuantity>~,~<PrinterQueue>~ );
+	OnCancelOBS();
+}
+
+// Entry point for when an order item is changed.  This will cause the order item to be refreshed.
+VOID RefreshOrderItem( OrderID, OrderItemID )
+{
+	CompObj.RefreshOrderItem( ~<OrderID>~, ~<OrderItemID>~ );
+}
+
+VOID Comp::RefreshOrderItem( OrderID, OrderItemID )
+{
+
+	// Check to make sure the window is working on the ID that Edit Order Item is.
+	if ( !SimilarStr( ~<OrderID>~, ~<fOrderID>~ ) )
+	{
+		return;
+	}
+
+	// Check which order item is currently displayed.
+	if ( !SimilarStr( ~<OrderItemID>~, ~<fOrderItemID>~ ) )
+	{
+		return;
+	}
+
+	Class( OrderItemClass,Extends,BaseOrderItem);
+	OrderItemClass( New,OrderItemObj );
+
+	jobPath = OrderItemObj.GetJobPathFromOrderItemID( ~<fOrderID>~, ~<fOrderItemID>~ );
+
+	if ( IsNull( ~<JobPath>~ ) )
+	{
+		return;
+	}
+
+	// ReplaceLayoutorJob is called in the engine to reuse an open layout and job view.
+	OnReplaceLayout(~<jobPath>~,~<fOrderItemID>~, ~~);
+	RedrawJobIcon( ~<fOrderID>~, ~<fOrderItemID>~ );
+
+	return;
+
+}
+
+VOID Comp::RefreshFromButton()
+{
+	if ( Defined( fLayoutAndJobView ) )
+	{
+		fLayoutAndJobView(previewall);
+	}
+
+	return;
+}
+
+VOID UpdateImageThumbnail( OrderID, Roll, Frame )
+{
+	CompObj.UpdateImageThumbnail( ~<OrderID>~, ~<Roll>~, ~<Frame>~ );
+}
+
+VOID Comp::UpdateImageThumbnail( OrderID, Roll, Frame )
+{
+	if ( SimilarStr( ~<fOrderID>~, ~<OrderID>~ ) )
+	{
+		// This function is in utilities.txt
+		RemoveAndAddThumbnail( ViewImages, ~<OrderID>~, ~<Roll>~, ~<Frame>~ );
+	}
+}
+
+VOID RemoveOpenThumbnail( Order, Roll, Frame )
+{
+	CompObj.RemoveOpenThumbnail( ~<Order>~, ~<Roll>~, ~<Frame>~ );
+}
+
+VOID Comp::RemoveOpenThumbnail( Order, Roll, Frame )
+{
+
+	if ( ViewImages( FindI,Key,~OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~,Where,Image ) )
+	{ 
+		ViewImages( RemoveThumbNailFor,Image );
+	}
+}
+
+NUMERIC Comp::AddOrderItem( OrderID, ID )
+{
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select OrderItems.*,Products.LayoutName From OrderItems Left Outer Join Products On (OrderItems.ProductID = Products.ID) Where OrderItems.ID = <ID> AND OrderItems.OrderID = '<OrderID>'~;
+
+	if ( !PGenConList( List,Connection,fConnection,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		Log( Session, ~Query Failed: <Query>. <theErr>~ );
+		return Warning( TR( Standard, UnableToQueryDB ) );
+	}
+
+	if ( !List( GetFirst,Record ) )	
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		Log( Session, ~Failed to find any records for: <Query>. <theErr>~ );
+		return FALSE;
+	}
+
+	//ViewOrderItems( SelectAll,FALSE );	// Make sure nothing is selected
+	
+	GenCon( AddOrderItemsThumbNailImage,New,DDICImageDef,SetValues,
+			Info5,		TR( Composition,OrderItemTooltip),
+			Path,		~<$pcon.Record[JobPath].Path>\Preview\<$pcon.Record[JobPath].Filename>.jpg~,
+			IsDeleted,	FALSE,
+			IsSelected,	FALSE,
+			DataType,	OrderItems, 
+			Table,		OrderItems,
+			Key,		~OrderID = '<$pcon.Record[OrderID]>' AND ID = <$pcon.Record[ID]>~ );
+
+	ViewOrderItems( AddThumbNailToThisView,AddOrderItemsThumbNailImage,~<OrderID>~,OrderItem,Record );
+	
+	ReleaseConnection();
+	
+	return TRUE;
+	
+}
+
+STR Comp::GetOrderID()
+{
+	if ( !GetViewByName( View ) )
+	{
+		return ~~;
+	}
+	fHtmlView( Get, ~OrderIDText~, 0, value, OrderID );
+	return ~<OrderID>~;
+}
+// Open a dialog to allow the user to choose a different orderID instead of just typing it in.
+
+VOID Comp::FindOrderID()
+{
+	
+	ForgetGlobal( FindOrderIDObj);
+	FindOrderIDDlg( New,FindOrderIDObj );
+	Global( FindOrderIDObj );
+
+	FindOrderIDObj.CreateModalDialog(~/Ordering/FindOrderID.kpl~);		// Create an HTML Window that behaves like a modal dialog
+}
+
+Class( FindOrderIDDlg,Extends,BaseHTMLWin );
+
+VOID FindOrderIDDlg::OnLoadCompleteFind()
+{
+	GetView(~FindOrderIDView~);
+	OrderID = CompObj.GetOrderID();
+	FindOrderIDView( Set, ~OrderIDText1~, 0, value, ~<OrderID>~ );
+}
+
+VOID FindOrderIDDlg::FindOrderIDDlg()
+{
+	fTitle = TR( Composition, OrderID );
+	WindowWidth = 500;
+	WindowHeight = 430;
+	fWindowStyle = ~WS_SIZEBOX~;
+}
+
+VOID FindOrderIDDlg::OnCancelFind()
+{
+	if ( OkayToCancel() )
+	{
+		ForceClose();
+		OnWindowClose();
+	}
+}
+
+VOID FindOrderIDDlg::OnOrderChange()
+{
+	GetView(~FindOrderIDView~);
+	FindOrderIDView( Get, ~OrdersList~, 0, value, newOrderID );
+	CompObj.SetOrder( ~<newOrderID>~ );
+	CompObj.ShowImagesForOrder();
+	CompObj.PopulateOrderItemsTable();
+}
+
+VOID FindOrderIDDlg::FindOrderIDs()
+{
+	Class( OrderClass,Extends,BaseOrder);
+	OrderClass( New,OrderObj );
+
+	GetView(~FindOrderIDView~);
+	FindOrderIDView( Get, ~OrderIDText1~, 0, value, partialOrderID );
+
+	numOrdersFound = 0;
+	StringList( StrListofOrders, New );
+	
+	numOrdersFound = OrderObj.GetCountOfOrderID( dBase, ~<partialOrderID>~ );
+	if ( <numOrdersFound> > 75 )
+	{
+		if ( MessageBox( TR( ImportImages, MoreThan30Warning,75), YESNO ) == NO )
+		{
+			return;
+		}
+	}
+		
+	if ( !OrderObj.FindPartialOrderID( dBase, ~<partialOrderID>~, StrListofOrders) )
+	{
+		Log( Session,~Failed getting list of orders~ );
+		return;
+	}
+
+	// Clear the OrdersTextBox before populating again
+	FindOrderIDView( Execute,~ResetList( GetElement('OrdersList') )~ );
+
+	ordersFound = StrListofOrders( GetFirstString,OrderID );
+	while ( <ordersFound> )
+	{
+		
+		FindOrderIDView( Execute,~AddListOption( GetElement('OrdersList'),'<OrderID>','<OrderID>')~ );
+		ordersFound = StrListofOrders( GetNextString, OrderID );
+	}
+
+}

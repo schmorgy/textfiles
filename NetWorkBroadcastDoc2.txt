@@ -1,0 +1,353 @@
+
+
+	LeftX = hGap = vGap = 10;
+
+	PromptHeight = 20;		PromptWidth = 60;		
+	ValueWidth = 150;
+	ButtonWidth = 90;		ButtonHeight = 20;	
+	LeftX = $hGap;			CurrentY = $vGap;		
+
+
+VOID DefineDialog()
+{
+	if ( !DictionaryExists( DDNetworkMessage ) )
+	{
+		Dictionary:		DDNetworkMessage
+			Fields:		Name Msg			Type Text
+			Fields:		Name Domain			Type Text
+			Fields:		Name All			Type long
+	}
+
+	Define: DlgData Using DDNetworkMessage
+		Fields: All  1
+
+	Define: aDialog Using DDWinDef
+		Fields:	POSITION				100, 100, 600,600 
+				TITLE					~Send a message to other workstations~
+				TYPENAME				Dialog 
+				STATUSBAR				~1 100~
+				WANTSMINIMIZEBOX		TRUE
+				OACTIONSTEXT			ACTION EXEC ( CloseDialog(FALSE) )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "NetworkMessage.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: MessagePrompt Using DDWinCtrlDef AsSymbol MessagePrompt
+				Fields:	TypeName		StaticText
+						Text			~Message:~
+						FontWeight		600
+						RightJustified	1
+						Position		$hGap $vGap,$PromptWidth $ButtonHeight
+
+			Define: MessageField Using DDWinCtrlDef AsSymbol MessageField 
+				Fields: TypeName		MLEDITTEXT
+						GenConField		Msg
+						GenConName		THIS
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						Position		MessagePrompt(GetRight,Position) + $hGap,MessagePrompt(GetTop,Position),500,$PromptHeight*8;
+
+			Define: ClearButton Using DDWinCtrlDef AsSymbol ClearButton
+				Fields:	TypeName		Button
+						Text			~Clear~
+						DActionsText	ACTION EXEC ( OnClearButton() )
+						Position		MessagePrompt(GetLeft,Position) MessagePrompt(GetBottom,Position)+$vGap*4,$PromptWidth $ButtonHeight
+
+
+			Define: ToPrompt Using DDWinCtrlDef AsSymbol ToPrompt
+				Fields:	TypeName		StaticText
+						Text			~Send To:~
+						FontWeight		600
+						RightJustified	1
+						Position		MessagePrompt(GetLeft,Position),MessageField(GetBottom,Position)+$vGap,$PromptWidth ,$PromptHeight
+		
+			Define: WorkstationsListBox Using DDWinCtrlDef AsSymbol WorkstationsListBox
+				Fields:	POSITION		ToPrompt(GetRight,Position)+$hGap,MessageField(Getbottom,Position)+$vGap,175 ,$PromptHeight * 8
+						GENCONNAME		THIS
+						GENCONFIELD		~ImagePath~
+						AllowMultipleSelection	TRUE
+						IACTIONSTEXT	ACTIONS ( Get )
+						DACTIONSTEXT	ACTIONS ( Save )
+						OACTIONSTEXT	ACTIONS ( Save )
+						NoDuplicates	TRUE
+						ToolTip			Translate( ~Select users to receive the message~ )
+						TYPENAME		ListBox ;
+						
+		Define: SelectAllButton Using DDWinCtrlDef AsSymbol SelectAllButton
+			Fields:	TypeName		Button
+					Text			~Select All~
+					DActionsText	ACTION EXEC ( OnSelectAll() )
+					Position		WorkstationsListBox(GetLeft,Position),WorkstationsListBox(GetBottom,Position)-12,$ButtonWidth-4 $ButtonHeight
+
+		Define: SelectNoneButton Using DDWinCtrlDef AsSymbol SelectNoneButton
+			Fields:	TypeName		Button
+					Text			~Select None~
+					DActionsText	ACTION EXEC ( OnSelectNone() )
+					Position		SelectAllButton(GetRight,Position)+2,SelectAllButton(GetTop,Position),$ButtonWidth-4 $ButtonHeight
+
+
+			Define: AllCheckBox Using DDWinCtrlDef AsSymbol AllCheckBox 
+				Fields: TypeName		RadioButton
+						GenConField		All
+						GenConName		THIS
+						RadioTrueValue	0
+						Text			~&All Workstations in domain ~
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save UncheckButton(DP2CheckBox) UncheckButton(DP2UsersCheckBox) CheckButton(AllCheckBox) "Exec(PopulateServersList())" )
+						OActionsText	ACTIONS ( Save )
+						Position		WorkstationsListBox(GetRight,Position) + $hGap,WorkstationsListBox(GetTop,Position),142,$PromptHeight;
+
+			Define: DomainField Using DDWinCtrlDef AsSymbol DomainField 
+				Fields: TypeName		EDITTEXT
+						GenConField		Domain
+						GenConName		THIS
+						ToolTip			Translate( ~Leave blank for the current domain~ )
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						Position		AllCheckBox(GetRight,Position)+2,AllCheckBox(GetTop,Position),100,$PromptHeight;
+
+			Define: RefreshButton Using DDWinCtrlDef AsSymbol RefreshButton
+				Fields:	TypeName		Button
+						Text			~Refresh~
+						DActionsText	ACTION EXEC ( PopulateServersList() )
+						Position		DomainField(GetRight,Position) + $hGap,DomainField(GetTop,Position),50,$PromptHeight;
+
+			Define: DP2CheckBox Using DDWinCtrlDef AsSymbol DP2CheckBox 
+				Fields: TypeName		RadioButton
+						GenConField		All
+						GenConName		THIS
+						RadioTrueValue	1
+						Text			~DP2 Workstations~
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save UncheckButton(AllCheckBox) UncheckButton(DP2UsersCheckBox) CheckButton(DP2CheckBox) "Exec(OnDP2WorkstationsCheckBox())" )
+						OActionsText	ACTIONS ( Save )
+						Position		WorkstationsListBox(GetRight,Position) + $hGap,AllCheckBox(GetBottom,Position),120,$PromptHeight;
+
+			Define: DP2UsersCheckBox Using DDWinCtrlDef AsSymbol DP2UsersCheckBox 
+				Fields: TypeName		RadioButton
+						GenConField		All
+						GenConName		THIS
+						Text			~DP2 Users~
+						RadioTrueValue	2
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save UncheckButton(AllCheckBox) UncheckButton(DP2CheckBox) CheckButton(DP2UsersCheckBox) "Exec(OnDP2UsersCheckBox())" )
+						OActionsText	ACTIONS ( Save )
+						Position		WorkstationsListBox(GetRight,Position) + $hGap,DP2CheckBox(GetBottom,Position),120,$PromptHeight;
+
+			DialogWidth = MessageField(GetRight,Position) + $hGap * 1.5;
+
+			Define: SendButton Using DDWinCtrlDef AsSymbol SendButton
+				Fields:	TypeName		Button
+						Text			~&Send~
+						DActionsText	ACTION EXEC ( OnSend() )
+						Position		$DialogWidth/2 - $ButtonWidth - $hGap/2,WorkstationsListBox(GetBottom,Position)+$vGap*3,$ButtonWidth $ButtonHeight
+
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				Fields:	TypeName		Button
+						Text			~&Cancel~
+						DActionsText	ACTION EXEC ( CloseDialog() )
+						Position		SendButton(GetRight,Position) + $hGap,SendButton(GetTop,Position),$ButtonWidth $ButtonHeight;
+		}
+
+	DialogHeight = SendButton(GetBottom,Position) + $vGap + 25;
+
+	aDialog( Set,Position,~20  20  <DialogWidth>  <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,aDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+	Global( dlg,aDialog,DlgData );
+}
+
+
+NUMERIC OnSelectNone()
+{
+	dlg( ListBox,WorkstationsListBox,SetSel,-1,FALSE );
+	
+	return TRUE;
+}
+
+
+NUMERIC OnSelectAll()
+{
+	dlg( ListBox,WorkstationsListBox,SetSel,-1,TRUE );
+	
+	return TRUE;
+	
+	WantAll = MakeNumber( ~<$con.DlgData[All]>~ );
+
+	if ( <WantAll> )
+	{
+		dlg( ListBox,WorkstationsListBox,SetSel,-1,FALSE );
+	}
+
+	return dlg( EnableControls,!<WantAll>,WorkstationsListBox );
+}
+
+
+NUMERIC OnClearButton()
+{
+	return dlg( SetStrings,Msg,~~ );
+}
+
+
+NUMERIC OnSend()
+{
+	dlg( GetInput);
+
+	if ( IsNull( ~<$con.DlgData[Msg]>~ ) )
+	{
+		return Warning( ~You must enter a message you wish to send~ );
+	}
+
+	Entity = (DlgData(GetNumeric,All) == 2) ? ~DP2 User(s)~ : ~Workstation(s)~;
+
+	if ( !dlg( ListBox,WorkstationsListBox,MakeSelectedStringList,WorkstationList ) )
+	{
+		return Warning( Translate( ~You must select at least one <Entity>~ ) );
+	}
+
+	if ( WorkstationList( Empty ) )
+	{
+		return Warning( Translate( ~You must select at least one <Entity>~ ) );
+	}
+
+	Count = WorkstationList( Num );
+
+	if ( MessageBox( ~Are you sure you would like to send the message to the <count> selected <Entity>?~,YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	More = WorkstationList( GetFirstString,Workstation );
+
+	while ( <more> )
+	{		
+		if ( DlgData(GetNumeric,All) == 2 )
+		{
+			ShellExecute( Open,~Msg~,~"<Workstation>" "<$con.DlgData[Msg]>"~,~~,SHOWMINNOACTIVE );
+		}
+		else
+		{
+			ShellExecute( Open,~Msg~,~/server:<Workstation> console "<$con.DlgData[Msg]>"~,~~,SHOWMINNOACTIVE );
+		}
+
+		More = WorkstationList( GetNextString,Workstation );
+	}
+
+	dlg( SetStatus,0,~Message sent to <count> <Entity>~ );
+
+	return TRUE;
+}
+
+VOID Reopen()
+{
+	dlg( SetFocus );
+}
+
+
+VOID CloseDialog()
+{
+	dlg( End );
+
+	Exit();
+}
+
+NUMERIC OnDP2WorkstationsCheckBox()
+{
+	dlg( GetInput );
+
+	dlg( ListBox,WorkstationsListBox,ResetContent );
+
+	WaitCursor( Begin );
+	
+	Query = ~Select Distinct Computer From WorkstationSettings Order By Computer~;
+
+	if ( !PGenConList( List,Connect,Query,~<Query>~ ) )
+	{
+		dlg( SetStatus,0,~Search failed~ );
+		WaitCursor( End );
+		return FALSE;
+	}
+
+	while ( List( GetNext,Workstation ) )
+	{
+		dlg( ListBox,WorkstationsListBox,AddString,~<$pcon.Workstation[Computer]>~ );
+	}
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC PopulateServersList()
+{
+	dlg( GetInput );
+
+	dlg( ListBox,WorkstationsListBox,ResetContent );
+
+	dlg( SetStatus,0,~Searching for workstations~ );
+
+	WaitCursor( Begin );
+
+	if ( !MakeServersList( List,Type,Workstation,Type,Workstation,Domain,~<$con.DlgData[Domain]>~ ) )
+	{
+		dlg( SetStatus,0,~Search failed~ );
+		WaitCursor( End );
+		return FALSE;
+	}
+
+	WaitCursor( End );
+
+	More = List( GetFirstString,Workstation );
+
+	while ( <more> )
+	{
+		dlg( ListBox,WorkstationsListBox,AddString,~<Workstation>~ );
+
+		More = List( GetNextString,Workstation );
+	}
+
+	dlg( SetStatus,0,~Workstation search complete~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OnDP2UsersCheckBox()
+{
+	dlg( GetInput );
+
+	dlg( ListBox,WorkstationsListBox,ResetContent );
+
+	WaitCursor( Begin );
+	
+	Query = ~Select Distinct UserName From Settings Order By UserName~;
+
+	if ( !PGenConList( List,Connect,Query,~<Query>~ ) )
+	{
+		dlg( SetStatus,0,~Search failed~ );
+		WaitCursor( End );
+		return FALSE;
+	}
+
+	while ( List( GetNext,User ) )
+	{
+		dlg( ListBox,WorkstationsListBox,AddString,~<$pcon.User[UserName]>~ );
+	}
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+DefineDialog();
+
+OnDP2WorkstationsCheckBox();
+
+
+
+
+
+

@@ -1,0 +1,1234 @@
+//////////////////////////////////////////////////////////////////
+//  Subject Info Wizard Import Tab functions
+//////////////////////////////////////////////////////////////////
+VOID SISetup::ImportData()
+{
+	Action = ACTION DOC ( ProcessSubjectInfo OpenOnce ProcessSubjectInfo "Init();" );
+	PerformActions( Action );
+}
+
+//////////////////////////////////////////////////////////////////
+//  Subject Info Wizard support functions
+//////////////////////////////////////////////////////////////////
+NUMERIC SISetup::ConnectToFile( FullPath,Path )
+{
+	if ( IsConnected( ~<FullPath>~ ) )
+	{
+		return TRUE;
+	}
+
+	ForgetPrivate( fileDB );
+	ForgetPrivate( dList );
+
+	fSource = ~<Source><Path>;~;
+
+	CreateSchemaIniFile( ~<FullPath>~ );
+
+	if ( !ADO( fileDB,Provider,~<Provider>~,Source,~<fSource>~,Connect ) ) 
+	{
+		ConnectedFile = ~~;
+		fileDB( GetErrorInformation,theErr );
+		msg = TR( SiWizardTrans, FileOpenFailed, ~<FullPath>~ );
+		Log( Session,~<msg>. <theErr>~ );
+		Error( ~<msg>~ );
+	}
+
+	ConnectedFile = ~<FullPath>~;
+	Private( fileDB );
+	
+	return TRUE;
+}
+
+NUMERIC SISetup::IsConnected( FullPath )
+{
+	if ( Defined( fileDB ) )
+	{
+		if ( SimilarStr( ~<FullPath>~,~<ConnectedFile>~ ) )
+		{
+			return TRUE;
+		}
+	}
+	
+	return FALSE;
+}
+
+NUMERIC SISetup::CreateSchemaIniFile( filePath )
+{
+	path		= ~<$str.$filePath.Path>~;
+	dbFile		= ~<$str.$filePath.filename>~;
+	schemaFile	= ~<path>\schema.ini~;
+
+	useUnicode  = IsFileUnicode( ~<filePath>~ );
+
+	if ( !file( TheFile,Open,~<schemaFile>~,Create,ReadWrite ) )
+	{
+		msg = TR( SiWizardTrans, FileCreateFailed, ~<filePath>~ );
+		Log( Session,~<msg>. <theErr>~ );
+		Error( ~<msg>~ );
+		return FALSE;
+	}
+
+	TheFile( ~[<dbFile>]~ );
+	TheFile( ~ColNameHeader=TRUE~ );
+	TheFile( ~Format=CSVDelimited~ );
+	TheFile( ~MaxScanRows=1~ );
+	if ( <useUnicode> )
+	{
+		TheFile( ~CharacterSet=Unicode~ );
+	}
+	else
+	{
+		TheFile( ~CharacterSet=ANSI~ );
+	}
+
+	result = GetFieldNames( TheFile,~<filePath>~ );
+	TheFile( Close );
+
+	return TRUE;
+}
+NUMERIC SISetup::GetFieldNames( &TheFile, filePath )
+{
+	if ( !File( Input, Open, ~<filePath>~, Read, Text ) ) 
+	{
+		Warning( Translate( ~Could not open <filePath>~ ) );
+		return FALSE;
+	}
+
+	SearchString = ~,~;
+	count = 1;
+
+	Input( ReadString, Buffer );
+	numTokens = GetTokens(~<Buffer>~,~,~);
+	while ( <count> <= <numTokens> )
+	{
+		// find each field name in Buffer, delimited by commas
+
+		TheFile( ~Col<count>=<token<count>> Char Width 255~ );
+		<++count>;
+	}
+
+	return TRUE;
+
+}
+
+NUMERIC SISetup::CreateXMLRecordsetFrom( Path, &xmlPath )
+{
+	if ( ~<Path>~ == ~~ )
+	{
+		ShowError( ~NoFileSelected~ );
+		return FALSE;
+	}
+
+	FilePath     = ~<$Str.$Path.Path>~;
+	Extension    = ~<$str.$Path.ext>~;
+	FileName     = ~<$Str.$Path.Filename.WithoutExt>~;
+
+	if ( !ConnectToFile( ~<Path>~,~<FilePath>~ ) )
+	{
+		return FALSE;
+	}
+
+	QuerySource = ~<Extension>~ == ~~ ? ~<FileName>~ : ~<FileName>#<Extension>~;
+	Query = ~Select * from [<QuerySource>] ~;
+
+	if ( !PGenConList( dList,Connection,fileDB,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		dList( GetErrorDescription,0,theErr );		
+		Log( Session, TR( SiWizardTrans, ~FileLoadFailed~,~<Path>~,~<Query>~,~<theErr>~ ) ); 
+		ShowError( ~FileLoadFailedDisp~,~<$str.$Path.cpath>.  <theErr>.~ ); 
+		return FALSE;
+	}
+
+	ShowStatus( ~ConvertFiletoXML~,~<Source>~,~<$str.$Path.cpath>~ );
+
+
+	xmlPath = ~<FilePath>\<FileName>.xml~;
+
+	if ( !Files( Delete,~<xmlPath>~ ) )
+	{
+		ShowError( ~XmlDeleteFailed~,~<$str.$xmlPath.cpath>~ );
+		return FALSE;
+	}
+
+	if ( !dList( Save,~<xmlPath>~,~xml~ ) )
+	{
+		dList( GetErrorDescription,0,theErr );
+		Log( Session, TR( SiWizardTrans, ~XmlSaveFailed~,~<xmlPath>~,~<theErr>~ ) );
+		ShowError( ~XmlSaveFailed~,~<$str.$xmlPath.cpath>~ );
+		return FALSE;
+	}
+	
+	Private( dList );
+	return TRUE;
+}
+
+
+NUMERIC SISetup::DuplicateTableDefinition( originalName, newName )
+{
+	Fields		  = ~TableName,Sequence,FieldName,FieldType,FieldLength,Displayname,MaskLength,Mask,AllowedChar,PrimaryKey,IndexOn~;
+
+	Connect();
+
+	fConnection( Cmd,~Delete From TableFormats Where TableName = 'SubjectInfo<newName>'~ );
+
+	Query = ~Select * From TableFormats Where TableName = 'SubjectInfo<originalName>'~;
+	if ( !PGenConList( List,Connection,fConnection,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ShowError( ~QueryFailed~,~<Query>~,~<theErr>~ );
+		return FALSE;
+	}
+
+	while ( List( GetNext,record ) )
+	{
+
+	// SUBJECT INFO TABLES NEED AN ORDERID AND A SUBJECTID.  OTHERS DO NOT
+
+		Values = STR ( 'SubjectInfo<newName>',<$pcon.record[Sequence]>,'<$pcon.record[FieldName]>','<$pcon.record[FieldType]>',<$pcon.record[FieldLength]>,
+						'<$pcon.record[Displayname]>',<$pcon.record[MaskLength]>,'<$pcon.record[Mask]>','<$pcon.record[AllowedChar]>',
+						<$pcon.record[PrimaryKey]>,<$pcon.record[IndexOn]> );
+
+		Cmd = STR ( Insert Into TableFormats(<Fields>) Values(<Values>) );
+
+		if ( !fConnection( CmdIn,Cmd ) ) 
+		{
+			WaitCursor( End );
+			fConnection( GetErrorDescription,theErr );
+			ShowError( ~<CmdFailed~,~<Cmd>~,~<theErr>~ );
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+//////////////////////////////////////////////////////
+// Create Subject info table
+//////////////////////////////////////////////////////
+
+
+NUMERIC SISetup::CreateTheTableDefinition( newTableName, xmlPath )
+{
+	PrimaryKey = ~OrderID,SubjectID~;
+
+	if ( ~<newTableName>~ == ~~ )
+	{
+		ShowError( ~NoTableSpecified~ );
+		return FALSE;
+	}
+
+	if ( !TableNameOkay( ~<newTableName>~ ) )
+	{
+		return FALSE;
+	}
+
+//	if ( MessageBox( TR( SiWizardTrans,CreateSiTableAsk,~<newTableName>~ ),YESNO ) != YES )
+//	{
+//		return FALSE;
+//	}
+
+	WaitCursor( Begin );
+	if ( !DetermineFieldFormats() )
+	{
+		ShowError( ~UndeterminedFieldTypes~ );
+		return FALSE;
+	}
+	FillTableFormats( ~<newTableName>~,~<PrimaryKey>~ );
+
+	return TRUE;
+}
+
+NUMERIC SISetup::DetermineFieldFormats()
+{
+	dList( GetFirst,record ); // throw away first - headings
+
+	i = 0;
+	if ( DefinedAndNotNull( MaxFields ) )
+	{
+		while ( <i> < <MaxFields> )
+		{
+			ForgetPrivate( FieldsList<i> );
+		}
+		ForgetPrivate( MaxFields );
+	}
+
+	Position = 0;
+	while ( dList( FieldInfo,<Position>,Name,FieldName,Length,FieldLength,Type,FieldType,ADOType,ADOType ) )
+	{
+			GenCon( FieldsList<Position>,New,DDFieldInfo );
+			FieldsList<Position>( SetValues,Name,~<FieldName>~,Length,~<FieldLength>~,Type,~<FieldType>~,ADOType,~<ADOType>~ );
+			Private( FieldsList<Position++> );
+	}
+	
+	MaxFields = <Position>;
+	while ( dList( GetNext, record ) )
+	{
+		Position = 0;
+		While ( <Position> < <MaxFields> )
+		{
+			FieldsList<Position>( GetValues,Name,FieldName,Length,FieldLength,Type,FieldType );
+			if ( SimilarStr( ~<FieldName>~,~OrderID~,~SubjectID~ ) ||
+				 SimilarStr( ~<FieldType>~,~MACRO~ ) )
+			{
+				<Position++>;
+				continue;
+			}
+			length = strlen( MACROSOFF ~<$pcon.record[<FieldName>]>~ MACROSON );
+
+			if ( <length> == 0 )
+			{
+				<Position++>;
+				continue;
+			}
+//			if ( StringContents( ContainsMacro, MACROSOFF ~<$pcon.record[<FieldName>]>~ MACROSON ) )
+//			{
+//				FieldLength = 40;
+//				FieldType   = ~MACRO~;
+//				FieldsList<Position++>( SetValues,Length,<FieldLength>,Type,~<FieldType>~ );
+//				continue;
+//			}
+			name	= ~<$pcon.record[<FieldName>]>~;
+			length	= strlen( ~<name>~ );
+
+			if ( <length> == 0 )
+			{
+				<Position++>;
+				continue;
+			}
+
+			FieldType = ~CHAR~;
+			FieldLength = ( <length> > 40 ) ? <length> : 40;
+
+/*			if ( IsDate( ~<name>~ ) && !SimilarStr( ~<FieldType>~,~CHAR~ ) )
+			{
+				FieldType = ~DATE~;
+				FieldLength = 16;
+			}
+			else if ( IsCurrency( ~<name>~ ) && !SimilarStr( ~<FieldType>~,~CHAR~ ) ) //currency
+			{
+				FieldType = ~CHAR~;
+				FieldLength = 16;
+			}
+			else if ( SimilarStr( ~<FieldType>~,~CHAR~ ) )
+			{
+				FieldLength = ( <length> > <FieldLength> ) ? <length> : <FieldLength>;
+			}
+			else if ( SimilarStr( ~<FieldType>~,~DOUBLE~ ) )
+			{
+				if ( !IsNumeric( ~<name>~ ) )
+				{
+					FieldType	= ~CHAR~;
+					FieldLength = ( <length> > 40 ) ? <length> : 40;
+				}
+			}
+			else if ( SimilarStr( ~<FieldType>~,~LONG~ ) )
+			{ 
+				if ( IsNumeric( ~<name>~ ) )
+				{
+					if ( IsDouble( ~<name>~ ) )
+					{
+						FieldType	= ~DOUBLE~;
+						FieldLength = 8;
+					}
+				}
+				else
+				{
+					FieldType	= ~CHAR~;
+					FieldLength = ( <length> > 40 ) ? <length> : 40;
+				}
+			}
+			else if ( SimilarStr( ~<FieldType>~, ~DATE~ ) )
+			{
+				FieldType	= ~CHAR~;
+				FieldLength = ( <length> > 40 ) ? <length> : 40;
+			}
+			else if ( IsNumeric( ~<name>~ ) )
+			{
+				FieldType	= ~LONG~;
+				FieldLength = 4;
+			}
+			else if ( SimilarStr( ~<FieldType>~, ~STRING~, ~TEXT~, ~UNKNOWN~ ) )
+			{
+				if ( !IsNumeric( ~<name>~ ) )
+				{ 
+					FieldType	= ~CHAR~;
+					FieldLength = ( <length> > 40 ) ? <length> : 40;
+				}
+				else 
+				{
+					if ( IsDouble( ~<name>~ ) )
+					{
+						FieldType = ~DOUBLE~;
+						FieldLength = 8;
+					}
+					else
+					{
+						FieldType = ~LONG~;
+						FieldLength = 4;
+					}
+				}
+			}
+*/
+			FieldsList<Position++>( SetValues,Length,<FieldLength>,Type,~<FieldType>~ );
+		}
+	}
+
+	Private( MaxFields );
+
+	return TRUE;
+}
+
+
+NUMERIC SISetup::IsDouble( charString )
+{
+	if ( strlen( ~<charString>~ ) == 0 ||
+		 !IsNumeric( ~<charString>~ ) )
+	{
+		return FALSE;
+	}
+
+	result = strlen( String( StringInString, ~.~, ~<charString>~ ) ) > 0;
+
+	return <result>;
+}
+
+NUMERIC SISetup::IsCurrency( charString )
+{
+	length    = strlen( ~<charString>~ );
+	
+	if ( <length> == 0 )
+	{
+		return FALSE;
+	}
+
+	result = FALSE;
+
+	firstChar = ~~;
+	lastChar  = ~~;
+
+	substr( ~<charString>~, 0, 1, firstChar );
+	substr( ~<charString>~, <length> - 1, 1, lastChar );
+
+	if ( SimilarStr( ~<firstChar>~, ~$~ ) && 
+			( <length> == 1 ||
+			  IsNumeric( ~<lastChar>~ ) || 
+			  SimilarStr( ~<lastChar>~,~-~ ) ) ) //currency
+	{
+		result = TRUE;
+	}
+
+	return <result>;
+}
+
+NUMERIC SISetup::IsDate( charString )
+{
+	length    = strlen( ~<charString>~ );
+	
+	if ( <length> == 0 )
+	{
+		return FALSE;
+	}
+
+	result = FALSE;
+
+	result = IsValidDate( ~<charString>~ );
+
+	return <result>;
+}
+
+
+NUMERIC SISetup::FillTableFormats( TableName,PrimaryKey )
+{
+	Position = 0;	Sequence = 10;
+
+	Fields		  = ~TableName,Sequence,FieldName,FieldType,FieldLength,Displayname,MaskLength,Mask,AllowedChar,PrimaryKey,IndexOn~;
+
+	Connect();
+
+	fConnection( Cmd,~Delete From TableFormats Where TableName = '<TableName>'~ );
+
+	// SUBJECT INFO TABLES NEED AN ORDERID AND A SUBJECTID.  OTHERS DO NOT
+
+	if ( !IsNull( String( BeginsWith,~SubjectInfo~,~<TableName>~ ) ) )
+	{
+		Values = STR ( '<TableName>',<Sequence>,'OrderID','CHAR',31,'OrderID',31,'%','',1,0 );
+
+		Cmd = STR ( Insert Into TableFormats(<Fields>) Values(<Values>) );
+
+		if ( !fConnection( CmdIn,Cmd ) ) 
+		{
+			WaitCursor( End );
+			fConnection( GetErrorDescription,theErr );
+			ShowError( ~CmdFailed~,~<Cmd>~,~<theErr>~ );
+			return FALSE;
+		}
+
+		Sequence += 10;
+
+		Values = STR ( '<TableName>',<Sequence>,'SubjectID','CHAR',31,'SubjectID',31,'%','',1,0 );
+
+		Cmd = STR ( Insert Into TableFormats(<Fields>) Values(<Values>) );
+
+		if ( !fConnection( CmdIn,Cmd ) ) 
+		{
+			WaitCursor( End );
+			fConnection( GetErrorDescription,theErr );
+			ShowError( ~CmdFailed~,~<Cmd>~,~<theErr>~ );
+			return FALSE;
+		}
+	}
+
+	FieldNamesWithSpaces = 0;
+	MAX_PATH_SIZE = 255;
+
+	While ( <Position> < <MaxFields> )
+	{
+		FieldsList<Position>( GetValues,Name,FieldName,Length,FieldLength,Type,FieldType );
+		if ( SimilarStr( ~<FieldName>~,~OrderID~,~SubjectID~ ) )
+		{
+			<Position++>;
+			continue;
+		}
+
+		if ( strlen( String( StringInString,~ ~,~<FieldName>~ ) ) )
+		{
+			++FieldNamesWithSpaces;
+		}
+
+		Sequence += 10;
+
+		Mask = ~*~;
+		MaskLength = <FieldLength>;
+		AllowedChars = ~~;
+
+		firstChar = ~~;
+		lastChar  = ~~;
+		substr( ~<FieldName>~, 0, 1, firstChar );
+		len = strlen( ~<FieldName>~ );
+		substr( ~<FieldName>~, <len> - 1, 1, lastChar );
+
+		if ( SimilarStr( ~p~, ~<firstChar>~ ) &&
+				IsNumeric( ~<lastChar>~ ) )	// product code
+		{
+			if ( !SimilarStr( ~<FieldType>~, ~CHAR~ ) )
+			{
+				FieldLength  = ( <FieldLength> > 255 ) ? <FieldLength> : 40;
+			}
+			else
+			{
+				FieldLength  = ( <FieldLength> > 40 ) ? <FieldLength> : 40;
+			}
+			FieldType    = ~CHAR~;
+			MaskLength   = <FieldLength>;
+
+		}
+		else if ( SimilarStr( ~q~, ~<firstChar>~ ) &&
+				IsNumeric( ~<lastChar>~ ) )	// quantity
+		{
+//			FieldType    = ~LONG~;
+//			FieldLength  = 4;
+//			MaskLength   = 9;
+//			Mask         = ~#~;
+			if ( !SimilarStr( ~<FieldType>~, ~CHAR~ ) )
+			{
+				FieldLength  = ( <FieldLength> > 255 ) ? <FieldLength> : 40;
+			}
+			else
+			{
+				FieldLength  = ( <FieldLength> > 40 ) ? <FieldLength> : 40;
+			}
+			FieldType    = ~CHAR~;
+			MaskLength   = <FieldLength>;
+
+		}
+		else if ( strlen( String( StringInString, ~roll~,~<FieldName>~ ) ) > 0 ||
+					strlen( String( StringInString, ~ROLL~,~<FieldName>~ ) ) > 0 ||
+					strlen( String( StringInString, ~Roll~,~<FieldName>~ ) ) > 0 ||
+					SimilarStr( ~<FieldName>~, ~Roll~ ) )
+		{
+			FieldType    = ~CHAR~;
+			FieldLength  = 31;
+		}
+		else if ( strlen( String( StringInString, ~frame~,~<FieldName>~ ) ) > 0 ||
+					strlen( String( StringInString, ~FRAME~,~<FieldName>~ ) ) > 0 ||
+					strlen( String( StringInString, ~Frame~,~<FieldName>~ ) ) > 0 ||
+					SimilarStr( ~<FieldName>~, ~Frame~ ) )
+		{
+			FieldType    = ~CHAR~;
+			FieldLength  = 31;
+		}
+		else if ( SimilarStr(~<FieldType>~,~LONG~) )
+		{
+			MaskLength = 9;
+			Mask = ~#~;
+		}
+		else if ( SimilarStr(~<FieldType>~,~DOUBLE~) )
+		{
+			MaskLength = 9;
+			Mask = ~#~;
+			AllowedChars = ~.~;
+		}
+		else if ( SimilarStr(~<FieldType>~,~TEXT~,~STRING~) )
+		{
+			if ( strlen( String( StringInString, ~path~,~<FieldName>~ ) ) > 0 ||
+					strlen( String( StringInString, ~PATH~,~<FieldName>~ ) ) > 0 ||
+					strlen( String( StringInString, ~Path~,~<FieldName>~ ) ) > 0 ||
+					SimilarStr( ~<FieldName>~, ~Path~ ) )
+			{
+				FieldType    = ~LongText~;
+				FieldLength = <MAX_PATH_SIZE>;
+			}
+			else
+			{
+				FieldType     = ~CHAR~;
+				FieldLength = 40;
+			}
+			MaskLength    = <FieldLength>;
+		}
+
+		else if ( SimilarStr(~<FieldType>~,~CHAR~ ) )
+		{
+			if ( strlen( String( StringInString, ~path~,~<FieldName>~ ) ) > 0 ||
+					strlen( String( StringInString, ~PATH~,~<FieldName>~ ) ) > 0 ||
+					strlen( String( StringInString, ~Path~,~<FieldName>~ ) ) > 0 ||
+					SimilarStr( ~<FieldName>~, ~Path~ ) )
+			{
+				FieldType    = ~LongText~;
+				FieldLength = <MAX_PATH_SIZE>;
+			}
+			MaskLength = <FieldLength>;
+		}
+		else if ( SimilarStr( ~<FieldType>~,~DATE~ ) )
+		{
+			FieldType = ~DateTime~;
+		}
+		else if ( SimilarStr( ~<FieldType>~,~MACRO~ ) )
+		{
+			FieldType    = ~ProcessLongText~;
+		}
+
+		Values = STR ( '<TableName>',<Sequence>,'<FieldName>','<FieldType>',<FieldLength>,'<FieldName>',<MaskLength>,'<Mask>','<AllowedChars>',0,0 );
+
+		Cmd = STR ( Insert Into TableFormats(<Fields>) Values(<Values>) );
+
+		if ( !fConnection( CmdIn,Cmd ) ) 
+		{
+			WaitCursor( End );
+			fConnection( GetErrorDescription,theErr );
+			ShowError( ~CmdFailed~,~<Cmd>~,~<theErr>~ );
+			return FALSE;
+		}
+
+		ForgetPrivate( FieldsList<Position++> );
+	}
+
+
+	ForgetPrivate( MaxFields );
+	if ( <FieldNamesWithSpaces> )
+	{
+		ShowError( ~SpacesInFields~ );
+	}
+
+//	Action = STR ( QueueTableDefinitionsDoc(~<TableName>~); );
+
+	WaitCursor( End );
+
+//	return QueueContentsAfter( Action,1000 );
+	return TRUE;
+
+}
+
+NUMERIC SISetup::TableNameOkay( TableName )
+{
+	if ( strlen( ~<TableName>~ ) > 21 )
+	{
+		ShowError( ~TableNameTooLong~,~<TableName>~ );
+		return FALSE;
+	}
+
+	if ( !IsNull( String( StringInString,~ ~,~<TableName>~ ) ) )
+	{
+		ShowError( ~TableNameSpaces~,~<TableName>~ );
+		return FALSE;
+	}
+
+	confirmMsg = TR( SiWizardTrans, TableExists, ~<TableName>~ );
+	return DeleteExistingTable( ~<TableName>~, ~<confirmMsg>~ );
+}
+
+NUMERIC SISetup::DeleteExistingTable( TableName, ConfirmMsg )
+{
+	Connect();
+	if ( !PGenConList( SchemaList,Connection,fConnection,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		ShowError( ~SchemaQueryFailed~,~<theErr>~ );
+		return FALSE
+	}
+
+	SchemaList( Filter,~Table_Name = '<TableName>'~ );
+
+	if ( SchemaList( NumEntries ) > 0 )	// IS THE TABLE ALREADY IN THE DATABASE?
+	{
+		if ( MessageBox( ~<ConfirmMsg>~,YESNO ) != YES )
+		{
+			return FALSE;
+		}
+
+		NumRecords = fConnection( RecordCountFor,~Select * From <TableName>~ );
+
+		if ( <NumRecords> > 0 )		// ARE THERE RECORDS IN THE TABLE?
+		{
+			if ( MessageBox( TR( SiWizardTrans, RecordsToDelete,~<TableName>~,<NumRecords> ),YESNO ) != YES )
+			{
+				return FALSE;
+			}
+
+			WaitCursor( Begin );
+
+			ShowStatus( ~RecordsToDelete~,~<TableName>~ );
+		
+			if ( !fConnection( CMD,~Delete From <TableName>~ ) )
+			{
+				WaitCursor( End );
+				fConnection( GetErrorDescription,theErr );
+				ShowError( ~RecordsToDelete~,~<TableName>~,~<theErr>~ );
+				return FALSE;
+			}
+
+			WaitCursor( End );
+		}
+
+		if ( !fConnection( CMD,~DROP TABLE <TableName>~ ) )		// DROP THE TABLE
+		{
+			fConnection( GetErrorDescription,theErr );
+			ShowError( ~DropTableFailed~,~<TableName>~,~<theErr>~ );
+			return FALSE;
+		}
+
+		if ( MessageBox( TR(SiWizardTrans,DeleteTableDefMsg,~<TableName>~),YESNO ) == YES )
+		{
+			Path = ~<$App.ShareDirectory>\Scripts\UserTableDefinitions~;
+			Filename = ~<Path>\<TableName>.txt~;
+			Files( Delete, ~<Filename>~ );
+		}
+
+		// GET RID OF THE EXISTING MACROS FOR THIS TABLE
+		Cmd = ~Delete From Macros Where Category = '<TableName>'~;
+		fConnection( Cmd,~<Cmd>~ );
+	}
+
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+NUMERIC SISetup::TableDefFileExists( TheTableName, FileName, AskBeforeDelete )
+{
+	if ( Files( FileExists,~<Filename>~ ) )
+	{
+		if ( <AskBeforeDelete> )
+		{
+			if ( MessageBox( TR( SiWizardTrans,TableDefExists,~<FileName>~,~<TheTableName>~ ),YESNO ) != YES )
+			{
+				return TRUE;
+			}
+		}
+		else
+		{
+			return TRUE;
+		}
+
+		Files( Delete,~<Filename>~ );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC SISetup::TableExists( TheTableName, AskBeforeDelete )
+{
+	if ( !PGenConList( SchemaList,Connection,fConnection,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		ShowError( ~SchemaQueryFailed~,~<theErr>~ );
+		return TRUE;
+	}
+
+	SchemaList( Filter,~Table_Name = '<TheTableName>'~ );
+
+	if ( SchemaList( NumEntries ) > 0 )	// IS THE TABLE ALREADY IN THE DATABASE?
+	{
+//		if ( <AskBeforeDelete> )
+//		{
+//			if ( MessageBox( TR( SiWizardTrans, TableExists, ~<TheTableName>~ ),YESNO ) != YES )
+//			{
+//				return TRUE;
+//			}
+//		}
+//		else
+//		{
+//			return TRUE;
+//		}
+
+		NumRecords = fConnection( RecordCountFor,~Select * From <TheTableName>~ );
+
+		if ( <NumRecords> > 0 )		// ARE THERE RECORDS IN THE TABLE?
+		{
+			if ( <AskBeforeDelete> )
+			{
+				if ( MessageBox( TR( SiWizardTrans, RecordsToDelete,~<TheTableName>~,~<NumRecords>~ ),YESNO ) != YES )
+				{
+					return TRUE;
+				}
+			}
+			else
+			{
+				return TRUE;
+			}
+		
+			if ( !fConnection( CMD,~Delete From <TheTableName>~ ) )
+			{
+				fConnection( GetErrorDescription,theErr );
+				ShowError( DeleteRecordsFailed,~<TheTableName>~, ~<theErr>~ );
+				return TRUE;
+			}
+		}
+
+		if ( !fConnection( CMD,~DROP TABLE <TheTableName>~ ) )		// DROP THE TABLE
+		{
+			fConnection( GetErrorDescription,theErr );
+			ShowError( ~DropTableFailed~,~<TheTableName>~ ~<theErr>~ );
+			return TRUE;
+		}	
+
+		// GET RID OF THE EXISTING MACROS FOR THIS TABLE
+		Cmd = ~Delete From Macros Where Category = '<TableName>'~;
+		fConnection( Cmd,~<Cmd>~ );
+	}
+
+	ForgetLocal( SchemaList );
+	return FALSE;
+
+}
+
+NUMERIC SISetup::SaveTableDefinitionFile( TheTableName,AskBeforeDelete,NeedToVerify )
+{
+	if ( !Connect() )
+	{
+		return FALSE;
+	}
+
+	ForgetPrivate( FieldsList );
+	Query = ~Select * From TableFormats Where TableName = '<TheTableName>' Order By Sequence~;
+
+	if ( !PGenConList( FieldsList,Connection,fConnection,Cursor,Keyset,QUERY,~<Query>~ ) )
+	{
+		FieldsList( GetErrorDescription,0,theErr );
+		ShowError( ~QueryFailed~,~<Query>~,~<theErr>~ );
+		return FALSE;
+	}
+
+	Private( FieldsList );
+	if ( <NeedToVerify> )
+	{
+		if ( !VerifyInput() )
+		{
+			return FALSE;
+		}
+	}
+
+	Database = ~<$Sym.DatabaseManager>~;
+
+	SQLDouble	= ~<$[DATABASE/Managers].<Database>[SQLDouble]>~;
+	SQLDate		= ~<$[DATABASE/Managers].<Database>[SQLDate]>~;
+	SQLLongText = ~<$[DATABASE/Managers].<Database>[SQLLongText]>~;
+	SQLInteger  = ~<$[DATABASE/Managers].<Database>[SQLInteger]>~;
+	SQLChar		= ~<$[DATABASE/Managers].<Database>[SQLChar]>~;
+
+	Path = ~<$App.ShareDirectory>\Scripts\UserTableDefinitions~;
+	Filename = ~<Path>\<TheTableName>.txt~;
+
+	if ( !Directory( Create,~<Path>~ ) )
+	{
+		ShowError( ~CreateDirFailed~,~<$str.$Path.cpath>~ );
+		return FALSE;
+	}
+
+	if ( TableDefFileExists( ~<TheTableName>~, ~<$str.$FileName,cpath>~,<AskBeforeDelete> ) )
+	{
+		return FALSE;
+	}
+
+	// MAKE SURE THE TABLE IS NOT ALREADY IN THE DATABASE
+
+	if ( TableExists( ~<TheTableName>~,<AskBeforeDelete> ) )
+	{
+		return FALSE;
+	}
+
+	if ( !file( TheFile,Open,~<Filename>~,Create,Write ) )
+	{
+		ShowError( ~FileCreateFailed~,~<$str.$Filename.cpath>~ );
+		return FALSE;
+	}
+
+	TheFile( ~VOID Define<TheTableName>Table()~ );
+	TheFile( ~{~ );
+
+	TheFile( ~ Define:	<TheTableName>Fields Using DDLong~ );
+	TheFile( ~	Contains:	InListOrder~ );
+	TheFile( ~	{~ );
+
+	Position = 0;  PrimaryKey = ~~;
+
+	StringList( IndexList,New );
+
+	more = FieldsList( GetFirst,Field );
+	while ( <more> )
+	{
+		name = ~<$pcon.Field[FieldName]>~;
+		if ( SimilarStr(~<$pcon.Field[FieldType]>~,~LONG~) )
+		{
+			FieldType = ~<SQLInteger>~;
+			FieldLength = 4;
+		}
+		else if ( SimilarStr(~<$pcon.Field[FieldType]>~,~DOUBLE~) )
+		{
+			FieldType = ~<SQLDouble>~;
+			FieldLength = 8;
+		}
+		else if ( SimilarStr( ~<$pcon.Field[FieldType]>~,~DateTime~ ) )
+		{
+			FieldType = ~<SQLDate>~;
+		}
+		else if ( SimilarStr( ~<$pcon.Field[FieldType]>~, ~LongText~ ) )
+		{
+			FieldType = ~<SQLLongText>~ ;
+		}
+		else if ( SimilarStr( ~<$pcon.Field[FieldType]>~, ~ProcessLongText~ ) )
+		{
+			FieldType = ~<SQLLongText>~ ;
+		}
+		else
+		{
+			FieldType = ~<SQLChar>(<$pcon.Field[FieldLength]>)~;
+		}
+
+		if ( Numeric(~<$pcon.Field[PrimaryKey]>~) )	// IS THIS FIELD PART OF THE PRIMARY KEY?
+		{
+			PrimaryKey = strlen(~<PrimaryKey>~) ? ~<PrimaryKey>,<$pcon.Field[FieldName]>~ : ~<$pcon.Field[FieldName]>~;
+		}
+
+		if ( Numeric(~<$pcon.Field[IndexOn]>~) )	// WILL THIS FIELD BE INDEXED?
+		{
+			IndexList( AddString,~<$pcon.Field[FieldName]>~ );
+		}
+
+		TheMask = ~|<$pcon.Field[Mask]>|~;			// ASSUME THE MASK WAS SPECIFIED EXPLICITLY
+
+		if ( Numeric(~<$pcon.Field[MaskLength]>~) )	// UNLESS A LENGTH WAS SPECIFIED
+		{
+			TheMask = STR ( RepeatStr(<$pcon.Field[MaskLength]>,|<$pcon.Field[Mask]>|) );
+		}
+
+		TheFile( ~	 Define: |<$pcon.Field[FieldName]>|	using DDCtrlMaskEditDef~ );
+		TheFile( ~		Fields:	Definition			|<FieldType>|~);
+		TheFile( ~			Displayname		|<$pcon.Field[DisplayName]>|~ );
+		TheFile( ~			Mask			<TheMask>~ );
+		TheFile( ~			AllowedChars		|<$pcon.Field[AllowedChar]>|~ );
+		TheFile( ~			DisAllowedChars		|<$pcon.Field[DisAllowedChar]>|~ );
+		TheFile( ~			PromptChar		| |~ );
+		TheFile( ~ ~ );	
+
+		more = FieldsList( GetNext,Field );
+	}
+
+	TheFile( ~	}~ );
+	TheFile( ~ ~ );
+	TheFile( ~ Define: <TheTableName>TableIndexes Using DDLong~ );
+	TheFile( ~	Contains:	InListOrder~ );
+	TheFile( ~	{~ );	
+
+	more = IndexList( First,GetString,FieldName );
+
+	while ( <more> )	// CREATE EACH INDEX
+	{
+		TheFile( ~			 Define: <FieldName>Index Using DDText~ );
+		TheFile( ~				Fields:	Text	|Create Index <FieldName>Index on <TheTableName>(<FieldName>)|~ );
+	
+		if ( more = IndexList( GetNextString,FieldName ) )
+		{
+			TheFile( ~ ~ );		
+		}
+	}
+
+	TheFile( ~			}~ );
+
+	RemainingDefinition = STR 
+(
+
+ Define: <TheTableName>TableConstraints Using DDLong
+	Contains: InListOrder
+	{
+		Define: <TheTableName>PrimaryKey Using DDText
+			Fields:	Text	~Constraint <TheTableName>PK PRIMARY KEY(<PrimaryKey>)~
+	}
+
+ Define: <TheTableName>			Using DDDatabaseTableDef
+	Fields:		TableName		<TheTableName>
+			TableConstraints		<TheTableName>TableConstraints(GetObjectReference)
+			Indexes			<TheTableName>TableIndexes(GetObjectReference)
+			Fields			<TheTableName>Fields(GetObjectReference) ;
+
+ Tree( Name,~<TheTableName>~,Location,~[DATABASE TableDefinitions]~,PluckAndFree );
+ Hang:	<TheTableName> ~[DATABASE TableDefinitions]~ InListOrder; 
+);
+
+	TheFile( WriteContentsOf,RemainingDefinition );
+
+	TheFile( ~}~ );
+	TheFile( ~ ~ );
+	TheFile( ~Define<TheTableName>Table();~ );
+
+	TheFile( Close );
+
+	ShowStatus( ~TableDefSuccessful~,~<Path>~ );
+	ForgetPrivate( FieldsList );
+	return TRUE;
+}
+
+
+NUMERIC SISetup::VerifyInput()
+{
+	FieldLengthsOf255 = 0;
+	MaskLengthMisMatch = 0;
+	FieldNameHasSpaces = 0;
+	ExtraIndeces = 0;
+	FatalErrors = 0;
+	PrimaryKeyFields = 0;
+
+	RowNumber = 1;
+	NameErrorList	 = ~~;
+	LengthErrorList  = ~~;
+	MaskErrorList	 = ~~;
+
+	while ( FieldsList( GetNext,Row ) )
+	{
+		name = ~<$pcon.Row[FieldName]>~;
+		if ( String( StringInString,~ ~,~<$pcon.Row[FieldName]>~ ) != ~~ )
+		{
+			++FieldNameHasSpaces;
+			++FatalErrors;
+			NameErrorList = strlen( ~<NameErrorList>~ ) ? ~<NameErrorList>, <$pcon.Row[Sequence]>~ : ~<$pcon.Row[Sequence]>~;
+		}
+
+		if ( MakeNumber( ~<$pcon.Row[IndexOn]>~ ) )
+		{
+			++ExtraIndeces;
+		}
+
+		if ( MakeNumber( ~<$pcon.Row[PrimaryKey]>~ ) )
+		{
+			++PrimaryKeyFields;
+		}
+
+		if ( MakeNumber( ~<$pcon.Row[FieldLength]>~ ) >= 255 )
+		{
+			++FieldLengthsOf255;
+//			DataView( SetSelected,Range,$RowNumber,$RowNumber );
+			LengthErrorList = strlen( ~<LengthErrorList>~ ) ? ~<LengthErrorList>,  <$pcon.Row[Sequence]>~ : ~<$pcon.Row[Sequence]>~;
+		}
+
+		if ( SimilarStr( ~<$pcon.Row[FieldType]>~,~CHAR~,~TEXT~ ) )
+		{
+			if ( MakeNumber( ~<$pcon.Row[FieldLength]>~ ) != MakeNumber( ~<$pcon.Row[MaskLength]>~ ) )
+			{
+				++MaskLengthMisMatch;
+				MaskErrorList = strlen( ~<MaskErrorList>~ ) ? ~<MaskErrorList>,  <$pcon.Row[Sequence]>~ : ~<$pcon.Row[Sequence]>~;
+//				DataView( SetSelected,Range,$RowNumber,$RowNumber );
+			}
+		}
+
+		++RowNumber;
+	}
+
+	if ( !<PrimaryKeyFields> )
+	{
+		++FatalErrors;
+	}
+	
+	NamesNote	= Strlen( ~<NameErrorList>~ ) ? ~(Sequence Number(s): <NameErrorList>)~ : ~~;
+	LengthNote	= Strlen( ~<LengthErrorList>~ ) ? ~(Sequence Number(s): <LengthErrorList>)~ : ~~;
+	MaskNote	= Strlen( ~<MaskErrorList>~ ) ? ~(Sequence Number(s): <MaskErrorList>)~ : ~~;
+	
+	if ( ~<NamesNote>~ != ~~ )
+	{
+		SpacesMsg = TR( SiWizardTrans, FatalSpacesFields,     <FieldNameHasSpaces>, ~<NamesNote>~ );
+	}
+	else
+	{
+		SpacesMsg = TR( SiWizardTrans, SpacesFields,     <FieldNameHasSpaces>, ~<NamesNote>~ );
+	}
+	LengthMsg = TR( SiWizardTrans, LengthFields,     <FieldLengthsOf255>,  ~<LengthNote>~ );
+	MaskMsg	  = TR( SiWizardTrans, MaskLenFields,    <MaskLengthMisMatch>, ~<MaskNote>~ );
+	IndexMsg  = TR( SiWizardTrans, ExtraIndexFields, <ExtraIndeces> );
+	if ( !<PrimaryKeyFields> )
+	{
+		PrimMsg   = TR( SiWizardTrans, FatalPrimaryKeyFields, <PrimaryKeyFields> );
+	}
+	else
+	{
+		PrimMsg   = TR( SiWizardTrans, PrimaryKeyFields, <PrimaryKeyFields> );
+	}
+	FatalMsg  = TR( SiWizardTrans, FatalErrors,      <FatalErrors> );
+
+	
+	Summary = STR
+(
+	<SpacesMsg>
+	<LengthMsg>
+	<MaskMsg>
+
+	<IndexMsg>
+	<PrimMsg>
+	
+	<FatalMsg>
+ );
+
+	if ( <FatalErrors> )
+	{
+		Warning( ~<Summary>~ );
+		ShowError( ~CreateErrorDetail~ );
+	}
+
+	return <FatalErrors> == 0;
+}
+
+NUMERIC SISetup::CreateTheTable( TheTableName )
+{
+
+	if ( ~<TheTableName>~ == ~~ )
+	{
+		ShowError( ~NoTableSpecified~ );
+		return FALSE;
+	}
+
+	Path = ~<$App.ShareDirectory>\Scripts\UserTableDefinitions\<TheTableName>.txt~;
+
+	if ( !Files( FileExists,~<Path>~ ) )
+	{
+		ShowError( ~NoTableDefFile~,~<$str.$Path.cpath>~ );
+		return FALSE;
+	}
+
+	ExecuteFile( ~<Path>~ );
+
+	if ( CreateTable( ~<TheTableName>~ ) )
+	{
+		ShowStatus( ~CreationComplete~,~<TheTableName>~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC SISetup::CreateTable( TheTableName )
+{
+	if ( !Connect() )
+	{
+		fConnection( GetErrorDescription,theErr );
+		ShowError( ~DropTableFailed~,~<theErr>~ );
+		return FALSE;
+	}
+
+	if ( !GenCon( TableDefinitions,GetFrom,~TableDefinitions~,~[Database]~ ) )
+	{ 
+		ShowError( ~CouldNotFindTableDef~,~<TableDefinitions>~ );
+		return FALSE;
+	}
+
+	if ( !TableDefinitions( GetByName,<TheTableName>,TableDefinition ) )
+	{
+		
+		ShowError( ~CouldNotFindTable~,~<TheTableName>~, ~<TableDefinitions>~ );
+		return FALSE;
+	}
+
+	TableDefinition( CreateTableDefinition,Definition,fConnection );
+	TableDefinition( Get,TableName,Tablename );
+
+	if ( !fConnection( CMD,~CREATE TABLE <TheTableName> (<Definition>)~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		OtherInfo = TR( SiWizardTrans,CreateFailedExplanation );
+		ShowError( ~CreateTableFailed~,~<TheTableName>~,~<Definition>~,~<theErr>~,~<OtherInfo>~ );
+		return FALSE;
+	}
+
+	if ( GenCon( TableIndexes,Is,TableDefinition(GetNumeric,Indexes) ) )
+	{
+		while ( TableIndexes( GetNext,IndexDefinition ) )
+		{	
+			if ( !fConnection( CMD,~<$Con.IndexDefinition[Text]>~ ) )
+			{
+				fConnection( GetErrorDescription,theErr );
+				ShowError( ~CreateIndexFailed~, ~<TheTableName>~, ~<$Con.IndexDefinition[Text]>~, ~<theErr>~ );
+				return FALSE;
+			}	
+		}
+	}
+
+	return AddMacrosForSubjectInfoTable( ~<TheTableName>~ );
+}
+
+NUMERIC SISetup::AddMacrosForSubjectInfoTable( TableName )
+{
+	Query = ~Select * From <TableName> where SubjectID = '1'~;
+
+	if ( !PGenConList( List,Connection,fConnection,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ShowError( ~QueryFailed~,~<Query>~,~<theErr>~ );
+		return FALSE;
+	}
+
+	// GET RID OF THE EXISTING MACROS FOR THIS TABLE
+	Cmd = ~Delete From Macros Where Category = '<TableName>'~;
+	fConnection( Cmd,~<Cmd>~ );
+
+	Fields = ~Category,Name,Description,Enabled,Activate~;
+	
+	Index = 0;
+
+	while ( List( GetFieldName,<Index++>,FieldName ) )
+	{
+		action = ~<$@Func.SubjectFieldForNode(%NODENUMBER%,<FieldName>)>~;
+		
+		Values = STR ( '<TableName>','<TableName> <FieldName> For Node','Subject <FieldName> For a Node',1,'<action>' );
+		
+		Cmd = STR ( Insert Into Macros(<Fields>) Values(<Values>) );
+
+		if ( !fConnection( Cmd,~<Cmd>~ ) )
+		{
+			fConnection( GetErrorDescription,theErr );
+			ShowError( ~MacroInsertFailed~, ~<Cmd>~, ~<theErr>~ );
+			return FALSE;
+		}
+	}
+	
+	return TRUE;	
+}
+
+NUMERIC ExecuteFile( Path )
+{
+	Document( doc );
+
+	if ( !doc( ParseFile,~<Path>~ ) )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+

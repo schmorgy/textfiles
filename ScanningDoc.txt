@@ -1,0 +1,1209 @@
+
+NUMERIC RefreshThumbNailView( Requery )
+{
+	if ( $Requery )
+	{
+		if ( !ImagesList( Requery ) )
+			{ return Warning( SysErrMsg() ); }
+	}
+
+	//ImagesThumbNailWindow( AddCategories,ImagesThumbNailCategory,OrderID,~<WhichOrders>~ );
+	ImagesThumbNailWindow( CreateThumbNailViews,ImagesThumbNailCategory,ImagesThumbNailImage,ImagesList,OrderID,OrderImage,~<WhichOrders>~ );
+	ImagesThumbNailWindow( RefreshWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC RefreshListView( Requery )
+{
+	if ( ImagesDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( $Requery )
+	{
+		if ( !ImagesList( Requery ) )
+			{ return Warning( SysErrMsg() ); }
+	}
+
+	ImagesDataWindow( RefreshWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC RefreshAllViews( Requery )
+{
+	Queue( ~RefreshThumbNailView( <Requery> );~ );
+	Queue( ~RefreshListView( FALSE )~ );
+
+	return TRUE;
+}
+
+
+ImagesDataWindowCreated = FALSE;
+
+VOID ShowListView()
+{
+	ImagesDataWindow( CreateWindow,~Image Data~ );
+	ImagesDataWindowCreated = TRUE;
+}
+
+
+NUMERIC ViewOrderInfo()
+{
+	List = ~~;
+
+	More = ImagesThumbNailWindow( GetFirst,View );
+
+	while ( $More )
+	{
+		View( Get,Text,OrderID );
+		List = (~<List>~ == ~~) ?  ~'<OrderID>'~ : ~<List>,'<OrderID>'~;
+		More = ImagesThumbNailWindow( GetNext,View );
+	}
+
+	if ( ~<List>~ == ~~ )
+		{ return FALSE; }
+
+	Query = ~SELECT * FROM Orders WHERE ID In (<List>) ORDER BY ID~ ;
+
+	Actions = ACTION Doc ( ~Orders~ Open OrdersDoc "Init( ~<List>~,~<Query>~ );" );
+
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+
+NUMERIC OpenOrderItemsAsImages()
+{
+	List = ~~;
+
+	More = ImagesThumbNailWindow( GetFirst,View );
+
+	while ( $More )
+	{
+		View( Get,Text,OrderID );
+		List = (~<List>~ == ~~) ?  ~'<OrderID>'~ : ~<List>,'<OrderID>'~;
+		More = ImagesThumbNailWindow( GetNext,View );
+	}
+
+	if ( ~<List>~ == ~~ )
+		{ return FALSE; }
+
+	Query = ~SELECT * FROM OrderItems WHERE OrderID In (<List>) ORDER BY OrderID,ID~ ;
+
+	Actions = ACTION Doc ( ~OrderItems~ OpenOnce OrderItemsDoc "Init( ~<List>~,~<Query>~,TRUE );" );
+
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+NewString( MagNames,Set,		~Undefined,35mm,35mm/Unperfed,46mm,46mm/Unperfed,62mm/4.5x6,62mm/6x4.5,62mm/6x6,62mm/6x7,62mm/6x9,70mm,70mm/Unperfed~,Delimiters,~,~ );
+NewString( Magnifications,Set,	~0,2150,1678,1291,1210,1226,910,910,910,910,802,800~,Delimiters,~,~ );
+NewString( ApertureWid,Set,		~0,0x0593,0x0670,0x07AB,0x09FF,0x08B3,0x0672,0x08B3,0x0AB8,0x0CD2,0x0C70,0x0D61~,Delimiters,~,~ );
+NewString( ApertureLen, Set,	~0,0x03BB,0x04C4,0x0622,0x069D,0x0672,0x08B3,0x08B3,0x08B3,0x08B3,0x09E0,0x09FF~,Delimiters,~,~ );
+NewString( ApertureOfs, Set,	~0,0x0057,0x0057,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000,0x0000~,Delimiters,~,~ );
+
+
+NUMERIC LoadScannerRoutines()
+{
+	if (  !Sizzle( scanner,LoadLib,Create ) )
+	{
+		return 0;
+	}
+
+	scanner( Version,Major,Minor );
+
+	if (  !scanner( Find,Count ) )
+	{
+		Warning( ~No scanners found~ );
+		return 0;
+	}
+
+	Global( Scanner );
+
+	return scanner( Select,0 );
+}
+VOID SetupFilmTypeInfo()
+{
+	Dictionary:			DDSizzleFilmType
+		Fields: Name	negative Type  long
+		Fields: Name	filmCorrectionMode Type  long
+		Fields: Name	redDyeGreenOpacity Type  long
+		Fields: Name	redDyeBlueOpacity Type  long
+		Fields: Name	greenDyeRedOpacity Type  long
+		Fields: Name	greenDyeBlueOpacity Type  long
+		Fields: Name	blueDyeRedOpacity Type  long
+		Fields: Name	blueDyeGreenOpacity Type  long
+		Fields: Name	redDyeGreenSensitivity Type  long
+		Fields: Name	redDyeBlueSensitivity Type  long
+		Fields: Name	greenDyeRedSensitivity Type  long
+		Fields: Name	greenDyeBlueSensitivity Type  long
+		Fields: Name	blueDyeRedSensitivity Type  long
+		Fields: Name	blueDyeGreenSensitivity Type  long
+		Fields: Name	redFilter Type  long
+		Fields: Name	redDMMin Type  long
+		Fields: Name	redDMin Type  long
+		Fields: Name	redND Type  long
+		Fields: Name	redDMax Type  long
+		Fields: Name	redDMMax Type  long
+		Fields: Name	redFilmGamma Type  long
+		Fields: Name	greenFilter Type  long
+		Fields: Name	greenDMMin Type  long
+		Fields: Name	greenDMin Type  long
+		Fields: Name	greenND Type  long
+		Fields: Name	greenDMax Type  long
+		Fields: Name	greenDMMax Type  long
+		Fields: Name	greenFilmGamma Type  long
+		Fields: Name	blueFilter Type  long
+		Fields: Name	blueDMMin Type  long
+		Fields: Name	blueDMin Type  long
+		Fields: Name	blueND Type  long
+		Fields: Name	blueDMax Type  long
+		Fields: Name	blueDMMax Type  long
+		Fields: Name	blueFilmGamma Type  long
+		Fields: Name	redOutputGamma Type  long
+		Fields: Name	greenOutputGamma Type  long
+		Fields: Name	blueOutputGamma Type  long ;
+
+	Define: Gold200FilmType Using DDSizzleFilmType
+		Fields:	negative					 0xFF			
+				filmCorrectionMode			 0x00
+				redDyeGreenOpacity			 0x87
+				redDyeBlueOpacity			 0x80
+				greenDyeRedOpacity			 0x7E
+				greenDyeBlueOpacity			 0x80
+				blueDyeRedOpacity			 0x81
+				blueDyeGreenOpacity			 0x00
+				redDyeGreenSensitivity		 0x00
+				redDyeBlueSensitivity		 0x00
+				greenDyeRedSensitivity		 0x00
+				greenDyeBlueSensitivity		 0x00
+				blueDyeRedSensitivity		 0x00
+				blueDyeGreenSensitivity		 0x00
+				redFilter					 0x03
+				redDMMin					 0x0E
+				redDMin						 0x0E
+				redND						 0x2F
+				redDMax						 0x32
+				redDMMax					 0x32
+				redFilmGamma				 0x1F
+				greenFilter					 0x04
+				greenDMMin					 0x25
+				greenDMin					 0x25
+				greenND						 0x2D
+				greenDMax					 0x32
+				greenDMMax					 0x32
+				greenFilmGamma				 0x1F
+				blueFilter					 0x01
+				blueDMMin					 0x2E
+				blueDMin					 0x2E
+				blueND						 0x2B
+				blueDMax					 0x32
+				blueDMMax					 0x32
+				blueFilmGamma				 0x1F
+				redOutputGamma				 90
+				greenOutputGamma			 90
+				blueOutputGamma				 90;
+
+	Global( Gold200FilmType );
+}
+
+
+VOID SetupSizzleControl()
+{
+	Tree( Location,~[Dictionaries]~,Name,SizzleControlDict,PluckAndFree );
+
+	Dictionary:	SizzleControlDict
+		Fields: Name	xPos				Type long
+		Fields: Name	yPos				Type long
+		Fields: Name	width				Type long
+		Fields: Name	length				Type long
+
+		Fields: Name	GrayScan			Type  long
+		Fields: Name	BitsPerPixel		Type  long
+		Fields: Name	Sharpen				Type  long
+		Fields: Name	Rotation			Type  long
+		Fields: Name	Focus				Type  long
+		Fields: Name	AutoBalance			Type  long
+		Fields: Name	ColorCorrection		Type  long
+		Fields: Name	ApertureWidth		Type  long
+		Fields: Name	ApertureHeight		Type  long
+		Fields: Name	DynamicRange		Type  long
+		Fields: Name	Size				Type  long
+
+		Fields: Name	redOverride			Type  long
+		Fields: Name	greenOverride		Type  long
+		Fields: Name	blueOverride		Type  long
+		Fields: Name	contrastOverride	Type  long
+		Fields: Name	brightnessOverride	Type  long ;
+
+	Define:	SizzleControl Using SizzleControlDict
+		Fields:	xPos				 0
+				yPos				 0
+				width				 768
+				length				 512
+				GrayScan			 0
+				BitsPerPixel		 8
+				Sharpen				 0
+				Rotation			 0
+				Focus				 0
+				AutoBalance			 0
+				ColorCorrection		 0
+				ApertureWidth		 ~<ApWidth>~
+				ApertureHeight		 ~<ApLeng>~
+				DynamicRange		 0
+				Size				 500
+				redOverride			 0
+				greenOverride		 0
+				blueOverride		 0
+				contrastOverride	 0
+				brightnessOverride	 0 ;
+
+	Global( SizzleControl );
+}
+
+Sequence = 0;
+
+//=====================================================================
+NUMERIC ScanAFrame( &FrameToScan )
+{
+	// Move the film
+	// Setup the scanner
+	// Start the scan
+	Path = ~<$App.Directory>\OrderImages\<$con.FrameToScan[OrderID]>\<$con.FrameToScan[Roll]>~;
+	Directory( Create,~<Path>~ );
+	Path = ~<Path>\<$con.FrameToScan[Frame]>~;
+	Files( Remove,~<Path>~ );
+	DoAScan( ~<Path>~ );
+	// Update the database
+	AddImageToDatabase(~<$con.FrameToScan[OrderID]>~,~<$con.FrameToScan[Roll]>~,
+							~<$con.FrameToScan[Frame]>~,~<Path>~,<++Sequence>);
+	// Complete the scan
+	// Update the UI
+
+	return TRUE;
+}
+//============================================================================================
+VOID DoAScan( Path )
+{
+
+	success = scanner( SetWindow,~Gold200FilmType~,~SizzleControl~ );
+
+	success = scanner( Scan );
+
+	scanner( Fetch,~<Path>~,120 * 1000 );
+}
+
+NUMERIC InitializeTheScanner()
+{
+	SetupFilmTypeInfo();
+
+	SetupSizzleControl();
+
+	DesiredMag = ~35mm~;
+	MagIndex = MagNames( IndexOf,~<DesiredMag>~ );
+
+	SizzleControl( SetValues,XPOS,0,YPOS,0,WIDTH,768,LENGTH,512);
+	SizzleControl( SetValues,APERTUREWIDTH,atof(ApertureWid(ValueOf,$MagIndex)),APERTUREHEIGHT,atof(ApertureLen(ValueOf,$MagIndex)),SIZE,500 );
+
+	LoadScannerRoutines();
+
+	scanner( ReLoadComplete );
+
+	return TRUE;
+
+}
+
+
+NUMERIC AddImageToDatabase(Order,Roll,Frame,ImagePath,Sequence)
+{
+	RemoveCmd = ~Delete From Images Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+	RemoveCmd2 = ~Delete From SBAImages Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+	xres = yres = 0;
+
+	//FormattedFrame = IsNumber( ~<Frame>~ ) ? Format( ~<Frame>~,~%03ld~ ) : ~<Frame>~;
+
+	//FormattedFrame = IsNumber( ~<Frame>~ );
+
+	Fields		= ~OrderID,Roll,Frame,Path,Category,Sequence,Gamma,Width,Length~;
+	Values		= ~'<Order>','<Roll>','<Frame>','<ImagePath>','All',<Sequence>,1.0,<xRes>,<yRes>~;	
+	InsertCmd	= ~Insert Into Images(<Fields>) Values(<Values>)~;
+
+	db( CMD,~<RemoveCmd>~ );	// OKAY FOR THIS TO ERROR OUT
+	db( CMD,~<RemoveCmd2>~ );	// OKAY FOR THIS TO ERROR OUT
+
+	if ( !db( CMD,~<InsertCmd>~ ) )
+	{
+		db( GetErrorDescription,theErr );
+		return Warning( ~Could not <cmd>. <theErr>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ScanSelectedImages()
+{
+	if ( !ImagesDataView( GetSelectedRows,FramesToScan) )		
+		{ return Warning( ~There were no rows selected~ ); }
+
+	if ( !InitializeTheScanner() )
+		{ return Warning( ~some kind of error~ ); }
+
+	while ( FramesToScan( GetNext,FrameToScan ) )
+	{
+		retval = ScanAFrame( FrameToScan );
+		RefreshThumbNailView( TRUE );
+	}
+
+	MessageBox( ~Complete Scanning~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OpenSelectedImages()
+{
+	if ( !ImagesDataView( GetSelectedRows,ImagesToOpen ) )		
+		{ return Warning( ~There were no rows selected~ ); }
+
+	while ( ImagesToOpen( GetNext,ImageToOpen ) )
+	{
+		if ( !OpenExistingImage( ~<$con.ImageToOpen[Path]>~ ) )
+			{ ImageToOpen( Open,Image,Path ); }
+
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OpenExistingImage( Path )
+{
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == ImageView )
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<Path>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+		}
+	}
+
+	return FALSE;
+}
+
+//============================== Remove "A" from AddAThumbNailToImage============
+//===========================For new Ima change==================================
+VOID AddAThumbNailToImage( Path )
+{
+	// change this to queue the operation in the background
+
+	if ( !Ima( anIma ) )
+		{ return Warning( ~Unable to instantiate the render subsystem~ ); }
+
+	theType = TIFF;
+	dstFile = ~<srcFile>p~;
+
+	Files( Delete,~<dstFile>~ );
+
+	result = anIma( AddThumbNailToImage,~<Path>~,~<dstFile>~,~<theType>~ );
+}
+
+
+NUMERIC AddThumbNailToSelectedImages()
+{
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	if ( !View( GetSelected,SelectedImages ) )		
+		{ return Warning( ~There were no Orders Items selected~ ); }
+
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		if ( <$con.Image[IsSelected]> )
+		{
+			if ( !AddAThumbNailToImage( ~<$con.Image[Path]>~ ) )
+				{ return FALSE; }
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OpenSelectedThumbNailImages()
+{
+	if ( !GenCon( ImageView,GETACTIVEVIEW ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	while ( ImageView( GetNext,ImageToOpen ) )
+	{
+		if ( <$con.ImageToOpen[IsSelected]> )
+		{
+			if ( !OpenExistingImage( ~<$con.ImageToOpen[Path]>~ ) )
+				{ ImageToOpen( Open,Image,Path ); }
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RemoveSelectedImages( DeleteImageFile )
+{
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return Warning( ~There is no active order~ ); }			
+
+	if ( ~<$con.View[ViewDataType]>~ != OrderImages )
+		{ return Warning( ~The view does not contain OrderItems~ ); }
+
+	if ( View(Empty) )
+		{ return Warning( ~There are no Images to delete~ ); }
+
+	if ( MessageBox( ~Are you sure you want to remove the images marked for deletion? ~,YESNO ) == NO )
+		{ return TRUE; }
+
+	Count = 0;
+	while ( View( GetPrev,Image )   )
+	{
+		if ( !<$Con.Image[IsSelected]> )	
+			continue;
+		
+		++Count;
+
+		Path = ~<$Con.Image[Info3]>~;
+
+		//View( REMOVE,Image );						
+		//ImagesThumbNailWindow( RefreshWindow );
+
+		View( ReleaseImage,~<Path>~ );
+		
+		if ( <DeleteImageFile> )
+		{	
+			if ( !Files( Delete,~<Path>~ ) )
+			{
+				err = GetLastErrorMsg();
+				RefreshThumbNailView( TRUE );
+				return Warning( ~The IMA folks are looking into this!  Could not delete <Path>. <err>~ );
+			}
+		}
+
+		if ( !db( CMD,~Delete FROM Images WHERE <$con.Image[Key]>~ ) )
+		{
+			db( GetErrorDescription,theErr );
+			RefreshThumbNailView( TRUE );
+			return Warning( ~Could not delete the Image where <$con.Image[Key]>.  <theErr>~ );
+		}
+		db( CMD,~Delete FROM SBAImages WHERE <$con.Image[Key]>~ ); //ok to error out
+	}
+
+	RefreshThumbNailView( TRUE );
+
+	if ( $Count <= 0 )
+		{ return Warning( ~There are no Images marked for deletion~ ); }
+
+	return TRUE;
+}
+
+
+STR GetKey( &Image )
+{
+	Key = ~OrderID = '<$con.Image[OrderID]>'	AND
+				Roll = '<$con.Image[Roll]>'			AND
+				Frame = '<$con.Image[Frame]>'~;
+
+	return ~<Key>~;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !ImagesDataView( GetChangedRow,ChangedImage,OrigImage,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( <IsNewRow> )
+	{
+		ImagesList( GenerateInsertsFor,ChangedImage,Fields,Values );
+		cmd = ~Insert Into Images(<Fields>) Values(<Values>)~;
+	}
+	else
+	{
+		Key = GetKey( OrigImage );
+		ImagesList( GenerateUpdatesFor,ChangedImage,OrigImage,Updates );
+		cmd = ~Update Images Set <Updates> Where <Key>~;
+	}
+
+	Log( Session,~<cmd>~ );
+
+
+	if ( !db( CMD,~<cmd>~ ) )
+	{	
+		ImagesDataView( RollBackChanges );
+		db( GetErrorDescription,theErr );
+		return Warning( ~Could not <cmd>. <theErr>~ );
+	}
+
+	ImagesDataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !ImagesDataView( GetSelectedRows,ImagesToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	if ( MessageBox( ~Are you sure you want to delete the selected images?~,YESNO ) != YES )
+		{ return; }
+
+	StringList( RowsToDelete,New );
+
+	while ( ImagesToDelete( GetNext,ImageToDelete ) )
+	{
+		Key = GetKey( ImageToDelete );
+
+		if ( !db( CMD,~Delete From Images Where <Key>~ ) )
+		{
+			db( GetErrorDescription,theErr );
+			Warning( ~Could not delete Image where <key>. <theErr>~ );
+			break;
+		}
+		db( CMD,~Delete From SBAImages Where <Key>~ ); //ok to error out
+
+		RowsToDelete( AddString,ImagesToDelete(GetCurrentPosition) );
+	}
+
+	ImagesDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	GenCon( NewRow,NewFrom,ImagesList(GetDataDictionary) );
+	
+	RowBeingAdded = ImagesDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	ImagesDataView( SetActiveCell,<RowBeingAdded>,~ID~ );
+
+	return TRUE;
+}
+
+
+NUMERIC AddCategory()
+{
+	if ( !GenCon( TheActiveWindow,GetActiveWindow ) )
+		{ return Warning( ~There was no active window to add a category to~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC RenameCategory()
+{
+	if ( !GenCon( ActiveView,GETACTIVEVIEW,GETNAME,NewCategory,GET,PreviousCategoryName,PrevCategory ) )
+		{ return Warning( ~There was no active view for adding a category~ ); }
+
+	if ( !db( CMD,~UPDATE Images SET Category = '<NewCategory>' WHERE Category = '<PrevCategory>'~ ) )
+	{
+		db( GetErrorDescription,theErr );
+		return Warning( ~Could not change category name from <PrevCategory> to <NewCategory>. <theErr>~ );
+	}
+
+	
+	return TRUE;
+}
+
+
+NUMERIC DeleteCategory()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( ~There was no active view for deleting a category~ ); }
+
+	ActiveView( GetName,Category );
+
+	if ( MessageBox( ~Are you sure you want to remove all Images from category <Category>~,YESNO ) == YES )
+	{
+		if ( !db( CMD,~DELETE From Images WHERE Category = '<Category>'~ ) )
+		{
+			db( GetErrorDescription,theErr );
+			return Warning( ~Could not remove images from the category <Category>.  <theErr>~ );
+		}
+		
+		RefreshAllViews( TRUE );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC ResequenceImageInCategory( Key,Category,FromLocation,ToLocation )
+{
+	if ( $FromLocation == $ToLocation )		// DID IT REALLY MOVE?
+		{ return TRUE; }					// NOPE, THERE IS NOTHING TO UPDATE
+
+	if ( $FromLocation > $ToLocation )		// A DRAG TO EARLIER IN THE LIST?
+	{
+		theSQL = ~UPDATE Images SET Sequence = Sequence + 1 WHERE Category = '<Category>' AND 
+					Sequence < <FromLocation> AND Sequence >= <ToLocation>~;
+	}
+	else									// NOPE, A DRAG TO LATER IN THE LIST
+	{
+		theSQL = ~UPDATE Images SET Sequence = Sequence - 1 WHERE Category = '<Category>' AND 
+					Sequence > <FromLocation> AND Sequence <= <ToLocation>~;
+	}
+
+	if ( !db( CMD,~<theSQL>~ ) )			// SHUFFLE THE AFFECTED IMAGES
+	{
+		db( GetErrorDescription,theErr );
+		return Warning( ~Could not move Image where <key> from <fromLocation> to <toLocation>.  <theErr>~ );
+	}
+
+	if ( !db( CMD,~UPDATE Images SET Sequence = <ToLocation> WHERE <Key>~ ) )	// MOVE THE TARGET IMAGE
+	{
+		db( GetErrorDescription,theErr );
+		return Warning( ~Could not set the sequence for Image where <Key> from to <toLocation>.  <theErr>~ );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC MoveImageToNewCategory( NewCategory,&ImageIcon,&SrcView,FromLocation,&DstView )
+{
+	NextSequence = CalcNextSequenceForCategory( Images,Category,~<NewCategory>~,Sequence );
+
+	if ( !db( CMD,~UPDATE Images SET Category = '<NewCategory>', Sequence = <NextSequence> Where <$con.ImageIcon[Key]>~ ) )
+	{
+		db( GetErrorDescription,theErr );
+		return Warning( ~Could not change category to <NewCategory> for the Image where <$con.ImageIcon[Key]>.  <theErr>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC MoveImageToNewOrder( OrderID,&ImageIcon,&SrcView,FromLocation,&DstView )
+{
+	ImageIcon( GetData,Image );
+
+	if ( ~<OrderID>~ == ~<$con.Image[OrderID]~ )
+		{ return Warning( ~That image is already associated with Order <OrderID>~ ); }
+
+	Query = STR ( Select OrderID,Roll,Frame From Images Where OrderID = '<OrderID>' AND Roll = '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>' );
+
+	if ( !PGenConList( List,Connect,Cursor,Dynamic,Query,~<Query>~ ) )
+		{ return Warning( ~Failed to query the Images table: <Query>.~ ); }
+
+	if ( !List( Empty ) )
+	{
+		if ( MessageBox( ~The Roll and Frame already exist in Order <OrderID>. Do you want to replace it? ~,YESNO ) != YES )
+			{ return FALSE; }
+
+		List( GetFirst,Record );
+
+	}
+
+	ForgetLocal( List );
+
+	Query = STR ( Select OrderID,Roll,Frame,Sequence From Images Where OrderID = '<$con.Image[OrderID]>' AND Roll = '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>' );
+
+	if ( !PGenConList( List,Connect,Cursor,Dynamic,Query,~<Query>~ ) )
+		{ return Warning( ~Failed to query the Images table: <Query>.~ ); }
+
+	NextSequence = CalcNextSequenceForCategory( Images,OrderID,~<OrderID>~,Sequence );
+
+	List( GetFirst,Record );
+	Record( Set,OrderID,~<OrderID>~,Sequence,<NextSequence> );
+	List( Update );
+
+	return TRUE;
+}
+
+
+NUMERIC ProcessDraggedFiles( &DraggedFileList,Order )
+{
+	Sequence = CalcNextSequenceForCategory( Images,OrderID,~<Order>~,Sequence );
+
+	count = 0;
+	while ( DraggedFileList( GetNext,Image ) )
+	{
+		ImagePath = ~<$Con.Image[Text]>~;
+		FileName = ~<$Str.$ImagePath.FileName>~;
+		Frame = ~<$Str.$FileName.WithOutExt>~;
+		Roll = ~<$Str.$ImagePath.Folder>~;
+
+		ImagesThumbNailWindow( StatusBar,Text,~Checking Size And Type of <ImagePath>~ );
+
+		xRes = yRes = 0;
+		ref = Ima( ImageReader,NewImageSource,Any,~<ImagePath>~ );
+		if ( $ref )
+		{
+			ImageReader( GetImageInfo,$ref,xRes,yRes,FileType,Resolutions );
+		}
+
+		ForgetLocal( ImageReader );
+
+		RemoveCmd = ~Delete From Images Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		RemoveCmd2 = ~Delete From SBAImages Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+		Fields		= ~OrderID,Roll,Frame,Path,Category,Sequence,Gamma,Width,Length~;
+		Values		= ~'<Order>','<Roll>','<Frame>','<ImagePath>','All',<Sequence++>,1.0,<xRes>,<yRes>~;	
+		InsertCmd	= ~Insert Into Images(<Fields>) Values(<Values>)~;
+
+		Log( Session,~<InsertCmd>~ );
+
+		ImagesThumbNailWindow( StatusBar,Text,~Adding OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~ );
+
+		db( CMD,~<RemoveCmd>~ );	// OKAY FOR THIS TO ERROR OUT
+		db( CMD,~<RemoveCmd2>~ );	// OKAY FOR THIS TO ERROR OUT
+
+		if ( !db( CMD,~<InsertCmd>~ ) )
+		{
+			db( GetErrorDescription,theErr );
+			return Warning( ~Could not <cmd>. <theErr>~ );
+		}
+		++count;
+	}
+
+
+	return <count>;
+}
+
+
+NUMERIC ExternalDrop( &DragDropInfo )
+{
+	if ( !GenCon( DstView,Is,~<$CON.DragDropInfo[DstView]>~ ) ) 
+		{ return Warning( ~The Destination View is invalid~ ); }				
+
+	if ( ~<$con.DstView[ViewDataType]>~ != OrderImages )
+		{ return Warning( ~The DstView contains <$con.DstView[ViewDataType]> instead of Images for Orders.~ ); }
+
+	DstView( Get,Text,Order );
+
+	if ( ~<Order>~ == ~~ || ~<Order>~ == ~Empty~ )
+		{ return Warning( ~There is no Order ID~ ); }
+
+	if ( !DragDropInfo( GetDraggedFiles,DraggedFileList ) )
+		{ return ~There were no files in the object you dragged~; }
+
+	count = DraggedFileList( ChildCount );
+		
+	if ( $count <= 0 )
+		{ return ~There were no files in the object you dragged~; }
+
+	if ( MessageBox( ~Are you sure you would like to assign <count> images to Order <Order>?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	count = ProcessDraggedFiles( DraggedFileList,~<Order>~ );
+
+	ImagesThumbNailWindow( StatusBar,Text,~Added <count> images for Order <Order>~ );
+
+	RefreshAllViews( TRUE );
+
+	return TRUE;
+}
+
+
+NUMERIC HandleDrop()
+{
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+		{ return FALSE; }
+	
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );			// REMOVE THE DRAG INFO FROM THE TREE
+
+	if ( !GenCon( SrcView,Is,~<$CON.DragDropInfo[SrcView]>~ ) )		// SEE IF THIS IS A DROP FROM OUTSIDE THE APPLICATION 
+		{ return ExternalDrop(DragDropInfo); }			
+
+	if ( !GenCon( DstView,Is,~<$CON.DragDropInfo[DstView]>~ ) ) 
+		{ return Warning( ~The Destination View is invalid~ ); }				
+
+	if ( ~<$con.SrcView[ViewDataType]>~ != OrderImages )
+		{ return Warning( ~The DstView contains <$con.DstView[ViewDataType]> instead of Images For Orders~ ); }
+
+	if ( ~<$con.DstView[ViewDataType]>~ != OrderImages )
+		{ return Warning( ~The DstView contains <$con.DstView[ViewDataType]> instead of Images For Orders~ ); }
+
+	while ( SrcView( Find,IsSelected,~T~,FromLocation,ImageIcon ) )	// LOOP FOR EACH SELECTED ITEM IN THE VIEW
+	{					
+		SrcView( Get,Text,Category );
+		DstView( Get,Text,NewCategory );	
+		ToLocation = ~<$CON.DragDropInfo[DropLocation]>~;
+
+		if ( ~<Category>~ == ~<NewCategory>~ )		// JUST A RESEQUENCE IN THE CURRENT CATEGORY?
+		{
+			ResequenceImageInCategory( ~<$CON.ImageIcon[Key]>~,~<Category>~,~<FromLocation>~,~<ToLocation>~ );
+		}
+		else										// MOVING THIS IMAGE TO A DIFFERENT CATEGORY
+		{
+			MoveImageToNewOrder( ~<NewCategory>~,ImageIcon,SrcView,<FromLocation>,DstView );
+		}
+		ImageIcon( Set,IsSelected,~F~ );
+	}
+
+	return RefreshAllViews( TRUE );
+}
+
+
+NUMERIC CalcNextSequenceForCategory( Table,CategoryField,NewCategory,SequenceField )
+{
+	if ( !db( CMD,~Select MAX(<SequenceField>) From <Table> Where <CategoryField> = '<NewCategory>'~,MaxSequence ) )
+	{
+		NextSequence = -1;
+	}
+	else
+	{
+		NextSequence = ~<$rs.MaxSequence[#0]>~ == ~~ ? ~-1~ : ~<$rs.MaxSequence[#0]>~;
+	}
+
+	return $NextSequence + 1;
+}
+
+
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	ActiveView( DisplayMenu,ImagesListViewMenu );
+
+	return TRUE;
+}
+
+NUMERIC RightClickInImageView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	ActiveView( DisplayMenu,ImagesViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( ~<what> is not implemented yet!~ );
+	return TRUE;
+}
+
+
+NUMERIC FindImages()
+{
+	action = ACTION DOC ( Explorer Open ExplorerDoc "Init( ~Find Images For This Order and Drag Order Images Window~,~~ );" );
+
+	return PerformActions( action );
+}
+
+
+VOID ChangeThumbNailSize( size )
+{
+	ImagesThumbNailWindow( Get,ImageFrameSize,CurrentSize );
+
+	CurrentSize = <CurrentSize> + <size>;
+
+	if ( <CurrentSize> < 100 )
+	{
+		CurrentSize = 100;
+	}
+	else if ( <CurrentSize> > 500  )
+	{
+		CurrentSize = 500;
+	}
+
+	ImagesThumbNailWindow( Set,ImageFrameSize,<CurrentSize>,RefreshWindow );
+	ImagesThumbNailWindow( RefreshWindow );
+}
+
+
+NUMERIC Init( WhichOrders,AsImages,Query,CategorizeBy )
+{
+	ImagesThumbNailWindow( Set,Title,~Order Images~ );
+
+	if ( !PGenConList( ImagesList,Connect,Cursor,Dynamic,QUERY,~<Query>~ ) )
+		{ Error( ~Failed to query the Images table~ ); }
+
+	SetDocumentData( ImagesList(GetObject) );
+	Global( WhichOrders,ImagesList );
+	
+	ImagesThumbNailWindow( CreateThumbNailViews,ImagesThumbNailCategory,ImagesThumbNailImage,ImagesList,OrderID,OrderImage,~<WhichOrders>~ );
+	ImagesThumbNailWindow( CreateWindow,~Images~ );
+
+	ShowListView();
+	return TRUE;
+}
+
+
+
+NUMERIC OnCloseImagesDataView()
+{
+	if ( ImagesDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	ImagesDataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( ImagesDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !ImagesDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new ????? that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( ImagesDataView( PendingChanges ) )
+	{
+		ImagesDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+if ( !GenCon( ImagesTableDefinition,GetFrom,Images,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The Images Table is not properly defined~ ); }
+
+if ( !ado( db,CONNECT ) )
+	{ Error( ~Could not open Database to access the Images Table~ ); }	
+
+
+Define:	ImagesListViewMenu Using DDMenuDef
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	ScanSelectedImages	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Sc&an~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ScanSelectedImages(); )
+
+		Define:	OpenSelectedImages	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Open~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( OpenSelectedImages(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	NULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&New Image~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+	}
+
+
+Define:	ImagesViewMenu Using DDMenuDef
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	OpenSelectedImages	using	DDMenuItemDef
+			Fields:	Text		~Open~
+					IDText		~ID~
+					ActionsText  ACTION Exec ( OpenSelectedThumbNailImages() )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		~Refresh~
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshThumbNailView(TRUE) )
+
+		Define:	ViewGridData using	DDMenuItemDef
+			Fields:	Text		~View Image Data~
+					IDText		ID
+					ActionsText  ACTION Exec ( ShowListView() )
+
+		Define:	ViewOrderInfo using	DDMenuItemDef
+			Fields:	Text		~View Orders~
+					IDText		ID
+					ActionsText  ACTION Exec ( ViewOrderInfo() )
+
+		Define:	ViewOrderItemsAsImages using	DDMenuItemDef
+			Fields:	Text		~View Order Items~
+					IDText		ID
+					ActionsText  ACTION Exec ( OpenOrderItemsAsImages() )
+
+
+		Define:	LayoutsNULL2S using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+IF 0
+{
+		Define:	EditSelectedImages	using	DDMenuItemDef
+			Fields:	Text		~Edit Selected Images~
+					IDText		~ID~
+					ActionsText  ACTION Exec ( EditImages() )
+}
+		Define:	RemoveSelectedImages	using	DDMenuItemDef
+			Fields:	Text		~Remove Selected Images~
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RemoveSelectedImages(FALSE) )
+
+		Define:	DeleteSelectedImages	using	DDMenuItemDef
+			Fields:	Text		~Delete Selected Images~
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RemoveSelectedImages(TRUE) )
+
+		Define:	LayoutsNULL2S using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	Explorer	using	DDMenuItemDef
+			Fields:	Text		~Find Images To Import~
+					IDText		~ID~
+					ActionsText  ACTION Exec ( FindImages() )
+
+	}
+
+
+Define: ImagesDataWindow Using DDWinDef
+	Fields:		Title					~Image Data~
+				Position				0 40 85 18
+				IsPositionPercent		T
+				Purpose					~Orders~
+
+	Contains:	INLISTORDER
+	{
+		Define: ImagesDataView Using DDViewDef AsSymbol ImagesDataView
+			Fields:	ViewType				ListView
+					GridControlTypes		ImagesTableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION EXEC ( ChangeRecord(); )
+					DeleteRecordActionsText ACTION EXEC ( DeleteRecord(); )
+					RClickUpActionsText		ACTION EXEC ( RightClickInListView(); )
+					CloseActionsText		ACTION Call ( OnCloseImagesDataView() )
+					DoubleClickActionsText	ACTION EXEC ( OpenSelectedImages() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "OrderImagesData.htm" )
+					DropActionsText			ACTION EXEC ( NotImplementedYet(~Dropping Here~) );
+	}
+	
+
+Define: ImagesThumbNailWindow Using DDWinDef
+	Fields:	Title						~Images~
+			TypeName					~ImageWnd~
+			Position					50 50 50 48
+			IsPositionPercent			T
+			IsCenteredVertical			F
+			IsCenteredHorizontal		F
+			IsMaximized					F
+			Purpose						~Orders~
+			ImageFrameSize				(2 * 72)
+			EnableStatusBar				T ;
+
+MACROSOFF
+
+Define: ImagesThumbNailCategory Using DDViewDef
+	Fields:	Text						~<OrderID>~
+			ViewType					~ThumbnailView~
+			IsModifiable				~T~
+			DoubleClickActionsText		ACTION Exec ( OpenSelectedThumbNailImages() )
+			IActionsText				~~
+			OActionsText				~~
+			DropTypes					OrderImages
+			ViewDataType				OrderImages
+			ViewDataFor					~<OrderID>~
+			DropActionsText				ACTION Exec ( HandleDrop() )
+			AddCategoryActionsText		ACTION Exec ( AddCategory() )
+			RenameCategoryActionsText	ACTION Exec ( RenameCategory() )
+			RClickUpActionsText			ACTION Exec ( RightClickInImageView() )
+			HActionsText				ACTION SHOWHELPPAGE ( KPISHelpFile "OrderImages.htm" )
+			UseImageCorrections			~T~;
+
+Define: ImagesThumbNailImage Using DDICImageDef
+	Fields:	Info1						~ROLL <$con.OrderImage[Roll]>~ 
+			Info2						~FRAME <$con.OrderImage[Frame]>~
+			Info3						~<$con.OrderImage[Path]>~
+			OrderID						~<$con.OrderImage[OrderID]>~
+			Roll						~<$con.OrderImage[Roll]>~
+			Frame						~<$con.OrderImage[Frame]>~
+			Path						~<$con.OrderImage[Path]>~
+			IsDeleted					FALSE
+			IsSelected					FALSE
+			DropTypes					OrderImages
+			DataType					OrderImages 
+			Table						OrderImages
+			FDAFailed					FALSE
+			Key							~OrderID = '<$con.OrderImage[OrderID]>' AND Roll = '<$con.OrderImage[Roll]>' AND Frame = '<$con.OrderImage[Frame]>'~ ;
+
+MACROSON

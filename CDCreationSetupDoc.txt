@@ -1,0 +1,879 @@
+
+IncludeClass(BaseDialog);
+
+Tree( Location,~[STRINGS]~,Name,ScanResolutionChoices,PluckAndFree );
+
+StringList:	Name ~ScanResolutionChoices~
+		Fields: String	~LOW~
+		Fields: String	~MEDIUM~
+		Fields:	String	~HIGH~
+		Fields: String	~DITHER~
+	Hang:	ScanResolutionChoices	~[STRINGS]~
+
+VOID Init( Setup )
+{
+	if ( Defined( CDSetupDialog ) )
+	{
+		CDSetupDialog.ReOpen();
+		return;
+	}
+
+	Class( CDSetupClass,Extends,BaseDialog,
+			Member,StaticTextWidth,Numeric,100,
+			Member,StaticTextHeight,Numeric,20 );
+
+	CDSetupClass( New,CDSetupDialog );
+
+	CDSetupDialog.DefineDialog();	
+
+	Global( CDSetupDialog );
+
+	if ( RunningVersion( 6.1 ) && 0 )
+	{
+		CDSetupDialog.PopulateCDStorageCapacityComboBox();
+		CDSetupDialog.PopulateDVDStorageCapacityComboBox();
+	}
+	
+	app( ThisApp,MessagePump,50 );
+
+	//CDSetupDialog.PopulateServersList();
+	CDSetupDialog.PopulateSoftwareVersionComboBox();
+
+	//Action = ~CDSetupDialog.PopulateServersList();~;
+	//QueueContentsAfter( Action,250 );
+
+	CDSetupDialog.PopulateWriters(1);
+
+	if ( ~<Setup>~ != ~~ )
+	{
+		CDSetupDialog.LoadSavedSettings( ~<Setup>~,TRUE );
+	}
+	
+	
+
+	CDSetupDialog.ControlFocus(RImageIDField);
+}
+
+
+VOID CDSetupClass::CDSetupClass()
+{
+	Left = 200;
+	Dictionary = ~CDSetup~;
+	Title = ~Media Writer Setup~;
+	GoButtonText = ~Save~;
+	GoButtonToolTip = ~Save your changes~;
+	HelpPage = ~RImageSetup.htm~;
+	hGap = 10;
+	vGap = 10;
+	ButtonWidth = 70;
+}
+
+
+VOID CDSetupClass::DefineDictionary()
+{
+	Dictionary: <Dictionary> 
+		Fields: Name IOFileLocation				Type Text
+		Fields: Name POFileLocation				Type Text
+		Fields: Name POLogFileLocation			Type Text
+		Fields: Name RImageID					Type Text
+		Fields:	Name AutoStartRImage			Type Long
+		fields: Name RImageComputer				Type Text
+		Fields: Name SelectedComputer			Type Text
+		Fields: Name WorkstationDomain			Type Text
+		Fields: Name RImageLogging				Type Long
+		Fields: Name ConstructionLocation		Type Text
+		Fields: Name MaxBuilds					Type Long
+		Fields:	Name SoftwareVersion			Type Long
+
+		if ( RunningVersion( 6.1 ) && 0 )
+		{
+			Fields: Name CDMediaAvailable			Type Long
+			Fields: Name CDMediaStorageCapacity		Type Long
+			Fields: Name DVDMediaAvailable			Type Long
+			Fields: Name DVDMediaStorageCapacity	Type Long
+		}
+}
+
+
+VOID CDSetupClass::DefineControls()
+{
+	x = 10;
+	y = 8;
+    TabWidth = $DialogWidth - $hGap * 2;
+	TabHeight = 400;
+
+	Define: TabWindow Using DDWinCtrlDef AsSymbol TabWindow
+                Fields: Position	<x>, <y>, <TabWidth>, <TabHeight>
+                        TypeName	TabCtrl
+                        Text		~TCS_HOTTRACK | TCS_MULTILINE | TCS_TOOLTIPS~
+        Contains: InListOrder
+        {
+			tab = 0;
+			x += 10;
+			y += 40;
+
+			RImageSetupTab(<++tab>, x, y, hGap, vGap, TabWidth, TabHeight);
+			CDDirectorySetupTab(<++tab>, x, y, hGap, vGap, TabWidth, TabHeight);
+
+			if ( RunningVersion( 6.1 ) && 0 )
+			{
+				CDMediaSetupTab(<++tab>, x, y, hGap, vGap, TabWidth, TabHeight);
+			}
+		}
+
+		DialogWidth = aDialog(GetMaxRight,Position) + $hGap;
+		DialogHeight = aDialog(GetMaxBottom,Position);
+
+		Define: GoButton Using DDWinCtrlDef AsSymbol GoButton
+			Fields:	GENCONNAME					THIS
+						DACTIONSTEXT			ACTION EXEC ( <THIS>.OnGoButton() )
+						POSITION				$hGap*3,$DialogHeight+$vGap * 2, $ButtonWidth, $ButtonHeight
+						TEXT					Translate( ~<GoButtonText>~ )
+						TOOLTIP					Translate( ~<GoButtonToolTip>~ )
+						TYPENAME				BUTTON
+						ISTABSTOP				TRUE
+
+		Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+			Fields:	GENCONNAME					THIS
+						DACTIONSTEXT			ACTION EXEC ( <THIS>.DoCancelButton() )
+						POSITION				GoButton(GetRight,Position) + $hGap,GoButton(GetTop,Position),
+												$ButtonWidth, $ButtonHeight
+						TEXT					Translate( ~<CancelButtonText>~ )
+						TOOLTIP					Translate( ~<CancelButtonToolTip>~ )
+						TYPENAME				BUTTON
+						ISTABSTOP				TRUE
+
+		Define: WriterGridButton Using DDWinCtrlDef AsSymbol WriterGridButton
+			Fields:	GENCONNAME					THIS
+						DACTIONSTEXT			ACTION EXEC ( <THIS>.OnShowWriterButton() )
+						POSITION				CancelButton(GetRight,Position) + $hGap*3, CancelButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						TEXT					Translate( ~Writers~ )
+						TOOLTIP					Translate( ~Shows the Writer Database Grid View~ )
+						TYPENAME				BUTTON
+						ISTABSTOP				TRUE;
+
+		Define: TemplateGridButton Using DDWinCtrlDef AsSymbol TemplateGridButton
+			Fields:	GENCONNAME					THIS
+						DACTIONSTEXT			ACTION EXEC ( <THIS>.OnShowTemplateButton() )
+						POSITION				WriterGridButton(GetRight,Position) + $hGap, WriterGridButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						TEXT					Translate( ~Templates~ )
+						TOOLTIP					Translate( ~Shows the Template Database Grid View~ )
+						TYPENAME				BUTTON
+						ISTABSTOP				TRUE;
+}
+
+
+NUMERIC CDSetupClass::CDDirectorySetupTab( tab,&x,&y,&hGap,&vGap,&TabWidth,&TabHeight )
+{
+ 	Define: Tab<tab> Using DDWinCtrlDef
+			Fields:	Text	~Directories~
+			TypeName		Tab
+			Tooltip			Translate(~Setup the RImage writer directories~)
+			
+
+		Contains: INLISTORDER
+		{
+			Define: ImageOrderFileText Using DDWinCtrlDef AsSymbol ImageOrderFileText
+				Fields: POSITION				<x>, <y>, $StaticTextWidth + 100, $StaticTextHeight
+						TEXT					~Location of IOFile.IOF~
+						LEFTJUSTIFIED			TRUE
+						TYPENAME				StaticText;
+
+			Define: ImageOrderFileField Using DDWinCtrlDef AsSymbol ImageOrderFileField
+				Fields:	TYPENAME				EDITTEXT
+						GENCONNAME				THIS
+						GENCONFIELD				IOFileLocation
+						IACTIONSTEXT			ACTIONS ( Get )
+						OACTIONSTEXT			ACTIONS ( Save )
+						IsEnabled				F
+						Position				ImageOrderFileText(GetLeft,Position), ImageOrderFileText(GetBottom,Position) 300 20;
+		
+			Define: ImageOrderFileBrowseButton Using DDWinCtrlDef AsSymbol ImageOrderFileBrowseButton 
+				Fields: TypeName				Button
+						Text					Translate( ~?~ )
+						Position				ImageOrderFileField(GetRight,Position) + $hGap,ImageOrderFileField(GetTop,Position),20,20
+						DActionsText			ACTION EXEC  ( <THIS>.OnBrowseForFileButton(IOFileLocation, ~IOFile.IOF~) ) 
+						IsEnabled				T
+						Tooltip					Translate( ~Locate the RImage Power Tools IOFile.IOF.~ );
+						
+			Define: ProdOrderFileText Using DDWinCtrlDef AsSymbol ProdOrderFileText
+				Fields: POSITION				ImageOrderFileText(GetLeft,Position), ImageOrderFileField(GetBottom,Position) + $vGap, $StaticTextWidth + 50, $StaticTextHeight
+						TEXT					~Location of POFile.POF~
+						LEFTJUSTIFIED			TRUE
+						TYPENAME				StaticText
+
+			Define: ProdOrderFileField Using DDWinCtrlDef AsSymbol ProdOrderFileField
+				Fields:	TYPENAME				EDITTEXT
+						GENCONNAME				THIS
+						GENCONFIELD				POFileLocation
+						IACTIONSTEXT			ACTIONS ( Get )
+						OACTIONSTEXT			ACTIONS ( Save )
+						IsEnabled				F
+						Position				ProdOrderFileText(GetLeft,Position), ProdOrderFileText(GetBottom,Position) 300 20;
+		
+			Define: ProdOrderFileBrowseButton Using DDWinCtrlDef AsSymbol ProdOrderFileBrowseButton 
+				Fields: TypeName				Button
+						Text					Translate( ~?~ )
+						Position				ProdOrderFileField(GetRight,Position) + $hGap,ProdOrderFileField(GetTop,Position),20,20
+						DActionsText			ACTION EXEC  ( <THIS>.OnBrowseForFileButton(POFileLocation, ~POFile.POF~) ) 
+						IsEnabled				T
+						Tooltip					Translate( ~Locate the RImage Power Tools POFile.POF.~ );
+						
+			Define: LogFileText Using DDWinCtrlDef AsSymbol LogFileText
+				Fields: POSITION				ProdOrderFileText(GetLeft,Position), ProdOrderFileField(GetBottom,Position) + $vGap, $StaticTextWidth + 50, $StaticTextHeight
+						TEXT					~Location of pwrtool.log~
+						LEFTJUSTIFIED			TRUE
+						TYPENAME				StaticText
+
+			Define: LogDirLocationField Using DDWinCtrlDef AsSymbol LogDirLocationField
+				Fields:	TYPENAME				EDITTEXT
+						GENCONNAME				THIS
+						GENCONFIELD				POLogFileLocation
+						IACTIONSTEXT			ACTIONS ( Get )
+						OACTIONSTEXT			ACTIONS ( Save )
+						IsEnabled				F
+						Position				LogFileText(GetLeft,Position), LogFileText(GetBottom,Position) 300 20;
+		
+			Define: LogDirLocationBrowseButton Using DDWinCtrlDef AsSymbol LogDirLocationBrowseButton 
+				Fields: TypeName				Button
+						Text					Translate( ~?~ )
+						Position				LogDirLocationField(GetRight,Position) + $hGap,LogDirLocationField(GetTop,Position),20,20
+						DActionsText			ACTION EXEC  ( <THIS>.OnBrowseForFileButton(POLogFileLocation, ~pwrtool.log~) ) 
+						IsEnabled				T
+						Tooltip					Translate( ~Locate the RImage Power Tools Logfile.~ );
+						
+			Define: EnableLoggingCheckBox Using DDWinCtrlDef AsSymbol EnableLoggingCheckBox 
+				Fields: TypeName		CheckBox
+						Text			~Enable Logging~
+						Position		LogFileText(GetLeft,Position), LogDirLocationField(GetBottom,Position) + $vGap, 120, <ButtonHeight>
+						GenConName		THIS
+						GenConField		~RImageLogging~
+						IActionsText	~[Get]~
+						DActionsText	ACTIONS ( Save "Exec(<THIS>.OnLoggingCheckBox();)" )	
+						OActionsText	~[Save]~
+						Tooltip			~Enable or disable logging on the RImage workstation~
+						
+			Define: ConstructionText Using DDWinCtrlDef AsSymbol ConstructionText
+				Fields: POSITION				EnableLoggingCheckBox(GetLeft,Position), EnableLoggingCheckBox(GetBottom,Position) + $vGap, $StaticTextWidth + 100, $StaticTextHeight
+						TEXT					~Location to Construct CD/DVD Orders~
+						LEFTJUSTIFIED			TRUE
+						TYPENAME				StaticText
+
+			Define: ConstructionLocationField Using DDWinCtrlDef AsSymbol ConstructionLocationField
+				Fields:	TYPENAME				EDITTEXT
+						GENCONNAME				THIS
+						GENCONFIELD				ConstructionLocation
+						IACTIONSTEXT			ACTIONS ( Get )
+						OACTIONSTEXT			ACTIONS ( Save )
+						Position				ConstructionText(GetLeft,Position), ConstructionText(GetBottom,Position) 300 20;
+		
+			Define: ConstructionLocationBrowseButton Using DDWinCtrlDef AsSymbol ConstructionLocationBrowseButton 
+				Fields: TypeName				Button
+						Text					Translate( ~?~ )
+						Position				ConstructionLocationField(GetRight,Position) + $hGap,ConstructionLocationField(GetTop,Position),20,20
+						DActionsText			ACTION EXEC  ( <THIS>.OnBrowseDirectoryButton() ) 
+						IsEnabled				T
+						Tooltip					Translate( ~Locate the RImage Construction Directory~ );
+		}
+
+	return TRUE;
+}
+
+if ( RunningVersion( 6.1 ) && 0 )
+{
+
+NUMERIC CDSetupClass::CDMediaSetupTab( tab,&x,&y,&hGap,&vGap,&TabWidth,&TabHeight )
+{
+ 	Define: Tab<tab> Using DDWinCtrlDef
+			Fields:	Text	~Media~
+			TypeName		Tab
+			Tooltip			Translate(~Setup the RImage writer available storage media~)
+
+
+		Contains: INLISTORDER
+		{
+			Define: ImageOrderFileText Using DDWinCtrlDef AsSymbol ImageOrderFileText Private
+				Fields: TypeName		StaticText
+						Text			~Select media available on the RImage Writer~
+						Position		<x>, <y>, $StaticTextWidth + 120, $StaticTextHeight
+						LeftJustified	TRUE;
+
+			Define: CDMediaAvailableCheckBox Using DDWinCtrlDef AsSymbol CDMediaAvailableCheckBox Private
+				Fields: TypeName		CheckBox
+						Text			~CD~
+						Position		ImageOrderFileText(GetLeft,Position), ImageOrderFileText(GetBottom,Position) 50 20
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save )	
+						OActionsText	ACTIONS ( Save )
+						GenConName		THIS
+						GenConField		~CDMediaAvailable~
+						IsTabStop		T
+						Tooltip			Translate( ~The RImage workstation has CD media available for writing~ );
+
+			Define:	CDMediaStorageCapacityComboBox Using DDWinCtrlDef AsSymbol CDMediaStorageCapacityComboBox Private
+				Fields:	TypeName		SComboBox
+						Position		CDMediaAvailableCheckBox(GetRight,Position) +<hGap>, CDMediaAvailableCheckBox(GetTop,Position),
+										150, <StaticTextHeight> * 8
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save )
+						OActionsText	ACTIONS ( Save )
+						GenConName		THIS
+						GenConField		~CDMediaStorageCapacity~
+						IsIndex			TRUE
+						IsTabStop		T
+						Tooltip			Translate( ~The storage capacity of the CD media on the RImage workstation~ ) ;
+
+			Define: DVDMediaAvailableCheckBox Using DDWinCtrlDef AsSymbol DVDMediaAvailableCheckBox Private
+				Fields: TypeName		CheckBox
+						Text			~DVD~
+						Position		CDMediaAvailableCheckBox(GetLeft,Position), CDMediaAvailableCheckBox(GetBottom,Position) + <vGap>, 50 20
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save )	
+						OActionsText	ACTIONS ( Save )
+						GenConName		THIS
+						GenConField		~DVDMediaAvailable~
+						IsTabStop		T
+						Tooltip			Translate( ~The RImage workstation has DVD media available for writing~ );
+
+			Define:	DVDMediaStorageCapacityComboBox Using DDWinCtrlDef AsSymbol DVDMediaStorageCapacityComboBox Private
+				Fields:	TypeName		SComboBox
+						Position		DVDMediaAvailableCheckBox(GetRight,Position) +<hGap>, DVDMediaAvailableCheckBox(GetTop,Position),
+										150, <StaticTextHeight> * 8
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save )
+						OActionsText	ACTIONS ( Save )
+						GenConName		THIS
+						GenConField		~CDMediaStorageCapacity~
+						IsIndex			TRUE
+						IsTabStop		T
+						Tooltip			Translate( ~The storage capacity of the DVD media on the RImage workstation~ ) ;
+
+		}
+
+	return TRUE;
+}
+
+}
+
+
+NUMERIC CDSetupClass::RImageSetupTab( tab,&x,&y,&hGap,&vGap,&TabWidth,&TabHeight )
+{
+ 	Define: Tab<tab> Using DDWinCtrlDef
+			Fields: Text	~Computer~
+			TypeName		Tab
+			Tooltip			Translate(~Setup the RImage writer computer settings~)
+				
+
+		Contains: INLISTORDER
+		{
+
+			Define: RImageIDText Using DDWinCtrlDef AsSymbol RImageIDText
+				Fields: POSITION			<x>, <y>, 90,$StaticTextHeight
+						TEXT				~Writer Name~
+						RIGHTJUSTIFIED		TRUE
+						TYPENAME			StaticText
+						Tooltip				~You assign a name to each RImage writer~
+
+			Define: RImageIDField Using DDWinCtrlDef AsSymbol RImageIDField 
+				Fields: TypeName				ComboBox  
+						Position				RImageIDText(GetRight,Position) + $hGap, RImageIDText(GetTop,Position)-3, 200 20*4
+						IActionsText			ACTIONS ( Get )
+						DActionsText			ACTION EXEC ( <THIS>.WriterSelected(1) )
+						OActionsText			ACTIONS ( Save )
+						GenConName				THIS
+						GenConField				~RImageID~
+						//IsTabStop				TRUE
+						Tooltip					~Enter or select a writer and press enter~
+						Mask					~<$[DATABASE FieldTypes].OrderID[Mask]>~
+						PromptChar				~<$[DATABASE FieldTypes].OrderID[PromptChar]>~
+						AllowedChars			~<$[DATABASE FieldTypes].OrderID[AllowedChars]>~
+						DisallowedChars			~<$[DATABASE FieldTypes].OrderID[DisallowedChars]>~
+						WantReturnKey			~T~
+						DropDownActionsText		ACTION CALL ( <THIS>.PopulateWriters(0)  )
+						ReturnKeyActionsText	ACTION EXEC ( <THIS>.WriterSelected(1) )
+
+			Define: DomainText Using DDWinCtrlDef AsSymbol DomainText
+				Fields: POSITION				RImageIDText(GetLeft,Position),RImageIDText(GetBottom,Position)+$vGap, RImageIDText(GetWidth,Position),$StaticTextHeight
+						TEXT					~Network Domain~
+						RIGHTJUSTIFIED			TRUE
+						TYPENAME				StaticText
+						Tooltip					Translate( ~Leave blank for the domain of this computer~ );
+
+			Define: DomainEditBox Using DDWinCtrlDef AsSymbol DomainEditBox
+				Fields:	TYPENAME				EDITTEXT
+						GENCONNAME				THIS
+						GENCONFIELD				WorkstationDomain
+						IACTIONSTEXT			ACTIONS ( Get )
+						OACTIONSTEXT			ACTIONS ( Save )
+						Position				DomainText(GetRight,Position)  + $hGap, DomainText(GetTop,Position)-3, RImageIDField(GetWidth,Position) 20
+						Tooltip					Translate( ~Leave blank for the domain of this computer~ );
+
+			Define: RefreshButton Using DDWinCtrlDef AsSymbol RefreshButton 
+				Fields: TypeName				Button
+						Text					Translate( ~Refresh~ )
+						Position				DomainEditBox(GetRight,Position) + $hGap,DomainEditBox(GetTop,Position),50,20
+						DActionsText			ACTION EXEC  ( <THIS>.PopulateServersList() ) 
+						IsEnabled				T
+						Tooltip					Translate( ~Refresh the list of computers after changing the Domain~ );
+			
+			Define: RimageWriterText Using DDWinCtrlDef AsSymbol RimageWriterText
+				Fields: POSITION				RImageIDText(GetLeft,Position), RefreshButton(GetBottom,Position) + $vGap + 30, RImageIDField(GetWidth,Position),$StaticTextHeight
+						TEXT					~Network Computers~
+						LEFTJUSTIFIED			TRUE
+						TYPENAME				StaticText;
+
+			Define: RImageComputerListBox Using DDWinCtrlDef AsSymbol RImageComputerListBox
+				Fields:	POSITION				DomainEditBox(GetLeft,Position) ,DomainEditBox(Getbottom,Position) + $vGap,RImageIDField(GetWidth,Position) ,100
+						GENCONNAME				THIS
+						GENCONFIELD				SelectedComputer
+						AllowMultipleSelection	FALSE
+						IACTIONSTEXT			ACTIONS ( Get )
+						DACTIONSTEXT			ACTIONS ( Save "Exec(<THIS>.OnComputerSelected();)")
+						OACTIONSTEXT			ACTIONS ( Save )
+						NoDuplicates			TRUE
+						ToolTip					Translate( ~Select workstation that has the RImage Writer~ )
+						TYPENAME				ListBox ;
+					
+			Define: CurrentRImageText Using DDWinCtrlDef AsSymbol CurrentRImageText
+				Fields: POSITION				RImageIDText(GetLeft,Position),RImageComputerListBox(GetBottom,Position)+$vGap, RImageIDText(GetWidth,Position),$StaticTextHeight
+						TEXT					~Burning Computer~
+						RIGHTJUSTIFIED			TRUE
+						TYPENAME				StaticText
+
+			Define: CurrentRImageEditBox Using DDWinCtrlDef AsSymbol CurrentRImageEditBox
+				Fields:	TYPENAME				EDITTEXT
+						GENCONNAME				THIS
+						GENCONFIELD				RImageComputer
+						IACTIONSTEXT			ACTIONS ( Get )
+						DACTIONSTEXT			ACTIONS ( Save )
+						OACTIONSTEXT			ACTIONS ( Save )
+						Position				RImageComputerListBox(GetLeft,Position), CurrentRImageText(GetTop,Position)-2,RImageIDField(GetWidth,Position) 20;
+
+			Define: ConnectButton Using DDWinCtrlDef AsSymbol ConnectButton
+				Fields:	TYPENAME				Button
+						DACTIONSTEXT			ACTION EXEC ( <THIS>.OnConnectButton() )
+						Text					Translate(~Connect~)
+						Position				CurrentRImageEditBox(GetRight,Position)+$hGap, CurrentRImageEditBox(GetTop,Position), 50 20
+	
+			Define: SoftwareVersionText Using DDWinCtrlDef AsSymbol SoftwareVersionText
+				Fields: POSITION				CurrentRImageText(GetLeft,Position),CurrentRImageText(GetBottom,Position)+$vGap, RImageIDText(GetWidth,Position),$StaticTextHeight
+						TEXT					~Software Version~
+						RIGHTJUSTIFIED			TRUE
+						TYPENAME				StaticText
+
+			Define: SoftwareVersionBox Using DDWinCtrlDef AsSymbol SoftwareVersionBox
+				Fields:	TYPENAME				SComboBox
+						GENCONNAME				THIS
+						GENCONFIELD				SoftwareVersion
+						IsIndex					TRUE
+						IActionsText			ACTIONS	( Get )
+						DActionsText			ACTIONS ( Save  "Exec(<THIS>.OnSoftwareVersionChange())" )
+						OACTIONSTEXT			ACTIONS ( Save )
+						Position				CurrentRImageEditBox(GetLeft,Position), SoftwareVersionText(GetTop,Position)-2,RImageIDField(GetWidth,Position) 80
+						
+						
+			Define: AutoStartCheckBox Using DDWinCtrlDef AsSymbol AutoStartCheckBox 
+				Fields: TypeName		CheckBox
+						Text			~Auto Run at Startup~
+						Position		SoftwareVersionBox(GetLeft,Position), SoftwareVersionText(GetBottom,Position) + $vGap, 120, <ButtonHeight>
+						GenConName		THIS
+						GenConField		~AutoStartRImage~
+						IActionsText	~[Get]~
+						DActionsText	ACTIONS ( Save "Exec(<THIS>.OnAutoStartCheckBox();)" )	
+						OActionsText	~[Save]~
+						Tooltip			~Enable or disable autostart of RImage CD writing~
+						
+			Define: MaxBuildsField Using DDWinCtrlDef AsSymbol MaxBuildsField
+				Fields:	TypeName		MaskedEditText
+						Position		SoftwareVersionBox(GetLeft,Position),AutoStartCheckBox(GetBottom,Position)+$vGap,15,$ButtonHeight
+						GenConName		THIS
+						GenConField		~MaxBuilds~
+						IActionsText	~[Get]~
+						DActionsText	~[Save]~
+						OActionsText	~[Save]~
+						Mask			~#~
+						PromptChar		~ ~		
+						Tooltip			~Enter the number of CD's that can be built simultaneously. Make sure you have enough disk space!~;
+						
+			Define: MaxBuildsPrompt Using DDWinCtrlDef AsSymbol MaxBuildsPrompt
+				Fields: POSITION		MaxBuildsField(GetRight,Position)+3,MaxBuildsField(GetTop,Position)+2, 250,$StaticTextHeight
+						TEXT			~Max Simultaneous Build Sessions~
+						LEFTJUSTIFIED	TRUE
+						TYPENAME		StaticText
+						Tooltip			~Enter the number of CD's that can be built simultaneously.  Make sure you have enough disk space!~;
+										
+		}
+	return TRUE;
+}
+
+
+VOID CDSetupClass::OnSoftwareVersionChange()
+{	
+	if ( Numeric(~<$con.dlgData[SoftwareVersion]>~) == 3 )
+	{
+		if ( IsNull(~<$con.dlgData[RimageComputer]>~) )
+		{
+			dlg( SetStrings,RimageComputer,~<$App.ComputerName>~ );
+		}
+	}
+	
+	dlg( EnableControls,Numeric(~<$con.dlgData[SoftwareVersion]>~) == 0,ImageOrderFileField,ImageOrderFileBrowseButton,
+																		ProdOrderFileField,ProdOrderFileBrowseButton,
+																		LogDirLocationField,LogDirLocationBrowseButton ); 
+																		
+																		
+	dlg( EnableControls,Numeric(~<$con.dlgData[SoftwareVersion]>~) != 3,ConstructionLocationField,ConstructionLocationBrowseButton );
+}
+
+
+
+VOID	CDSetupClass::OnConnectButton()		{ WNet( ConnectionDialog ); }
+
+NUMERIC CDSetupClass::WriterSelected( UserSelection )
+{	
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.dlgData[RImageID]>~ ) )	{ return FALSE; }
+	
+	return CDSetupDialog.LoadSavedSettings(~<$con.dlgData[RImageID]>~,Numeric(~<UserSelection>~) );
+}
+
+NUMERIC CDSetupClass::SelectWriter( ID )	{ return dlg( SelectString,RImageIDField,~<ID>~ ); }
+
+NUMERIC CDSetupClass::PopulateWriters( UserSelection )
+{
+	Query = ~Select ID From RImage Order By ID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	if ( List( NumEntries ) )
+	{
+		List( MakeStringList,WritersList,ID );
+
+		dlg( SetControlFromStringList,RImageIDField,WritersList,Selection  );
+	}
+
+	if ( <UserSelection> )
+	{
+		WriterSelected(<UserSelection>);
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CDSetupClass::OnGoButton()
+{
+	// Update the Rimage database tables
+
+	dlg( GetInput );
+
+	if ( !ADO( DB,CONNECT ) )
+	{ 
+		return Warning( ~Could not open PLS Database~ ); 
+	}
+
+	if ( ~<$con.dlgData[RImageID]>~ == ~~ )
+	{
+		return Warning( Translate( ~You must create a RImage ID~ ) );
+	}
+
+	Query = ~Select ID From RImage Where ID = '<$con.DlgData[RImageID]>'~;
+	count = DB(RecordCountFor, ~<Query>~);
+	
+	if ( <count> == 0 )
+	{
+		Parameters = ~ID,Computer,ProgramPath~; 
+		
+		Values = ~'<$con.DlgData[RImageID]>','<$App.ComputerName>','<$App.Path>\<$App.Name>'~;
+
+		SQLCommand = ~Insert Into RImage(<Parameters>) Values(<Values>)~;
+
+		if (!DB(Cmd, ~<SQLCommand>~))
+		{
+
+			DB(GetErrorDescription, theErr);
+			return Warning( Translate(~Database update failed <SQLCommand>. <theErr>~));
+		
+		}
+	}
+
+	// Get the chosen workstation from the workstation listbox
+
+//	dlg( ListBox,RImageComputerListBox,GetSelectedItem,Workstation );
+	workstation = ~<$con.DlgData[RImageComputer]>~;
+
+	if ( ~<workstation>~ == ~~ )
+	{
+		return Warning( Translate( ~You must select a RImage Workstation~ ) );
+	}
+
+	SQLCommand = ~UPDATE RImage SET SoftwareVersion = <$con.DlgData[SoftwareVersion]>, MaxBuilds = <$con.DlgData[MaxBuilds]>, ImagingOrderFile = '<$con.DlgData[IOFileLocation]>',ProductionOrderFile = '<$con.DlgData[POFileLocation]>',Server = '<Workstation>',AutoStart = '<$con.DlgData[AutoStartRImage]>',ImagePath = '<$con.DlgData[ConstructionLocation]>', LogFilePath = '<$con.DlgData[POLogFileLocation]>', Log = '<$con.DlgData[RImageLogging]>' Where ID = '<$con.DlgData[RImageID]>'~;
+
+	if (!DB(Cmd, ~<SQLCommand>~))
+	{
+
+		DB(GetErrorDescription, theErr);
+		return Warning( Translate(~Database update failed <SQLCommand>. <theErr>~));
+	
+	}
+
+	if ( RunningVersion( 6.1 ) && 0 )
+	{
+
+		SQLCommand = ~UPDATE RImage SET CDMediaAvailable = '<$con.DlgData[CDMediaAvailable]>',CDMediaStorageCapacity = '<$con.DlgData[CDMediaStorageCapacity]>',DVDMediaAvailable = '<$con.DlgData[DVDMediaAvailable]>',DVDMediaStorageCapacity = '<$con.DlgData[DVDMediaStorageCapacity]>' Where ID = '<$con.DlgData[RImageID]>'~;
+
+		if (!DB(Cmd, ~<SQLCommand>~))
+		{
+
+			DB(GetErrorDescription, theErr);
+			return Warning( Translate(~Database update failed <SQLCommand>. <theErr>~));
+	
+		}
+	}
+
+	// BaseDialog::DoCancelButton();	Matt, I Don't think we should exit here.
+
+	dlg( SetStatus,0,~Save Complete~ );
+
+	return TRUE;
+}
+
+
+VOID CDSetupClass::OnAutoStartCheckBox()
+{
+
+}
+
+
+VOID CDSetupClass::OnLoggingCheckBox()
+{
+
+}
+
+
+NUMERIC CDSetupClass::OnBrowseDirectoryButton(tempgencon, location)
+{
+	Title = ~Construction Location~;
+	SubTitle = Translate( ~Construction Location on RImage Workstation~ );
+	StartingDirectory = ~<$con.DlgData[ConstructionLocation]>~;
+
+	if ( IsNull( ~<StartingDirectory>~ ) )
+	{
+		StartingDirectory = ~\\<$con.DlgData[RImageComputer]>~;
+	}
+
+	if ( GetFolder( ~<Title>~,~<SubTitle>~,Path,TRUE,~<StartingDirectory>~ ) )
+	{
+		dlg( SetString,~<Path>~,ConstructionLocation,0 );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CDSetupClass::OnBrowseForFileButton(tempgencon, filename)
+{
+	dlg( GetInput);
+
+	rimagecomp = ~\\<$con.DlgData[RImageComputer]>~;
+
+	StartingDirectory = ~<$App.Directory>~;
+
+	Title = Translate( ~Find ~ );
+
+	SubTitle = Translate( ~<filename>~ );
+	GetTokens(~<filename>~,~.~,temp,ext);
+
+	if ( FileDialog( DefaultDirectory, ~<rimagecomp>~, Title,~<Title>~ + ~<SubTitle>~,Filter,~<ext> Files|*.<ext>|All Files|*.*|~,PATH,Path,Open ) )
+	{
+		dlg( SetString,~<Path>~,$tempgencon,0 );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CDSetupClass::PopulateSoftwareVersionComboBox()
+{
+	if ( !StringList( list, New, Is, ~<$[DATABASE FieldTypes].RImageSoftwareVersion[ChoiceList]>~ ) ) 
+	{
+		return Warning( ~Unable to update RImageSoftwareVersion combo box~ );
+	}
+	
+	return dlg( SetControlFromStringList, SoftwareVersionBox, list, Selection );
+}
+
+
+NUMERIC CDSetupClass::PopulateServersList()
+{
+	if ( !Defined( dlg ) )		{ return FALSE; }
+
+	dlg( GetInput );
+
+	dlg( ListBox,RImageComputerListBox,ResetContent );
+
+	dlg( SetStatus,0,~Searching for network computers~ );
+
+	WaitCursor( Begin );
+
+	if ( !MakeServersList( List,Type,Workstation,Type,Workstation,Domain,~<$con.DlgData[WorkstationDomain]>~ ) )
+	{
+		dlg( SetStatus,0,~Unable to get list of network computers~ );
+		WaitCursor( End );
+		return FALSE;
+	}
+
+
+	More = List( GetFirstString,Workstation );
+
+	while ( <more> )
+	{
+		dlg( ListBox,RImageComputerListBox,AddString,~<Workstation>~ );
+
+		More = List( GetNextString,Workstation );
+	}
+
+	WaitCursor( End );
+
+	dlg( SetStatus,0,~Workstation search complete~ );
+
+	return TRUE;
+}
+
+
+// Function that queuries the database at dialog startup and 
+// populates the dialog fields.
+
+NUMERIC CDSetupClass::LoadSavedSettings( writerID,UserSelection )
+{
+	if ( !ADO( DB,CONNECT ) )
+	{ 
+		return Warning( ~LoadSavedSettings: Could not open DP2 Database~ ); 
+	}
+
+	Query = ~Select * From RImage Where ID = '<writerID>'~;
+
+	if ( !PGenConList( List,Connection,DB,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	// initialize writerName in case the ID doesn't exist.  This is because the
+	// user manually entered the name on the setup screen and it isn't in the db yet.
+
+	writerName = ~<writerID>~;
+	IOFile = ~~;
+	POFile = ~~;
+	POLog = ~~;
+	autoStart = 0;
+	cdDirectory = ~~;
+	writerComputer = ~~;
+	enableLogging = 1;
+	MaxBuilds = 1;
+
+	if ( RunningVersion( 6.1 ) && 0 )
+	{
+		CDMediaAvailable = 1;
+		CDMediaStorageCapacity = 0;
+		DVDMediaAvailable = 0;
+		DVDMediaStorageCapacity = 0;
+	}
+
+	if ( List( GetNext,Setting ) )
+	{
+		// Get the settings from database record.
+		writerName	= ~<$pcon.Setting[ID]>~;
+		IOFile		= ~<$pcon.Setting[ImagingOrderFile]>~;
+		POFile		= ~<$pcon.Setting[ProductionOrderFile]>~;
+		POLog		= ~<$pcon.Setting[LogFilePath]>~;
+		autoStart	= ~<$pcon.Setting[AutoStart]>~;
+		cdDirectory	= ~<$pcon.Setting[ImagePath]>~;
+		writerComputer = ~<$pcon.Setting[Server]>~;
+		enableLogging = ~<$pcon.Setting[Log]>~;
+		MaxBuilds	  = ~<$pcon.Setting[MaxBuilds]>~;
+		SoftwareVersion	  = ~<$pcon.Setting[SoftwareVersion]>~;
+
+		if ( RunningVersion( 6.1 ) && 0 )
+		{
+			CDMediaAvailable = Numeric( ~<$pcon.Setting[CDMediaAvailable]>~ );
+			CDMediaStorageCapacity = Numeric( ~<$pcon.Setting[CDMediaStorageCapacity]>~ );
+			DVDMediaAvailable = Numeric( ~<$pcon.Setting[DVDMediaAvailable]>~ );
+			DVDMediaStorageCapacity = Numeric( ~<$pcon.Setting[DVDMediaStorageCapacity]>~ );
+		}
+	}
+
+	if ( MakeNumber( ~<MaxBuilds>~ ) < 1 )
+	{
+		MaxBuilds = 1;
+	}
+
+	dlg( SetStrings, RImageID,~<writerName>~, IOFileLocation,~<IOFile>~, POFileLocation,~<POFile>~, ConstructionLocation,~<cdDirectory>~, 
+				RImageComputer, ~<writerComputer>~, POLogFileLocation,~<POLog>~,MaxBuilds,~<MaxBuilds>~,SoftwareVersion,~<SoftwareVersion>~ );
+
+	if ( RunningVersion( 6.1 ) && 0 )
+	{
+		dlg( SetCheck, <CDMediaAvailable>, CDMediaAvailableCheckBox );
+		dlg( SetCheck, <DVDMediaAvailable>, DVDMediaAvailableCheckBox );
+		dlg( SetStrings, CDMediaStorageCapacity, ~<CDMediaStorageCapacity>~, DVDMediaStorageCapacity, ~<DVDMediaStorageCapacity>~ );
+	}
+	
+	// SetCheck works off the control, not the gencon.
+	dlg( SetCheck, <autoStart>, AutoStartCheckBox );
+	dlg( SetCheck, <enableLogging>, EnableLoggingCheckBox );
+	
+	OnSoftwareVersionChange();
+
+	return TRUE;
+}
+
+
+VOID CDSetupClass::OnShowWriterButton()
+{
+	Actions = ACTION DOC ( RImageDoc OpenOnce RImageDoc "Init();" );
+	PerformActions( Actions );
+}
+
+
+VOID CDSetupClass::OnShowTemplateButton()
+{
+	Actions = ACTION DOC ( RImageTemplatesDoc OpenOnce RImageTemplatesDoc "Init(~All~,~Select * From RImageTemplates Order By ID~);" );
+	PerformActions( Actions );
+}
+
+
+VOID CDSetupClass::OnComputerSelected()
+{
+	dlg( GetInput );
+	dlg( ListBox,RImageComputerListBox,GetSelectedItem,Workstation );
+
+	dlg( SetString,~<Workstation>~,RImageComputer,0 );
+	dlg( Update );
+}
+
+
+if ( RunningVersion( 6.1 ) && 0 )
+{
+NUMERIC CDSetupClass::PopulateCDStorageCapacityComboBox()
+{
+	if (! StringList( list, New, Is, ~<$[DATABASE FieldTypes].CDStorageCapacity[ChoiceList]>~ ) ) 
+	{
+		return Warning( Translate( ~Unable to update CD storage capacity combo box~ ) );
+	}
+	return dlg( SetControlFromStringList, CDMediaStorageCapacityComboBox, list, Selection );
+}
+
+NUMERIC CDSetupClass::PopulateDVDStorageCapacityComboBox()
+{
+	if (! StringList( list, New, Is, ~<$[DATABASE FieldTypes].DVDStorageCapacity[ChoiceList]>~ ) ) 
+	{
+		return Warning( Translate( ~Unable to update DVD storage capacity combo box~ ) );
+	}
+	return dlg( SetControlFromStringList, DVDMediaStorageCapacityComboBox, list, Selection );
+}
+}

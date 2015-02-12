@@ -1,0 +1,925 @@
+// CustomerProductsDoc.txt
+//
+// Globals: DocumentQuery - Query for the data displayed
+//			DocCustomerID - Passed into Init(). Used for Title, & Customer ID if no row to imitate.
+ 
+ IncludeClass( BaseEnterText );
+
+NeedsComposite = ~Needs Composite~;  
+
+Define:	CustProdMessages Using DDSymbol
+	Fields:	Value	~These strings are CustomerProducts related strings used by the user interface.~
+	Contains:
+	{
+		Define: Title				using DDText	Fields: Text ~CustomerProducts~
+		Define: MenuTitle			using DDText	Fields: Text ~Customer Products For - %1~
+		Define: ReadingRecords		using DDText	Fields: Text ~Reading %1 CustomerProducts Records~
+		Define: ReadRecords			using DDText	Fields: Text ~Read %1 CustomerProducts~
+		Define: RemovingFor			using DDText	Fields: Text ~Are you sure you want to delete the %1 selected rows?~
+		Define: UnableSave1			using DDText	Fields: Text ~Unable to save pending changes.  CustomerID cannot be blank.~
+		Define: UnableSave2			using DDText	Fields:	Text ~Unable to save pending changes.  ProgramID cannot be blank.~
+		Define: UnableSave3			using DDText	Fields: Text ~Unable to save pending changes.  ID cannot be blank.~
+		Define: UnableSave4			using DDText	Fields:	Text ~Unable to save pending changes.  ProductID cannot be blank.~
+		Define: CompCantBePrint     using DDText	Fields:	Text ~Composites can not have a Printing Request of "Print"~
+		Define: NoDocInfo			using DDText	Fields: Text ~Could not create document info for %1~
+		Define: CouldNotOpen		using DDText	Fields: Text ~Could not open %1~
+		Define: MaxOpen				using DDText	Fields: Text ~You can only have %1 jobs or layouts open at a time~
+		Define: BlankProductID		using DDText	Fields: Text ~The Product ID is blank.~
+		Define: TblNotDef           using DDText	Fields:	Text ~The CustomerProducts Table is not properly defined~
+	}
+
+Include: ~GetFullLayout~;
+
+VOID RefreshDoc()
+{
+	RefreshListView();
+}
+
+
+// [Refresh], "Refresh", F5
+NUMERIC RefreshListView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox(Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	Count = List( NumEntries );
+	
+	DataWindow( StatusBar,Text,Translate(CustProdMessages,ReadingRecords,~<Count>~) );
+	DataWindow( RefreshWindow );
+	DataWindow( StatusBar,Text,Translate(CustProdMessages,ReadRecords,~<Count>~) );
+
+	return TRUE;
+}
+
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,ChangedItem,OrigItem,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedItem[CustomerID]>~ == ~~ )
+		{ return Warning( Translate( CustProdMessages,UnableSave1 ) ); }
+
+	if ( ~<$con.ChangedItem[ProgramID]>~ == ~~ )
+		{ return Warning( Translate( CustProdMessages,UnableSave2 ) ); }
+
+	if ( ~<$con.ChangedItem[ID]>~ == ~~ )
+		{ return Warning( Translate( CustProdMessages,UnableSave3 ) ); }
+
+	if ( ~<$con.ChangedItem[ProductID]>~ == ~~ )
+		{ return Warning( Translate( CustProdMessages,UnableSave4 ) ); }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~CustomerProducts~,~<theErr>~) );
+	}
+
+	// Verify Composites/Multiples are not set for Printing now
+	if (~<$con.ChangedItem[ProductID]>~ == ~<NeedsComposite>~)
+	{	isMultiple = TRUE;	}
+	else
+	{
+		Query = ~Select Multiple From Products Where ID = '<$con.ChangedItem[ProductID]>'~;
+		if ( !dBase( GetValuesFor,~<Query>~,isMultiple) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+			return FALSE;
+		}
+	}
+
+	if ((<isMultiple>) && (~<$con.ChangedItem[PrintingRequest]>~ == ~0~))  // PrintRequest = 0 = "Print"
+	{
+		return Warning( Translate(CustProdMessages,CompCantBePrint) );
+	}
+	 
+	Key = ~CustomerID = '<$con.OrigItem[CustomerID]>' AND ProgramID = '<$con.OrigItem[ProgramID]>' AND ID = '<$con.OrigItem[ID]>' AND Sequence = <$con.OrigItem[Sequence]>~;
+	
+	Query = ~Select * From CustomerProducts Where <Key>~;
+
+	if ( !PGenConList( List,Connection,dbase,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( UpdateFrom,ChangedItem,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+	}
+
+	DataView( CommitChanges );	
+
+	return TRUE;
+}
+
+
+// [Delete],"Delete", and DeleteRecordAction
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,ItemsToDelete ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	Count = ItemsToDelete( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( Translate(UIMessages,NoRowsSelected) ) ); }
+
+	if ( MessageBox(Translate(CustProdMessages,RemovingFor,~<Count>~),YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~CustomerProducts~,~<theErr>~) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( ItemsToDelete( GetNext,ItemToDelete ) )
+	{
+		Key = ~CustomerID = '<$con.ItemToDelete[CustomerID]>' AND ProgramID = '<$con.ItemToDelete[ProgramID]>' AND ID = '<$con.ItemToDelete[ID]>' AND Sequence = <$con.ItemToDelete[Sequence]>~;
+
+		Cmd = ~Delete From CustomerProducts Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+		}
+
+		RowsToDelete( AddString,ItemToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC CalcNextSequenceNumber( CustomerID,ProgramID,ID )
+{
+	NextSequence = 0;
+
+	Key = ~CustomerID = '<CustomerID>' AND ProgramID = '<ProgramID>' AND ID = '<ID>'~;
+
+	if ( !Ado( dbase,Connect) )
+	{ 
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~CustomerProducts~,~<theErr>~) );
+	}
+
+	Query = ~Select MAX(Sequence) From CustomerProducts Where <Key>~;
+	if ( dBase( GetValuesFor,~<Query>~,MaxSequence ) )
+	{ 
+		NextSequence = ~<MaxSequence>~ == ~~ ? ~0~ : ~<MaxSequence>~; 
+	}
+
+	if ( <NextSequence> > 999999989 )
+	{
+		NextSequence = 999999989;
+	}
+
+	return $NextSequence + 10;
+}
+
+
+// [New], "New"
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	NextSequence = CalcNextSequenceNumber( ~<$con.Item[CustomerID]>~,~<$con.Item[ProgramID]>~,~<$con.Item[ID]>~ );
+
+	NewRow( SetValues,Quantity,1,CustomerID,~<DocCustomerID>~,ProgramID,~*~ );
+
+	if ( DataView( GetSelectedRows,ItemsSelected ) )		
+	{ 
+		if ( ItemsSelected( GetFirst,Item ) )
+		{
+			NextSequence = CalcNextSequenceNumber( ~<$con.Item[CustomerID]>~,~<$con.Item[ProgramID]>~,~<$con.Item[ID]>~ );
+			NewRow( SetValues,Sequence,<NextSequence>,CustomerID,~<$con.Item[CustomerID]>~ );
+			NewRow( SetValues,ProgramID,~<$con.Item[ProgramID]>~,ID,~<$con.Item[ID]>~ );
+		}
+	}
+	
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate(UIMessages,AddRowFailed) ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	return TRUE;
+}
+
+
+
+// "Duplicate"
+NUMERIC Duplicate()
+{
+	if ( !DataView( GetSelectedRows,RowToImitate ) )		
+	{
+		return Warning( Translate(UIMessages,NoRecordToDup ) );	
+	}
+
+	While (RowToImitate( GetNext,DupRecord ))
+	{
+		GenCon( NewRow,IsCopyOf,DupRecord );
+
+//		NewRow( Set,CustomerID,~~ );  // CustomerID, ProgramID
+
+		RowBeingAdded = DataView( AddRow, NewRow );
+
+		if ( <RowBeingAdded> <= 0 )
+			{ return Warning( Translate(UIMessages, AddRowFailed) ); }
+
+	}
+
+	DataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	return TRUE;
+}
+
+
+
+NUMERIC DuplicateAllForCustomer()
+{
+	if ( !DataView( GetSelectedRows,RowToImitate ) )		
+	{
+		return Warning( Translate(UIMessages,NoRecordToDup ) );	
+	}
+
+	if ( RowToImitate( GetFirst,DupRecord ) )
+	{
+		CustomerID = ~<$con.DupRecord[CustomerID]>~;
+		
+		if ( IsNull(~<CustomerID>~) )
+		{
+			return Warning( ~There is no CustomerID to duplicate from~ );
+		}
+	}
+	
+	ForgetGlobal( EnterTextDialog );
+	Class( MyBaseEnterText,Extends,BaseEnterText,Member,fCustomerID,Str,~~ );
+	MyBaseEnterText( New,EnterTextDialog,~<CustomerID>~ );			// Instantiate an object of class BaseEnterText
+	EnterTextDialog.DefineDialog();									// Activate it
+	Global( EnterTextDialog );
+
+	return TRUE;
+}
+
+
+
+
+
+VOID MyBaseEnterText::DoCancelButton()	
+{ 
+	BaseEnterText::DoCancelButton();
+}
+
+
+VOID MyBaseEnterText::MyBaseEnterText( CustomerID )
+{ 	
+	fCustomerID = ~<CustomerID>~;
+	Title = ~Enter the Customer ID to duplicate to~;
+	
+	DataWindow( GetWindowPosition,Left,Top);
+	
+	Left += 50;
+	Top += 50;
+}
+
+
+VOID MyBaseEnterText::OnReturnKey()	
+{ 	
+	dlg( GetInput );
+
+	ToCustomerID = GetText();
+
+	if ( IsNull( ~<ToCustomerID>~ ) )		
+	{ 
+		dlg( SetControlFocus,EditTextField );
+		PopupMsg( ~Enter a Customer ID and the press ENTER or press the close box to cancel~ );
+	}
+	else
+	{
+		Action = STR ( DuplicateAll( ~<fCustomerID>~,~<ToCustomerID>~ ); );
+		QueueContentsAfter( Action,30 );								
+	}
+}
+
+
+NUMERIC DuplicateAll( FromCustomerID,ToCustomerID )
+{	
+	Action = STR ( EnterTextDialog.DoCancelButton(); );
+	QueueContentsAfter( Action,30 );	
+	
+	theQuestion = ~Are you sure you want to duplicate all product cross references for Customer <FromCustomerID> into Customer <ToCustomerID>~;
+	
+	ReturnOnFailure( MessageBox( ~<theQuestion>~,YESNO ) == YES );
+
+	Log( Session,~Duplicating the product cross reference for Customer <fCustomerID> to <ToCustomerID>~ );
+	
+	Query = ~Select * From CustomerProducts Where CustomerID = '<FromCustomerID>'~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Database query failed: <Query>  <theErr>~ );
+	}
+	
+	List( GetConnection,dBase );
+	
+	while ( List(GetNext,Rec) )
+	{
+		Cmd = ~Delete From CustomerProducts Where CustomerID='<ToCustomerID>' AND ProgramID = '<$pcon.Rec[ProgramID]>' AND ID = '<$pcon.Rec[ID]>' AND Sequence = <$pcon.Rec[Sequence]>~;
+	
+		dbase( Cmd,~<Cmd>~ );
+		
+		Fields = ~CustomerID,ProgramID,ID,Sequence,ProductID,Quantity,PrintingRequest~;
+		Values = ~'<ToCustomerID>','<$pcon.Rec[ProgramID]>','<$pcon.Rec[ID]>',<$pcon.Rec[Sequence]>,'<$pcon.Rec[ProductID]>',<$pcon.Rec[Quantity]>,'<$pcon.Rec[PrintingRequest]>'~;
+		
+		Cmd = ~Insert Into CustomerProducts(<Fields>) Values(<Values>)~;
+		
+		if ( !dbase( Cmd,~<Cmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			return Warning( ~Database update failed: <Cmd>  <theErr>~ );
+		}
+	}
+	
+	Query = ~Select * From CustomerProducts Where CustomerID = '<ToCustomerID>' Order By CustomerID,ProgramID,ID,Sequence~;
+	
+	Actions = ACTION DOC ( CustomerProductsDoc Open CustomerProductsDoc "Init( ~<ToCustomerID>~,~<Query>~);" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC ShowAllRecords()
+{
+	Query = ~Select * From CustomerProducts Order By CustomerID,ProgramID,ID,Sequence~;
+	
+	Actions = ACTION DOC ( CustomerProductsDoc Open CustomerProductsDoc "Init( ~All Customers~,~<Query>~);" );
+	return PerformActions( Actions );
+}
+
+
+// [Find] and "Find"
+NUMERIC Search()
+{
+	Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( CustomerProducts );" ) );
+	return PerformActions( Actions );
+}
+
+ProductsLoaded = FALSE;	// Customers have too many products to refresh every time
+
+NUMERIC UpdateProductsCombo( &ColumnDefinition,Row,Col )
+{
+	ReturnOnSuccess( <ProductsLoaded> );	// Only due this once because it takes too long to load the products
+	
+	DataView( GetCellValue,PrinterModel,<Row>,PrinterModel );
+
+	Query = STR ( Select ID From Products Where Style <> 1 And Multiple <> 1 Order By ID );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,ProductIDs,ID );
+
+		if (RunningVersion(3.5))
+		{
+			ProductIDs(AddString,~<NeedsComposite>~);
+		}
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,ProductIDs(GetCopyOf) );
+
+		DataView( SetComboBox,ColumnDefinition,<Col> );
+		
+		ProductsLoaded = TRUE;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RefreshProductsList()
+{
+	DataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+
+	if ( ~<ColumnName>~ == ~PRODUCTID~ )
+	{
+		UpdateProductsCombo( ColumnDefinition,<row>,<col> );
+	}
+
+	return TRUE;
+}
+
+// Following routine is called whenever one of the combo boxes are changed.
+// If the combo box was the "ProductID" column, and the ID selected was
+// Needs Composite, then set the Printing Request to "Delay Printing".
+NUMERIC ComboBoxChangedActions()
+{
+	DataView( GetActiveCell,row,col );
+	DataView( GetColumnName,<col>,ColumnName );
+
+	if ( ~<ColumnName>~ == ~PRODUCTID~ )
+	{
+		// If Type = Need Comp, then PrintingRequest should be Delay Printing.
+
+		DataView( GetCellValue,TypeValue,<row>,<col>);
+		if (~<TypeValue>~ == ~<NeedsComposite>~)
+		{  
+			DataView( SetCellValue,<row>,PrintingRequest,1);  // 1 = Delay Printing
+		}
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC RightClickInListView()
+{
+	DataView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,ListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,ListViewMenu,0,0  );
+	}
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	return DataWindow( ForceCloseWindow );
+}
+
+
+// [Save], "Save Changes", Refresh, and Close
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+// [Cancel], "Cancel Changes"
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( Translate(UIMessages,CancelChanges), YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OpenALayout( LayoutPath,ProductID,LayoutName )
+{
+	if ( ~<LayoutPath>~ == ~~ )
+		{ return FALSE; }
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == LayoutView )
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<LayoutPath>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+		}
+	}
+
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( Translate(CustProdMessages,NoDocInfo, ~<LayoutPath>~) ); }
+
+	Info( SetValues,ProductID,~<ProductID>~,LayoutName,~<LayoutName>~ );
+
+	if (!Document( aLayout,Open,~<LayoutPath>~,Layout,~~,Info ) )
+		{ return Warning( Translate(CustProdMessages,CouldNotOpen, ~<LayoutPath>~) ); }
+
+	return TRUE;
+}
+
+
+// NOT CALLED
+NUMERIC ViewAsText()
+{
+	Program = ~<$Sys.Directory>\Notepad.exe~;
+
+	if ( !Files( FileExists,~<Program>~ ) )
+	{
+		return Warning( ~Could not find NotePad.exe at <Program>~ );
+	}
+
+	if ( !DataView( GETSELECTED,SelectedProducts ) )	{ return Warning( Translate( ~There were no selected Products.~ ) ); }
+
+	Count = SelectedProducts( CHILDCOUNT );
+
+	if ( <Count> <= 0 )	 { return Warning( Translate( ~There were no selected Products.~ ) ); }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~CustomerProducts~,~<theErr>~) );
+	}
+
+	while ( SelectedProducts( GETNEXT,Product ) )
+	{
+		ID = ~<$con.Product[ProductID]>~;
+		Query = ~Select ProductLayoutPath,LayoutName From Products Where ID = '<ID>'~;
+
+		if ( !dBase( GetValuesFor,~<Query>~,ProductLayoutPath,LayoutName ) )
+		{
+			Warning( Translate( ~Failed to query products for product with ID <ID>~ ) );
+			continue;
+		}
+
+		if ( !ShellExecute( Open,~<Program>~,~<ProductLayoutPath>~ ) )
+		{
+			GetLastError( ErrorString,theErr );
+			return Warning( ~Could not open <$con.Product[ProductLayoutPath]>. <theErr>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+// [Open], "Open", and DoubleClickAction
+NUMERIC OpenSelected()
+{
+	if ((~<$App.Name>~ !=~DP1.exe~) && (!GetUserPermissions( LayoutEditing ) ))
+	{
+		return Warning( Translate(UIMessages,NoPermission) );
+	}
+
+	if ( !DataView( GetSelected,SelectedProducts ) )
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	Count = SelectedProducts( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	CurrentlyOpen = NumWindows( LayoutOrJob );
+
+	MaxOpenJobsOrLayouts = ~<$[Symbols].MaxOpenJobsOrLayouts[Long]>~;
+
+	if ( <MaxOpenJobsOrLayouts> < 1 )
+	{ 
+		MaxOpenJobsOrLayouts = 1;
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~CustomerProducts~,~<theErr>~) );
+	}
+
+	while ( SelectedProducts( GetNext,Product ) )
+	{
+		if ( ~<$Con.Product[ProductID]>~ == ~~)
+		{
+			Warning(Translate(CustProdMessages,BlankProductID));
+			continue;
+		}
+		Query = ~Select ID,Multiple,Package,LayoutName,ProductLayoutPath From Products Where ID = '<$Con.Product[ProductID]>'~;
+
+		if ( !dBase( GetValuesFor,~<Query>~,ID,Multiple,Package,LayoutName,LayoutPath ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		}
+		
+		if ( <Package> )
+		{
+			Query = ~Select * From Packages Where PackageID = '<$Con.Product[ProductID]>' Order By Sequence~;
+			action = ACTION DOC ( Packages Open PackagesDoc "Init( ~Packages~, ~<Query>~ );" );
+			PerformActions( action );
+		}
+		else if ( !IsNull( ~<LayoutPath>~ ) )
+		{
+			if ( <++CurrentlyOpen> > <MaxOpenJobsOrLayouts> )
+			{
+				Warning( Translate( CustProdMessages,MaxOpen,~<MaxOpenJobsOrLayouts>~ ) );
+				break;
+			}
+
+			IsMultiple = FALSE;
+
+			TheLayout = GetFullLayout( ~<LayoutPath>~,IsMultiple );
+
+			if ( IsNull( ~<TheLayout>~ ) )
+				continue;
+
+			Operation = STR ( OpenALayout( ~<TheLayout>~,~<ID>~,~<LayoutName>~ ) );
+			QueueContentsOf( Operation );
+		}
+	}
+
+	return TRUE;
+}
+
+
+// NOT CALLED
+NUMERIC OldOpenSelected()
+{
+	if ( !DataView( GETSELECTED,SelectedProducts ) )	{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	Count = SelectedProducts( CHILDCOUNT );
+
+	if ( <Count> <= 0 )								{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~CustomerProducts~,~<theErr>~) );
+	}
+
+	while ( SelectedProducts( GETNEXT,Product ) )
+	{
+		ID = ~<$con.Product[ProductID]>~;
+		Query = ~Select ProductLayoutPath,LayoutName,Package,Multiple From Products Where ID = '<ID>'~;
+
+		if ( !dBase( GetValuesFor,~<Query>~,ProductLayoutPath,LayoutName,Package,Multiple ) )
+		{
+			Warning( Translate( ~Failed to query products for product with ID <ID>~ ) );
+			continue;
+		}
+
+		Operation = STR ( OpenALayout( ~<ProductLayoutPath>~,~<ID>~,~<LayoutName>~ ) );
+		QueueContentsOf( Operation );
+	}
+
+	return TRUE;
+}
+
+// "Change Field"
+Include: ~ChgFldDlg.txt~;
+NUMERIC ChangeSelectedColumn()
+{
+	return DisplayChangeFieldDlg(DataView);
+
+}
+
+
+// "Export"
+Include: ~ExportSelectedToFile~;
+NUMERIC ExportRecords()
+{
+	return  ExportSelectedToFile(DataView,CustomerProducts);
+}
+
+
+NUMERIC AllOptions()
+{
+	return DataView( DisplayMenu,ListViewMenu,0,0 );
+}
+
+
+DocCustomerID = ~~;
+
+FirstTime = TRUE; // Only open a new window the first time
+
+NUMERIC Init( ThisCustomerID,DocumentQuery )
+{
+	DocCustomerID = ~<ThisCustomerID>~;
+
+	DataWindow( Set,Title,Translate(CustProdMessages,MenuTitle,~<DocCustomerID>~) );
+
+	Global( DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			Error( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+		}
+		SetDocumentData( List(GetObject) );
+
+		if ( !DataWindow( CreateWindow,Translate( CustProdMessages,Title ) ) )
+		{ 
+			Error( Translate(UIMessages, CreateWindowFailed, ~CustomerProducts~) ); 
+		}
+		
+		//RefreshProductsList();
+
+		return TRUE;
+	}
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+
+if ( !GenCon( TableDefinition,GetFrom,CustomerProducts,~[DATABASE TableDefinitions]~ ) )
+	{ Error( Translate( CustProdMessages,TblNotDef ) ); }
+
+Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	OpenProducts	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuOpen )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( OpenSelected(); )
+
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuAdd )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	Duplicate	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuDuplicate )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( Duplicate() )
+					
+		Define:	DuplicateAll	using	DDMenuItemDef
+			Fields:	Text		~Duplicate all for Customer~
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DuplicateAllForCustomer() )
+
+		Define:	NULL0 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	Search	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuFind )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( Search() )
+					
+		Define:	SearchAll	using	DDMenuItemDef
+			Fields:	Text		~Show all Customer Products~
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ShowAllRecords() )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuSaveChanges )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuCancelChanges )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuDelete )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuRefresh )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	NULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	ChangeColValue	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuChangeField )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ChangeSelectedColumn() )
+
+		Define:	NULL3 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	Export	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuExport )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ExportRecords() )
+	}
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+Define: DataWindow Using DDWinDef
+	Fields:		Position				0 50 58 30
+				IsPositionPercent		T
+				EnableStatusBar			F
+				TypeName				SplitterWnd
+				SplitterRows			~2 1 90~
+				SplitterColumns			1
+
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "CustomerProducts.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons(CustomerProduct) + 10;
+				}
+
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				ListView
+					GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+				//	ButtonClickActionsText	ACTION Exec ( OnButtonClick() )
+					DoubleClickActionsText	ACTION Exec ( OpenSelected() )
+					ComboBoxActionsText		ACTION Call ( RefreshProductsList() )	
+//Not called on change		ComboBoxChangedActionsText	ACTION Call ( ComboBoxChangedActions() )
+//Called after leave cell	EndEditActionsText		ACTION Call ( ComboBoxChangedActions() )
+					CloseActionsText		ACTION Call ( OnCloseDataView() )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "CustomerProducts.htm" );
+	}
+	
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\<$Job.Name>~ ) ;
+

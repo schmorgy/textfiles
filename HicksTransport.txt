@@ -1,0 +1,903 @@
+// HICKS FILM DRIVES COMMANDS (GENERAL - HIGH LEVEL)
+
+
+//NUMERIC Hicks_TranslateMoveToFrameDelta( Movement)
+//{
+//	FrameDelta = (<Movement> * (-1));
+//	return <FrameDelta>;
+//}
+
+
+
+NUMERIC Hicks_Tension( Tension )
+{
+	LogMessage( ~Tension sequence~ );
+	Hicks_Halt();
+	Hicks_Halt();
+
+	if ( <Tension> )
+	{
+		LogMessage( ~Tension Film~ );
+		TensionCmd = chr(0x07);
+		return SendFilmDriveCmdCheckResponse( ~<TensionCmd><CR>~, <HICKS_SEND_WAIT>, ~<HICKS_TAKEUPS_ON_RESPONSE>~, 1000 );
+	}
+	return TRUE;
+}
+
+
+NUMERIC Hicks_FastForward()
+{
+	LogMessage( ~Fast Forward~ );
+	FastForwardCmd = chr(0x06);
+	retval = SendFilmDriveCmdCheckResponse( ~<FastForwardCmd><CR>~, <HICKS_SEND_WAIT>, ~<HICKS_REWINDING_RESPONSE>~, 1000 );
+	if ( <retval> )
+	{
+		ForwardRewindFlag = TRUE;
+		return TRUE;
+	}
+	return FALSE;
+}
+
+
+NUMERIC Hicks_Rewind()
+{
+	LogMessage( ~Rewind~ );
+	RewindCmd = chr(0x08);
+	retval = SendFilmDriveCmdCheckResponse( ~<RewindCmd><CR>~, <HICKS_SEND_WAIT>, ~<HICKS_REWINDING_RESPONSE>~, 1000 );
+	if ( <retval> )
+	{
+		ForwardRewindFlag = TRUE;
+		return TRUE;
+	}
+	return FALSE;
+}
+
+
+NUMERIC Hicks_NextFrame( XOffset, YOffset, ScanMode, FrameToPunch )
+{
+	LogMessage( ~Next Frame with Adjust X Offset~ );
+	PunchNumber = ~~;
+	PunchDistance = 1;
+	ActualDistance = 0;
+	if ( !Hicks_PunchAdvance( <PunchDistance>, ActualDistance, PunchNumber, TRUE, FALSE ) )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Failed... ~, FALSE, FALSE );
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationError, ~move to next frame~ ); }
+		return FALSE;
+	}
+	if ( <ContinueRunning> && !Hicks_AdjustXOffset( <XOffset> ) )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Failed... ~, FALSE, FALSE );
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationError, ~adjust X offset~ ); }
+		return FALSE;
+	}
+	if ( <ContinueRunning> )
+	{
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Complete~ );
+		if ( !<ScanMode> )
+		{
+			Invoke( EnableScanningControls, TRUE );
+			Invoke( SetTransportControlsStopped );
+		}
+		Invoke( SetCurrentPunchNumber,~<PunchNumber>~,~<FrameToPunch>~ );
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationComplete, ~<PunchNumber>~ ); }
+		return TRUE;
+	}
+	Invoke( UserFrameErrorMessage,~Frame Movement Aborted~, FALSE, FALSE );
+	if ( <ScanMode> ) { Invoke( FilmDriveOperationStopped ); }
+	return FALSE;
+}
+
+
+NUMERIC Hicks_PrevFrame( XOffset, YOffset, ScanMode, FrameToPunch  )
+{
+	LogMessage( ~Previous Frame with Adjust X Offset~ );
+	PunchNumber = ~~;
+	PunchDistance = (-1);
+	ActualDistance = 0;
+	if ( !Hicks_PunchAdvance( <PunchDistance>, ActualDistance, PunchNumber, TRUE, FALSE ) )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Failed... ~, FALSE, FALSE );
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationError, ~move to previous frame~ ); }
+		return FALSE;
+	}
+	if ( <ContinueRunning> && !Hicks_AdjustXOffset( <XOffset> ) )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Failed... ~, FALSE, FALSE );
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationError, ~adjust X offset~ ); }
+		return FALSE;
+	}
+	if ( <ContinueRunning> )
+	{
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Complete~ );
+		if ( !<ScanMode> )
+		{
+			Invoke( EnableScanningControls, TRUE );
+			Invoke( SetTransportControlsStopped );
+		}
+		Invoke( SetCurrentPunchNumber, ~<PunchNumber>~,~<FrameToPunch>~ );
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationComplete, ~<PunchNumber>~ ); }
+		return TRUE;
+	}
+	Invoke( UserFrameErrorMessage,~Frame Movement Aborted~, FALSE, FALSE );
+	if ( <ScanMode> ) { Invoke( FilmDriveOperationStopped ); }
+	return FALSE;
+}
+
+
+NUMERIC Hicks_Stop( )
+{
+	LogMessage( ~Stop drive movement and retension~ );
+	ContinueRunning = FALSE;
+	// Must retension drive
+	if ( Hicks_tension( TRUE ) )
+	{
+		SetTransportControlsStopped();
+		EnableScanningControls( TRUE );
+		return TRUE;
+	}
+	ForwardRewindFlag = FALSE;
+	return FALSE;
+}
+
+
+NUMERIC Hicks_Halt()
+{
+	LogMessage( ~Halt Film Drive~ );
+	SimulationMode = FALSE;
+	if ( Defined( SimulateFilmDrive ) )
+	{
+		if ( <SimulateFilmDrive> )
+		{
+			SimulationMode = TRUE;
+		}
+	}
+	if ( !<SimulationMode> )
+	{
+		FilmDrive( CancelReadIO );
+	}
+	StopCmd = chr(0x1D);
+	return SendFilmDriveCmdCheckResponse( ~<StopCmd><CR>~, <HICKS_SEND_WAIT>, ~<HICKS_STOPPED_RESPONSE>~, 1000 );
+}
+
+
+NUMERIC Hicks_SeekPunch( CurrentPunch, SeekPunch, XOffset, YOffset, FirstPunch, LastPunch, ScanMode, FrameToPunch )
+{
+	LogMessage( ~Seek Punch <SeekPunch>~ );
+	// If non scanning mode then default to max ranges - to allow manual
+	// frame movement - NOT used but implemented to be same API as Bremson
+	if ( !<ScanMode> )
+	{
+		FirstPunch = Hicks_FormatPunchNumber( <MinPunchNumber> );
+		LastPunch  = Hicks_FormatPunchNumber( <MaxPunchNumber> );
+	}
+	if ( !Hicks_FindPunchNumber( ~<CurrentPunch>~,~<SeekPunch>~,~<FirstPunch>~,~<LastPunch>~ ) )
+	{
+		Invoke( FilmDriveOperationError, ~seek punch [<SeekPunch>]~ );
+		return FALSE;
+	}
+	if ( <ContinueRunning> && !Hicks_AdjustXOffset( <XOffset> ) )
+	{
+		Invoke( FilmDriveOperationError, ~adjust X offset~ );
+		return FALSE;
+	}
+	if ( <ContinueRunning> )
+	{
+		Invoke( FilmDriveCmdInProgress,~Seek Frame Complete~ );
+		if ( !<ScanMode> )
+		{
+			Invoke( EnableScanningControls, TRUE );
+			Invoke( SetTransportControlsStopped );
+		}
+		Invoke( SetCurrentPunchNumber,~<SeekPunch>~,~<FrameToPunch>~ );
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationComplete, ~<SeekPunch>~ ); }
+		return TRUE;
+	}
+	Invoke( UserFrameErrorMessage,~Frame Movement Aborted~, FALSE, FALSE );
+	if ( <ScanMode> ) { Invoke( FilmDriveOperationStopped ); }
+	return TRUE;
+
+}
+
+
+NUMERIC Hicks_MoveDeltaX( Delta, IgnoreAdjustment )
+{
+	if ( <Delta> == 0 )
+	{
+		return TRUE;
+	}
+
+	DlgData( GetValues,TXOffsetPositionInUnits,CurrentXOffset,TXOffsetIncrementUnit,TXOffsetIncrementUnit );
+
+	if ( <IgnoreAdjustment> )
+	{
+		AllowedDelta = <Delta>;
+	}
+	else
+	{
+		if ( <CurrentXOffset> >= 0 )
+		{
+			sign = ~+~;
+			DeltaAvailable =  <MaxXIncrements> - <CurrentXOffset>;
+			AllowedDelta = pin( <Delta>,-<MaxXIncrements>,<DeltaAvailable> );
+		}
+		else
+		{
+			sign = ~-~;
+			DeltaAvailable =  (-<MaxXIncrements>) - <CurrentXOffset>;
+			AllowedDelta = pin( <Delta>,<DeltaAvailable>,<MaxXIncrements> );
+		}
+
+		if ( <AllowedDelta> == 0 )
+		{
+			Warning( Translate( ~Film Offset at end of limit of <sign><MaxXIncrementsInDisplayUnits> <DisplayUnits>.~ ) );
+			return TRUE;
+		}
+	}
+
+	LogMessage( ~Move Delta X Offset by <AllowedDelta>~ );
+	SetTransportControlsRunning();
+	if ( !Hicks_MoveXDistance( <AllowedDelta> ) )
+	{
+		return FALSE;
+	}
+	SetTransportControlsStopped();
+	if ( !<IgnoreAdjustment> )
+	{
+		SetDialogVendorXOffsetInfo( <CurrentXOffset> + Numeric( <AllowedDelta> ), <TXOffsetIncrementUnit> );
+	}
+	return TRUE;
+}
+
+
+NUMERIC Hicks_AdjustXOffset( XOffset )
+{
+	SimulationMode = FALSE;
+	if ( Defined( SimulateFilmDrive ) )
+	{
+		if ( <SimulateFilmDrive> )
+		{
+			SimulationMode = TRUE;
+		}
+	}
+
+	AdjustXOffsetCmd = chr(0x88);
+	AdjustXOffsetValue = ~~;
+	AdjustXOffsetValue = Format( Pin( <XOffset>, -32768, 32767 ), ~%+ld~ );
+	SetAdjustXOffset = ~<AdjustXOffsetCmd><AdjustXOffsetValue>~;
+
+	LogMessage( ~Adjust X Offset by <AdjustXOffsetValue>~ );
+
+	if ( !<SimulationMode> )
+	{
+		if ( !FilmDrive( SerialWriteString,~<SetAdjustXOffset><CR>~ ) )
+		{
+			Invoke( UserFrameErrorMessage,~Adjust X Offset Failed... Unable to Adjust X Offset~, FALSE, FALSE );
+			return FALSE;
+		}
+
+		if ( !FilmDrive( SerialReadString,Response,~<CR>~,ticks() + (30 * 1024) ) )
+		{
+			Invoke( UserFrameErrorMessage,~Adjust X Offset Failed... Unable to Adjust X Offset~, FALSE, FALSE );
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+
+// HICKS FILM DRIVES COMMANDS (THREADED UTILITIES - LOW LEVEL - CALLED BY HIGH LEVEL)
+
+
+NUMERIC Hicks_FindPunchNumber( CurrentPunchNumber, SeekPunchNumber, FirstPunch, LastPunch )
+{
+	if ( !Hicks_ValidPunchNumber( ~<CurrentPunchNumber>~ ) )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Aborted... No Current Frame Number Specified~, TRUE, FALSE );
+		return FALSE;
+	}
+	if ( !Hicks_ValidPunchNumber( ~<SeekPunchNumber>~ ) )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Aborted... Invalid Seek Frame Number Specified~, TRUE, FALSE );
+		return FALSE;
+	}
+	if ( !Hicks_ValidPunchNumber( ~<FirstPunch>~ ) )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Aborted... Invalid First Frame Number Specified~, TRUE, FALSE );
+		return FALSE;
+	}
+	if ( !Hicks_ValidPunchNumber( ~<LastPunch>~ ) )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Aborted... Invalid Last Frame Number Specified~, TRUE, FALSE );
+		return FALSE;
+	}
+
+	if ( Defined( SimulateFilmDrive ) )
+	{
+		if ( <SimulateFilmDrive> )
+		{
+			SimulatedPunchNumber = <SeekPunchNumber>;
+			Invoke( SetCurrentPunchNumber,~<SeekPunchNumber>~ );
+			return TRUE;
+		}
+	}
+
+	Retries = -1;
+
+	StartPunchNumber = ~<CurrentPunchNumber>~;
+	EndPunchNumber   = ~<CurrentPunchNumber>~;
+	ActualDistance   = 0;
+
+	while ( <ContinueRunning> && ( <Retries> < 5 ) && ( ~<EndPunchNumber>~ != ~<SeekPunchNumber>~ ) )
+	{
+		PunchMovementCommand = ~~;
+		Response = ~~;
+		Distance = 0;
+
+		if ( <ContinueRunning> &&
+			!Hicks_CalculatePunchMovement( ~<StartPunchNumber>~,~<SeekPunchNumber>~,Distance ) )
+		{
+			Invoke( UserFrameErrorMessage,~Frame Movement Aborted... Invalid Frame Number Specified~, FALSE, FALSE );
+			return FALSE;
+		}
+
+		// If movement is less than 18 frames, then turn on the retries check
+		if ( ( <Distance> < 18 ) && ( <Retries> < 0 ) )
+		{
+			Retries = 0;
+		}
+
+		// If movement goes to end punch, then adjust the distance to move 3 punches shorter
+		// so that we don't go past end of film... do single next/prev steps
+		EndPunchFlag = FALSE;
+		if ( <Distance> != 0 )
+		{
+			tempCurrentPunch = Numeric( ~<StartPunchNumber>~ );
+			tempEndPunch = <tempCurrentPunch> + (<Distance> * (-1));
+			tempAbsoluteDistance = <Distance> * ( ( <Distance> < 0 ) ? (-1) : 1);
+			tempFirstPunch = Numeric( ~<FirstPunch>~ );
+			tempLastPunch = Numeric( ~<LastPunch>~ );
+			if ( <tempAbsoluteDistance> <= (18+2) && ( <tempEndPunch> <= ( <tempFirstPunch> + 4 ) || <tempEndPunch> >= ( <tempLastPunch> - 4 ) ) )
+			{
+				LogMessage( ~Applying End Punch Flag~ );
+				EndPunchFlag = TRUE;
+			}
+		}
+
+		HicksAdvanceStatus = Hicks_PunchAdvance( <Distance>,ActualDistance,EndPunchNumber,FALSE,<EndPunchFlag> );
+
+		if ( <ContinueRunning> && ( !<HicksAdvanceStatus> || !Hicks_ValidateMovement( ~<StartPunchNumber>~,~<EndPunchNumber>~,<ActualDistance> ) ) )
+		{
+			if ( <ContinueRunning> && !Hicks_CorrectPunchAlignment( <ActualDistance>,EndPunchNumber ) )
+			{
+				Invoke( UserFrameErrorMessage,~Frame Movement Failed... Unable to Correct Frame Alignment~, FALSE, FALSE );
+				return FALSE;
+			}
+		}
+		StartPunchNumber = ~<EndPunchNumber>~;
+		Invoke( SetCurrentPunchNumber,~<EndPunchNumber>~ );
+		if ( <Retries> >= 0 )
+		{
+			<Retries++>;
+		}
+	}
+
+	if ( !<ContinueRunning> )
+	{
+		Invoke( SetCurrentPunchNumber,~~ );
+		return FALSE;
+	}
+
+	Invoke( SetCurrentPunchNumber,~<EndPunchNumber>~ );
+
+	if ( <ContinueRunning> && ( <Retries> >= 5 ) && ( ~<EndPunchNumber>~ != ~<SeekPunchNumber>~ ) )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Failed... Exceeded Retries~, FALSE, FALSE );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC Hicks_CorrectPunchAlignment( OriginalDirection,&OnPunchNumber )
+{
+	LogMessage( ~Checking Punch Alignment...~ );
+
+	Retries = 0;
+	OnPunchNumber = ~~;
+
+	// Jog the film back and forth by one frame (starting
+	// in the opposite direction) until we obtain a difference
+	// of one frame movement
+	Distance1 = ( <OriginalDirection> < 0 ) ? (1)  : (-1);
+	Distance2 = ( <OriginalDirection> < 0 ) ? (-1) : (1);
+
+	PrevPunchNumber1 = 0;
+	PrevPunchNumber2 = 0;
+
+	while ( <ContinueRunning> && <Retries> < 3 )
+	{
+		PunchNumber1 = ~~;
+		PunchNumber2 = ~~;
+		ActualDistance1 = 0;
+		ActualDistance2 = 0;
+
+		LogMessage( ~Checking Punch Alignment... Move to a nearby Punch~ );
+
+		if ( !Hicks_PunchAdvance( <Distance1>,ActualDistance1,PunchNumber1,FALSE,FALSE ) )
+		{
+			return FALSE;
+		}
+
+		Invoke( SetCurrentPunchNumber,~<PunchNumber1>~ );
+
+		LogMessage( ~Checking Punch Alignment... Go back to the previous Punch~ );
+
+		if ( !Hicks_PunchAdvance( <Distance2>,ActualDistance2,PunchNumber2,FALSE,FALSE ) )
+		{
+			return FALSE;
+		}
+
+		Invoke( SetCurrentPunchNumber,~<PunchNumber2>~ );
+
+		if ( <PunchNumber1> != 0 && <PunchNumber2> != 0 && <Retries> > 0)
+		{
+			LogMessage( ~Checking Punch Alignment... Verifying previous Punch numbers with Current Punch Numbers~ );
+			if ( <PrevPunchNumber1> != 0 && <PrevPunchNumber2> != 0 &&
+				 <PunchNumber1>  != 0 && <PunchNumber2>  != 0 )
+			{
+
+				PrevTotalDistance = <PrevPunchNumber1> - <PrevPunchNumber2>;
+				CurrTotalDistance = <PunchNumber1> - <PunchNumber2>;
+				if ( <PunchNumber1> == <PrevPunchNumber1> &&
+					 <PunchNumber2> == <PrevPunchNumber2> &&
+					 <PrevTotalDistance> == <CurrTotalDistance> )
+				{
+					LogMessage( ~Checking Punch Alignment... Punch Number Aligned~ );
+					OnPunchNumber = ~<PunchNumber2>~;
+					return TRUE;
+				}
+				else
+				{
+					LogMessage( ~Checking Punch Alignment... Attempting to retrieve another Punch Number set~ );
+				}
+			}
+		}
+		PrevPunchNumber1 = <PunchNumber1>;
+		PrevPunchNumber2 = <PunchNumber2>;
+		Retries = <Retries> + 1;
+	}
+	return FALSE;
+}
+
+
+NUMERIC Hicks_PunchAdvance( RequestedDistance, &ActualDistance, &PunchNumber, UpdateUI, EndPunchFlag )
+{
+	ActualDistance = 0;
+	PunchMovementCommand = ~~;
+	PunchNumberFound = ~~;
+
+	SimulationMode = FALSE;
+	if ( Defined( SimulateFilmDrive ) )
+	{
+		if ( <SimulateFilmDrive> )
+		{
+			SimulationMode = TRUE;
+		}
+	}
+
+	if ( !Hicks_CreatePunchMovementCommand( <RequestedDistance>, <EndPunchFlag>, ActualDistance, PunchMovementCommand ) )
+	{
+		if ( <UpdateUI> )
+		{
+			Invoke( UserFrameErrorMessage,~Frame Movement Failed... Unable to Create Movement Command~, FALSE, FALSE );
+		}
+		return FALSE;
+	}
+
+	LogMessage( ~Advancing Punch by <ActualDistance>~ );
+
+	if ( !<SimulationMode> )
+	{
+		if ( !FilmDrive( SerialWriteString,~<PunchMovementCommand>~ ) )
+		{
+			if ( <UpdateUI> )
+			{
+				Invoke( UserFrameErrorMessage,~Frame Movement Failed... Serial Write Failure~, FALSE, FALSE );
+			}
+			return FALSE;
+		}
+	}
+
+	if ( !<SimulationMode> )
+	{
+		if ( !FilmDrive( SerialReadString,Response,~<CR>~,ticks() + (30 * 1024) ) )
+		{
+			if ( <UpdateUI> )
+			{
+				Invoke( UserFrameErrorMessage,~Frame Movement Aborted While Waiting for Frame Number~, FALSE, FALSE );
+			}
+			return FALSE;
+		}
+	}
+
+	if ( <SimulationMode> )
+	{
+		if ( Defined( SimulatedPunchNumber ) )
+		{
+			// REM Hicks starts at high punch number (each next frame is a decrement)
+			SimulatedPunchNumber = ( <SimulatedPunchNumber> ) + ( <ActualDistance> * (-1) );
+			if ( <SimulatedPunchNumber> < 1 )
+			{
+				SimulatedPunchNumber = 0;
+				PunchNumberFound = ~-1~;
+			}
+			else if ( <SimulatedPunchNumber> > <MaxPunchNumber> )
+			{
+				SimulatedPunchNumber = <MaxPunchNumber> + 1;
+				PunchNumberFound = ~<SimulatedPunchNumber>~;
+			}
+			else
+			{
+				PunchNumberFound = Hicks_FormatPunchNumber( <SimulatedPunchNumber> );
+			}
+		}
+		else
+		{
+			// This is the bes we can do if SimulatedPunchNumber is nbot defined
+			PunchNumberFound = Hicks_FormatPunchNumber( <ActualDistance> );
+		}
+	}
+	else
+	{
+		substr( ~<Response>~, 1, 4, PunchNumberFound );
+	}
+
+	if ( !Hicks_ValidPunchNumber( ~<PunchNumberFound>~ ) )
+	{
+		if ( <UpdateUI> )
+		{
+			Invoke( UserFrameErrorMessage,~Frame Movement Failed... Invalid Frame Number [<PunchNumberFound>]~, FALSE, FALSE );
+		}
+		return FALSE;
+	}
+
+	PunchNumber = ~<PunchNumberFound>~;
+	if ( <UpdateUI> )
+	{
+		Invoke( SetCurrentPunchNumber,~<PunchNumberFound>~ );
+	}
+	return TRUE;
+}
+
+NUMERIC Hicks_MoveXDistance( Distance )
+{
+	if ( <Distance> == 0 )	{ return TRUE; }
+
+	DistanceMoved = 0;
+	CurrentMovingDistance = 0;
+
+	while ( <ContinueRunning> && ( <DistanceMoved> != <Distance> ) )
+	{
+		CurrentDistance = pin( <Distance>,-<MaxXIncrements>,<MaxXIncrements> );
+
+		if ( <ContinueRunning> && !Hicks_XDistanceAdvance( <CurrentDistance>, TRUE ) )
+		{
+			return FALSE;
+		}
+
+		DistanceMoved = <DistanceMoved> + <CurrentDistance>;
+	}
+	return TRUE;
+}
+
+NUMERIC Hicks_XDistanceAdvance( Delta, UpdateUI )
+{
+	SimulationMode = FALSE;
+	if ( Defined( SimulateFilmDrive ) )
+	{
+		if ( <SimulateFilmDrive> )
+		{
+			SimulationMode = TRUE;
+		}
+	}
+
+	XOffsetAdjustCmd   = chr(0x88);
+	XOffsetAdjustValue = Format( <Delta>,~%+ld~ );
+	SetXOffsetAdjust   = ~<XOffsetAdjustCmd><XOffsetAdjustValue><CR>~;
+
+	if ( !<SimulationMode> )
+	{
+		if ( !FilmDrive( SerialWriteString,~<SetXOffsetAdjust>~ ) )
+		{
+			if ( <UpdateUI> )
+			{
+				Invoke( UserFrameErrorMessage,~X Movement Failed... Serial Write Failure~, FALSE, FALSE );
+			}
+			return FALSE;
+		}
+
+		if ( !FilmDrive( SerialReadString,Response,~<CR>~,ticks() + (30 * 1024) ) )
+		{
+			if ( <UpdateUI> )
+			{
+				Invoke( UserFrameErrorMessage,~X Movement Aborted While Waiting for Response~, FALSE, FALSE );
+			}
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+// HICKS FILM DRIVES COMMANDS (CONFIGURATION - HIGH LEVEL)
+
+IF 0
+{
+// Set Data Window
+// Set Minimum Index
+// Set Maximum Index
+// Set Sample Length
+// Set Initial Offset
+// Set Film Drive Speed
+// Wait for Drive Stopped
+// Disable Notch
+// Set X Offset
+// Wait for X Offset (Check for Neg/Pos/Zero response)
+}
+
+NUMERIC Hicks_DataBitWindow( DataBitWindow )
+{
+	LogMessage( ~Set Data Bit Window <DataBitWindow>~ );
+	DataBitWindowCmd = chr(0x24);
+	DataBitWindowValue = chr( Pin( <DataBitWindow>,0,100 ) );
+	SetDataBitWindow = ~<DataBitWindowCmd><DataBitWindowValue><CR>~;
+	return SendFilmDriveCmdCheckResponse( ~<SetDataBitWindow>~, <HICKS_SEND_WAIT>, ~<HICKS_STOPPED_RESPONSE>~, 6000 );
+}
+
+
+NUMERIC Hicks_MinIndex( MinIndex )
+{
+	LogMessage( ~Set Min Index <MinIndex>~ );
+	MinIndexCmd = chr(0x25);
+	MinIndexValue = chr( Pin( <MinIndex>,46,60 ) );
+	SetMinIndex = ~<MinIndexCmd><MinIndexValue><CR>~;
+	return SendFilmDriveCmdCheckResponse( ~<SetMinIndex>~, <HICKS_SEND_WAIT>, ~<HICKS_STOPPED_RESPONSE>~, 6000 );
+}
+
+
+NUMERIC Hicks_MaxIndex( MaxIndex )
+{
+	LogMessage( ~Set Max Index <MaxIndex>~ );
+	MaxIndexCmd = chr(0x26);
+	MaxIndexValue = chr( Pin( <MaxIndex>,55,75 ) );
+	SetMaxIndex = ~<MaxIndexCmd><MaxIndexValue><CR>~;
+	return SendFilmDriveCmdCheckResponse( ~<SetMaxIndex>~, <HICKS_SEND_WAIT>, ~<HICKS_STOPPED_RESPONSE>~, 6000 );
+}
+
+
+NUMERIC Hicks_SampleLength( SampleLength )
+{
+	LogMessage( ~Set Sample Length <SampleLength>~ );
+	SampleLengthCmd = chr(0x27);
+	SampleLengthValue = chr( Pin( <SampleLength>,0,25 ) );
+	SetSampleLength = ~<SampleLengthCmd><SampleLengthValue><CR>~;
+	return SendFilmDriveCmdCheckResponse( ~<SetSampleLength>~, <HICKS_SEND_WAIT>, ~<HICKS_STOPPED_RESPONSE>~, 6000 );
+}
+
+
+NUMERIC Hicks_InitialOffset( InitialOffset )
+{
+	LogMessage( ~Set Initial Offset <InitialOffset>~ );
+	InitialOffsetCmd = chr(0x28);
+	InitialOffsetValue = chr( Pin( <InitialOffset>, 36,39 ) );
+	SetInitialOffset = ~<InitialOffsetCmd><InitialOffsetValue><CR>~;
+	return SendFilmDriveCmdCheckResponse( ~<SetInitialOffset>~, <HICKS_SEND_WAIT>, ~<HICKS_STOPPED_RESPONSE>~, 6000 );
+}
+
+
+NUMERIC Hicks_FilmDriveSpeed( FilmDriveSpeed )
+{
+	LogMessage( ~Set Film Drive Speed <FilmDriveSpeed>~ );
+	FilmDriveSpeedCmd = chr(0x87);
+	FilmDriveSpeedValue = chr( Pin( <FilmDriveSpeed>,48,57 ) );
+	SetFilmDriveSpeed = ~<FilmDriveSpeedCmd><FilmDriveSpeedValue><CR>~;
+	return SendFilmDriveCmdCheckResponse( ~<SetFilmDriveSpeed>~,<HICKS_SEND_WAIT>, ~<HICKS_STOPPED_RESPONSE>~, 6000 );
+}
+
+
+NUMERIC Hicks_DisableNotch()
+{
+	LogMessage( ~Disable Notch~ );
+	DisableNotchCmd = chr(0x22);
+	SetDisableNotch = ~<DisableNotchCmd><CR>~;
+	return SendFilmDriveCmdCheckResponse( ~<SetDisableNotch>~, <HICKS_SEND_WAIT>, ~~, 6000 );
+}
+
+
+NUMERIC Hicks_SetupXOffset( XOffset )
+{
+	XOffsetCmd = chr(0x0F);
+	XOffsetValue = ~~;
+	XOffsetValue = Format( Pin( <XOffset>, -9999, 9999 ), ~%+04ld~ );
+	SetXOffset = ~<XOffsetCmd><XOffsetValue><CR>~;
+
+	LogMessage( ~Set XOffset Setup <XOffset>~ );
+	if ( <XOffset> < 0 )
+	{
+		return SendFilmDriveCmdCheckResponse( ~<SetXOffset>~, <HICKS_SEND_WAIT>, ~<HICKS_NEGATIVE_OFFSET>~, 6000 );
+	}
+	else if ( <XOffset> == 0 )
+	{
+		return SendFilmDriveCmdCheckResponse( ~<SetXOffset>~, <HICKS_SEND_WAIT>, ~<HICKS_ZERO_OFFSET>~, 6000 );
+	}
+	return SendFilmDriveCmdCheckResponse( ~<SetXOffset>~, <HICKS_SEND_WAIT>, ~<HICKS_POSITIVE_OFFSET>~, 6000 );
+}
+
+
+// HICKS FILM DRIVES COMMANDS (MISCELLANEOUS - HIGH LEVEL)
+
+VOID Hicks_SetupGlobals()
+{
+	// Set up Global Variables
+	CR							= chr(0x0D);
+	STX							= chr(0x01);
+	HICKS_SEND_WAIT				= 40;
+	HICKS_FRAME_WAIT			= 40;
+	HICKS_STOPPED_RESPONSE		= ~<STX>STOPPED...    <CR>~;
+	HICKS_TAKEUPS_ON_RESPONSE	= ~<STX>TAKE UPS ON   <CR>~;
+	HICKS_NEGATIVE_OFFSET		= ~<STX>NEG OFFSET    <CR>~;
+	HICKS_ZERO_OFFSET			= ~<STX>ZERO OFFSET   <CR>~;
+	HICKS_POSITIVE_OFFSET		= ~<STX>POS OFFSET    <CR>~;
+	HICKS_REWINDING_RESPONSE	= ~<STX>REWINDING...  <CR>~;
+
+	Global( CR, STX, HICKS_SEND_WAIT, HICKS_FRAME_WAIT, HICKS_STOPPED_RESPONSE );
+	Global( HICKS_TAKEUPS_ON_RESPONSE, HICKS_NEGATIVE_OFFSET, HICKS_ZERO_OFFSET );
+	Global( HICKS_POSITIVE_OFFSET, HICKS_REWINDING_RESPONSE );
+}
+
+NUMERIC Hicks_ForgetGlobals( UpdateStatus,ClosingDialog )
+{
+	// Set up Global Variables
+	ForgetGlobal( CR, STX, HICKS_SEND_WAIT, HICKS_FRAME_WAIT, HICKS_STOPPED_RESPONSE );
+	ForgetGlobal( HICKS_TAKEUPS_ON_RESPONSE, HICKS_NEGATIVE_OFFSET, HICKS_ZERO_OFFSET );
+	ForgetGlobal( HICKS_POSITIVE_OFFSET, HICKS_REWINDING_RESPONSE );
+	return CloseFilmDriveComplete( <UpdateStatus>,<ClosingDialog> );
+
+}
+
+NUMERIC Hicks_ValidPunchNumber( PunchNumber )
+{
+	if ( strlen( ~<PunchNumber>~ ) != 4 || !IsNumeric( ~<PunchNumber>~ ) )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+STR Hicks_FormatPunchNumber( PunchNumber )
+{
+	return Format( Numeric( ~<PunchNumber>~ ), ~%04d~ );
+}
+
+NUMERIC Hicks_ValidPunchRange( PunchNumber )
+{
+	if ( !IsNumeric( ~<PunchNumber>~ ) ||
+	   ( Numeric( ~<PunchNumber>~ ) < <MinPunchNumber> ) || ( Numeric( ~<PunchNumber>~ ) > <MaxPunchNumber> ) )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC Hicks_CalculatePunchMovement( CurrentPunchNumber, SeekPunchNumber, &Distance )
+{
+	if ( !Hicks_ValidPunchNumber( ~<CurrentPunchNumber>~ ) || !Hicks_ValidPunchNumber( ~<SeekPunchNumber>~ ) )
+	{
+		return FALSE;
+	}
+
+	Distance = <CurrentPunchNumber> - <SeekPunchNumber>;
+
+	return TRUE;
+}
+
+NUMERIC Hicks_CreatePunchMovementCommand( RequstedDistance, EndPunchFlag, &ActualDistance, &PunchMovementCommand )
+{
+	ActualDistance = 0;
+	PunchMovementCommand = ~~;
+
+	// If movement goes to end punch, then adjust the distance to move 3 punches shorter
+	// so that we don't go past end of film... do single next/prev steps
+	if ( <RequstedDistance> != 0 && <EndPunchFlag> )
+	{
+		LogMessage( ~Requested distance to be adjusted from <RequstedDistance>~ );
+		if ( <RequstedDistance> < (-3) || <RequstedDistance> > 3 )
+		{
+			RequstedDistance = <RequstedDistance> + ( <RequstedDistance> > 3 ) ? (-3) : 3;
+		}
+		else
+		{
+			RequstedDistance = ( <RequstedDistance> > 0 ) ? (1) : (-1);
+		}
+		LogMessage( ~Requested distance adjusted to <RequstedDistance>~ );
+	}
+
+	if ( <RequstedDistance> <= (-19) )
+	{
+		Cmd = chr( 0x84 );
+		PunchMovementCommand = ~<Cmd>18<CR>~;
+		ActualDistance = (-18);
+	}
+	else if ( <RequstedDistance> < (-1) )
+	{
+		Cmd = chr( 0x84 );
+		AbsoluteDistance = <RequstedDistance> * (-1);
+		PunchMovementCommand = ~<Cmd><AbsoluteDistance><CR>~;
+		ActualDistance = <RequstedDistance>;
+	}
+	else if ( <RequstedDistance> == (-1) )
+	{
+		Cmd = chr( 0x15 );
+		PunchMovementCommand = ~<Cmd><CR>~;
+		ActualDistance = (-1);
+	}
+	else if ( <RequstedDistance> == 0 )
+	{
+		PunchMovementCommand = ~~;
+		ActualDistance = 0;
+		return FALSE;
+	}
+	else if ( <RequstedDistance> == (1) )
+	{
+		Cmd = chr( 0x0C );
+		PunchMovementCommand = ~<Cmd><CR>~;
+		ActualDistance = 1;
+	}
+	else if ( <RequstedDistance> < 19 )
+	{
+		Cmd = chr( 0x85 );
+		PunchMovementCommand = ~<Cmd><RequstedDistance><CR>~;
+		ActualDistance = <RequstedDistance>;
+	}
+	else
+	{
+		Cmd = chr( 0x85 );
+		PunchMovementCommand = ~<Cmd>18<CR>~;
+		ActualDistance = 18;
+	}
+	return TRUE;
+}
+
+NUMERIC Hicks_ValidateMovement( StartPunchNumber,EndPunchNumber,ExpectedDistance )
+{
+	ActualDistance = 0;
+
+	LogMessage( ~Enter Validate Hicks Movement Start:<StartPunchNumber> End:<EndPunchNumber> Expected Distance:<ExpectedDistance>~ );
+
+	if ( !<StartPunchNumber> || !<EndPunchNumber> )
+	{
+		LogMessage( ~Aborting Validate Hicks Movement Start:<StartPunchNumber> or End:<EndPunchNumber>~ );
+		return FALSE;
+	}
+
+	if ( !Hicks_CalculatePunchMovement( ~<StartPunchNumber>~,~<EndPunchNumber>~,ActualDistance ) )
+	{
+		LogMessage( ~Aborting Validate Hicks Movement Actual:<ActualDistance>~ );
+		return FALSE;
+	}
+
+	LogMessage( ~Validate Hicks Movement Expected:<ExpectedDistance> Actual:<ActualDistance>~ );
+
+	if ( <ExpectedDistance> != <ActualDistance> )
+	{
+		LogMessage( ~Aborting Validate Hicks Movement Expected:<ExpectedDistance> Actual:<ActualDistance>~ );
+		return FALSE;
+	}
+
+	LogMessage( ~Validate Hicks Movement: Passed~ );
+
+	return TRUE;
+}
+

@@ -1,0 +1,369 @@
+IncludeClass( BaseImportProc );
+Include: UtilityRoutines;
+Include: ~Utilities~;
+
+Class( DTM,Extends,BaseImportProc,
+		Member,fPath,Str,~~,
+		Member,fUnzipPath,Str,~~,
+		Member,fImagesPath,Str,~<$App.ShareDirectory>\Images~,
+		Member,fCurrentDirectory,Str,~~,
+		Member,fDTMPath,Str,~~,
+		Member,fOrderID,Str,~~,
+		Member,fCount,Numeric,0 );
+
+
+VOID DTM::DTM( Path )
+{
+	fPath = ~<Path>~;
+	LoadTranslationFile( Importer,Importer,Importer );
+}
+
+NUMERIC	DTM::LoadTranslationFile(Path,Category,FileName)
+{
+	ForgetGlobal( ~<Category>~ );
+	
+	XMLPath = ~<$App.ShareDirectory>\Translations\<Path>\<FileName>.xml~;
+	
+	if ( !xml( <Category>,load,~<XMLPath>~,Global ) )
+	{
+		<Category>(GetReason,theErr);
+		
+		return Warning( ~Failed to Load: <XMLPath>.  <theErr>~ );
+	}
+	
+	return TRUE;
+}
+
+NUMERIC DTM::DeleteTemporaryFiles()
+{
+	Directory( DeleteRecursive,~<fUnzipPath>~,~*.*~ );
+	Directory( Remove,~<fUnzipPath>~ );
+	return TRUE;
+}
+
+//Import the order images
+NUMERIC DTM::AutoImportThread()
+{
+	if ( !Ado( dbase,Connect) ) //Connect to DB
+	{
+		dBase( GetErrorDescription,theErr );
+		return Failure( TR(Importer, ConnectFailed) );
+	}
+	
+	//if the script has error within it we will use "unknown" as customer id    
+	CustomerID = ~unknown~;
+	OrderID = ~~;
+	
+	//Read data from .dtm file
+	PrivateProfileString(Get,~DTM~,~CustomerID~,~~,CustomerID,~<fPath>~);
+	PrivateProfileString(Get,~DTM~,~OrderID~,~~,OrderID,~<fPath>~);
+	
+	Path= ~<$Str.$fPath.Path>\<$Str.$fPath.FileName.WithOutExt>~;
+	
+	Query = ~Select * From Customers where ID ='<CustomerID>'~;
+	
+	if ( !PGenConList( CustomerList,Connect,Query,~<Query>~) )
+	{
+		return Failure( TR(Importer, QueryFailed) );
+	}
+	
+	//Add new Customer if it doesn't exist in the database
+	if ( !CustomerList( GetNext, FoundDTMOrder) )
+	{
+		if (!dBase( Cmd,~Insert into Customers (ID) Values ('<CustomerID>')~) )
+		{
+			dBase( GetErrorDescription,theErr);
+			return Failure( TR(Importer, InsertFailed) );
+		}
+	}
+	
+	if ( !SQLSafe(~<Path>~) || !PathSafe(~<Path>~) || (AuditPathString(~<Path>~) != 0 ) )
+	{
+		return Failure( TR(Importer, InvalidPath) );
+	}
+	
+	//Add order for customer if the path really exists.
+	if ( Files( DirectoryExists,~<Path>~ ) )
+	{
+		if ( SimilarStr( ~<OrderID>~, ~~ ) )
+		{
+			return Failure( TR(Importer, NoOrderID) );
+		}
+		
+		OrderID = ~<CustomerID>_<OrderID>~;
+		
+		if ( !PGenConList( OrderList,Connect,Query,~Select * From Orders Where ID = '<OrderID>'~ ) )
+		{
+			return Failure( TR(Importer, QueryFailed) );
+		}
+		
+		if ( !OrderList( GetFirst,order ) )//It means this is a new order
+		{
+			if (!dBase( Cmd,~Insert into Orders (ID,CustomerID,Instructions) 
+								Values ('<OrderID>','<CustomerID>','<$App.ShareDirectory>\DTMOrders\Import\<$Str.$fPath.FileName.WithOutExt>')~) )
+			{
+				dBase( GetErrorDescription,theErr);
+				return Failure( TR(Importer, InsertFailed) );
+			}
+		}
+		else
+		{
+			customer = ~<$pcon.order[CustomerID]>~;
+			if ( !SimilarStr( ~<customer>~, ~<CustomerID>~ ) ) { return Failure( TR(Importer, OrderIDOccupied) ); }
+		}
+		
+		//Search for images and import them
+		GetFilesFromFolder( Path ,OrderID ,dBase);
+		
+		//Change Order Status to "Adjust"
+		Query = ~Select * From Orders Where ID = '<OrderID>'~;
+		if ( PGenConList( List, Connect, GetRecordFor, ~<Query>~, Order ) )
+		{
+			if ( Order( Set, Status, ~Adjust~ ) )
+			{
+				List( Update );
+			}
+		}
+	}
+	
+	return TRUE;
+}
+
+//Recursively search the folder for images
+VOID DTM::GetFilesFromFolder( &Path ,&OrderID ,&dBase)
+{
+    MoreFiles = findfile( aDirectoryEntry,Find,~<$ContentsOf.Path>\*.*~ );
+	
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );//Rememer this "Path"
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		{
+			GetFilesFromFolder( aPath ,OrderID ,dBase);
+			continue;
+		}
+
+		Extension = ~<$ContentsOf.aPath.Ext>~;
+		
+		// Make sure the first two characters are not ._
+		firstChar = ~~;
+		substr( ~<$ContentsOf.aPath.Filename>~, 0, 1, firstChar );
+		
+		if ( !SimilarStr(~<$ContentsOf.aPath>~,~thumbs.db~ ) && 
+			 !SimilarStr( ~.~, ~<firstChar>~ ) &&
+ 			 !SimilarStr(~<Extension>~,~info~) &&
+			 !SimilarStr( ~<Extension>~, ~ini~ ) &&
+			 !SimilarStr( ~<Extension>~, ~xml~ ) &&
+			 !SimilarStr( ~<Extension>~, ~csv~ ) &&
+			 !SimilarStr( ~<Extension>~, ~txt~ ) &&
+			 !SimilarStr( ~<Extension>~, ~dat~ ) && 
+			 !SimilarStr( ~<Extension>~, ~mdb~ ) && 
+			 ( SimilarStr(~<Extension>~,~jpg~) || 
+			   SimilarStr(~<Extension>~,~tif~) || 
+			   SimilarStr(~<Extension>~,~psd~) ) )
+		{
+		    MakeWritable = 1;
+		    UseEmbeddedProfile = 1;
+		    ProfileName = ~sRGB~;
+		    EnableProfile = 0;
+		    
+		    //Now we can add image to database
+		    Frame = ~<$Str.$aPath.FileName.WithOutExt>~;
+		    Roll1 = ~<$Str.$aPath.Folder>~;
+		    Roll2 = ~<$ContentsOf.aPath.Path.Folder>~;
+		    
+		    //Won't import images in the folder "render" and "product"
+		    if ( SimilarStr(~<Roll1>~,~render~) || SimilarStr(~<Roll1>~,~product~) ) { continue; }
+			
+			if (Numeric(~<UseEmbeddedProfile>~) && ContainsEmbeddedInputProfile(~<aPath>~) )
+			{
+				if ( !AddThumbNail( dBase,~<aPath>~,~<OrderID>~,~<Roll2>\<Roll1>~,~<Frame>~, ~~,~<EnableProfile>~,~<MakeWritable>~) )
+				{
+					dBase( LogActivity, Msg,~Unable to import image <aPath> as Order: <OrderID> Roll: <Roll> Frame: <Frame>~,Type,Error );
+				}
+			}
+			else
+			{
+				if ( !AddThumbNail( dBase,~<aPath>~,~<OrderID>~,~<Roll2>\<Roll1>~,~<Frame>~,~<ProfileName>~,~<EnableProfile>~, ~<MakeWritable>~ ) )
+				{
+					dBase( LogActivity, Msg,~Unable to import image <ImagePath> as Order: <OrderID> Roll: <UseThisRoll> Frame: <ThisFrame>~,Type,Error );
+				}
+			}
+		}
+	}
+	
+	return;
+}
+
+//Add ThumbNail for normal images
+NUMERIC DTM::AddThumbNail( &dBase,ImagePath,Order,Roll,WhichFrame,ProfileName,EnableProfile, MakeWritable )
+{
+    fSharpenDelta = 0;
+	FileName = ~<$Str.$ImagePath.FileName>~;
+	
+	Frame = ~<WhichFrame>~;
+	
+	if (~<Frame>~ == ~~)
+	{
+		Log( Session, ~The Frame was NULL for order: <Order> Roll: <Roll> Image: <ImagePath>~);
+		return FALSE;
+	}
+
+	size = ~<$SystemSettings.Thumbnail[Size]>~;
+	compressionQuality = ~<$SystemSettings.Thumbnail[Quality]>~;
+
+	size = IsNULL( ~<size>~ ) ? ~500~ : ~<size>~;
+	compressionQuality = IsNULL( ~<compressionQuality>~ ) ? ~100~ : ~<compressionQuality>~;
+
+	FileType=~~; 
+	xRes = yRes = 0; 
+	PreviewWidth = PreviewLength = 0;
+	ImageSource = ~~;
+
+	if ( <MakeWritable> )
+	{
+		if ( !Files( Chmod,~<ImagePath>~,ReadWrite ) )
+		{
+			err = GetLastErrorMsg();
+			return FALSE;
+		}
+	}
+
+	ColorType = 0 ;
+	OpRestrictions = 0 ;
+	Orientation = 0;
+	result = AddThumbNailToImage( ~<ImagePath>~,<size>,<compressionQuality>,FileType,xRes,yRes,
+									PreviewWidth,PreviewLength,ProfileName,ColorType,1,OpRestrictions,Orientation);
+
+	if ( !<result> )
+	{
+		PreviewWidth = PreviewLength = 0;
+		Failure( TR(Importer, AddThumbNailFailed) );
+		return FALSE;
+	}
+	else if ( <result> == -1 )
+	{
+		Failure( TR(Importer, AddThumbNailFailed) );
+		return FALSE;
+	}
+	else if ( <result> < 0 )
+	{
+		Failure( TR(Importer, AddThumbNailFailed) );
+		return FALSE;
+	}
+	
+	if ( GetSystemSettings( ~HonorImageOrientation~,~PIE~, HonorOrientation, Enabled ) )
+	{
+		if ( !<Enabled> || IsNull( ~<HonorOrientation>~ ) )
+		{
+			Orientation = 0 ;
+		}
+	}
+
+	// THE ORDER,ROLL,FRAME IS NEW SO WE CAN JUST INSERT A NEW RECORD
+	ProfileFields = (IsNULL(~<ProfileName>~) || !<EnableProfile>) ? ~~ : ~ ,ICCProfile~;
+	Fields		= ~OrderID,Roll,Frame,ImageType,Path,Category,Sequence,Gamma,Width,Length,Filetype,PreviewWidth,PreviewLength,CropX,CropY,CropWidth,CropLength,Inspect<ProfileFields>, Sharpen, ImageSource,ColorType,OpRestrictionsRotateFromDisk~;
+	
+	ProfileValues = (IsNULL(~<ProfileName>~) || !<EnableProfile>) ? ~~ : ~ ,'<ProfileName>'~;
+
+	if ( <Orientation>  == 6 || <Orientation>  == 8 )
+	{
+		Values = ~'<Order>','<Roll>','<Frame>',0,'<ImagePath>','All',<Sequence++>,1.0,<yRes>,<xRes>,'<Filetype>',<PreviewLength>,<PreviewWidth>,50.0,50.0,100.0,100.0,1<ProfileValues>,<fSharpenDelta>, '<ImageSource>',<ColorType>,<OpRestrictions>,<Orientation>~;
+	}
+	else
+	{
+		Values = ~'<Order>','<Roll>','<Frame>',0,'<ImagePath>','All',<Sequence++>,1.0,<xRes>,<yRes>,'<Filetype>',<PreviewWidth>,<PreviewLength>,50.0,50.0,100.0,100.0,1<ProfileValues>,<fSharpenDelta>, '<ImageSource>',<ColorType>,<OpRestrictions>,<Orientation>~;
+	}
+	
+	//Insert a new record into database or see if one image with the same name already exists.
+	InsertCmd = ~Insert Into Images(<Fields>) Values(<Values>)~;
+	
+	if ( !PGenConList( ImageList,Connect,Query,~Select * From Images Where Path = '<ImagePath>'~) )
+	{
+		return Failure( TR(Importer, QueryFailed) );
+	}
+	
+	if ( !ImageList( GetFirst, ImageRecord ) )
+	{
+		if ( !dBase( Cmd,~<InsertCmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Log( Session, ~Database update failed. <InsertCmd>. <theErr>~ );
+			return Failure( TR(Importer, AddImageFailed) );
+		}
+	}
+	else
+	{
+		UpdateCmd = ~ Update Images Set Roll = '<Roll>', Frame = '<Frame>', Sequence = <Sequence++>, Width = <xRes>, Length = <yRes>, Filetype = '<Filetype>',
+					PreviewWidth = <PreviewWidth>, PreviewLength = <PreviewLength>, Inspect<ProfileFields> = 1<ProfileValues>, Sharpen = <fSharpenDelta>, ImageSource = '<ImageSource>' 
+					Where Path = '<ImagePath>' And OrderID = '<Order>'~;
+		
+		if ( !dBase( Cmd,~<UpdateCmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Log( Session, ~Database update failed. <InsertCmd>. <theErr>~ );
+			return Failure( TR(Importer, AddImageFailed) );
+		}
+	}
+	
+	return TRUE;
+}
+
+NUMERIC DTM::Initialize()
+{
+	fUnZip( Path,~<fPath>~ );
+
+	ReturnOnFailure( DeleteTemporaryFiles() );
+	
+	ReturnOnFailure( GetDatabaseConnection() );
+	
+	return TRUE;
+}
+
+
+NUMERIC DTM::PerformImport()
+{
+	AutoImportThread();
+	return TRUE;
+}
+
+
+NUMERIC DTM::Process()
+{
+	ReturnOnFailure( Initialize() );
+	
+	retval = PerformImport();
+	
+	CleanUp();
+	
+	return <retval>;
+}
+
+
+VOID	DTM::CleanUp()
+{
+	DeleteTemporaryFiles();
+}
+
+
+NUMERIC Init( Path )
+{
+	//debug(1);
+	ReturnOnSuccess( IsNull( ~<Path>~ ) );
+	
+	if ( Defined( Obj ) )
+	{
+		return TRUE;
+	}
+	
+	DTM( New,Obj,~<Path>~ );
+	Global( Obj );
+	
+	return obj.Process();
+}

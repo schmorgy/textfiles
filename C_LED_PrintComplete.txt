@@ -1,0 +1,328 @@
+//	C_LED_PrintComplete.cpp
+
+ExecC() ;
+
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+char	*NULL ;
+int		 gTesting = FALSE ;
+
+UGenCon	*gRELookAhead	= NULL ;
+long	 gLogAmount		= 0L ;
+
+main()
+{
+	gRELookAhead = GetTreeObject(_T("RELookAhead"),_T("[GenCons]")) ;
+	gLogAmount	= gRELookAhead->GetLongValue(_T("RELogLevel")) ;
+	return( TRUE ) ;
+}
+
+int Advertize()
+{
+	SessionLogDirect( _T("C_LED_PrintComplete.Advertize: (V9.00)")) ;
+	return( TRUE ) ;
+}
+
+int Init( UGenCon *fSOrder, UGenCon *CompletePrint )
+{
+	TCHAR	CmdPath[2048] ;
+	TCHAR	TmpPath[2048] ;
+	TCHAR	SortTime[2048] ;
+	TCHAR	*Center = _T("FALSE");
+	TCHAR	*IDPunch = _T("FALSE");
+	int		isDirectory ;
+	int		Count = 0L ;
+	TCHAR	NewImgPath[2048] ;
+
+	if( gLogAmount >= 8 )
+	{
+		SessionLogDirect( _T("C_LED_PrintComplete: fSOrder: 0x%08lX, CompletePrint1: 0x%08lX"),
+					fSOrder, CompletePrint ) ;
+	}
+	
+	UGenCon	*StatusGC		= fSOrder->GetLongValue(_T("StatusGC")) ;
+	UGenCon	*PrinterSetup	= fSOrder->GetLongValue(_T("PrinterSetup")) ;
+	TCHAR	*ControlFolder	= PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+
+	TCHAR	*BatchID		= fSOrder->GetStringValue(_T("BatchID")) ;
+	TCHAR	*OrderID		= fSOrder->GetStringValue(_T("OrderID")) ;
+
+	GetSortableTimeNow(SortTime);
+	sprintf( TmpPath, _T("%s\\%s"), ControlFolder, SortTime) ;
+
+	strcpy( CmdPath, TmpPath ) ;
+	strcat( CmdPath, _T(".cmd")) ;
+	while( FileOrDirectoryExists( CmdPath, &isDirectory ))
+	{
+		Count++ ;
+		sprintf( CmdPath, _T("%s_%04d.cmd"), TmpPath, Count ) ;
+	}
+
+
+	long	 Qty		= CompletePrint->GetLongValue(_T("Quantity")) ;
+	long	 PageID		= CompletePrint->GetLongValue(_T("JobID")) ;
+	TCHAR	*ImagePath	= CompletePrint->GetStringValue(_T("ImagePath")) ;
+//	TCHAR	*Resolution	= GetResolution( PrinterSetup ) ;
+	long    Res			= CompletePrint->GetDoubleValue(_T("Resolution")) ;
+
+	long	 TotalPrints = fSOrder->GetLongValue(_T("TotalPrints")) ;
+	long	 PrintNumber = CompletePrint->GetLongValue(_T("PrintNumber")) ;
+	TCHAR	*BarCode	 = CompletePrint->GetStringValue(_T("BarCode")) ;
+	long	 BarCodeType = CompletePrint->GetLongValue(_T("BarCodeType")) ;
+	long	 tempLong	 = CompletePrint->GetLongValue(_T("Center")) ;
+	long	 tempIDPunch = CompletePrint->GetStringValue(_T("IDPunch")) ;
+	long	 deferred	 = CompletePrint->GetLongValue(_T("Deferred"));
+
+	if( gLogAmount >= 6 )
+	{
+		SessionLogDirect( _T("C_LED_PrintComplete: PageID: %ld, CmdPath: \"%s\""), PageID, CmdPath ) ;
+	}
+
+	if(tempLong == 1)	{ Center = _T("TRUE")  ; }
+	else				{ Center = _T("FALSE") ; }
+
+	if(tempIDPunch == 1)	{ IDPunch = _T("TRUE")  ; }
+	else					{ IDPunch = _T("FALSE") ; }
+
+	TCHAR	*IsEndOfOrder = _T("FALSE") ;
+	if( PrintNumber == TotalPrints )	{	IsEndOfOrder = _T("TRUE") ; }
+
+	if( ImagePath == NULL )
+	{
+		SessionLogDirect( _T("C_LED_PrintComplete.Init: No ImagePath for PageID: %ld"), PageID ) ;
+		DumpPage( CompletePrint ) ;
+		return( FALSE ) ;
+	}
+
+//	RenameFile( ImagePath, NewImgPath ) ;
+
+	long	tempBorderless = CompletePrint->GetLongValue(_T("Borderless")) ;
+	TCHAR	*Borderless = _T("FALSE");
+	if(tempBorderless == 1) {	Borderless = _T("TRUE"); }
+
+	long paperfill = 0;
+	paperfill = PrinterSetup->GetLongValue(_T("PaperFill")) ;
+
+	if(paperfill != 0)
+	{
+		Borderless = _T("TRUE");
+	}
+
+	double dPaperWidth = CompletePrint->GetDoubleValue(_T("PaperWidth"));
+
+	if( gLogAmount >= 6 )
+	{
+		SessionLogDirect( _T("C_LED_PrintComplete: tempBorderless = %d, dPaperWidth = %lf"), tempBorderless, dPaperWidth ) ;
+	}
+
+	TCHAR	*CmdText	= malloc( 100 * 1024 ) ;
+	if( CmdText )
+	{
+		CmdText[0] = 0x00 ;
+
+		AddLongLine( CmdText, _T("PAGE_ID: %ld\n"), PageID ) ;
+		AddTextLine( CmdText, _T("ORDER_ID: %s\n"), OrderID ) ;
+		AddTextLine( CmdText, _T("BATCH_ID: %s\n"), BatchID ) ;
+		AddTextLine( CmdText, _T("FILENAME: %s\n"), ImagePath ) ;
+		AddLongLine( CmdText, _T("COPIES: %ld\n"), Qty ) ;
+		AddLongLine( CmdText, _T("PRINT: %ld\n"), deferred ) ;
+		AddTextLine( CmdText, _T("EOO: %s\n"), IsEndOfOrder ) ;
+		AddTextLine( CmdText, _T("CENTER: %s\n"), Center) ;
+		AddLongLine( CmdText, _T("RESOLUTION: %ld\n"), Res ) ;
+		AddTextLine( CmdText, _T("TONESCALE: %s\n"), _T("FALSE") ) ;
+//		AddTextLine( CmdText, _T("TSFILENAME: %s\n"), PrinterSetup->GetStringValue(_T("GammaTablePath")) ;
+		AddTextLine( CmdText, _T("DELETEFILE: %s\n"), _T("TRUE")) ;
+		AddTextLine( CmdText, _T("ID: %s\n"), IDPunch) ;
+		AddTextLine( CmdText, _T("BORDERLESS: %s\n"), Borderless ) ;
+		AddDoubleLine( CmdText, _T("PAPER_WIDTH: %2.3lf\n"), dPaperWidth ) ;
+
+		if( BarCode )
+		{
+			AddTextLine( CmdText, _T("BARCODE: %s\n"), BarCode ) ;
+			AddTextLine( CmdText, _T("BARCODE_TYPE: %ld\n"), BarCodeType ) ;
+		}
+
+		if(gTesting == TRUE && PrintNumber == 7 )
+		{
+			AddTextLine( CmdText, _T("DEBUGERRORCODE: %d\n"), -9 );  //to force errors during Stub mode testing with no printer
+		}
+
+		if( gLogAmount >= 4 )
+		{
+			SessionLogDirect( _T("C_LED_cmd:\n%s"), CmdText ) ;
+		}
+
+		char	*fp = fopen( CmdPath, _T("wb")) ;
+		if( fp )
+		{
+			TCHAR	IOBuff[10] ;
+			IOBuff[0] = 0xFEFF ;
+			IOBuff[1] = 0x0000 ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+			WriteUnicodeFile( fp, CmdText ) ;
+			fclose( fp ) ;
+		}
+		else
+		{
+			SessionLogDirect( _T("C_LED_PrintComplete.Init: Could not create \"%s\"."), CmdPath ) ;
+		}
+
+		CompletePrint->SetLongValue(_T("CommandSent"), 1L ) ;
+
+//		CompletePrint->Dump(_T("C_LED_PrintComplete: After CommandSent")) ;
+
+		free( CmdText ) ;
+
+		//	INCREMENT THE NUMBER OF JOBS AT THE PRINTER
+		long	NumPrinterJobs = StatusGC->GetLongValue(_T("NumPrinterJobs")) + 1L ;
+		StatusGC->SetLongValue( _T("NumPrinterJobs"), NumPrinterJobs ) ;
+
+		if( gLogAmount >= 7 )
+		{
+			SessionLogDirect( _T("C_LED_PrintComplete.Init: NumPrinterJobs %ld."), NumPrinterJobs ) ;
+		}
+	}
+
+	return( TRUE ) ;
+}
+
+TCHAR *AddTextLine( TCHAR *CmdText, TCHAR *Format, TCHAR *Value )
+{
+	TCHAR	Line[1024] ;
+
+	sprintf( Line, Format, Value ) ;
+	strcat( CmdText, Line ) ;
+
+	return( CmdText ) ;
+}
+
+TCHAR *AddLongLine( TCHAR *CmdText, TCHAR *Format, long Value )
+{
+	TCHAR	Line[1024] ;
+
+	sprintf( Line, Format, Value ) ;
+	strcat( CmdText, Line ) ;
+
+	return( CmdText ) ;
+}
+
+TCHAR *AddDoubleLine( TCHAR *CmdText, TCHAR *Format, double Value )
+{
+	TCHAR	Line[1024] ;
+
+	sprintf( Line, Format, Value ) ;
+	strcat( CmdText, Line ) ;
+
+	return( CmdText ) ;
+}
+
+TCHAR	*GetResolution( UGenCon *PrinterSetup )
+{
+	double	Res = PrinterSetup->GetDoubleValue(_T("Resolution")) ;
+	if( Res == 125)	{ return(_T("125" )) ; }
+	if( Res == 250)	{ return(_T("250" )) ; }
+	return( _T("250")) ;
+}
+
+int DumpPage( UGenCon *aGC )
+{
+	TCHAR		*AttrName ;
+	TCHAR		 AttrValue[2048] ;
+
+	UDataDict	*theDict = aGC->GetDataDict() ;
+
+	TCHAR		*GCName = aGC->GetName() ;
+	TCHAR		*DDName = theDict->GetName() ;
+
+	SessionLogDirect( _T("Create \"%s\" Using \"%s\"\r\n{\r\n"), GCName, DDName ) ;
+	UListIterator	*anIter = new UListIterator( theDict ) ;
+	UAttribute		*anAttr = (UAttribute *) anIter->GetFirst() ;
+	while( anAttr )
+	{
+		AttrName = anAttr->GetName() ;
+		if( aGC->AttrChanged( AttrName ))
+		{
+			aGC->GetAttrValue( AttrName, AttrValue ) ;
+			SessionLogDirect( _T("\t%s\t\t\"%s\"\r\n"), AttrName, AttrValue ) ;
+		}
+		anAttr = (UAttribute *) anIter->GetNext() ;
+	}
+	SessionLogDirect( _T("\r\n%c ;\r\n"), 0x0x7D) ;
+	delete anIter ;
+	return( TRUE ) ;
+}
+
+WriteUnicodeFile( char *fp, TCHAR *Text )
+{
+	long	Length = strlen( Text ) ;
+	fwrite( Text, 2, Length, fp ) ;
+
+	long	EndOfLine = 0x000A000D ;
+	fwrite( &EndOfLine, 2, 2, fp ) ;
+}
+
+
+TCHAR *RenameFile( TCHAR *ImagePath, TCHAR *NewImgPath )
+{
+	long	SrcPos, DstPos ;
+	SrcPos = 0L ;
+	DstPos = 0L ;
+
+	while( ImagePath[SrcPos] )
+	{
+		if( IsLegalFileChar( ImagePath[SrcPos] ))
+		{
+			NewImgPath[DstPos] = ImagePath[SrcPos] ;
+			DstPos++ ;
+		}
+		SrcPos++ ;
+	}
+
+	if( gLogAmount >= 7 )
+	{
+		SessionLogDirect( _T("Original File: \"%s\""), ImagePath ) ;
+		SessionLogDirect( _T("New File: \"%s\""), NewImgPath ) ;
+	}
+
+	if( stricmp( ImagePath, NewImgPath ) == 0 )
+	{
+		return( NewImgPath ) ;
+	}
+
+	//	SOMETIMES IMA STILL HAS THE FILE.
+	//	SO DO SOME WAITING AND TRY AGAIN.
+	int Result = rename( ImagePath, NewImgPath ) ;
+	long	StartClock = Clock() ;
+	long	EndClock ;
+	while( Result )
+	{
+		Result = rename( ImagePath, NewImgPath ) ;
+		if( gLogAmount >= 5 )
+		{
+			SessionLogDirect( _T("New File: \"%s\" Result = %ld\r\n"), NewImgPath, Result ) ;
+		}
+
+		EndClock = Clock() ;
+		if( EndClock - StartClock > 10000 )
+		{
+			Result = 0 ;
+		}
+		else
+		{
+			Sleep( 500 ) ;
+		}
+	}
+
+	return( NewImgPath ) ;
+}
+
+int IsLegalFileChar( TCHAR aChar )
+{
+	if( aChar >= 'A' && aChar <= 'Z' )	{ return( TRUE ) ; }
+	if( aChar >= 'a' && aChar <= 'z' )	{ return( TRUE ) ; }
+	if( aChar >= '0' && aChar <= '9' )	{ return( TRUE ) ; }
+	if( aChar == '_' || aChar == '.' )	{ return( TRUE ) ; }
+	if( aChar == ':' || aChar == '\\' )	{ return( TRUE ) ; }
+	if( aChar == ' ' || aChar == '-'  )	{ return( TRUE ) ; }
+	return( FALSE ) ;
+}

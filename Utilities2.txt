@@ -1,0 +1,703 @@
+// Utilities2.txt
+
+// general utilities for getting info from Orders table, etc, when managing images,
+// SubjectInfo, etc for an order.
+
+NUMERIC doNewWay()
+{
+	return TRUE;	// We are way past this.  Always do the new way.
+
+
+//	if ( GetSystemSettings( ~AlternateWay~,~ShootIsSubject~,Setting,Enabled ) )
+	if ( GetSystemSettings( ~AlternateWay~,~OrderIsSubject~,Setting,Enabled ) )
+	{
+		if ( !IsNULL( ~<Setting>~ ) && <Enabled> )
+		{
+//			return TRUE;
+			return FALSE;
+		}
+	}
+//	return FALSE;
+	return TRUE;
+}
+
+
+NUMERIC GetSystemMultipleImageChoice()
+{
+	WhichImage = 1;   // Use First   (0 = Use All)
+
+	if ( GetSystemSettings( ~ImageHandling~,~MultipleImages~,Setting,Enabled ) )
+	{
+		if ( <Enabled> )
+		{
+			if (~<Setting>~ == ~Use First~)
+			{
+				WhichImage = 1;
+			}
+			else if (~<Setting>~ == ~Use Last~)
+			{
+				WhichImage = 2;
+			}
+			else if (~<Setting>~ == ~Use All~) 
+			{
+				WhichImage = 0;
+			}
+			else  // Use First
+			{
+				WhichImage = 1;
+			}
+
+		}
+	}
+	else
+	{
+		success = AddSystemMultiImageRecord();
+	}
+
+	return <WhichImage>;
+}
+
+NUMERIC AddSystemMultiImageRecord()
+{
+
+	if ( !ADO( dBase,Connect) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Connection Failed: <theErr>~ ) );
+	}
+
+	Fields = ~Category,Item,SettingsText,Enabled~;
+	Values = ~'ImageHandling','MultipleImages', 'Use First', 1~;
+	Cmd = STR ( Insert Into SystemSettings(<Fields>) Values(<Values>) );
+
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr);
+		return Warning( Translate(~Command Failed: <Cmd>, Error: <theErr>~) );
+	}
+
+	return TRUE;
+}
+
+
+VOID GetImagesOrderID( theOrderID, &theImagesOrderID )
+{
+	theImagesOrderID = ~~;
+
+	Query = ~Select ImagesOrderID From Orders Where ID = '<theOrderID>'~;
+	Success = Ado( dBase,Connect,GetValuesFor,~<Query>~,theImagesOrderID ) != FALSE;
+
+	if (~<theImagesOrderID>~ == ~~)
+	{
+		theImagesOrderID = ~<theOrderId>~;
+	}
+
+}
+ 
+
+// For the given Order ID, get the SubjectInfo ID and InfoType.
+NUMERIC GetSubjectOrderIDInfoType( theOrderID, &theInfoType, &theSubjectInfoOrderId)
+{
+	theQuery = ~Select ImagesOrderID ,InfoType, ShootDescID From Orders Where ID = '<theOrderID>'~;
+
+	theShootDescID = ~~;
+	theImagesID = ~~;
+	theInfoType = ~~;
+	Success = Ado( dBase,Connect,GetValuesFor,~<theQuery>~,theImagesID, theInfoType, theShootDescID ) != FALSE;
+
+	if (~<theImagesID>~ != ~~)
+	{
+		theOrderID = ~<theImagesID>~;
+
+		theQuery = ~Select InfoType, ShootDescID From Orders Where ID = '<theOrderID>'~;
+
+		Success = dBase(GetValuesFor,~<theQuery>~,theInfoType, theShootDescID ) != FALSE;
+	}
+
+	if ( ~<theShootDescID>~ != ~~)
+	{
+		if ( doNewWay() )
+		{
+			theSubjectInfoOrderId = ~<theShootDescID>~;
+		}
+		else
+		{
+			theSubjectInfoOrderId = ~<theOrderID>~;
+		}
+	}
+	else
+	{
+		theSubjectInfoOrderId = ~<theOrderID>~;
+	}
+
+	return <Success>;
+}
+
+
+// For the given Order ID, get all the order's IDs - subjectInfo Id & InfoType, ImagesOrderID, and ShootDescID & ShootDescType
+NUMERIC GetIdsAndTypesForOrder( OrderID,  &ImagesOrderID, &SubjectInfoId, &InfoType, &ShootDescID, &ShootType)
+{
+	if ( !ADO( dBase,Connect ) ) 
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+		return FALSE;
+	}
+
+	if ( !dBase( GetValuesFor,~Select ImagesOrderID,ShootDescID,ShootDescType,InfoType from Orders where ID = '<OrderID>'~,ImagesOrderID,ShootDescID,ShootType,InfoType ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( Translate(DBMessages,CmdFailed,~Select ImagesOrderID,ShootDescID,ShootDescType,InfoType from Orders where ID = '<OrderID>'~,~<theErr>~) );
+		return FALSE;
+	} 
+
+	if (~<ImagesOrderID>~ == ~~)
+	{
+		ImagesOrderID = ~<OrderID>~;
+	}
+	else 
+	{
+		if ( !dBase( GetValuesFor,~Select ShootDescID,ShootDescType,InfoType from Orders where ID = '<ImagesOrderID>'~,ShootDescID,ShootType,InfoType ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate(DBMessages,CmdFailed,~Select ShootDescID,ShootDescType,InfoType from Orders where ID = '<ImagesOrderID>'~,~<theErr>~) );
+			return FALSE;
+		} 
+	}
+
+	if ( (~<ShootDescID>~ != ~~) && doNewWay() )
+	{
+		SubjectInfoId = ~<ShootDescID>~;
+	}
+	else
+	{
+		SubjectInfoId = ~<ImagesOrderID>~;
+	}
+
+	return TRUE;
+}
+
+
+
+// SubjectInfoOrderID - OrderId of the SubjectInfo table.
+// InfoType  - InfoType of the SubjectInfo table
+// OrderIDList - type  - Returns list of Order Ids associated with the SubjectInfo table
+//             If ScannerUStringList, it must be created before calling this routine (StringList(OrderIDList,New);)
+// doSQLList - Boolean - TRUE if OrderIDList is to be an SQL List
+//			 FALSE if is a ScannerUStringList 
+// Returns Count of number of IDs found or 0 if error.
+NUMERIC GetOrderIDsForSubjectInfo(SubjectInfoOrderID,InfoType,&OrderIDList,doSQLList)
+{
+
+	if ( doNewWay() )
+	{
+		if (~<InfoType>~ != ~~)
+		{
+			theQuery = ~Select ID From Orders Where (ID = '<SubjectInfoOrderID>' And InfoType = '<InfoType>' And ShootDescID IS NULL) OR (ShootDescID = '<SubjectInfoOrderID>' And InfoType = '<InfoType>' And ImagesOrderID IS NULL) OR ImagesOrderID In (Select ID from Orders where (ID = '<SubjectInfoOrderID>' And InfoType = '<InfoType>' And ShootDescID Is Null) Or (ShootDescID = '<SubjectInfoOrderID>' And InfoType = '<InfoType>' And ImagesOrderID Is Null)) Order by ID~;
+		}
+		else
+		{
+			theQuery = ~Select ID From Orders Where (ID = '<SubjectInfoOrderID>' And InfoType IS NULL And ShootDescID IS NULL) OR (ShootDescID = '<SubjectInfoOrderID>' And InfoType IS NULL And ImagesOrderID IS NULL) OR ImagesOrderID In (Select ID from Orders where (ID = '<SubjectInfoOrderID>' And InfoType IS NULL And ShootDescID Is Null) Or (ShootDescID = '<SubjectInfoOrderID>' And InfoType IS NULL And ImagesOrderID Is Null)) Order by ID~;
+		}
+	}
+	else
+	{
+		theQuery = ~Select ID From Orders Where ID = '<SubjectInfoOrderID>' OR ImagesOrderID = '<SubjectInfoOrderID>' Order by ID~;
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	Count = List(NumEntries);
+	if (<doSQLList>)
+	{
+		List( MakeSQLList,OrderIDList,TRUE,ID );  // TRUE - make list quoted ''
+	}
+	else
+	{
+		List( MakeStringList,OrderIDList,ID );
+	}
+
+	return <Count>;
+}
+
+
+// doSQLList - Boolean - TRUE if OrderIDList is to be an SQL List
+//			 FALSE if is a ScannerUStringList 
+//             If ScannerUStringList, it must be created before calling this routine (StringList(OrderIDList,New);)
+// Returns Count of number of IDs found or 0 if error.
+NUMERIC GetOriginalOrderIDsForSubjectInfo(SubjectInfoOrderID,InfoType,&OrderIDList,doSQLList)
+{
+
+	if ( doNewWay() )
+	{
+		if (~<InfoType>~ != ~~)
+		{
+			theQuery = ~Select ID From Orders Where (ID = '<SubjectInfoOrderID>' And InfoType = '<InfoType>' And ShootDescID IS NULL) OR (ShootDescID = '<SubjectInfoOrderID>' And InfoType = '<InfoType>' And ImagesOrderID IS NULL) Order by ID~;
+		}
+		else
+		{
+			theQuery = ~Select ID From Orders Where (ID = '<SubjectInfoOrderID>' And InfoType IS NULL And ShootDescID IS NULL) OR (ShootDescID = '<SubjectInfoOrderID>' And InfoType IS NULL And ImagesOrderID IS NULL) Order by ID~;
+		}
+	}
+	else
+	{
+		theQuery = ~Select ID From Orders Where ID = '<SubjectInfoOrderID>' Order by ID~;
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	Count = List(NumEntries);
+	if (<doSQLList>)
+	{
+		List( MakeSQLList,OrderIDList,TRUE,ID );  // TRUE - make list quoted ''
+	}
+	else
+	{
+		List( MakeStringList,OrderIDList,ID );
+	}
+
+	return <Count>;
+}
+
+
+// ShootId - ShootDescription Id wanting the types for
+// TypeList - type  - Returns list of ShootDescription types for tables which ShootId found in
+// doCommaList - TRUE - returns comma separted list of types
+//				 FALSE - returns a ScannerUStringList
+//   If ScannerUStringList, it must be created before calling this routine (StringList(TypeList,New);)
+// Returns Count of number of types found or 0 if error.
+NUMERIC GetTypeListForShootDescID(ShootId,&TypeList,doCommaList)
+{
+	if ( !PGenConList( SchemaList,Connect,Cursor,Keyset,Schema,Tables ) )
+//	if ( !PGenConList( SchemaList,dBase,Connection,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		return Warning( Translate( DBMessages, SchemaQueryFailed, ~Tables~, ~<theErr>~ ) );
+	}
+
+	SchemaList( Filter,~Table_Name Like 'ShootDescription%'~ );
+
+	Count = 0;
+	if (<doCommaList>)
+	{	TypeList = ~~;	}
+
+	ADO(dBase,Connect);
+
+	while ( SchemaList( GetNext,ShootTable ) )
+	{
+		substr( ~<$pcon.ShootTable[Table_Name]>~,strlen(~ShootDescription~),99,Type);
+
+		theQuery = ~Select ID from ShootDescription<Type> where ID = '<ShootId>'~;
+		if ( dBase(GetValuesFor,~<theQuery>~,theId) )
+		{
+			if (<doCommaList>)
+			{
+				TypeList = ~<TypeList>~ == ~~ ? ~<Type>~ : ~<TypeList>,<Type>~;
+			}
+			else
+			{
+				TypeList(AddString,~<Type>~);
+			}
+
+			++Count;
+		}
+	}
+
+	return <Count>;
+}
+
+
+// Checks if ID exists in any of the ShootDescription tables.
+// If it does, returns TRUE and first ShootDescription table type in ShootType
+NUMERIC ShootDescExists( ID,&ShootType )
+{
+	StringList(TypeList,New);
+	if ( GetTypeListForShootDescID(~<ID>~,TypeList,FALSE) )  // ShootDescription exists with same Id as Order
+	{
+		TypeList(GetStringAt,0,ShootType);  // Use first Type found
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+
+// Checks ALL SubjectInfo Tables
+// ShootId - Id wanting the InfoTypes for
+// InfoTypeList - type  - Returns list of SubjectInfo types for tables which ShootId found in
+// doCommaList - TRUE - returns comma separted list of types
+//				 FALSE - returns a ScannerUStringList
+//   If ScannerUStringList, it must be created before calling this routine (StringList(TypeList,New);)
+// Returns Count of number of types found or 0 if error.
+NUMERIC GetInfoTypeListForSubjOrderID(ShootId,&InfoTypeList,doCommaList)
+{
+	if ( !PGenConList( SchemaList,Connect,Cursor,Keyset,Schema,Tables ) )
+//	if ( !PGenConList( SchemaList,dBase,Connection,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		return Warning( Translate( DBMessages, SchemaQueryFailed, ~Tables~, ~<theErr>~ ) );
+	}
+
+	SchemaList( Filter,~Table_Name Like 'SubjectInfo%'~ );
+
+	Count = 0;
+	if (<doCommaList>)
+	{	InfoTypeList = ~~;	}
+
+	ADO(dBase,Connect);
+
+	while ( SchemaList( GetNext,SubjTable ) )
+	{
+		substr( ~<$pcon.SubjTable[Table_Name]>~,strlen(~SubjectInfo~),99,Type);
+
+		if (~<Type>~ == ~Columns~)
+		{	continue;	}
+
+		theQuery = ~Select Distinct OrderID From SubjectInfo<Type> where OrderID = '<ShootId>'~;
+		if ( dBase(GetValuesFor,~<theQuery>~,theId) )
+		{
+			if (<doCommaList>)
+			{
+				InfoTypeList = ~<InfoTypeList>~ == ~~ ? ~<Type>~ : ~<InfoTypeList>,<Type>~;
+			}
+			else
+			{
+				InfoTypeList(AddString,~<Type>~);
+			}
+
+			++Count;
+		}
+	}
+
+	return <Count>;
+}
+
+
+// Checks Orders first, if not found then checks
+// SubjectOrderID - Id wanting the InfoTypes for
+// InfoTypeList - type  - Returns list of SubjectInfo types for tables which ShootId found in
+// doCommaList - TRUE - returns comma separted list of types
+//				 FALSE - returns a ScannerUStringList
+//   If ScannerUStringList, it must be created before calling this routine (StringList(TypeList,New);)
+// Returns Count of number of types found or 0 if error.
+NUMERIC GetInfoTypeListForDefinedID(SubjectOrderID,&InfoTypeList,doCommaList)
+{
+	if ( doNewWay() )
+	{
+		Query = ~Select Distinct InfoType From Orders Where ((ID = '<SubjectOrderID>' And ShootDescID Is Null) Or (ShootDescID = '<SubjectOrderID>')) And ImagesOrderID Is Null Order by InfoType~;
+	}
+	else
+	{
+		Query = ~Select Distinct InfoType From Orders Where ID = '<SubjectOrderID>' And ImagesOrderID Is Null Order by InfoType~;
+	}
+
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+	count = List( NumEntries );
+
+	if (<count> > 0)
+	{
+		if (<doCommaList>)
+		{
+			List( MakeSQLList,InfoTypeList,FALSE,ID );  // FALSE - Not make list quoted ''
+		}
+		else
+		{
+			List(MakeStringList,InfoTypeList,InfoType);
+		}
+	}
+	else
+	{
+		if ( doNewWay() )
+		{
+			count = GetInfoTypeListForSubjOrderID(~<SubjectOrderID>~,InfoTypeList,<doCommaList>);
+		}
+	}
+
+	return <count>;
+}
+
+
+NUMERIC TrimCommaString(&theString,TrimLen)
+{
+	numTokens = GetTokens(~<theString>~,~,~);
+
+	if (<numTokens> < 1)
+	{	return 0;	}
+
+	theString = ~<Token1>~;	
+	i = 2;
+	len = strlen(~<Token2>~);
+
+	while ((<i> <= <numTokens>) && ((strlen(~<theString>~) + <len>) < <TrimLen>))
+	{
+		theString = ~<theString>,<Token<i>>~;
+		++i;
+		len = strlen(~<Token<i>>~);
+	}
+
+	return (<i>-1);
+}
+
+
+// If the ImgList has not been disconnected from the database prior to calling this routine
+// when the record is "Removed" from the list, the record will also be removed from the
+// Images table, ie the image will no longer show up for the order.
+// ImgList is Images records.  (Not a join of SubjectInfo and Images - if was, would need to:  if (dbase(IsJet)) {	subjectid = ~<$pcon.ImgRecord[Images.SubjectID]>~;	})
+VOID HandleMultiImages(&dbase,MultiChoice,&ImgList)
+{
+	if (<MultiChoice> != 0)  // don't want all images - remove duplicate
+	// may be best to remove duplicates when adding record to job - do here for now until other parts of system are implemented
+	{
+		i = 0;
+		if (<MultiChoice> == '1')  // Use First
+		{
+			more = ImgList(GetFirst,ImgRecord);
+			NextCmd = ~GetNext~;
+		}
+		else  // Use Last
+		{
+			more = ImgList(GetLast,ImgRecord);
+			NextCmd = ~GetPrev~;
+		}
+		while (<more>)
+		{
+			subjectid = ~<$pcon.ImgRecord[SubjectID]>~;
+			
+			more = ImgList(~<NextCmd>~,ImgRecord);
+			nextSubjectid = ~<$pcon.ImgRecord[SubjectID]>~;
+			++i;
+
+			while ((<more>) && ( ~<subjectid>~ == ~<nextSubjectid>~))
+			{
+				ImgList(Remove);
+
+				more = ImgList(~<NextCmd>~,ImgRecord);
+				nextSubjectid = ~<$pcon.ImgRecord[SubjectID]>~;
+			}
+		}
+	}
+	more = ImgList(SetPosition,-1);
+
+}
+VOID HandleMultiImagesJoin(&dbase,MultiChoice,&ImgList)
+{
+	if (<MultiChoice> != 0)  // don't want all images - remove duplicate
+	// may be best to remove duplicates when adding record to job - do here for now until other parts of system are implemented
+	{
+		i = 0;
+		if (<MultiChoice> == '1')  // Use First
+		{
+			more = ImgList(GetFirst,ImgRecord);
+			NextCmd = ~GetNext~;
+		}
+		else  // Use Last
+		{
+			more = ImgList(GetLast,ImgRecord);
+			NextCmd = ~GetPrev~;
+		}
+		while (<more>)
+		{
+			if (dbase(IsJet))
+			{	subjectid = ~<$pcon.ImgRecord[Images.SubjectID]>~;	}
+			else
+			{	subjectid = ~<$pcon.ImgRecord[SubjectID]>~;	}
+			
+			more = ImgList(~<NextCmd>~,ImgRecord);
+			if (dbase(IsJet))
+			{	nextSubjectid = ~<$pcon.ImgRecord[Images.SubjectID]>~;	}
+			else
+			{	nextSubjectid = ~<$pcon.ImgRecord[SubjectID]>~;	}
+			++i;
+
+			while ((<more>) && ( ~<subjectid>~ == ~<nextSubjectid>~))
+			{
+				ImgList(Remove);
+
+				more = ImgList(~<NextCmd>~,ImgRecord);
+				if (dbase(IsJet))
+				{	nextSubjectid = ~<$pcon.ImgRecord[Images.SubjectID]>~;	}
+				else
+				{	nextSubjectid = ~<$pcon.ImgRecord[SubjectID]>~;	}
+			}
+		}
+	}
+	more = ImgList(SetPosition,-1);
+
+}
+
+STR CreateWhereClause(OrderID,Margin)
+{
+	WidthMarginClause = GetWidthMarginClause(<Margin>);  
+
+	LengthMarginClause = GetLengthMarginClause(<Margin>);  
+	
+	ExistsClause = ~Select * From OrderItemImages Where OrderItemImages.ItemOrderID='<OrderID>' AND Images.OrderID=OrderItemImages.OrderID AND Images.Roll=OrderItemImages.Roll AND Images.Frame=OrderItemImages.Frame~;
+
+	WhereClause = ~EXISTS (<ExistsClause> AND <WidthMarginClause> AND <LengthMarginClause> )~ ;
+
+	return ~<WhereClause>~;
+}
+
+
+STR UpdateScanFlag(OrderID,Margin)
+{
+	// If Margin is empty, then set all the images scan flag.
+	if ( ~<Margin>~ == ~~ )
+	{
+		WhereClause	= ~EXISTS (Select * From OrderItemImages Where OrderItemImages.ItemOrderID='<OrderID>' AND Images.OrderID=OrderItemImages.OrderID AND Images.Roll=OrderItemImages.Roll AND Images.Frame=OrderItemImages.Frame)~;
+	}
+	else
+	{
+		WhereClause = CreateWhereClause(~<OrderID>~,~<Margin>~);
+	}  
+
+	Cmd = ~UPDATE Images SET Scan=1 WHERE <WhereClause>~ ;
+
+	return ~<Cmd>~;
+}
+
+STR GetWidthMarginClause(Margin)
+{
+	Factor = <Margin>/100;
+	return ~(OrderItemImages.NeededWidth > 0) AND (OrderItemImages.NeededWidth > (Images.Width + (Images.Width * <Factor>)))~;  
+
+}
+
+STR GetLengthMarginClause(Margin)
+{
+	Factor =  <Margin>/100;
+	return ~(OrderItemImages.NeededLength > 0) AND (OrderItemImages.NeededLength > (Images.Length + (Images.Length * <Factor>)))~;  
+}
+
+NUMERIC GetTableRowCount(&db, TableName)
+{
+	if ( !db(GetValuesFor,~select count(*) from <TableName>~,count ) )
+	{
+		return Warning( Translate( ~Fail to query the table <TableName>~ ) );
+	}
+	return <count>;		
+}
+
+NUMERIC GetLutList( &LutsList )
+{
+	LoadLutsTranslationFile(~Engine~,LutStrings,Luts);
+	
+	MoreFiles = findfile( aDirectoryEntry,Find,~<$App.Directory>\Tables\ConversionLuts\*.txt~ );
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+				
+		if ( !aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		{
+			aDirectoryEntry( Get,Path,aPath );
+			tempStr = ~<$Str.$aPath.FileName.WithoutExt>~;
+			GetTokens( ~<tempStr>~,~_~,token1,token2,token3 );
+
+			TranslatedName = TR( LutStrings, ~Lut_<token2>~ );
+			LutsList( AddString,~<TranslatedName>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC GetLutIndex( value )
+{
+	LoadLutsTranslationFile(~Engine~,LutStrings,Luts);
+
+	index = -1;
+	
+	MoreFiles = findfile( aDirectoryEntry,Find,~<$App.Directory>\Tables\ConversionLuts\*.txt~ );
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+				
+		if ( !aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		{
+			aDirectoryEntry( Get,Path,aPath );
+			tempStr = ~<$Str.$aPath.FileName.WithoutExt>~;
+			GetTokens( ~<tempStr>~,~_~,token1,token2,token3 );
+
+			TranslatedName = TR( LutStrings, ~Lut_<token2>~ );
+			if ( SimilarStr( ~<value>~,~<TranslatedName>~ ) )
+			{
+				index = <token2>;
+			}
+		}
+	}
+
+	return <index>;
+}
+
+STR GetLutName( index )
+{
+	LoadLutsTranslationFile(~Engine~,LutStrings,Luts);
+
+	LutName = TR( LutStrings, ~Lut_<index>~ );
+
+	return ~<LutName>~;
+}
+
+NUMERIC LoadLutsTranslationFile(Path,Category,FileName,IsOptional)
+{
+	if ( Defined( ~<Category>~ ) )
+	{
+		return TRUE;
+	}
+
+	XMLPath = ~<$App.ShareDirectory>\Translations\<Path>\<FileName>.xml~;
+	
+	if ( !xml( <Category>,load,~<XMLPath>~ ) )
+	{
+		if ( Numeric(~<IsOptional>~) )	{ return FALSE; }
+		
+		<Category>(GetReason,theErr);
+
+		ForgetGlobal( ~<Category>~ );
+		
+		return Warning( ~Failed to Load: <XMLPath>.  <theErr>~ );
+	}
+	
+	Global(~<Category>~);
+	
+	return TRUE;
+}
+
+STR StripLeadingNumerics(MyString)
+{ 
+	Length = strlen(~<MyString>~);
+
+	if (<Length> <= 0)
+	{
+		return ~~;
+	}
+	
+	Result = ~<MyString>~; 
+
+	while (<Length> > 0)
+	{
+		ThisChar =  ~<$Str.$Result.Substr|0|1|>~;
+		if (!IsNumeric(~<ThisChar>~) && ThisChar != ~ ~)
+		{
+			return ~<Result>~; 
+		}
+		else
+		{
+			--Length;
+			Result = ~<$Str.$Result.Substr|1|<Length>|>~; 
+		}
+	}
+	return ~<Result>~; 
+} 

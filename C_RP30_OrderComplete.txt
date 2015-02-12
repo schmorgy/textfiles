@@ -1,0 +1,279 @@
+//	C_RP30_OrderComplete.txt
+
+//	THIS FILE WILL PARSE THE RESPONSE FILE FROM THE PRINTER
+
+ExecC() ;
+
+char	*NULL ;
+int		 FALSE = 0L ;
+int		 TRUE  = ! FALSE ;
+
+int		 gTesting = FALSE ;
+
+main()
+{
+//	Test() ;
+}
+
+
+int Init( UGenCon *OrderGC )
+{
+	SessionLogDirect( _T("C_RP30_OrderComplete.txt Init: Version 1.01")) ;
+	if( gTesting )
+	{
+	//	Debug(1) ;
+		UList	*Prints = OrderGC->GetChildren() ;
+		if( Prints )
+		{
+			long			 Count = 1L ;
+			long			 PageID ;
+			long			 ResponseCode = 0L ;
+
+			UListIterator	*anIter = new UListIterator( Prints ) ;
+			UGenCon *aPrint = anIter->GetFirst() ;
+			while( aPrint )
+			{
+				ResponseCode = aPrint->GetLongValue(_T("ResponseCode")) ;
+				if( ResponseCode == 0L )
+				{
+					PageID	= aPrint->GetLongValue(_T("JobID")) ;
+					GenerateResponse( OrderGC, PageID, ResponseCode, Count ) ;
+				}
+				Count++ ;
+				aPrint = anIter->GetNext() ;
+			}
+			delete anIter ;
+		}
+	}
+
+//	WriteMaintainOrderItemsScript( OrderGC ) ;
+
+	return( 0 ) ;
+}
+
+int RememberJobData( UGenCon *aGC )
+{
+	aGC->SetLongValue(_T("Long"), 1L ) ;
+
+	return( FALSE ) ;
+}
+
+
+int WriteMaintainOrderItemsScript( UGenCon *OrderGC )
+{
+	TCHAR	*OrderID = OrderGC->GetStringValue(_T("OrderID")) ;
+//	TCHAR	*DstPath = _T("\\\\RL-DP2DEV-W7697\\C\\RP30\\Control\\Maintain_%s.txt") ;
+	TCHAR	*DstPath = _T("\\\\cserver10\\DP2Import\\Maintain_%s.txt") ;
+	TCHAR	 Path[2048] ;
+	sprintf( Path, DstPath, OrderID ) ;
+
+	char	*fp = fopen( Path, _T("w")) ;
+	if( fp )
+	{
+		fprintf( fp, _T("Include: Cmds;\n") ) ;
+		fprintf( fp, _T("MaintainOrderItems(~%s~, True);\n"), OrderID ) ;
+		fclose( fp ) ;
+		return( TRUE ) ;
+	}
+	else
+	{
+		TCHAR	Msg[2048] ;
+		sprintf( Msg, _T("C_RP30_OrderComplete: Warning: Failed to create Maintain Order Item Script: \"%s\"."), Path ) ;
+		SessionLogDirect( Msg ) ;
+		MessageBox( Msg, _T("MB_OK") ) ;
+	}
+	return( FALSE ) ;
+}
+
+
+int GenerateResponse( UGenCon *OrderGC, long PageID, long ErrCode, long PrintNumber )
+{
+	TCHAR	NewFilePath[2048] ;
+
+	TCHAR	*BatchID = OrderGC->GetStringValue(_T("BatchID")) ;
+	TCHAR	*OrderID = OrderGC->GetStringValue(_T("OrderID")) ;
+
+	UGenCon	*PrinterSetup = OrderGC->GetLongValue(_T("PrinterSetup")) ;
+	TCHAR	*ResponseFolder = PrinterSetup->GetStringValue(_T("ResponseFolder")) ;
+
+	sprintf( NewFilePath, _T("%s\\B%s%s_%03ld.rsp"), ResponseFolder, BatchID, OrderID, PrintNumber ) ;
+
+	char	*fp = fopen( NewFilePath, _T("wb")) ;
+	if( fp )
+	{
+		TCHAR	IOBuff[64] ;
+		TCHAR	theDate[64] ;
+		GetTimeNow(theDate,  _T("%m/%d/%y %H:%M:%S")) ;
+		
+		IOBuff[0] = 0xFEFF ;
+		IOBuff[1] = 0x0000 ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("TYPE: RESPONSE")) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("PAGE_ID: %ld"), PageID ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("TIME: %s"), theDate ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("CODE: %04ld"), ErrCode ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("ERRORTYPE: %s"), _T("C")) ;
+		fclose(fp) ;
+	}
+
+}
+
+WriteUnicodeFile( char *fp, TCHAR *Text )
+{
+	long	Length = strlen( Text ) ;
+	fwrite( Text, 2, Length, fp ) ;
+
+	long	EndOfLine = 0x000A000D ;
+	fwrite( &EndOfLine, 2, 2, fp ) ;
+}
+
+
+TCHAR *GetBaseName( TCHAR *Src, TCHAR *Dst )
+{
+	strcpy( Dst, Src ) ;
+	long	loop = 0L ;
+
+	while( Dst[loop] != 0x2E && Dst[loop] != 0x00 )
+	{
+		loop++ ;
+	}
+
+	Dst[loop] = 0x00 ;
+
+	return( Dst ) ;
+}
+
+int InitX( UGenCon *OrderGC )
+{
+	return( 0 ) ;
+
+	int	Count = 0L ;
+	int	Error ;
+//	SessionLogDirect(_T("C_RP30_OrderComplete.txt: OrderComplete")) ;
+
+//	Debug(1) ;
+
+	TCHAR	 FilePath[2048] ;
+	TCHAR	 TempPath[2048] ;
+	TCHAR	*FileName ;
+	UGenCon	*PrinterSetup = OrderGC->GetLongValue(_T("PrinterSetup")) ;
+	TCHAR	*ResponseFolder = PrinterSetup->GetStringValue(_T("ResponseFolder")) ;
+	TCHAR	*BatchID = OrderGC->GetStringValue(_T("BatchID")) ;
+	TCHAR	*OrderID = OrderGC->GetStringValue(_T("OrderID")) ;
+
+	sprintf( FilePath, _T("%s\\B%su%s*.*"), ResponseFolder, BatchID, OrderID ) ;
+	CleanUpFiles( ResponseFolder, FilePath ) ;
+
+	TCHAR	*OutputPath = PrinterSetup->GetStringValue(_T("OutputPath")) ;
+	strcpy( TempPath, OutputPath ) ;
+	GetBasePath( TempPath ) ;
+
+	sprintf( FilePath, _T("%s\\%s %s*.*"), TempPath, BatchID, OrderID ) ;
+	CleanUpFiles( TempPath, FilePath ) ;
+}
+
+TCHAR *GetBasePath( TCHAR *Path )
+{
+	long	loop = strlen( Path ) - 1L ;
+	while( loop && Path[loop] != '\\' )
+	{
+		loop-- ;
+	}
+	
+	if( Path[loop] == '\\' )
+	{
+		Path[loop] = 0 ;
+	}
+	return( Path ) ;
+}
+
+CleanUpFiles( TCHAR *ResponseFolder, TCHAR *FilePath )
+{
+	TCHAR	*FileName ;
+	TCHAR	 Msg[1024] ;
+	int		 ErrNo ;
+	int		 Error ;
+	int		 Count = 0L ;
+
+	UList *theFileList = GetFileList(FilePath) ;
+
+	SortBy( theFileList, _T("_NAME_") ) ;
+
+	UListIterator *anIter = new UListIterator( theFileList ) ;
+	UGenCon			*aFile = anIter->GetFirst() ;
+	while( aFile )
+	{
+		FileName = aFile->GetStringValue(_T("FileName")) ;
+//		SessionLogDirect( _T("\tFile: \"%s\"."), FileName ) ;
+		sprintf( FilePath, _T("%s\\%s"), ResponseFolder, FileName ) ;
+		Error = unlink( FilePath ) ;
+		if( Error )
+		{
+			ErrNo = errno(Msg) ;
+			SessionLogDirect(_T("Cannot Delete: \"%s\", LastError = %ld, errno = %ld, %s"),
+				FilePath, GetLastError(), ErrNo, Msg ) ;
+		}
+		else
+		{
+			Count++ ;
+		}
+		aFile = anIter->GetNext() ;
+	}
+	delete anIter ;
+	delete theFileList ;
+	return( Count ) ;
+}
+
+UList *GetFileList(TCHAR *Path)
+{
+	long	*FileHandle ;
+	char	 FileData[2048] ;
+	TCHAR	 FileName[2048] ;
+	TCHAR	 FileDate[1024] ;
+	int		 Result ;
+	long	 FileAttr ;
+	long	 longHandle ;
+	UGenCon	*FileDataGC ;
+
+	UList	*theList = new UList ;
+
+	strcpy( FileName, Path ) ;
+	FileHandle = FindFirstFile( FileName, FileData ) ;
+	longHandle = FileHandle ;
+	if( longHandle != 0xFFFFFFFF )
+	{
+		FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+//SessionLogDirect(_T("C_RP30_OrderComplete: GCFindFileData: %0lX"), FileDataGC ) ;
+		Result = FindFileConvToGC( FileData, FileDataGC ) ;
+		FindFileConvTime( FileDataGC, _T("ACCESSED"), FileDate ) ;
+
+		theList->InsertBack(FileDataGC) ;
+
+		FileAttr = FileDataGC->GetLongValue(_T("FileAttributes")) ;
+		while( Result )
+		{
+			Result = FindNextFile( FileHandle, FileData ) ;
+			if( Result )
+			{
+				FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+//SessionLogDirect(_T("C_RP30_OrderComplete: GCFindFileData: %0lX"), FileDataGC ) ;
+				FindFileConvToGC( FileData, FileDataGC ) ;
+				theList->InsertBack(FileDataGC) ;
+			}
+		}
+
+		Result = FindClose( FileHandle ) ;
+	}
+	return( theList ) ;
+}
+
+

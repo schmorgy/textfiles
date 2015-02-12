@@ -1,0 +1,1454 @@
+// CompJobDetails.txt
+
+//Function handles the details of the Composite Job Generator
+//  These routines are only in a separate file for ease of code handling.  It is
+//  assumed that it is included in CompJobGen.txt, and has available to it all the 
+//  globals defined within CompJobGen.
+
+//  Globals assumed available:
+//	dlgComp - The dialog box
+
+Tab = Chr(9);
+//DetailsTabStops = ~21,65,109~;
+DetailsTabStops = ~25,80,125~;
+
+Define:	CompJobDetailsMsgs Using DDSymbol
+	Fields:	Value	~These strings are CompositeJobGenerator related strings used by the user interface.~
+	Contains:
+	{
+//		Define: DetailsBoxHeader	using DDText	Fields: Text ~Node                                   Text                                                                                 Image                                                                              Style~
+		Define: DetailsBoxHeader	using DDText	Fields: Text ~Node                                          Text                                                                                                       Image                                                                                Style~
+		Define: GnrlNodeHeader		using DDText	Fields: Text ~          Node                                         Text                                                             Image                                                          Style~
+		Define: GeneralHeader		using DDText	Fields: Text ~Define Nodes~
+//		Define: NodeFldPrompt		using DDText	Fields: Text ~Node~
+//		Define: StyleFldPrompt		using DDText	Fields: Text ~Style~
+//		Define: ImageFldPrompt		using DDText	Fields: Text ~Image~
+//		Define: TextFldPrompt		using DDText	Fields: Text ~Text~
+		Define: DefaultNode			using DDText	Fields: Text ~Countable Default~
+		Define: AddButton			using DDText	Fields: Text ~Add~
+		Define: AddButtonToolTip	using DDText	Fields: Text ~Add the Node Details ~
+		Define: DeleteButton		using DDText	Fields: Text ~Delete~
+		Define: DeleteButtonToolTip	using DDText	Fields: Text ~Delete the Node Details~
+		Define: NodeFieldBlankMsg	using DDText	Fields: Text ~Node field cannot be blank.~
+		Define: RemovingDetailsMsg	using DDText	Fields: Text ~There are no Node Details defined for this job.\nThis operation will remove any node details that may have been saved for this Order and ProductID.  Do you want to proceed?~
+		Define: ReplacingDetailsMsg using DDText	Fields: Text ~This operation will replace all details not saved.~
+		Define: ImagePathTitleMsg	using DDText	Fields: Text ~Select the path for the Image~
+		Define: NodeNameNotExist	using DDText	Fields: Text ~Node Named '%1' does not exist for this Product collection.  It will not be loaded in the Node Details.~
+//		Define: MacroHeader			using DDText	Fields: Text ~Composite Job Macros~
+		Define: FromText			using DDText	Fields: Text ~From~
+		Define: DescFldPrompt		using DDText	Fields: Text ~Field~
+		Define: MacroFldPrompt		using DDText	Fields: Text ~Macro~
+		Define: SubjInfoListName	using DDText	Fields:	Text ~SubjectInfo~
+		Define: ShootDescListName	using DDText	Fields: Text ~ShootDescription~
+		Define: UserMacrosListName	using DDText	Fields: Text ~UserMacros~
+		Define: DisplayMacrosButton	using DDText	Fields: Text ~<<~
+		Define: RemoveMacrosButton	using DDText	Fields: Text ~>>~
+		Define: CopyClipboardButton using DDText	Fields: Text ~Copy To Clipboard~
+		Define: CopyClipboardToolTip using DDText	Fields: Text ~Copy Macro Text to Clipboard~
+		Define: CopyToTextButton	using DDText	Fields: Text ~Copy To Text~
+		Define: CopyToTextToolTip	using DDText	Fields: Text ~Copy Macro Text to Text field~
+		Define: CopyToImageButton	using DDText	Fields: Text ~Copy To Image~
+		Define: CopyToImageToolTip	using DDText	Fields: Text ~Copy Macro Text to Image field~
+		Define: ShowMacroToolTip	using DDText	Fields:	Text ~Display/Remove Macros for Table Field Values~
+		Define: CloseToolTip		using DDText	Fields: Text ~Close dialog~
+		Define: CCToolTip			using DDText	Fields: Text ~Copies Text in Macro field to Clipboard~
+		Define: FromFldToolTip		using DDText	Fields: Text ~What to generate the macros from~
+		Define: DescFldToolTip		using DDText	Fields: Text ~Field or Name of Macro~
+		Define: MacroFldToolTip		using DDText	Fields: Text ~The macro to be used~
+		Define: ClearNodeDetails	using DDText	Fields: Text ~Node Details have been cleared.~
+		}
+
+
+NodeDetailsChanged = FALSE;
+
+//	MacroTextWidth = 250;
+	MacroTextWidth = 220;
+
+	if ( !DictionaryExists(DDNodeDetailsDlg) )
+	{
+		Dictionary: DDNodeDetailsDlg
+			Fields:	Name NodeName	Type Text
+			Fields:	Name Image		Type Text
+			Fields:	Name Text		Type Text
+			Fields:	Name Style		Type Text
+
+		// the following needs to match exactly the NodeDetails table
+		Dictionary: DDNodeDetailsRecord
+			Fields:	Name OrderID	Type Text 	
+			Fields:	Name ProductID	Type Text
+			Fields: Name NodeName	Type Text
+			Fields:	Name NodeStyle	Type Text
+			Fields:	Name NodeImage	Type Text
+			Fields: Name NodeText	Type Text
+	}
+
+	if ( !Tree( Name,MacroTypeChoices,Location,~[STRINGS]~,Exists ) )
+	{
+		StringList: Name		MacroTypeChoices
+			Fields:	String	Translate(CompJobDetailsMsgs,SubjInfoListName)
+			Fields:	String	Translate(CompJobDetailsMsgs,ShootDescListName)
+	//		Fields:	String	Translate(CompJobDetailsMsgs,UserMacrosListName)
+		Hang:	MacroTypeChoices		~[STRINGS]~
+	}
+
+	DetailsBoxWidth = <TabWidth> - (2*$hGap + 2*$hGap);
+	DetailsBoxHeight = 20 * 5;
+
+VOID DefineDetailsTabControls(x,y)
+{
+	xpos = $x + 2*$hGap;
+
+	Define: SaveSetup_Button Using DDWinCtrlDef AsSymbol SaveSetup_Button 
+		Fields:	TypeName		Button
+				Text			Translate( CompJobMessages,SaveSetupButton )
+				Position		$xpos,
+								$y,
+								$ButtonLongWidth,$ButtonHeight
+				DActionsText	ACTION EXEC ( OnSaveSetup() ) 
+				Tooltip			Translate( CompJobMessages,SaveSetupToolTip )
+
+if (0)
+{
+	    Define: DefsSetupsComboBox Using DDWinCtrlDef AsSymbol DefsSetupsComboBox 
+			Fields: TypeName        ComboBox  
+					Position		SaveSetup_Button(GetRight,Position) + $hGap,
+									SaveSetup_Button(GetTop,Position),
+									$EditText31Width,$ComboBoxHeight
+					DropDownActionsText	ACTION EXEC ( GetSetupsList() )
+					IActionsText	ACTIONS ( Get )
+					DActionsText	~[Save Exec("LoadSetupNodeDetails()")]~
+					OActionsText	ACTIONS ( Save )
+					GenConName		THIS
+					GenConField		~DefName~
+					Mask			~<$[DATABASE FieldTypes].ScanSetupName[Mask]>~
+					PromptChar		~<$[DATABASE FieldTypes].ScanSetupName[PromptChar]>~
+					AllowedChars	~<$[DATABASE FieldTypes].ScanSetupName[AllowedChars]>~
+					DisallowedChars ~<$[DATABASE FieldTypes].ScanSetupName[DisallowedChars]>~
+					Tooltip			Translate( CompJobMessages,SetupComboToolTip )
+
+		Define: DefsSetups_Button Using DDWinCtrlDef AsSymbol DefsSetups_Button 
+			Fields:	TypeName		Button
+					Text			Translate( ~?~ )
+					Position		DefsSetupsComboBox(GetRight,Position)+$hGap,
+									DefsSetupsComboBox(GetTop,Position),
+									20,$ButtonHeight
+					DActionsText	ACTION EXEC  ( OnEditSetups() ) 
+					Tooltip			Translate( CompJobMessages,SetupEditToolTip )
+
+		Define: UseSetupBox Using DDWinCtrlDef AsSymbol UseSetupBox 
+			Fields: TypeName		CheckBox
+					Text			Translate( CompJobMessages,UseSetupText )
+					GenConName       THIS
+					GenConField		~UseDefCheckBox~
+					DActionsText	ACTIONS ( Save "Exec(ToggleUseSetup())" )
+					Position		DefsSetups_Button(GetRight,Position) + $hGap,
+									DefsSetups_Button(GetTop,Position),
+									$StaticTextWidth*4,$StaticTextHeight
+					Tooltip			Translate( CompJobMessages,UseSetupToolTip )
+}
+
+	Define: DetailsBoxlHdr Using DDWinCtrlDef AsSymbol DetailsBoxlHdr 
+		Fields: TypeName		StaticText
+				Text			Translate( CompJobDetailsMsgs,DetailsBoxHeader )
+				RightJustified	FALSE
+//				Position		$xpos,
+//								$y + 10,
+				Position		$xpos,
+								SaveSetup_Button(GetBottom,Position) + 5*$vGap,
+								$DetailsBoxWidth,$StaticTextHeight
+
+	Define: DetailsListBox Using DDWinCtrlDef AsSymbol DetailsListBox
+		Fields:	TypeName		ListBox
+				Position		DetailsBoxlHdr(GetLeft,Position),
+								DetailsBoxlHdr(GetBottom,Position) + $vGap,
+								$DetailsBoxWidth,$DetailsBoxHeight
+				GenConField		~SelectedDetail~
+				GenConName		THIS
+				IActionsText	ACTIONS ( Get )
+				DACTIONSTEXT	ACTION EXEC ( DetailSelected() )
+				OActionsText	ACTIONS ( Save );
+
+
+	Define: GeneralNodeHdr Using DDWinCtrlDef AsSymbol GeneralNodeHdr 
+		Fields: TypeName		StaticText
+				Text			Translate( CompJobDetailsMsgs,GnrlNodeHeader )
+				RightJustified	FALSE
+//				FontSize		14
+				FontWeight		600
+    			Position		$xpos + 6*$hGap,
+								DetailsListBox(GetBottom,Position) + 10,
+								$DetailsBoxWidth - 6*$hGap,$StaticTextHeight
+
+		Define: GeneralFieldFld Using DDWinCtrlDef AsSymbol GeneralFieldFld 
+            Fields: TypeName		SComboBox  
+                    Position		$xpos,
+									GeneralNodeHdr(GetBottom,Position) + $vGap*3,
+									$EditText31Width,$ComboBoxHeight 
+					GenConName		THIS
+					GenConField		~NodeField~
+					DropDownActionsText	ACTION EXEC ( GetNodeList() )
+					IActionsText	ACTIONS ( Get )
+					DActionsText	~[Save Exec("OnNodeFieldChanged()")]~
+					OActionsText	ACTIONS ( Save )
+//					Tooltip			Translate( CompJobDetailsMsgs,ToolTip )
+
+		Define: GeneralTextFld Using DDWinCtrlDef AsSymbol GeneralTextFld 
+            Fields: TypeName		MlEditText
+//					NOHORIZONTALSCROLL	TRUE
+                    Position		GeneralFieldFld(GetRight,Position) + $hGap,
+									GeneralFieldFld(GetTop,Position),
+									$MacroTextWidth, ($EditTextHeight*2)+2
+					GenConName		THIS
+					GenConField		~NodeText~
+					Mask			~<$[DATABASE FieldTypes].ProcessLongText2[Mask]>~
+					PromptChar		~<$[DATABASE FieldTypes].ProcessLongText2[PromptChar]>~
+					AllowedChars	~<$[DATABASE FieldTypes].ProcessLongText2[AllowedChars]>~
+					DisallowedChars ~<$[DATABASE FieldTypes].ProcessLongText2][DisallowedChars]>~
+					IActionsText	~[Get]~
+					DActionsText	ACTIONS ( Save )
+					OActionsText    ~[Save]~;
+//					Tooltip			Translate( CompJobDetailsMsgs,ToolTip );
+
+		thisXPos = GeneralTextFld(GetRight,Position) + $hGap;
+		thisYPos = GeneralTextFld(GetTop,Position) + 2;
+		Define: TextMacroButton Using DDWinCtrlDef AsSymbol TextMacroButton 
+			Fields:	TypeName		Button
+					Text			Translate( ~M~ )
+					Tooltip			~Press the M for to show the list of macros.  Optionally hold the Ctrl key down while you press M for more information~
+					Position		<thisXPos>,
+									<thisYPos>,
+									15,15
+					DActionsText	ACTION EXEC  ( OnCompMacroButton(~1~,<thisXPos>,<thisYPos>) )
+
+		Define: GeneralImageFld Using DDWinCtrlDef AsSymbol GeneralImageFld 
+            Fields: TypeName		EditText
+                    Position		TextMacroButton(GetRight,Position) + 2*$hGap,
+									GeneralTextFld(GetTop,Position),
+									$MacroTextWidth, $EditTextHeight
+					GenConName		THIS
+					GenConField		~NodeImage~
+					IActionsText	~[Get]~
+					DActionsText	ACTIONS ( Save )
+					OActionsText    ~[Save]~
+//					Tooltip			Translate( CompJobDetailsMsgs,ToolTip )
+
+		Define: ImageBrowseButton Using DDWinCtrlDef AsSymbol ImageBrowseButton 
+			Fields:	TypeName		Button
+					Text			Translate( ~?~ )
+					Position		GeneralImageFld(GetRight,Position)+ $hGap,
+									GeneralImageFld(GetTop,Position) - (5 + $hGap/2),
+									15,15
+					DActionsText	ACTION EXEC  ( OnImageBrowseButton() );
+//					Tooltip			Translate( CompJobDetailsMsgs,ToolTip );
+
+		thisXPos = ImageBrowseButton(GetLeft,Position);
+		thisYPos = ImageBrowseButton(GetBottom,Position) + $hGap;
+		Define: ImageMacroButton Using DDWinCtrlDef AsSymbol ImageMacroButton 
+			Fields:	TypeName		Button
+					Text			Translate( ~M~ )
+					Tooltip			~Press the M for to show the list of macros.  Optionally hold the Ctrl key down while you press M for more information~
+					Position		<thisXPos>,
+									<thisYPos>,
+									15,15
+					DActionsText	ACTION EXEC  ( OnCompMacroButton(~0~,<thisXPos>,<thisYPos>) )
+
+		Define: GeneralStyleFld Using DDWinCtrlDef AsSymbol GeneralStyleFld 
+            Fields: TypeName		SComboBox  
+                    Position		ImageBrowseButton(GetRight,Position) + 2*$hGap,
+									GeneralImageFld(GetTop,Position),
+									$EditText31Width,$ComboBoxHeight 
+					GenConName		THIS
+					GenConField		~NodeStyle~
+					DropDownActionsText	ACTION EXEC ( GetStyleList() )
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+//					Tooltip			Translate( CompJobDetailsMsgs,ToolTip )
+
+		Define: AddButton Using DDWinCtrlDef AsSymbol AddButton 
+            Fields: TypeName		Button
+                    Text			Translate( CompJobDetailsMsgs,AddButton )
+    				Position		$TabWidth/2 - $ButtonWidth - $hGap/2,
+									GeneralTextFld(GetBottom,Position) + 20,
+									$ButtonWidth, $ButtonHeight
+                    DActionsText	ACTION EXEC ( OnAddButton() ) 
+					IsEnabled		T
+                    Tooltip			Translate( CompJobDetailsMsgs,AddButtonToolTip );
+
+		Define: NodeDeleteButton Using DDWinCtrlDef AsSymbol NodeDeleteButton 
+            Fields: TypeName		Button
+                    Text			Translate( CompJobDetailsMsgs,DeleteButton )
+    				Position		AddButton(GetRight,Position) + $hGap,
+									AddButton(GetTop,Position),
+									$ButtonWidth, $ButtonHeight
+                    DActionsText	ACTION EXEC ( OnDeleteButton() ) 
+					IsEnabled		T
+                    Tooltip			Translate( CompJobDetailsMsgs,DeleteButtonToolTip );
+
+
+if (0)
+{
+	Define: GeneralHdrGroupBox Using DDWinCtrlDef
+		Fields:	TypeName		GroupBox
+				Text			Translate( CompJobDetailsMsgs,GeneralHeader )
+				Position		GeneralFieldPrompt(GetLeft,Position) - 10,
+								AddButton(GetTop,Position) - 20,
+								ImageBrowseButton(GetRight,Position) - GeneralFieldPrompt(GetLeft,Position) + 20,
+								GeneralTextFld(GetBottom,Position) - AddButton(Gettop,Position) + 30 
+//				Tooltip			~~;
+
+}
+	Define: FromText Using DDWinCtrlDef AsSymbol FromText 
+        Fields: TypeName		StaticText
+                Position		$xpos,
+								AddButton(GetBottom,Position) + 20,
+								$StaticTextWidth,$StaticTextHeight
+				RightJustified	TRUE
+                Text			Translate( CompJobDetailsMsgs,FromText )
+				IsHidden		T
+
+		Define: FromFld Using DDWinCtrlDef AsSymbol FromFld 
+            Fields: TypeName		SComboBox  
+                    Position		FromText(GetRight,Position) + $hGap,
+									FromText(GetTop,Position),
+									$EditTextWidth,$ComboBoxHeight 
+					GenConName		THIS
+					IsHidden		T
+					GenConField		~MacroType~
+					IActionsText	ACTIONS ( GetList(MacroTypeChoices) GetMacroTextList() Get )
+					DActionsText	~[Save Exec("GetMacroTextList()")]~
+					OActionsText	ACTIONS ( Save )
+//					Tooltip			Translate( CompJobDetailsMsgs,ToolTip )
+
+		Define: DescPrompt Using DDWinCtrlDef AsSymbol DescPrompt 
+            Fields: TypeName		StaticText
+                    Position		FromFld(GetRight,Position) + $hGap*3,
+									FromFld(GetTop,Position),
+									$StaticTextWidth,$StaticTextHeight
+                    Text			Translate( CompJobDetailsMsgs,DescFldPrompt )
+					RightJustified	TRUE
+					IsHidden		T
+
+		Define: DescFld Using DDWinCtrlDef AsSymbol DescFld 
+            Fields: TypeName		SComboBox
+                    Position		DescPrompt(GetRight,Position) + $hGap,
+									DescPrompt(GetTop,Position),
+									$EditTextWidth, $ComboBoxHeight
+					IsHidden		T
+					GenConName		THIS
+					GenConField		~MacroField~
+					DropDownActionsText	ACTION EXEC ( GetMacroTextList() )
+					IActionsText	~[Get]~
+					DActionsText	~[Save Exec("OnMacroMacroFieldChanges()")]~
+					OActionsText	ACTIONS ( Save )
+//					Tooltip			Translate( CompJobDetailsMsgs,ToolTip )
+
+		Define: MacroPrompt Using DDWinCtrlDef AsSymbol MacroPrompt 
+            Fields: TypeName		StaticText
+                    Position		DescFld(GetRight,Position) + $hGap*3,
+									DescFld(GetTop,Position),
+									$StaticTextWidth,$StaticTextHeight
+                    Text			Translate( CompJobDetailsMsgs,MacroFldPrompt )
+					RightJustified	TRUE
+					IsHidden		T
+
+		Define: MacroFld Using DDWinCtrlDef AsSymbol MacroFld 
+            Fields: TypeName		EditText
+                    Position		MacroPrompt(GetRight,Position) + $hGap,
+									MacroPrompt(GetTop,Position),
+									$MacroTextWidth,$EditTextHeight
+					IsHidden		T
+					GenConName		THIS
+					GenConField		~MacroText~
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+//					Tooltip			Translate( CompJobDetailsMsgs,ToolTip )
+
+			Define: MacroCTButton Using DDWinCtrlDef AsSymbol MacroCTButton 
+				Fields:	TypeName		Button
+						Text			Translate( CompJobDetailsMsgs,CopyToTextButton)
+						Position		<TabWidth>/2 - ($ButtonLongWidth+$hGap),
+										MacroFld(GetBottom,Position) + $vGap + 10,
+										$ButtonLongWidth,$ButtonHeight
+						IsHidden		T
+						DActionsText	ACTION EXEC  ( OnSaveMacroToClipBoard(~Text~) ) 
+						Tooltip			Translate( CompJobDetailsMsgs,CopyClipboardToolTip );
+
+			Define: MacroCIButton Using DDWinCtrlDef AsSymbol MacroCCButton 
+				Fields:	TypeName		Button
+						Text			Translate( CompJobDetailsMsgs,CopyToImageButton)
+						Position		MacroCTButton(GetRight,Position) + 2*$hGap,
+										MacroCTButton(GetTop,Position),
+										$ButtonLongWidth,$ButtonHeight
+						IsHidden		T
+						DActionsText	ACTION EXEC  ( OnSaveMacroToClipBoard(~Image~) ) 
+						Tooltip			Translate( CompJobDetailsMsgs,CopyClipboardToolTip );
+
+if (0)
+{
+	Define: MacroHdrGroupBox Using DDWinCtrlDef
+		Fields:	TypeName		GroupBox
+				Text			Translate( CompJobDetailsMsgs,MacroHeader )
+				Position		FromText(GetLeft,Position) - 10,
+								FromText(GetTop,Position) - 20,
+								MacroFld(GetRight,Position) - FromText(GetLeft,Position) + 20,
+								MacroCTButton(GetBottom,Position) - FromText(Gettop,Position) + 30 
+				IsHidden		T
+//				Position		$x,$y, $TabEndLength  50			
+}
+
+		Define: ShowMacroButton Using DDWinCtrlDef AsSymbol ShowMacroButton 
+			Fields:	TypeName		Button
+					Text			Translate( CompJobDetailsMsgs,DisplayMacrosButton )
+					Position		<TabWidth> - ($ButtonWidth+$hGap),
+									AddButton(GetBottom,Position) + 50,
+									$ButtonWidth,$ButtonHeight
+//					DActionsText	ACTION EXEC  ( OnShowDlgMacroButton() )
+					DActionsText	ACTION EXEC  ( OnShowMacroButton() )
+					Tooltip			Translate( CompJobDetailsMsgs,ShowMacroToolTip );
+
+}
+
+
+NUMERIC HasNodeDetailsChanged()
+{
+	return <NodeDetailsChanged>;
+}
+
+
+
+VOID GetMacroTextList()
+{
+	theMacroType = ~<$con.dlgCompData[MacroType]>~;
+
+	if (~<$con.dlgCompData[MacroType]>~ == Translate( CompJobDetailsMsgs,SubjInfoListName ) )
+	{
+		StringList(FieldList,New);
+		if ( GenerateTableFieldList(~SubjectInfo<$con.dlgCompData[InfoType]>~,FieldList) )
+		{	dlgComp( SetControlFromStringList,DescFld,FieldList,NoSelection );	}
+	}
+	else if (~<$con.dlgCompData[MacroType]>~ == Translate( CompJobDetailsMsgs,ShootDescListName ) )
+	{
+		StringList(FieldList,New);
+		if ( GenerateTableFieldList(~ShootDescription<$con.dlgCompData[ShootDescType]>~,FieldList) )
+		{	dlgComp( SetControlFromStringList,DescFld,FieldList,NoSelection );	}
+	}
+if (0)
+{
+	else if (~<$con.dlgCompData[MacroType]>~ == Translate( CompJobDetailsMsgs,UserMacrosListName ) )
+	{
+		StringList(FieldList,New);
+		if ( GenerateUserMacroFldList(FieldList) )
+		{	dlgComp( SetControlFromStringList,DescFld,FieldList,NoSelection );	}
+	}
+}
+
+	OnMacroMacroFieldChanges();
+}
+
+
+// Remove
+VOID OnMacroMacroFieldChanges()
+{
+	dlgComp(GetInput);
+
+	theFieldName = ~<$con.dlgCompData[MacroField]>~;
+
+	if (~<$con.dlgCompData[MacroType]>~ == Translate( CompJobDetailsMsgs,SubjInfoListName ) )
+	{
+		theMacro = ~func.SI(<theFieldName>)~;
+	}
+	else if (~<$con.dlgCompData[MacroType]>~ == Translate( CompJobDetailsMsgs,ShootDescListName ) )
+	{
+		theMacro = ~func.SD(<theFieldName>)~;
+	}
+	else if (~<$con.dlgCompData[MacroType]>~ == Translate( CompJobDetailsMsgs,UserMacrosListName ) )
+	{
+		theMacro = ~func.<theFieldName>~;
+	}
+
+	SetSpecialMacroExpansion(FALSE);
+	theMacro = ~<$<theMacro>>~;
+
+	dlgComp(SetStrings,MacroText,~<theMacro>~);
+
+	SetSpecialMacroExpansion(TRUE);
+}
+
+
+NUMERIC GetNodeType(theProduct,theNode) 
+{
+	theNodeType = -1;
+
+	if (~<theNode>~ != ~~)
+	{
+		Query = ~Select NodeType from CompositeNodes where ProductID = '<theProduct>' And NodeName = '<theNode>'~;
+		if ( !ADO( dBase,Connect,GetValuesFor,~<Query>~,theNodeType ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning(Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+		}
+	}
+
+	return <theNodeType>;
+}
+
+
+NUMERIC GetNodeList()
+{
+	StringList(NodeNameList,New);
+
+	theQuery = ~Select * From CompositeNodes Where ProductID = '<$con.dlgCompData[Collection]>' Order By NodeName~;	
+	
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	count = List(NumEntries);
+
+	if (<count> > 0)
+	{
+		List( MakeStringList,NodeNameList,NodeName );
+	}
+	dlgComp( SetControlFromStringList,GeneralFieldFld,NodeNameList,NoSelection );
+
+	return TRUE;
+}
+
+
+NUMERIC GetStyleList()
+{
+	theNode = ~<$con.dlgCompData[NodeField]>~;
+	theProduct = ~<$con.dlgCompData[Collection]>~;
+	theNodeType = GetNodeType(~<theProduct>~,~<theNode>~);
+
+	if (<theNodeType> == -1)
+	{	return FALSE;	}
+
+	StringList(NodeStyleList,New);
+	NodeStyleList( AddString,~ ~ );
+
+	if (<theNodeType> == 0)  // Image
+	{
+		StyleTypes = ~StyleType = 0 Or StyleType = 2~;
+	}
+	else if (<theNodeType> == 1) // Text
+	{
+		StyleTypes = ~StyleType = 1 Or StyleType = 2~;
+	}
+	else if (<theNodeType> == 2)  // Image and Text
+	{
+		StyleTypes = ~StyleType = 0 Or StyleType = 1 Or StyleType = 2~;
+	}
+	else // invalid node type
+	{
+		StyleTypes = ~StyleType = 0 Or StyleType = 1 Or StyleType = 2~;
+	}
+	
+	theQuery = ~Select ID From Products Where Style <> 0 And (<StyleTypes>) Order By ID~;	
+	
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	count = List(NumEntries);
+
+	if (<count> > 0)
+	{
+		while ( List( GetNext,Record ) )
+		{
+			++count;
+			NodeStyleList( AddString,~<$pcon.Record[ID]>~ );
+		}
+	}
+	dlgComp( SetControlFromStringList,GeneralStyleFld,NodeStyleList,NoSelection );
+
+	return TRUE;
+}
+
+
+NUMERIC OnNodeFieldChanged()
+{
+	dlgComp(GetInput);
+
+	theNode = ~<$con.dlgCompData[NodeField]>~;
+	theProduct = ~<$con.dlgCompData[Collection]>~;
+	dlgComp( SetStrings,NodeImage,~~,NodeText,~~ );	
+	dlgComp( Update );
+
+	if (!Defined(FeaturedNodeName))
+	{
+		FeaturedNodeName = Featured;
+		if ( GetSystemSettings( ~GridLayouts~,~FeaturedNodeName~,FeaturedName,Enabled ) )
+		{
+			if (!IsNull(~<FeaturedName>~))
+			{
+				FeaturedNodeName = ~<FeaturedName>~;
+			}
+		}
+		Global(FeaturedNodeName);
+	}
+
+	isFeaturedNode =  SimilarStr(~<theNode>~,~<FeaturedNodeName>~);
+	
+
+//	if (~<theNode>~ == ~Background~)
+//	{
+		//dlgComp( EnableControls,FALSE,GeneralStyleFld );	
+//	}
+//	else
+//	{
+		dlgComp( EnableControls,TRUE,GeneralStyleFld );	
+		GetStyleList();
+//	}
+
+	theNodeType = GetNodeType(~<theProduct>~,~<theNode>~);
+	if (<theNodeType> == -1)
+	{	return FALSE;	}
+
+	if (<theNodeType> == 0)  // Image
+	{
+		dlgComp( EnableControls,!<isFeaturedNode>,GeneralImageFld );	
+		dlgComp( EnableControls,FALSE,GeneralTextFld );	
+	}
+	else if (<theNodeType> == 1) // Text
+	{
+		dlgComp( EnableControls,FALSE,GeneralImageFld );	
+		dlgComp( EnableControls,!<isFeaturedNode>,GeneralTextFld );	
+	}
+	else if (<theNodeType> == 2)  // Image and Text
+	{
+		dlgComp( EnableControls,!<isFeaturedNode>,GeneralImageFld );	
+		dlgComp( EnableControls,!<isFeaturedNode>,GeneralTextFld );	
+	}
+	else // invalid node type
+	{
+		dlgComp( EnableControls,FALSE,GeneralImageFld );	
+		dlgComp( EnableControls,FALSE,GeneralTextFld );	
+	}
+
+	if (~<theNode>~ == Translate(CompJobDetailsMsgs,DefaultNode))
+	{
+		// disable image field
+		dlgComp( EnableControls,FALSE,GeneralImageFld );	
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC GenerateNodeDetailsListBox()
+{
+	count = NodeDetailList(ChildCount);
+
+	TabCount = GetTokens(~<DetailsTabStops>~,~,~);
+
+	if (<count> > 0 )
+	{
+		StringList(NodesList,New);
+		more = NodeDetailList(GetFirst,theRecord);
+		while ( <more> )
+		{
+			theRecord(GetValue,Text,tempText);
+			theRecord(GetValue,Image,tempImage);
+			substr(~<$con.theRecord[NodeName]>~, 0, <Token1>-3, theNodeName);
+			substr(~<$con.theRecord[Style]>~, 0, 19, theStyle);
+
+			SetSpecialMacroExpansion(FALSE);
+			substr(~<tempText>~, 0, <Token2>-<Token1>-2, theText);
+			substr(~<tempImage>~, 0, <Token3>-<Token2>-2, theImage);
+			theString = ~<theNodeName><Tab><theText><Tab><theImage><Tab><theStyle>~;
+			NodesList(AddString,~<theString>~);
+			SetSpecialMacroExpansion(TRUE);
+		
+			more = NodeDetailList(GetNext,theRecord);
+		}
+		dlgComp( ListBox,DetailsListBox,SetTabStops,<DetailsTabStops>);
+		return dlgComp(SetControlFromStringList,DetailsListBox,NodesList);
+	}
+
+	else
+	{
+		if ( !dlgComp(ListBox,DetailsListBox,ResetContent) )
+		{ return Warning( Translate(CompJobMessages, ErrorResettingListBox, ~<Groups>~) );}
+	}
+	
+	return TRUE;		
+}
+
+
+NUMERIC DetailSelected()
+{
+if (0)
+{
+	if ( !dlgComp( ListBox,DetailsListBox,GetSelectedItem,Item ) > 0 )
+	{
+		return FALSE;
+	}
+
+	SetSpecialMacroExpansion(FALSE);
+	count = GetArgs( ~<Item>~,~<Tab>~,Node,Style,Text,Image );
+	SetSpecialMacroExpansion(TRUE);
+
+	dlgComp( SetStrings,NodeField,~<Node>~ );
+	OnNodeFieldChanged();
+
+	dlgComp( SetStrings,NodeStyle,~<Style>~ );
+
+	SetSpecialMacroExpansion(FALSE);
+	dlgComp( SetStrings,NodeImage,~<Image>~ );
+	dlgComp( SetStrings,NodeText,~<Text>~ );
+	SetSpecialMacroExpansion(TRUE);
+}
+
+	Index = dlgComp( ListBox,DetailsListBox,GetSelectedIndex); 
+
+	NodeDetailList(GetAt,<Index>,theRecord);
+	dlgComp( SetStrings,NodeField,~<$con.theRecord[NodeName]>~ );
+	OnNodeFieldChanged();
+	dlgComp( SetStrings,NodeStyle,~<$con.theRecord[Style]>~ );
+
+	theRecord(GetValue,Text,theText);
+	theRecord(GetValue,Image,theImage);
+
+	SetSpecialMacroExpansion(FALSE);
+	dlgComp( SetStrings,NodeText,~<theText>~ );
+	dlgComp( SetStrings,NodeImage,~<theImage>~ );
+	SetSpecialMacroExpansion(TRUE);
+
+	return TRUE;
+}
+
+
+
+// Remove
+NUMERIC GenerateTableFieldList(Table,&FieldList)
+{
+	if ( !ADO( dBase,Connect,MakePrimaryKeyFrom,~<Table>~,Dummy,Key ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( DBMessages,ConnectionFailed,~<TranslatedTableName>~,~<theErr>~ ) );
+	}
+
+	Query = ~Select * From <Table>~;	// WANT A QUERY THAT RETURNS NO RECORDS
+
+	if ( !IsNull(~<Key>~) )
+	{
+		Query = ~<Query> Where <Key>~;  // WILL BE A QUERY THAT RETURNS NO RECORDS
+	}
+
+	// get all the fields in the SubjectInfo table
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( DBMessages,QueryFailed,~<Query>~,~<theErr>~ ) );
+	}
+
+	Index = 0;
+	while ( List( FieldInfo,<Index>,Name,theFieldName ) )
+	{
+		FieldList(AddString,~<theFieldName>~);
+		++Index;
+	}
+
+	return TRUE;	
+}
+
+
+NUMERIC OnAddButton()
+{
+	dlgComp(GetInput);
+
+	if (~<$con.dlgCompData[NodeField]>~ == ~~) 
+	{	return Warning( Translate( CompJobDetailsMsgs,NodeFieldBlankMsg)); }
+
+	// determine if field needs to be updated, or create new record
+	theNodeField = ~<$con.dlgCompData[NodeField]>~;
+// can we create a C++ routine to find the record?
+	count = NodeDetailList(ChildCount);
+	more = FALSE;
+	if (<count> > 0)
+	{
+		more = NodeDetailList(GetFirst,theRecord);
+		while ( <more> )
+		{
+			if (~<theNodeField>~ == ~<$con.theRecord[NodeName]>~)
+			{
+				break;
+			}
+			more = NodeDetailList(GetNext,theRecord);
+		}
+	}
+
+	theProduct = ~<$con.dlgCompData[Collection]>~;
+	if (<more>)  // we found a match before reaching the end of the list
+	{
+		if (~<theNodeField>~ != ~Background~ || 1)
+		{
+			theRecord(SetValue,Style,~<$con.dlgCompData[NodeStyle]>~);
+		}
+		else
+		{	
+			theRecord(SetValue,Style,~~);	
+		}
+
+		NodeType = GetNodeType(~<theProduct>~,~<$con.dlgCompData[NodeField]>~);
+		if (( <NodeType> != 1)  && ( ~<theNodeField>~ != Translate(CompJobDetailsMsgs,DefaultNode) ))  // not Text Only
+		{ 
+			dlgCompData(GetValue,NodeImage,theImage);
+			SetSpecialMacroExpansion(FALSE);
+ 			theRecord(Set,Image,~<theImage>~);
+			SetSpecialMacroExpansion(TRUE);
+		}
+		else
+		{  theRecord(Set,Image,~~);  }
+
+		if ( <NodeType> != 0)  // not Image Only
+		{  
+			dlgCompData(GetValue,NodeText,theText);
+			SetSpecialMacroExpansion(FALSE);
+			theRecord(Set,Text,~<theText>~); 
+			SetSpecialMacroExpansion(TRUE);
+		}
+		else
+		{  theRecord(Set,Text,~~);  }
+	}
+
+	else // create a new record
+	{
+		GenCon(NodeRecord,NewFrom,DDNodeDetailsDlg);
+		NodeRecord(SetValue,NodeName,~<$con.dlgCompData[NodeField]>~);
+		if (~<theNodeField>~ != ~Background~)
+		{
+			NodeRecord(SetValue,Style,~<$con.dlgCompData[NodeStyle]>~);
+		}
+		else
+		{	
+			NodeRecord(SetValue,Style,~~);	
+		}
+
+		NodeDetailList(InsertBack,NodeRecord);
+
+// can I do the following from determining if the fields are enabled?
+		NodeType = GetNodeType(~<theProduct>~,~<$con.dlgCompData[NodeField]>~);
+		if (( <NodeType> != 1)  && ( ~<theNodeField>~ != Translate(CompJobDetailsMsgs,DefaultNode) ))  // not Text Only
+		{ 
+			dlgCompData(GetValue,NodeImage,theImage);
+			SetSpecialMacroExpansion(FALSE);
+ 			NodeRecord(Set,Image,~<theImage>~); 
+			SetSpecialMacroExpansion(TRUE);
+		}
+		else
+		{  NodeRecord(Set,Image,~~);  }
+
+		if ( <NodeType> != 0)  // not Image Only
+		{  
+			dlgCompData(GetValue,NodeText,theText);
+			SetSpecialMacroExpansion(FALSE);
+			NodeRecord(Set,Text,~<theText>~); 
+			SetSpecialMacroExpansion(TRUE);
+		}
+		else
+		{  NodeRecord(Set,Text,~~);  }
+
+	}
+
+
+    NodeDetailsChanged = TRUE;
+	GenerateNodeDetailsListBox();
+
+	return TRUE;
+
+
+}
+
+
+// In the following routine, this worked to pass the macro, but when the routine invoked, it evaluated the macro
+//				Item(GetValue,Activate,ItemMacro);
+//				ItemName = ~<$pcon.Item[Name]>~;
+//				SetSpecialMacroExpansion(FALSE);
+//				Define:	ImageList<++Count> using	DDMenuItemDef
+//					Fields:	Text		~&<Count>)  <ItemName> ~
+//							IDText		~ID~
+//							ActionsText  ACTION Exec ( PerformImageDrop(~<ItemMacro>~) );
+//				SetSpecialMacroExpansion(TRUE);
+
+// MacroType- 0 = Image, 1 = Text
+VOID OnCompMacroButton(MacroType,mouseX,mouseY)
+{
+	NodeCategory = ~<$con.dlgCompData[NodeField]>~;
+	Count = 0;
+	if (~<NodeCategory>~ != ~~)
+	{
+		theQuery = ~Select * from CompositeMacros where Category = '<NodeCategory>' And MacroType = <MacroType> And Enabled <> 0~;
+		if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<theQuery>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+			return;
+		}
+
+		Count = List( NumEntries );
+	}
+
+	if (!<Count>)
+	{
+		theQuery = ~Select * from CompositeMacros where MacroType = <MacroType> And Enabled <> 0~;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<theQuery>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+			return;
+		}
+
+		Count = List( NumEntries );
+	}
+
+	if ( !<Count> )
+		{
+			Warning( Translate(~No <MacroType> CompositeMacros defined.~) );
+			return;
+		}
+
+	Define:	ListMenu Using DDMenuDef AsSymbol ListMenu
+		Fields:		Position	(-1)		
+		Contains:	INLISTORDER
+		{
+			Count = 0;
+			GenCon( CtrlKeyTest,New,DDSymbol);
+			CtrlKeyTest(GetKeyState,VK_Control,CtrlState);
+			if (Numeric(~<CtrlState>~) & 0x8000)
+			{
+				while ( List( GetNext,Item ) )
+				{
+					Define:	ImageList<++Count> using	DDMenuItemDef
+						Fields:	Text		~&<Count>)  <$pcon.Item[Name]><$Chr.CRLF>    <$pcon.Item[Description]> ~
+								IDText		~ID~
+								ActionsText  ACTION Exec ( InsertCompMacro(~<MacroType>~,~<$pcon.Item[Name]>~) );
+				}
+			}
+			else
+			{
+				while ( List( GetNext,Item ) )
+				{
+					Define:	ImageList<++Count> using	DDMenuItemDef
+						Fields:	Text		~&<Count>)  <$pcon.Item[Name]> ~
+								IDText		~ID~
+								ActionsText  ACTION Exec ( InsertCompMacro(~<MacroType>~,~<$pcon.Item[Name]>~) );
+				}
+			}
+		}
+		dlgComp( DisplayMenu,ListMenu,<mouseX>,<mouseY> );
+
+}
+
+
+// MacroType - 0=Image, 1=Text
+VOID InsertCompMacro(MacroType,MacroName)
+{
+//	theQuery = ~Select Activate from CompositeMacros where Category = '<NodeCategory>' And Name = '<MacroName>'~;
+	theQuery = ~Select Activate from CompositeMacros where Name = '<MacroName>'~;
+
+	if (!ADO(dbase,Connect,GetValuesFor,~<theQuery>~,MacroString))
+	{
+		dbase( GetErrorDescription,theErr );
+		Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+		return;
+	}
+
+	SetSpecialMacroExpansion(FALSE);
+
+	if (~<MacroType>~ == ~0~)  // Image
+	{	
+		if ( KeyState( CONTROL ) )  // append text   LSHIFT,RSHIFT, CONTROL
+		{
+			dlgCompData(GetValue,NodeImage,theImage);
+			theImage = ~<theImage><MacroString>~;
+		}
+		else  // replace text
+		{
+			theImage = ~<MacroString>~;
+		}
+		dlgComp(SetString,~<theImage>~,NodeImage,0);	
+	}
+	else  // MacroType = 1  // Text
+	{	
+		if ( KeyState( CONTROL ) )  // append text   LSHIFT,RSHIFT, CONTROL
+		{
+			dlgCompData(GetValue,NodeText,theText);
+			theText = ~<theText><MacroString>~;
+		}
+		else  // replace text
+		{
+			theText = ~<MacroString>~;
+		}
+		dlgComp(SetString,~<theText>~,NodeText,0);
+	}
+
+	SetSpecialMacroExpansion(TRUE);
+
+}
+
+
+VOID OnImageBrowseButton()
+{
+	Title = Translate( CompJobDetailsMsgs,ImagePathTitleMsg );
+
+	if ( !FileDialog( Title,~<Title>~,PATH,theFile,Open ) )	// ASK THE USER TO FIND THE FILE
+		{ return; }
+		
+	dlgComp( SetString,~<theFile>~ ,NodeImage,0 );										
+}
+
+
+
+VOID OnDeleteButton()
+{
+	// Delete record from the NodeDetailList based on NodeField
+	theNodeField = ~<$con.dlgCompData[NodeField]>~;
+
+// can we create a C++ routine to find the record?
+	count = NodeDetailList(ChildCount);
+	if (<count> > 0)
+	{
+		more = NodeDetailList(GetFirst,theRecord);
+		while ( <more> )
+		{
+			if (~<theNodeField>~ == ~<$con.theRecord[NodeName]>~)
+			{
+				NodeDetailList(Delete,theRecord);
+			}
+			more = NodeDetailList(GetNext,theRecord);
+		}
+	}
+
+    NodeDetailsChanged = TRUE;
+
+	// redraw the list
+	GenerateNodeDetailsListBox();
+
+}
+
+//Include: ~GenCompMacroDlg.txt~;
+VOID OnShowDlgMacroButton()
+{
+
+	if ( DisplayChangeFieldDlg(~<$con.dlgCompData[ShootDescType]>~,~<$con.dlgCompData[InfoType]>~) )
+	{
+		// Disable Macro button so can't open again
+		dlgComp( EnableControls,FALSE,ShowMacroButton );
+	}
+}
+
+
+macrosDisplayed = FALSE;
+VOID OnShowMacroButton()
+{
+
+	if (<macrosDisplayed>)  // displayed, hide
+	{
+		dlgComp( ShowControls,FALSE,FromText);
+		dlgComp( ShowControls,FALSE,FromFld);
+		dlgComp( ShowControls,FALSE,DescPrompt);
+		dlgComp( ShowControls,FALSE,DescFld);
+		dlgComp( ShowControls,FALSE,MacroPrompt);
+		dlgComp( ShowControls,FALSE,MacroFld);
+		dlgComp( ShowControls,FALSE,MacroCTButton);
+		dlgComp( ShowControls,FALSE,MacroCIButton);
+		dlgComp(SetControlTitle,ShowMacroButton,Translate(CompJobDetailsMsgs,DisplayMacrosButton));
+		macrosDisplayed = FALSE;
+	}
+	else  // hidden, dislay
+	{
+		dlgComp( ShowControls,TRUE,FromText);
+		dlgComp( ShowControls,TRUE,FromFld);
+		dlgComp( ShowControls,TRUE,DescPrompt);
+		dlgComp( ShowControls,TRUE,DescFld);
+		dlgComp( ShowControls,TRUE,MacroPrompt);
+		dlgComp( ShowControls,TRUE,MacroFld);
+		dlgComp( ShowControls,TRUE,MacroCTButton);
+		dlgComp( ShowControls,TRUE,MacroCIButton);
+		dlgComp(SetControlTitle,ShowMacroButton,Translate(CompJobDetailsMsgs,RemoveMacrosButton));
+		macrosDisplayed = TRUE;
+	}
+
+}
+
+VOID OnSaveMacroToClipBoard(SaveTo)
+{
+	dlgComp( GetControlValue,MacroFld,MacroString);
+
+	SetSpecialMacroExpansion(FALSE);
+	if (~<SaveTo>~ == ~Clipboard~)  // Clipboard
+	{	
+		dlgComp(CopyToClipboard, ~<MacroString>~);
+	}
+
+	if (~<SaveTo>~ == ~Image~)  // Image
+	{	
+		if ( KeyState( CONTROL ) )  // append text   LSHIFT,RSHIFT, CONTROL
+		{
+			dlgCompData(GetValue,NodeImage,theImage);
+			theImage = ~<theImage><MacroString>~;
+		}
+		else  // replace text
+		{
+			theImage = ~<MacroString>~;
+		}
+		dlgComp(SetString,~<theImage>~,NodeImage,0);	
+	}
+	else  // SaveTo = Text
+	{	
+		if ( KeyState( CONTROL ) )  // append text   LSHIFT,RSHIFT, CONTROL
+		{
+			dlgCompData(GetValue,NodeText,theText);
+			theText = ~<theText><MacroString>~;
+		}
+		else  // replace text
+		{
+			theText = ~<MacroString>~;
+		}
+		dlgComp(SetString,~<theText>~,NodeText,0);
+	}
+
+	SetSpecialMacroExpansion(TRUE);
+}
+
+
+NUMERIC SaveDetailsForOrder(OrderID, ProductID)
+{
+	// verify the user really wants to do it
+	count = NodeDetailList(ChildCount);
+	if (<count> < 1)
+	{
+		if ( MessageBox( Translate(CompJobDetailsMsgs,RemovingDetailsMsg),YESNO ) != YES )
+		{
+			return FALSE;
+		}
+	}
+
+	return SaveNodeDetails( ~<OrderID>~,~<ProductID>~);
+}
+
+
+NUMERIC SaveNodeDetails(theOrderId,theProductId)
+{
+	count = NodeDetailList(ChildCount);
+
+	if ( !ADO( dBase,Connect ) ) 
+	{
+		dBase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+		return FALSE;
+	}
+
+	Key = ~OrderId = '<theOrderId>' And ProductID ='<theProductId>'~;
+
+	// Delete any existing entries in the table
+	theCmd = ~Delete From NodeDetails where <Key>~;
+	if ( !dBase( CMD,~<theCmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,Translate(DBMessages,CmdFailed,~<theCmd>~,~<theErr>~) );
+		return FALSE;
+	}
+
+	// Add the new entries
+	GenCon( TableDetailsRecord,New,DDNodeDetailsRecord);
+// DO I need to get the whole list here?
+	if ( !PGenConList( List,Connection,dBase,Cursor,Keyset,Query,~SELECT * FROM NodeDetails~ ) )
+	{
+		Warning( ~Could not open NodeDetails recordset~ );
+		return FALSE;
+	}
+
+	more = NodeDetailList(GetFirst,DetailRecord);
+	while ( <more> )
+	{
+		theNodeName = ~<$con.DetailRecord[NodeName]>~;
+		theStyle = ~<$con.DetailRecord[Style]>~;
+		DetailRecord(GetValue,Text,theText);
+		DetailRecord(GetValue,Image,theImage);
+
+if (0)  // which way is better? - This does not completely work.
+{		List( MoveFirst );
+		List( AddNew,theDetails );
+		theDetails(SetValues,
+				OrderID,	~<theOrderId>~,
+				ProductID,	~<theProductId>~,
+				NodeName,	~<theNodeName>~,
+				NodeStyle,		~<theStyle>~);
+		theDetails( SetFromContentsOf,NodeImage,theImage );
+		theDetails( SetFromContentsOf,NodeText,theText );
+
+		if ( !theDetails( Update ) )
+		{
+			theDetails( GetConnection,Connection );
+			Connection( GetErrorDescription,theErr );
+			return Warning( Translate( ~Could not update the NodeDetails table. <theErr>~ ) );
+		}
+}
+
+
+		TableDetailsRecord(SetValues,
+					OrderID,	~<theOrderId>~,
+					ProductID,	~<theProductId>~,
+					NodeName,	~<theNodeName>~,
+					NodeStyle,	~<theStyle>~);
+		SetSpecialMacroExpansion(FALSE);
+		TableDetailsRecord(SetValue,NodeImage,~<theImage>~);
+		TableDetailsRecord(SetValue,NodeText,~<theText>~);
+		SetSpecialMacroExpansion(TRUE);
+
+		if ( !List( UpdateFrom,TableDetailsRecord,~<Key>~,TRUE ) )
+		{
+			List( GetErrorDescription,0,theErr,CancelUpdate );
+			return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+		}
+	
+		more = NodeDetailList(GetNext,DetailRecord);
+	}
+
+    NodeDetailsChanged = FALSE;
+
+	return TRUE;
+}
+
+
+// OrderID and ProductID are used to look up NodeDetails records
+// For node setups, OrderID='Setup' and ProductID=<Name of setup>
+NUMERIC GetDetailsForOrder(OrderID,ProductID)
+{
+	// verify the user really wants to do it
+	count = NodeDetailList(ChildCount);
+if (0)
+{
+	if (<count> < 1)
+	{
+		if ( MessageBox( Translate(CompJobDetailsMsgs,ReplacingDetailsMsg),YESNO ) != YES )
+		{
+			return TRUE;
+		}
+	}
+}
+
+	if (!GetNodeDetails( ~<OrderID>~,~<ProductID>~))
+	{	return FALSE;	}
+
+	GenerateNodeDetailsListBox();
+
+	return TRUE;
+}
+
+
+// OrderID and ProductID are used to look up NodeDetails records
+// For node setups, OrderID='Setup' and ProductID=<Name of setup>
+
+NUMERIC GetNodeDetails(theOrderId,theProductId)
+{
+	if ( !Ado( dBase,Connect) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~));
+
+	}
+
+	// Get the node details for this order or "Setup"
+	theQuery = ~Select * from NodeDetails Where OrderID = '<theOrderId>' And ProductID = '<theProductId>'~;
+	if ( !PGenConList( List,Connection,dbase,Cursor,Forward,QUERY,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	// Get the valid node names for this composite to check that the name exists for the Product Collection being used
+	theQuery = ~Select * from CompositeNodes where ProductID = '<$con.dlgCompData[Collection]>'~;
+	if ( !PGenConList( NameList,Connection,dbase,Cursor,Forward,QUERY,~<theQuery>~ ) )
+	{
+		NameList( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+	NameCount = NameList(NumEntries);
+
+	count = List(NumEntries);
+	if (<count> > 0)
+	{
+		ChildCount = NodeDetailList(ChildCount);
+		if (<ChildCount> > 0)
+		{
+			NodeDetailList( RemoveChildren );
+		}
+
+		Index = 0;
+		while (List( GetNext,theRecord ))
+		{
+			NameList(Filter, ~NodeName = '<$pcon.theRecord[NodeName]>'~);
+			NameCount = NameList(NumEntries);
+
+			if (<NameCount> > 0)
+			{
+				GenCon(NodeRecord<Index>,NewFrom,DDNodeDetailsDlg);
+				NodeRecord<Index>(SetValues,NodeName,~<$pcon.theRecord[NodeName]>~,Style,~<$pcon.theRecord[NodeStyle]>~);
+				if (~<$con.NodeRecord<Index>[Style]>~ == ~~)
+				{ NodeRecord<Index>(Set,Style,~ ~); }
+				NodeDetailList(InsertBack,NodeRecord<Index>);
+
+				theRecord(GetValue,NodeImage,theImage);
+				theRecord(GetValue,NodeText,theText);
+				SetSpecialMacroExpansion(FALSE);
+ 				NodeRecord<Index>(Set,Image,~<theImage>~); 
+				NodeRecord<Index>(Set,Text,~<theText>~); 
+				SetSpecialMacroExpansion(TRUE);
+				++Index;
+			}
+
+			else
+			{
+				Warning( Translate(CompJobDetailsMsgs,NodeNameNotExist,~<$pcon.theRecord[NodeName]>~) );
+			}
+		}
+	}
+
+    NodeDetailsChanged = FALSE;
+
+	return TRUE;
+}
+
+
+NUMERIC ClearNodeDetailsChange()
+{
+	count = NodeDetailList(ChildCount);
+	if (<count> > 0)
+	{
+//		Do we want to give option to clear or remove those items that don't match
+		Warning( Translate(CompJobDetailsMsgs,ClearNodeDetails,~<count>~) );
+//		{ ; }
+
+		i = <count>;
+		while ( <i> > 0)
+		{
+			--i;
+
+			NodeDetailList(GetAt,<i>,nodeDetailItem);
+			NodeDetailList(Delete,nodeDetailItem );
+		}
+//		NodeDetailList( RemoveChildren );  // Causes Exception in GetNodeDetails
+	}
+
+	if ( !dlgComp(ListBox,DetailsListBox,ResetContent) )
+		{ return Warning( Translate(CompJobMessages, ErrorResettingListBox, ~<OrderItems>~) );}
+
+    NodeDetailsChanged = TRUE;
+
+	return TRUE;
+}
+
+
+NUMERIC DeleteNodeDetails(theOrderId,theProductId)
+{
+	count = NodeDetailList(ChildCount);
+
+	if ( !ADO( dBase,Connect ) ) 
+	{
+		dBase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+		return FALSE;
+	}
+
+	// Delete any existing entries in the table
+	theCmd = ~Delete From NodeDetails where OrderId = '<theOrderId>' and ProductID = '<theProductId>'~;
+	if ( !dBase( CMD,~<theCmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,Translate(DBMessages,CmdFailed,~<theCmd>~,~<theErr>~) );
+		return FALSE;
+	}
+
+//	ClearNodeDetailsChange();
+
+	return TRUE;
+}
+
+
+NUMERIC GetCountCCDetailsNodes(ProductID)
+{
+	CountCC = 0;
+
+	more = NodeDetailList(GetFirst,DetailRecord);
+	while (<more>)
+	{
+		if (~<$con.DetailRecord[NodeName]>~ != Translate(CompJobDetailsMsgs,DefaultNode) )
+		{
+			if (NodeIsCountable(~<ProductID>~,~<$con.DetailRecord[NodeName]>~) )
+			{
+				++CountCC;
+			}
+		}
+		more = NodeDetailList(GetNext,DetailRecord);
+	}
+
+	return <CountCC>;
+}
+
+
+
+VOID SetupNodeDetails()
+{
+	// Create Node List
+	dlgComp( ListBox,DetailsListBox,SetTabStops,<DetailsTabStops>);
+	GenCon(NodeDetailList,NewFrom,DDNodeDetailsDlg);
+	Global(NodeDetailList);
+
+	dlgComp( GetInput );
+//	GenerateNodeDetailsListBox();
+//	GetNodeList();
+//	OnNodeFieldChanged();
+	GetMacroTextList();		
+}
+
+
+
+
+// Globals available
+//    SubjectImgRecord - pGenCon - Contains the SubjectInfo Data and Image Data
+//									for the current countable image
+
+Include: ~UserCompJobMacros.txt~;
+
+STR SI(FieldName)
+{
+	theString = ~~;
+//	SubjectImgRecord(GetValue,<FieldName>,theString);  // doesn't work
+	theString = ~<$pcon.SubjectImgRecord[<FieldName>]>~;
+	return ~<theString>~;
+
+}
+
+
+STR SD(FieldName)
+{
+	theString = ~~;
+	Query = ~Select <FieldName> from ShootDescription<$con.dlgCompData[ShootDescType]> where ID = '<WhichShootDesc>'~;
+	if ( !ADO( dBase,Connect,GetValuesFor,~<Query>~,theString ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning(Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	return ~<theString>~;
+
+}
+
+
+
+//		
+//		dlgComp( CopyToClipboard,~<$con.dlgCompData[MacroText]>~ );
+//		dlgComp( EditText,GeneralImageFld,Paste );
+
+

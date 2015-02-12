@@ -1,0 +1,172 @@
+// Resequence Order Items so featured composites appear with subject packages
+IncludeClass(BaseDialog);
+IncludeClass(BaseThread);
+Class( MyDialog,Extends,BaseDialog);
+Class( MyThread,Extends,BaseThread,
+	Member,fOrderID,Str,~~);
+
+VOID MyDialog::MyDialog()
+{
+	Left = 200;
+	Dictionary = ~DDAnotherDialog~;
+	fProcessingOrderItems = 0;
+	Private(fProcessingOrderItems);
+	Title = ~Merge Featured Composites with Subject Packages~;
+
+}
+
+NUMERIC	MyDialog::OkayToCancel()							
+{
+	if (aThread.Processing())
+	{
+		ReturnOnFailure( MessageBox( ~Are you sure you want to cancel?~,YESNO ) == YES );
+		aThread.Abort();
+	}
+		
+	return 1;
+}
+
+VOID MyDialog::DefineControls()
+{
+	Define: OrderPrompt Using DDWinCtrlDef AsSymbol OrderPrompt Private
+			Fields:	TYPENAME				STATICTEXT
+						GENCONNAME			THIS
+						Position				<hgap> <vGap> 70 <ButtonHeight>
+						Text						~Order ID~;
+
+	Define: OrderField Using DDWinCtrlDef AsSymbol OrderField Private
+			Fields:	TYPENAME				EDITTEXT
+						GENCONNAME			THIS
+						GENCONFIELD			OrderID
+						IACTIONSTEXT			ACTIONS ( Get )
+						DACTIONSTEXT			ACTIONS ( Save )
+						OACTIONSTEXT			ACTIONS ( Save )
+						Position				OrderPrompt(GetRight,Position)+$hGap OrderPrompt(GetTop,Position) 220 <ButtonHeight>
+						Text					~Initial Value~;
+
+	BaseDialog::DefineControls();
+}
+
+
+VOID MyDialog::DefineDictionary()
+{
+		Dictionary: ~<Dictionary>~ 
+			Fields: Name OrderID		type text
+}
+
+VOID MyDialog::SetStatus(Message)
+{
+	StatusBar(0,~<Message>~);
+}
+
+VOID MyDialog::SetOrder(OrderID)
+{
+
+	dlg(SetStrings,OrderID,~<OrderID>~);
+}
+
+
+NUMERIC MyDialog::OnGoButton()
+{
+	dlg( GetInput );
+
+	if ( IsNULL( ~<$con.DlgData[OrderID]>~ ) )
+	{
+		return Warning( ~You must enter an OrderID first~ );
+	}
+	dlg( EnableControls,0,GoButton );
+	fProcessingOrderItems = 1;
+	aThread.Set(fOrderID,~<$con.DlgData[OrderID]>~);
+	aThread.NewOneShot(1);
+	return TRUE;
+}
+
+VOID MyDialog::UpdateControls()
+{
+	fProcessingOrderItems = 0;
+	dlg( EnableControls,1,GoButton );
+}
+
+
+NUMERIC MyThread::HandleThread()
+{
+	FixOrder(~<$con.DlgData[OrderID]>~ );
+	Invoke( ~thisDialog.UpdateControls~ );
+	return TRUE;
+}
+
+NUMERIC MyThread::FixOrder()
+{
+	if ( !ADO( dBase,Connect ) ) 
+	{
+		dBase( GetErrorDescription,theErr );
+		Log(Session,~Connection failed <theErr>~ );
+		return FALSE;
+	}
+	ResequenceOrderItems(dbase,~<fOrderID>~);
+
+
+	return TRUE;
+}
+/*
+// This does not work the desired way.  Please do not use
+NUMERIC MyThread::ResequenceOrderItems( &dBase, OrderID )
+{
+	SequenceQuery = ~Select MAX(Sequence) From OrderItems Where OrderID = '<OrderID>' and Type Not In ('Composite','Subject Packages')~;
+	if ( dbase( GetValuesFor,~<SequenceQuery>~,MaxSequence ) )
+	{ 
+		NextSequence = ~<MaxSequence>~ == ~~ ? ~0~ : ~<MaxSequence>~; 
+	}
+ 
+	
+	Query = ~Select * from OrderItems where OrderID = '<OrderID>' 
+			and Type In ('Composite','Subject Packages') 
+			Order By ImagesOrderID,ImagesSubjectID,Sequence,Subsequence~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Log(Session, ~Unable to query database. Query: <Query>; <theErr>~ );
+		return FALSE;
+	}
+
+	OrderItemsCount = List(ChildCount);
+	
+	SeqCount = <NextSequence> + 1;
+
+	count = 0;
+	while ( List( GetNext, OrderItem ) )
+	{
+		++count;
+		SQLCommand = ~Update OrderItems Set Sequence = <SeqCount>, Subsequence = 0 Where ID = <$pcon.OrderItem[ID]>~;
+		if (!dBase(Cmd, ~<SQLCommand>~))
+		{
+				dBase(GetErrorDescription, theErr);
+				return Warning( ~Unable to update the sequence for moved order items.  <theErr>~ );
+		}
+
+		++SeqCount;
+		Invoke( ~thisDialog.SetStatus~,~Updated <count> of <OrderItemsCount> records~);
+		Breakif(Aborting());
+	}
+
+
+	return TRUE;
+}
+*/
+
+VOID Init(OrderID)
+{
+	if ( !Defined( thisDialog ) )
+	{
+		MyDialog( New,thisDialog );	// Instantiate an object of class MyDialog
+		MyThread( New,aThread );
+		Global(aThread);
+		thisDialog.DefineDialog();
+		Global( thisDialog );
+		thisDialog.SetOrder(~<OrderID>~);
+		return;
+	}
+
+	thisDialog.ReOpen();
+}

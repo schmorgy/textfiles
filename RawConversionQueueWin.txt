@@ -1,0 +1,105 @@
+IncludeClass(BaseHTML);
+IncludeClass(BaseGrid);
+Include: ~RawQGridFuncs.txt~;
+
+Class( RawConvert,Extends,BaseHTML,
+		Member, fOrderID,Str,~~ );
+		
+
+VOID	RawConvert::RawConvert(WantStatic,OrderID)
+{
+	WindowLeft = 0; WindowTop = 50;
+	WindowWidth = 100;
+	WindowHeight = 45;
+	
+	fOrderID = ~<OrderID>~;
+	
+	Static(~<WantStatic>~);
+}
+
+
+VOID	RawConvert::DefineMessages()
+{
+	BaseHtml::DefineMessages();
+	LoadTranslationFile( RawConversion,RawConversion,RawConversion );
+}
+
+
+VOID	RawConvert::WindowDefinition()
+{
+	Fields:	TypeName			SplitterWnd2
+			SplitterRows		~2 25 75~
+			SplitterColumns		~1~
+			HideSplitterBars	1
+}
+
+VOID	RawConvert::DefineViews()
+{ 
+	DefineView();							// HTML stuff at the top
+	RawQGridObj.DefineView();				// The GridView
+	RawQGridObj.Set( ParentWindow,<THIS> );	// Tell the GridView who the Parent Window is
+}
+
+VOID	RawConvert::ViewDefinition()
+{ 
+	Fields:	HTMLCloseBox		<fStatic>
+}
+
+VOID	RawConvert::ViewDefinitionGrid()	{ Fields: HACTIONSTEXT		ACTION EXEC ( <THIS>.HelpRoutineSetup(); ); }
+
+
+NUMERIC RawConvert::DisplayQueueData()
+{
+	WhereClause = IsNull(~<fOrderID>~) ? ~~ : ~Where OrderID = '<fOrderID>'~; 
+	
+	RawQGridObj.Set( DocumentQuery,~Select * From RawQueue <WhereClause> Order By Priority desc,SubmitDate~ );
+	RawQGridObj.RefreshView( ~Data~ );
+	
+	return TRUE;
+}
+
+
+VOID RawConvert::OnCloseDataWindow()
+{
+	if ( RawQGridObj.OnCloseDataView() )
+	{
+		BaseHTML::OnCloseDataWindow();
+	}
+}
+
+VOID	RefreshDoc()							{ RawConvertObj.RefreshListView(); }			// Called from other windows
+NUMERIC RawConvert::RefreshListView()			{ return DisplayQueueData(); }
+NUMERIC RawConvert::ShowStatus(msg)				{ StatusBar(~<msg>~); }
+VOID	RecordHasBeenDeleted(Key)				{ RawQGridObj.DeleteARowByValue(1,2,~<Key>~); }	// Called from the Engine
+VOID	RawConvert::OnLoadComplete()			{ DisplayQueueData(); }
+VOID	RawConvert::SetTitle()					{ SetWindowTitle( TR(RawConversion,Title) ); }
+VOID	RawConvert::OnCloseParentDataWindow()	{ BaseHTML::OnCloseDataWindow(); }
+VOID	RawConvert::HelpRoutineSetup()			{ OpenHelpPage(~/RawConversion/RawConversion.kpl#Queue~,TR(RawConversion,Title)); }
+VOID	RawConvert::DeleteSelected()			{ RawQGridObj.DeleteRecord(); }
+VOID	RawConvert::OnRefreshTable()			{ RawQGridObj.RefreshView( ~Data~ ); }
+VOID	RawConvert::InitWindow()				{ CreateAndOpen( ~<$App.HTTPServer>/RawConversion/RawConversion.kpl~ ); }
+
+VOID	InitDoc( OrderID,WantStatic )
+{
+	if ( !ObjectAlreadyExists( RawConvertObj ) )
+	{
+		RawConvert( New,RawConvertObj,~<WantStatic>~,~<OrderID>~ );
+
+		RawConvertObj( Global );
+
+		if ( !ObjectAlreadyExists( RawQGridObj ) )
+		{
+			RawQGrid( New,RawQGridObj,~<OrderID>~ );
+			RawQGridObj( Global );
+		}
+		
+		RawConvertObj.InitWindow();
+	}
+
+	RawConvertObj.SetTitle();
+}
+
+// ENTRY POINTS FROM OTHER SCRIPTS
+
+VOID	InitStatic( OrderID )	{ InitDoc( ~<OrderID>~,TRUE ); }	// For DP1
+VOID	Init( OrderID )			{ InitDoc(  ~<OrderID>~,FALSE ); }	// For DP2

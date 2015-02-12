@@ -1,0 +1,1745 @@
+Include: ~DBFixOrders~;
+
+VOID ReOpen()
+{
+}
+
+
+// Needed for transition from a version earlier than 4.1.7
+NUMERIC LoadHR500FilmDriveTable()
+{
+	TableName = ~HR500FilmDrive~;
+	Path = ~<CurrentDirectory>\<TableName>~;
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	Count = ErrorCount = 0; 
+	Stopping = FALSE;
+	Running( TRUE );
+
+	while ( CurrentArchiveList( GetNext,Item ) && !<Stopping> )
+	{
+		<++Count>;
+
+		if ( !Defined( TableRecord ) )
+		{
+			if ( !PGenConList( TableRecord,Connect,Cursor,Keyset,QUERY,~Select * From <TableName>~ ) )
+			{
+				ForgetGlobal( CurrentArchiveList );
+				Running( FALSE );
+				TableRecord( GetErrorDescription,0,theErr );
+				return Warning( ~Failed to Query <TableName> to determine it's fields.\n\nNo updates occured.\n\n<theErr>~ );
+			}
+		}
+
+		TableRecord( GenerateInsertsFor,Item,Fields,Values );
+
+		if ( ~<$pcon.Item[ScannerSerialNo]>~ == ~~ )
+		{
+			Field1 = ~<$ContentsOf.Fields>,ScannerSerialNo~;
+			Value1 = ~<$ContentsOf.Values>,0~;
+			Cmd	= STR ( Insert Into <TableName>(<Field1>) Values(<Value1>) );
+		}
+		else
+		{
+			Cmd	= STR ( Insert Into <TableName>(<$ContentsOf.Fields>) Values(<$ContentsOf.Values>) );
+		}
+
+		if ( !dBase( CmdIn,Cmd ) )
+		{
+			++ErrorCount;
+
+			dBase( GetErrorDescription,theErr,GetErrorNumber,ErrNum,GetErrorNative,NativeError );
+
+			Log( Session,~Insert Cmd failed for <TableName> (<ErrNum>, NativeError is <NativeError>): <TheErr>~ );
+			Log( SessionFrom,Cmd );
+				
+			if ( MessageBox( ~Database update failed on record <Count>. (Native Error is <NativeError>):\n\n<theErr>.\n\nDo you want to continue?~,YESNO ) != YES )
+				break;
+		}
+	}
+	return TRUE;
+
+}
+
+NUMERIC ShowTableFields()
+{
+	if ( !ControlView( ListBox,DBTablesListBox,MakeSelectedStringList,SelectedTables ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	if ( SelectedTables( Empty ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	Count = SelectedTables( Num );
+
+	if ( <Count> > 3 )
+	{
+		if ( MessageBox( Translate( ~Are you sure you want to open <Count> windows to view the fields for the selected tables?~ ),YESNO ) != YES )
+		{ 
+			return FALSE;
+		}
+	}
+
+	More = SelectedTables( GetFirstString,TableName );
+
+	while ( <more> )
+	{
+		action = ACTION DOC ( <TableName>Fields Open DBFieldsDoc "Init( ~<TableName>~ );" );
+		PerformActions( action );
+
+		More = SelectedTables( GetNextString,TableName );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateDesiredLocation( Title )
+{
+	FileMsg = Translate( ~Find the correct directory~ );
+	
+	if ( !GetFolder( ~<Title>~,~~,Path,TRUE,~\\~ ) )
+	{
+		return FALSE;
+	}
+
+	//if ( !FileDialog( Title,~<Title>~,DefaultFile,~<FileMsg>~,Path,Path,HideReadOnly,NoValidate,Save ) )
+	//{
+	//	return FALSE;
+	//}
+	//Path = ~<$str.$Path.Path>~;
+	
+	if ( !Files( DirectoryExists,~<Path>~ ) )
+	{
+		return Warning( Translate( ~You must select an existing directory.\n\n<Path> is not an existing directory~ ) );
+	}
+
+	if ( SimilarStr( ~<Path>~,~<$app.ShareDirectory>~,~<$app.Directory>~ ) )
+	{
+		return Warning( Translate( ~<Path> is not a good choice. Choose a directory above <Path>~ ) );
+	}
+
+	CurrentDirectory = ~<Path>~;
+
+	Global( CurrentDirectory );
+
+	return TRUE;
+}
+
+NUMERIC ArchiveSubjectInfoDefinition( Name )
+{
+	FromPath = ~<$App.ShareDirectory>\Scripts\UserTableDefinitions\<Name>.txt~;
+
+	if ( !Files( FileExists,~<FromPath>~ ) )
+	{
+		return TRUE;
+	}
+
+	ToPath = ~<CurrentDirectory>\UserTableDefinitions~;
+
+	Directory( Create,~<ToPath>~ );
+
+	if ( !Files( Copy,~<FromPath>~,~<ToPath>\<Name>.txt~ ) )
+	{
+		return Warning( ~Could not copy <FromPath> to <ToPath>\<Name>.txt.  <$Func.GetLastErrorMsg()>~ );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC ArchiveSelected(Format)
+{
+	if ( !ControlView( ListBox,DBTablesListBox,MakeSelectedStringList,SelectedTables ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	if ( SelectedTables( Empty ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	Count = SelectedTables( Num );
+
+	if ( ~<CurrentDirectory>~ == ~~ )
+	{
+		if ( !LocateArchive(FALSE) )
+		{
+			DataWindow( StatusBar,Text,Translate(~No directory was selected~ ) );
+			return FALSE;
+		}
+	}
+
+	RepairWarning = STR ( It is recommended that you repair your database before archiving to ensure there are no database errors stored in the archive. );
+
+	if ( MessageBox( Translate( ~The directory you have selected to archive to is:\n\n  <CurrentDirectory>\n\n<RepairWarning>\n\nAre you really sure you want to archive data from the <Count> selected tables?~ ),YESNO ) != YES )
+	{ 
+		DataWindow( StatusBar,Text,Translate(~No action was taken~ ) );
+		return FALSE;
+	}
+
+	aThread( New,ArchiveSelectedThread,SelectedTables(Permanent,GetObject),~<Format>~ );
+
+	return TRUE;
+
+}
+
+NUMERIC ArchiveSelectedThread(Selected,Format)
+{
+	Running(TRUE);
+
+	StringList( SelectedTables,Is,<Selected>,Temporary );
+
+	TableCount = 0;
+
+	More = SelectedTables( GetFirstString,TableName );
+
+	while ( <more> && !<Stopping> )
+	{
+		if ( !CreateArchive( ~<TableName>~,~Select * From <TableName>~,~<CurrentDirectory>\<TableName>~,~<Format>~ ) )
+		{
+			Running(FALSE); 
+			return FALSE;
+		}
+
+		++TableCount;
+
+		ArchiveSubjectInfoDefinition( ~<TableName>~ );
+		More = SelectedTables( GetNextString,TableName );
+	}
+
+	UserStoppedArchiving = <Stopping>;
+
+	// Write out a file that indicates the product and database version that the files were archived from.
+
+	VerFileName = ~<CurrentDirectory>\ArchiveVersion.txt~;
+	Files( Delete, ~<VerFileName>~ );
+
+	if ( File( VerFile,OPEN,~<VerFileName>~,Create,Write ) )
+	{
+		Version = ~0~;
+		Version = ~<$[Symbols].Version[Value]>~;
+		GetTokens( ~<Version>~,~ ~,Junk,Version );
+		VerFile( WriteLine,~ProductVersion=<Version>;~ );
+
+		DatabaseVersion = ~0~;
+		if ( ado( dBase,CONNECT ) )
+		{ 
+			dBase( GetValuesFor,~Select Version From DatabaseInfo~,DatabaseVersion );
+		}
+		VerFile( WriteLine,~DatabaseVersion=<DatabaseVersion>;~ );
+	}
+
+	Invoke( UserInfo,Translate( ~<TableCount> tables were archived~ ) );
+
+	Running(FALSE);
+
+	if ( !<UserStoppedArchiving> )
+	{
+		Action = STR ( CreatePopulateDB "ArchivingComplete();" );
+		PerformDocActions( Action );
+
+		Action = STR ( KPDAWCreatePopulateDB "ArchivingComplete();" );
+		PerformDocActions( Action );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ViewSelected()
+{
+	if ( !ControlView( ListBox,DBTablesListBox,MakeSelectedStringList,SelectedTables ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	if ( SelectedTables( Empty ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	if ( ~<CurrentDirectory>~ == ~~ )
+	{
+		if ( !LocateArchive(FALSE) )
+		{
+			DataWindow( StatusBar,Text,Translate(~No directory was selected~ ) );
+			return FALSE;
+		}
+	}
+
+	Count = SelectedTables( Num );
+
+	if ( <Count> > 1 )
+	{
+		return Warning( ~Select just one table~ );
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	TableCount = 0;
+
+	if ( !SelectedTables( GetFirstString,TableName ) )
+	{
+		return FALSE;
+	}
+
+	GenCon( ListMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+	FileVersionCount = 0;
+
+	FilePath = ~<CurrentDirectory>\<TableName>~;
+
+	while ( Files( FileExists,~<FilePath>~ ) )
+	{			 
+		GenCon( MenuAction<FileVersionCount>,New,DDMenuItemDef,AddTo,ListMenu,SetValues,
+				Text,		~<$str.$FilePath.FileName>~,
+				IDText,		~ID~ );
+
+		ActionsText = ACTION Exec ( OpenATableFile(~<FilePath>~); );
+
+		MenuAction<FileVersionCount>( SetValuesFrom,ActionsText,ActionsText );
+
+		FilePath = ~<CurrentDirectory>\<TableName>.<++FileVersionCount>~;
+	}
+
+	if ( !<FileVersionCount> )
+	{
+		return Warning( ~There are no files for this table~ );
+	}
+
+	return ControlView( DisplayMenu,ListMenu );
+}
+
+
+NUMERIC OpenATableFile(Path)
+{
+	Action = ACTION DOC ( Test Open EditAnyRecSetDoc "Init( ~<Path>~,~<Path>~,~~);" );
+	return PerformActions( Action );
+}
+
+
+
+NUMERIC RemoveRecordsFromSelected()
+{
+	if ( !ControlView( ListBox,DBTablesListBox,MakeSelectedStringList,SelectedTables ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	if ( SelectedTables( Empty ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	Count = SelectedTables( Num );
+
+	Msg = Translate( ~This will delete all of the data in the selected tables.\n\n~ );
+	Msg = ~<Msg>~ + Translate( ~DO NOT PERFORM THIS OPERATION UNLESS YOU HAVE AN UP TO\n~ );
+	Msg = ~<Msg>~ + Translate( ~DATE ARCHIVE OF YOUR DATA THAT YOU CAN LOAD FROM!!!!!\n\n~ );
+	Msg = ~<Msg>~ + Translate( ~Are you sure you want to delete all data in the <Count> selected tables?~ );
+	if ( MessageBox( ~<Msg>~,YESNO ) != YES )
+	{ 
+		return FALSE;
+	}
+
+	if ( MessageBox( Translate( ~Are you really sure you want to delete all data in the <Count> selected tables?~ ),YESNO ) != YES )
+	{ 
+		return FALSE;
+	}
+
+	TableCount = 0;
+
+	aThread( New,RemoveRecordsThread,SelectedTables(Permanent,GetObject) );
+
+	return TRUE;
+}
+
+
+VOID UserWarning( msg )	{ Warning( ~<Msg>~ );	}
+
+
+VOID UserStatus( msg )	{ DataWindow( StatusBar,Text,ContentsOf(msg) ); }
+
+
+VOID UserInfo( msg )
+{
+	DataWindow( StatusBar,Text,~<msg>~ );
+	Log( Session,~<msg>~ );
+}
+
+
+NUMERIC RemoveRecordsThread( Selected )
+{
+	Running(TRUE);
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		Running(FALSE);
+		dBase( GetErrorDescription,theErr );
+		return Invoke( UserWarning,~Could not connect to the database. <theErr>~ );
+	}
+
+	StringList( SelectedTables,Is,<Selected>,Temporary );
+
+	Total = SelectedTables( Num ); TableCount = 0;  Start = Ticks();
+
+	more = SelectedTables( GetLastString,TableName );
+
+	While ( <more> && !<Stopping> )
+	{
+		Invoke( UserInfo,Translate( ~<TableCount> of <Total>) Deleting all records in table <TableName>~ ) );
+
+		DeleteFromTable( dBase,~<TableName>~ );
+		
+		++TableCount;
+
+		more = SelectedTables( GetPrevString,TableName );
+	}
+
+	Duration = (Ticks() - <Start>) / 1000 / 60;
+
+	Invoke( UserInfo,Translate( ~Deleted All Records from <TableCount> of <Total> Tables in <Duration> minutes~ ) );
+
+	Running(FALSE);
+
+	return TRUE;
+}
+
+
+NUMERIC DeleteFromTable( &Connection,TableName )	// RUNS ON A THREAD
+{
+	Connection( IgnoreErrors,CMD,~Truncate Table <TableName>~,ReportErrors );	// Take a shot doing it fast
+
+	Cmd = ~Delete from <TableName>~;
+
+	if ( !Connection( CMD,~<Cmd>~ ) )
+	{
+		Connection( GetErrorDescription,theErr );	
+		return Invoke( UserWarning,~Database update failed: <Cmd>.  <theErr>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC DeleteSecondaryIndexes( &Connection,TableName )	// NOT CURRENTLY USED
+{
+	if ( Defined( IndexList ) )
+	{
+		if ( IndexList( Filter,~TABLE_NAME = '<TableName>' AND PRIMARY_KEY = 0~ ) )
+		{
+			while ( IndexList( GetNext,Index ) )
+			{
+				Cmd = ~Drop Index <$pcon.Index[INDEX_NAME]>~;
+
+				//Debug( 1 );
+
+				if ( !Connection( CMD,~<Cmd>~ ) )
+				{
+					Connection( GetErrorDescription,theErr );	
+					Warning( ~Database update failed: <Cmd>.  <theErr>~ );
+				}
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC LocateArchive( ReportResult )
+{
+	if ( !UpdateDesiredLocation( ~Find the directory for the archived tables~ ) )
+	{ 
+		DataWindow( StatusBar,Text,Translate(~No directory was selected~ ) );
+		return FALSE;
+	}
+
+	if ( <ReportResult> )
+	{
+		if ( MessageBox( Translate( ~The directory of archived data you have selected is \n\n   <CurrentDirectory>\n\n Is that the correct directory?~ ),YESNO ) != YES )
+		{ 
+			CurrentDirectory = ~~;
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC LoadSelected()
+{
+	if ( !ControlView( ListBox,DBTablesListBox,MakeSelectedStringList,SelectedTables ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	if ( SelectedTables( Empty ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	Count = SelectedTables( Num );
+
+	if ( ~<CurrentDirectory>~ == ~~ )
+	{
+		if ( !LocateArchive(FALSE) )
+		{
+			DataWindow( StatusBar,Text,Translate(~No directory was selected~ ) );
+			return FALSE;
+		}
+	}
+
+	if ( MessageBox( Translate( ~The directory you have selected to load from is:\n\n    <CurrentDirectory>\n\n Are you really sure you want to load data from the <Count> selected files into your database?~ ),YESNO ) != YES )
+	{ 
+		DataWindow( StatusBar,Text,Translate(~No action was taken~ ) );
+		return FALSE;
+	}
+
+	aThread( New,LoadSelectedThread,SelectedTables(Permanent,GetObject) );
+
+	return TRUE;
+}
+
+NUMERIC LoadArchiveFancy( Path,Table )	// RUNS A THREAD
+{
+	FileVersionCount = 0;
+
+	OrgPath = ~<Path>~;
+
+	while ( Files( FileExists,~<Path>~ )  )
+	{
+		if ( !PGenConList( CurrentArchiveList,Cursor,Forward,File,~<Path>~ ) )
+		{
+			CurrentArchiveList( GetErrorDescription,0,theErr );		
+			return Invoke( UserWarning,~Failed to load data from <Path>.  <theErr>~ ); 
+		}
+
+		Total = CurrentArchiveList( NumEntries );
+
+		if ( !<Total> )
+		{
+			return TRUE;
+		}
+
+		Global( CurrentArchiveList );
+
+		if ( ~<Table>~ == ~HR500FilmDrive~ )
+		{
+			LoadHR500FilmDriveTable();
+		}
+		else
+		{
+			if ( !Ado( dBase,Connect ) )
+			{
+				ForgetGlobal( CurrentArchiveList );
+				dBase( GetErrorDescription,theErr );
+				return Invoke( UserWarning,~Could not connect to the database. <theErr>~ );
+			}
+
+			Count = ErrorCount = 0;		Stopping = FALSE;
+
+			while ( CurrentArchiveList( GetNext,Item ) && !<Stopping> )
+			{
+				//Invoke( UserInfo,Translate( ~Loading <Table> with <Total> record(s) from <$str.$Path.FileName>~ ) );
+				
+				if ( !CurrentArchiveList( UpdateTableFromList,dBase,~<Table>~,AddCount ) ||  (<AddCount> != <Total>) )
+				{			
+					MessageDialog(Title,~Archiving~,xPosition,-1,yPosition,-1,
+										Message1,~Update of table <Table> from <Path> had errors~,
+										Message2,~Added <AddCount> of <Total> records.  Check the SessionLog for details.~);
+				}
+
+				invoke( UserInfo,Translate( ~Added <AddCount> of <Total> records to <Table> from <$str.$Path.FileName>~ ) );
+			}
+		}
+
+		ForgetGlobal( CurrentArchiveList );
+
+		path = ~<OrgPath>.<++FileVersionCount>~;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC LoadSelectedThread( Selected )
+{
+	Running(TRUE);
+
+	StringList( SelectedTables,Is,<Selected>,Temporary );
+
+	Macros = Tasks = FALSE;
+
+	CheckOrderData = FALSE;
+
+	Total = SelectedTables( Num ); TableCount = 0;  Start = Ticks();
+
+	more = SelectedTables( GetFirstString,TableName );
+
+	While ( <more> && !<Stopping> )
+	{
+		if ( Files( FileExists,~<CurrentDirectory>\<TableName>~ ) )
+		{
+			//Invoke( UserInfo,Translate( ~Loading <TableName> from <CurrentDirectory>\<TableName>~ ) );
+
+			if ( !LoadArchiveFancy( ~<CurrentDirectory>\<TableName>~,~<TableName>~ ) )
+			{ 
+				Running(FALSE);
+				return Invoke( UserWarning,Translate( ~Errors occured loading Table <TableName> from <TableName>~ ) );
+			}
+
+			if ( SimilarStr( ~<TableName>~,~Orders~ ) )
+			{
+				if ( File( VerFile, OPEN,~<CurrentDirectory>\ArchiveVersion.txt~,READ ) )
+				{ 
+					if ( VerFile( ReadTextFile,buffer ) )
+					{
+						DatabaseVersion = ~~;
+						DatabaseVersion = String( GetParameter,buffer,~DatabaseVersion=~,~;~ );
+					}
+				}
+				else
+				{
+					// This case assumes we are loading an archive from a previous version of DP2
+					// that did not write out an ArchiveVersion.txt file - thus is earlier, so fix
+					CheckOrderData = TRUE;
+				}
+			}
+
+			if ( SimilarStr( ~<TableName>~,~Macros~ ) )		{ ++Macros; }
+
+			if ( SimilarStr( ~<TableName>~,~Tasks~ ) )		{ ++Tasks; }
+
+			++TableCount;
+		}
+		else
+		{
+			Invoke( UserInfo,Translate( ~<TableName> was skipped because there is no file at <TableName>~ ) );
+		}
+
+		more = SelectedTables( GetNextString,TableName );
+	}
+
+	if ( <CheckOrderData> )
+	{
+		if ( FixOrdersAndSubjectInfo() )
+		{
+			Invoke( UserWarning,Translate( ~Changes may have been made to the Orders Data and/or SubjectInfo Data.\nSee Session Log for details.~ ) );
+		}
+	}
+
+	Duration = (Ticks() - <Start>) / 1000 / 60;
+
+	Invoke( UserInfo,Translate( ~Loaded Database from <TableCount> Files in <Duration> minutes~ ) );
+
+	Running(FALSE);
+
+	Invoke( UserWarning,Translate( ~The load has completed. Now would be a good time to compact your database to recover any unused space~ ) );
+
+	if ( <DisplayTasksMacrosMsg> )
+	{
+		if ( <Macros> || <Tasks> )
+		{
+			Invoke( UserWarning,Translate( ~<TasksMacrosMsg>~ ) );
+		}
+	}
+
+	return TRUE;
+}
+
+TasksMacrosMsg = 
+~You have loaded the Tasks and/or the Macros table.
+
+If you are upgrading from a previous version of <$App.Name>, you have probably overwritten the
+tasks and macros for <$sym.Version> of <$App.Name> with the previous version's tasks and macros.  
+
+To reload the  tasks and macros for <$sym.Version> of <$App.Name>, you may select 
+'Load Tasks and Macros' from the Edit menu.~;
+
+
+Thread( aThread);
+
+LoadFastMsg = ~This is a special means of loading data into the <AppName> database that is faster than
+the 'Load Selected Tables From Archive' function above.   This technique is faster because it
+requires you to start with empty tables.  If you have a lot of data and you are reloading from
+a saved archive that has all your data then this is the fastest way to get your data back into
+the database.\n\n
+
+For this technique to work, you should delete all data from the tables first.
+
+Are sure you wish to proceed?~;
+
+NUMERIC LoadSelectedFast()
+{
+	if ( MessageBox( ~<LoadFastMsg>~,YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	if ( MessageBox( ~Have you deleted all data from the selected tables?~,YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	if ( !ControlView( ListBox,DBTablesListBox,MakeSelectedStringList,SelectedTables ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	if ( SelectedTables( Empty ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	Count = SelectedTables( Num );
+
+	if ( ~<CurrentDirectory>~ == ~~ )
+	{
+		if ( !LocateArchive(FALSE) )
+		{
+			DataWindow( StatusBar,Text,Translate(~No directory was selected~ ) );
+			return FALSE;
+		}
+	}
+
+	if ( MessageBox( Translate( ~The directory you have selected to load from is:\n\n    <CurrentDirectory>\n\n Are you really sure you want to load data from the <Count> selected files into your database?~ ),YESNO ) != YES )
+	{ 
+		DataWindow( StatusBar,Text,Translate(~No action was taken~ ) );
+		return FALSE;
+	}
+
+
+	Start = Ticks();
+
+	TableCount = 0;
+
+	aThread( New,BulkLoadThread,SelectedTables(Permanent,GetObject) );
+
+	return TRUE;
+}
+
+
+NUMERIC BulkLoadThread( Selected )
+{
+	Running(TRUE);
+
+	StringList( SelectedTables,Is,<Selected>,Temporary );
+
+	Macros = Tasks = FALSE;
+
+	CheckOrderData = FALSE;
+
+	Total = SelectedTables( Num ); TableCount = 0;  Start = Ticks();
+
+	more = SelectedTables( GetFirstString,TableName );
+
+	While ( <more> && !<Stopping> )
+	{
+		if ( Files( FileExists,~<CurrentDirectory>\<TableName>~ ) )
+		{
+			if ( !LoadArchiveFast( ~<CurrentDirectory>\<TableName>~,~<TableName>~ ) )
+			{ 
+				Running(FALSE);
+				return Invoke( UserWarning,Translate( ~Errors occured loading Table <TableName> from <TableName>~ ) );
+			}
+
+			if ( SimilarStr( ~<TableName>~,~Orders~ ) )
+			{
+				if ( File( VerFile, OPEN,~<CurrentDirectory>\ArchiveVersion.txt~,READ ) )
+				{ 
+					if ( VerFile( ReadTextFile,buffer ) )
+					{
+						DatabaseVersion = ~~;
+						DatabaseVersion = String( GetParameter,buffer,~DatabaseVersion=~,~;~ );
+					}
+				}
+				else
+				{
+					// This case assumes we are loading an archive from a previous version of DP2
+					// that did not write out an ArchiveVersion.txt file - thus is earlier, so fix
+					CheckOrderData = TRUE;
+				}
+			}
+
+			if ( SimilarStr( ~<TableName>~,~Macros~ ) )		{ ++Macros; }
+
+			if ( SimilarStr( ~<TableName>~,~Tasks~ ) )		{ ++Tasks; }
+		
+			++TableCount;
+		}
+		else
+		{
+			Invoke( UserInfo,Translate( ~<TableName> was skipped because there is no file at <TableName>~ ) );
+		}
+
+		more = SelectedTables( GetNextString,TableName );
+	}
+
+	if ( <CheckOrderData> )
+	{
+		if ( FixOrdersAndSubjectInfo() )
+		{
+			Invoke( UserWarning,Translate( ~Changes may have been made to the Orders Data and/or SubjectInfo Data.\nSee Session Log for details.~ ) );
+		}
+	}
+
+	Running(FALSE);
+
+	Duration = (Ticks() - <Start>) / 1000 / 60;
+
+	Invoke( UserInfo,Translate( ~Loaded Database from <TableCount> Files in <Duration> minutes~ ) );
+
+	if ( <DisplayTasksMacrosMsg> )
+	{
+		Invoke( UserWarning,Translate( ~The load has completed. Now would be a good time to compact your database to recover any unused space.~ ) );
+	
+		if ( <Macros> || <Tasks> )
+		{
+			Invoke( UserWarning,Translate( ~<TasksMacrosMsg>~ ) );
+		}
+	}
+	else
+	{
+		Invoke( UserWarning,Translate( ~The load has completed.~ ) );
+	}
+
+	return TRUE;
+}
+
+NUMERIC LoadArchiveFast( Path,Table )	// RUNS ON A THREAD
+{
+	OrgPath = ~<Path>~;
+
+	TotalInsertCount = FileVersionCount = 0;
+
+	while ( Files( FileExists,~<Path>~ ) && !<Stopping> )
+	{
+		Invoke( UserStatus,~Reading <$str.$Path.FileName>~ );
+
+		if ( !PGenConList( CurrentArchiveList,Cursor,Keyset,File,~<Path>~ ) )
+		{
+			CurrentArchiveList( GetErrorDescription,0,theErr );		
+			Invoke( UserWarning,~Failed to load data from <Path>.  <theErr>~ ); 
+			return FALSE;
+		}
+
+		Total = CurrentArchiveList( NumEntries );
+
+		if ( !<Total> )
+		{
+			Invoke( UserInfo,Translate( ~0 records in <$str.$Path.FileName>~ ) );
+		}
+
+		Global( CurrentArchiveList );
+
+		Invoke( UserStatus,Translate( ~Bulk Inserting Into <Table> with <Total> record(s) from <$str.$Path.FileName>~ ) );
+		
+		if ( ~<Table>~ == ~HR500FilmDrive~ )
+		{
+			LoadHR500FilmDriveTable();
+		}
+		else
+		{
+			if ( !CurrentArchiveList( AddToTableFromList,~<Table>~,AddCount ) || (<AddCount> != <Total>) )
+			{
+				MessageDialog(Title,~Archiving~,
+									Message1,~Update of table <Table> from <Path> had errors~,
+									Message2,~Added <AddCount> of <Total> records.  Check the SessionLog for details.~);
+			}
+
+			invoke( UserInfo,Translate( ~Added <AddCount> of <Total> records to <Table> from <$str.$Path.FileName>~ ) );
+
+			TotalInsertCount += <AddCount>;
+		}
+
+		ForgetGlobal( CurrentArchiveList );
+
+		Path = ~<OrgPath>.<++FileVersionCount>~;
+	}
+
+	//Invoke( UserInfo,Translate( ~Inserted  <TotalInsertCount> records into <Table>~ ) );
+
+	return TRUE;
+}
+
+
+LoadPartialMessage = ~This function is used to load partial data from an archive.
+It only works with one table at a time and it expects you
+to supply a start record and an end record.
+
+The normal use for this function is recover from problems
+with an archive file that require skipping certain records
+or retrying a range of records.
+
+Are you sure you would like to continue? ~;
+
+NUMERIC LoadArchivePartial()
+{
+	if ( !ControlView( ListBox,DBTablesListBox,MakeSelectedStringList,SelectedTables ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	if ( SelectedTables( Empty ) )
+	{
+		return Warning( Translate( ~No tables are selected.~ ) );
+	}
+
+	Count = SelectedTables( Num );
+
+	if ( <Count> != 1 )
+	{
+		return Warning( ~This function only works on one table.  Select a single table and try again~ );
+	}
+
+	if ( MessageBox( ~<LoadPartialMessage>~,YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	ControlView( GetControlValue,StartField,StartRecord );
+	ControlView( GetControlValue,EndField,EndRecord );
+
+	if ( IsNull(~<StartRecord>~) )
+	{
+		return Warning( ~You must supply a start record.~ );
+	}
+
+	if ( IsNull(~<EndRecord>~) )
+	{
+		return Warning( ~You must supply an end record.~ );
+	}
+
+	StartRecord = MakeNumber( ~<StartRecord>~ );
+	EndRecord = MakeNumber( ~<EndRecord>~ );
+
+	if ( <EndRecord> < <StartRecord> )
+	{
+		return Warning( ~The End Record must be greater than or equal to the Start Record~ );
+	}
+
+	if ( ~<CurrentDirectory>~ == ~~ )
+	{
+		if ( !LocateArchive(FALSE) )
+		{
+			DataWindow( StatusBar,Text,Translate(~No directory was selected~ ) );
+			return FALSE;
+		}
+	}
+
+	if (!SelectedTables( GetFirstString,TableName ))
+	{
+		return FALSE;
+	}
+
+	if ( MessageBox( Translate( ~The file you have selected is:\n\n<CurrentDirectory>\<TableName>\n\nAre you really sure you want to load data from the <TableName> archive file into your database?~ ),YESNO ) != YES )
+	{ 
+		DataWindow( StatusBar,Text,Translate(~No action was taken~ ) );
+		return FALSE;
+	}
+
+	Start = Ticks();
+
+	TableCount = 0;
+
+	Path = ~<CurrentDirectory>\<TableName>~;
+
+	if ( !Files( FileExists,~<Path>~ ) )
+	{
+		return Warning( ~<Path> does not exist~ );
+	}
+
+	if ( !PGenConList( CurrentArchiveList,Cursor,Forward,File,~<Path>~ ) )
+	{
+		CurrentArchiveList( GetErrorDescription,0,theErr );		
+		return Warning( ~Failed to load data from <Path>.  <theErr>~ ); 
+	}
+
+	Total = CurrentArchiveList( NumEntries );
+
+	if ( !<Total> )
+	{
+		return TRUE;
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	RecordsToSkip = <StartRecord> - 1;
+
+	DataWindow( StatusBar,Text,Translate( ~Skipping <RecordsToSkip> Record(s) ...~ ) );
+
+	Processed = Count = ErrorCount = 0;
+
+	Running( TRUE );
+
+	Global( CurrentArchiveList );
+
+	while ( CurrentArchiveList( GetNext,Item ) && !<Stopping> )
+	{
+		if ( <++Count> < <StartRecord> )
+			continue;
+
+		if ( <Count> > <EndRecord> )
+			break;
+
+		if ( !Defined( TableRecord ) )
+		{
+			DataWindow( StatusBar,Text,Translate( ~Determining fields in <TableName>~ ) );
+
+			if ( !PGenConList( TableRecord,Connect,Cursor,Keyset,QUERY,~Select * From <TableName>~ ) )
+			{
+				ForgetGlobal( CurrentArchiveList );
+				Running( FALSE );
+				TableRecord( GetErrorDescription,0,theErr );
+				return Warning( ~Failed to Query <TableName> to determine it's fields.\n\nNo updates occured.\n\n<theErr>~ );
+			}
+		}
+
+		TableRecord( GenerateInsertsFor,Item,Fields,Values );
+
+		// Needed for transition from a version earlier than 4.1.7
+		if ( ~<TableName>~ == ~HR500FilmDrive~ && ~<$pcon.Item[ScannerSerialNo]>~ == ~~ )
+		{
+			Field1 = ~<$ContentsOf.Fields>,ScannerSerialNo~;
+			Value1 = ~<$ContentsOf.Values>,0~;
+			Cmd	= STR ( Insert Into <TableName>(<Field1>) Values(<Value1>) );
+		}
+		else
+		{
+			Cmd	= STR ( Insert Into <TableName>(<$ContentsOf.Fields>) Values(<$ContentsOf.Values>) );
+		}
+
+		DataWindow( StatusBar,Text,Translate( ~Loading Record <Count> of <total> into Table <TableName>~ ) );
+
+		if ( !dBase( CmdIn,Cmd ) )
+		{
+			++ErrorCount;
+
+			dBase( GetErrorDescription,theErr,GetErrorNumber,ErrNum,GetErrorNative,NativeError );
+
+			Log( Session,~Insert Cmd failed for <TableName> (<ErrNum>, NativeError is <NativeError>): <TheErr>~ );
+			Log( SessionFrom,Cmd );
+				
+			if ( MessageBox( ~Database update failed on record <Count>. (Native Error is <NativeError>):\n\n<theErr>.\n\nDo you want to continue?~,YESNO ) != YES )
+				break;
+		}
+
+		++Processed;
+	}
+
+	ForgetGlobal( CurrentArchiveList );
+
+	Warning( ~Processed <Processed> Record(s) From <StartRecord> to <EndRecord>. Error count was <ErrorCount>.  Archive contains <Total> record(s).~ );
+
+	Running( FALSE );
+
+	return TRUE;
+}
+
+
+
+
+
+NUMERIC DeleteFilesLike( Path,TableName )
+{
+	if ( !Directory( DeleteRecursive,~<Path>~,~<TableName>.*~ ) )
+	{
+		return Warning( ~Failed to delete all files in <CurrentDirectory>~ );
+	}
+
+	return TRUE;
+
+	Files( Delete,~<Path>~ );
+
+	i = 0;
+
+	while ( <++i> )
+	{
+		if ( !Files( FileExists,~<Path>.<i>~ ) )
+			break;
+
+		Files( Delete,~<Path>.<i>~ );
+	}
+
+	return TRUE;
+}
+
+
+STR GetPrimaryKeyForTable( &dBase,Table )
+{
+	if ( !dBase( MakePrimaryKeyFrom,~<Table>~,NULL,Key ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( ~Your database will not respond to a request for the primary key of <Table>.  <theErr>~ );
+		return ~~;
+	}
+
+	return ~<Key>~;
+}
+
+
+
+NUMERIC TableExists( &connection,TableName )
+{
+
+}
+
+
+NUMERIC CreateArchive( TableName,Query,Path,Format )
+{
+	ADO( dbase,Connect );
+
+	if ( !PGenConList( SchemaList,Connection,dbase,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query Schema of type Tables.  <theErr>~ ) );
+	}
+
+	SchemaList( Filter,~TABLE_NAME = '<TableName>'~ );
+
+	if ( !SchemaList( GetFirst,Table ) )
+	{
+		Invoke( UserInfo,~Skipping <TableName> because it does not exist in the database~ ); 
+		return TRUE;
+	}
+
+	DesiredChunkSize = ChunkSize = 5000;
+
+	if ( Files( DirectoryExists,~<Path>~ ) )
+	{
+		return Warning( Translate( ~Sorry, <Path> is a already a directory.  Can't create an archive file called <Path>~ ) );
+	}
+
+	DirPath = MakePath( DirectoryOf,~<Path>~ );
+
+	if ( !Directory( Create,~<DirPath>~ ) )
+	{
+		return Warning( ~Could not create directory for <DirPath>.  <$Func.GetLastErrorMsg()>~ );
+	}
+
+	if ( !DeleteFilesLike( ~<DirPath>~,~<TableName>~ ) )
+	{
+		return FALSE;
+	}
+
+
+	if ( SimilarStr(~<TableName>~,~OrderItems~) )
+	{
+		FirstPrimaryField = ~OrderID~;	// Until we can fix the primary key definition in the database
+	}
+	else
+	{
+		PrimaryKey = GetPrimaryKeyForTable( dbase,~<TableName>~ );
+		NumPrimaryFields = GetTokens( ~<PrimaryKey>~,~ ~,FirstPrimaryField,SecondPrimaryField,ThirdPrimaryField,FourthPrimaryField );
+	}
+
+	OrgPath = ~<Path>~;
+	count = 0;
+
+	Query = ~Select count(*) From <TableName>~;
+
+	if ( !PGenConList( CountList,Connection,dBase,Cursor,Static,Lock,ReadOnly,QUERY,~<Query>~ ) )
+	{
+		return ReportRecordsetError( CountList );
+	}
+
+	CountList( GetFirst,Record );
+
+	TotalRecordCount = ~<$pcon.Record[#0]>~;
+
+	ForgetLocal( CountList );
+
+	if ( <TotalRecordCount> == 0 )
+	{
+		Invoke( UserInfo,~Skipping <TableName> because it is empty~ );
+		return TRUE;
+	}
+
+	if ( <TotalRecordCount> <= <ChunkSize> )
+	{
+		if ( !PGenConList( List,Connection,dBase,Cursor,Keyset,Lock,Optimistic,QUERY,~Select * from <TableName>~ ) )
+		{
+			return ReportRecordsetError( List );
+		}
+	
+		Invoke( UserInfo,Translate(~Archiving <TotalRecordCount> Records From <TableName> to <$str.$Path.FileName>~ ) );
+
+		if ( !List( Save,~<Path>~,~<Format>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( ~Save to file failed: <Path>. <theErr>~ );
+		}
+
+		return TRUE;
+	}
+
+	Query = ~Select Distinct <FirstPrimaryField> From <TableName> Order By <FirstPrimaryField>~;
+
+	Invoke( UserInfo,~Analyzing <TableName>~ );
+
+	if ( !dbase( GetFieldQuoteChar,~<TableName>~,~<FirstPrimaryField>~,QC ) )
+	{
+		return Warning( ~Could not get the quote character for Table <TableName>, Field <FirstPrimaryField>.  <$Func.GetLastErrorMsg()>~ );
+	}
+
+	if ( !PGenConList( KeyList,Connection,dBase,Cursor,Static,Lock,ReadOnly,QUERY,~<Query>~ ) )
+	{
+		return ReportRecordsetError( KeyList );
+	}
+
+	TableCount = KeyList( Count );
+
+	if ( <TableCount> == 0 )
+	{
+		return Warning( ~Table <TableName> has no records for FirstPrimaryField <FirstPrimaryField>~ );
+	}
+
+	if ( <TotalRecordCount> < <ChunkSize> )
+	{
+		ChunkSize = <TotalRecordCount>;
+	}
+
+	AveRecordsPerKey = <TotalRecordCount> / <TableCount>;
+
+	while ( TRUE )
+	{
+		RecordsPerChunk = <Chunksize> * <AveRecordsPerKey>;
+
+		if ( <RecordsPerChunk> <= <DesiredChunkSize> )
+			break;
+
+		ChunkSize = floor(<ChunkSize> / 2);
+
+		if ( <ChunkSize> < 1 )
+		{
+			ChunkSize = 1;
+			break;
+		}
+	}
+
+	Position = Recordcount = RecordPosition = 0;
+
+	Log( Session,~<TableName>: Selection Field=<FirstPrimaryField>, Size=<ChunkSize>.  Selection Entries=<TableCount>. Total Records=<TotalRecordCount>.  Field Quote is <QC>~ );
+
+	while ( (<Recordcount> < <TotalRecordCount>)  && !<Stopping> )
+	{
+		//debug( keystate( control ) );
+
+		if ( !KeyList( SetPosition,<Position> ) )
+		{
+			return Warning( ~Failed to set to position <Position> for table <TableName>~ );
+		}
+
+		if ( !KeyList( GetRecord,Record ) )
+		{
+			return Warning( ~Failed to get the record at position <Position> for table <TableName>~ );
+		}
+
+		StartKey = ~<$pcon.Record[<FirstPrimaryField>]>~;
+
+		LastPosition = <Position> + <ChunkSize> - 1;
+
+		if ( <LastPosition> >= <TableCount> )
+		{
+			LastPosition = <Tablecount> - 1;
+		}
+
+		if ( !KeyList( SetPosition,<LastPosition> ) )
+		{
+			return Warning( ~Failed to set to position <Position> for table <TableName>~ );
+		}
+
+		if ( !KeyList( GetRecord,Record ) )
+		{
+			return Warning( ~Failed to get the record at position <Position> for table <TableName>~ );
+		}
+
+		EndKey = ~<$pcon.Record[<FirstPrimaryField>]>~;
+
+		Query = ~Select * From <Tablename> where <FirstPrimaryField> >= <QC><StartKey><QC> AND <FirstPrimaryField> <= <QC><EndKey><QC>~;
+
+		Files( Delete,~<Path>~ );
+
+		if ( Files( FileExists,~<Path>~ ) )
+		{
+			return Warning( Translate( ~Could not delete <Path>.  <$Func.GetLastErrorMsg()>~ ) );
+		}
+
+		if ( !PGenConList( ChunkList,Connect,Cursor,Keyset,Lock,Optimistic,QUERY,~<Query>~ ) )
+		{
+			return ReportRecordsetError( ChunkList );
+		}
+
+		FetchedRecords = ChunkList( Count );
+
+		LastRecordPosition = <RecordPosition> + <FetchedRecords> - 1;
+	
+		Invoke( UserInfo,Translate(~Archiving <RecordPosition>-<LastRecordPosition> (<FetchedRecords> records) of <TotalRecordCount> Records (<StartKey>-<EndKey>) From <TableName> to <$str.$Path.FileName>~ ) );
+
+		if ( !ChunkList( Save,~<Path>~,~<Format>~ ) )
+		{
+			ChunkList( GetErrorDescription,0,theErr );
+			return Warning( ~Save to file failed: <Path>. <theErr>~ );
+		}
+
+		ForgetLocal( ChunkList );
+
+		Path = ~<OrgPath>.<++count>~;
+
+		Position = <LastPosition> + 1;
+
+		RecordCount += <FetchedRecords>;
+		RecordPosition = <RecordPosition> + <FetchedRecords>;
+	}
+
+	return TRUE;
+}
+
+NUMERIC ReportRecordsetError( &List,Msg )
+{
+	List( GetErrorNumber,0,errNum );
+
+	if ( <errNum> == -2147217865 )	// TABLE DOES NOT EXIST
+	{
+		return TRUE;
+	}
+
+	List( GetErrorDescription,0,theErr );
+	List( GetCommandText,theQuery );
+	return Warning( ~<Msg>. Query: <theQuery>. Error: <theErr>~ );
+}
+
+VOID Running( Value )
+{
+	Stopping = FALSE;
+
+	ControlView( EnableViewControls,<Value>,StopButton );
+
+	ControlView( EnableViewControls,!<Value>,SelectAllButton,LocateArchiveButton,ArchiveSelectedButton,
+							ArchiveXMLButton,ViewSelectedButton,RemoveRecordsFromSelectedButton,LoadSelectedButton );
+
+	ControlView( EnableViewControls,!<Value>,LoadSelectedFastButton,LoadPartialButton,StartField,EndField );
+}
+
+
+VOID OnStopButton()
+{
+	if ( Defined( CurrentArchiveList ) )
+	{
+		CurrentArchiveList( SetAbort,TRUE );
+	}
+
+	Stopping = TRUE;
+
+	ControlView( EnableViewControls,FALSE,StopButton );
+
+	DataWindow( StatusBar,Text,~Stopping ...~ );
+}
+
+
+NUMERIC PopulateListOfTables()
+{
+	if ( !GenCon( TableDefinitions,GetFrom,TableDefinitions,~[DATABASE]~ ) )
+		{ Error( ~The Table Definitions are not defined right~ ); }
+
+	ControlView( ListBox,DBTablesListBox,ResetContent );
+
+	while ( TableDefinitions( GetNext,Table ) )
+	{
+		TableName = ~<$con.Table[TableName]>~;
+
+		if ( SimilarStr( ~<TableName>~,~DatabaseInfo~ ) )
+		{
+			continue;
+		}
+
+		ControlView( ListBox,DBTablesListBox,AddString,~<TableName>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OldCreateArchive( TableName,Query,Path,Format )
+{
+	ChunkSize = 10000;
+
+	if ( Files( DirectoryExists,~<Path>~ ) )
+	{
+		return Warning( Translate( ~Sorry, <Path> is a already a directory.  Can't create an archive file called <Path>~ ) );
+	}
+
+	DirPath = MakePath( DirectoryOf,~<Path>~ );
+
+	if ( !Directory( Create,~<DirPath>~ ) )
+	{
+		return Warning( ~Could not create directory for <DirPath>.  <$Func.GetLastErrorMsg()>~ );
+	}
+
+	if ( !DeleteFilesLike( ~<DirPath>~,~<TableName>~ ) )
+	{
+		return FALSE;
+	}
+
+	OrgPath = ~<Path>~;
+	Page = 1;
+	count = 0;
+
+	DataWindow( StatusBar,Text,~Reading <TableName>~ );
+
+	if ( !PGenConList( List,Connect,CursorLocation,Server,SetPageSize,<ChunkSize>,Cursor,Static,Lock,ReadOnly,QUERY,~<Query>~ ) )
+	{
+		return ReportRecordsetError( List );
+	}
+
+	if ( !List( SetAbsolutePage,<Page>,TRUE ) )
+	{
+		//return ReportRecordsetError( List,~Failed to position to page <Page>~ );
+	}
+
+	TableCount = List( Count );
+
+	if ( <TableCount> == 0 )
+	{
+		DataWindow( StatusBar,Text,~Skipping <TableName> because it is empty~ );
+		Log( Session,~Skipping <TableName> because it is empty~ );
+		MessagePump();
+	}
+
+	PageCount = List( PageCount );
+
+	while ( <Page> <= <PageCount> )
+	{
+		RecordStart = (<Page>-1) * <ChunkSize> + 1;
+		RecordEnd = <RecordStart> + <ChunkSize> - 1;
+
+		if ( <RecordEnd> > <TableCount> )
+		{
+			RecordEnd = <TableCount>;
+		}
+
+		Files( Delete,~<Path>~ );
+
+		if ( Files( FileExists,~<Path>~ ) )
+		{
+			return Warning( Translate( ~Could not delete <Path>.  <$Func.GetLastErrorMsg()>~ ) );
+		}
+
+		if ( !List( SetAbsolutePage,<Page>,TRUE ) )
+		{
+			return ReportRecordsetError( List,~Failed to position to page <Page>~ );
+		}
+
+		if ( <PageCount> == 1 )
+		{
+			DataWindow( StatusBar,Text,Translate(~Archiving <TableCount> Records From <TableName> to <Path>~ ) );
+
+			if ( !List( Save,~<Path>~,~<Format>~ ) )
+			{
+				List( GetErrorDescription,0,theErr );
+				return Warning( ~Save to file failed: <Path>. <theErr>~ );
+			}
+
+			Log( Session,Translate(~Archived <TableCount> Records From <TableName> to <Path>~ ) );
+		}
+		else
+		{
+			DataWindow( StatusBar,Text,Translate(~Archiving <RecordStart>-<RecordEnd> of <TableCount> Records From <TableName> to <Path>~ ) );
+
+			FetchedRecords = List( Count );
+
+			if ( !List( Duplicate,FilteredList ) )
+			{
+				List( GetErrorDescription,0,theErr );
+				return Warning( ~Failed to create the filtered recordset. <theErr>~ );
+			}
+
+			if ( !FilteredList( Save,~<Path>~,~<Format>~ ) )
+			{
+				List( GetErrorDescription,0,theErr );
+				return Warning( ~Save to file failed: <Path>. <theErr>~ );
+			}
+
+			Log( Session,Translate(~Archived <RecordStart>-<RecordEnd> of <TableCount> Records From <TableName> to <Path>~ ) );
+
+		}
+
+		Path = ~<OrgPath>.<++count>~;
+		++Page;
+
+		MessagePump();
+		MessagePump();
+		MessagePump();
+		MessagePump();
+		MessagePump();
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC Init( AppName, DisplayTasksMacrosMsg, DisplayRepairPopup, EnableLoadArchive, WarningMessage )
+{
+	Global( AppName );
+	Global( DisplayTasksMacrosMsg );
+
+	if ( <DisplayRepairPopup> )
+	{
+		PopupMsg( Translate( ~You should consider repairing your database prior to archiving~ ) );
+
+	}
+
+	if ( !SimilarStr( ~<WarningMessage>~, ~~ ) )
+	{
+		TheWarningMessage = ~<WarningMessage>~;
+	}
+
+	DataWindow( Set,Title,~Database Archiving~ );
+
+	if ( !DataWindow( CreateWindow,Translate( ~Database - Tables~ ) ) )
+		{ Error( Translate( ~Failed to create the window~ ) ); }
+
+	PopulateListOfTables();
+
+	PGenConList( IndexList,Connect,Cursor,Keyset,Schema,~Indexes~ );
+
+	Global( IndexList );
+
+	ControlView( SetControlTitle, WarningMsgText, ~<TheWarningMessage>~ );
+
+	if ( !<EnableLoadArchive> )
+	{
+		ControlView( EnableViewControls,FALSE,RemoveRecordsFromSelectedButton );
+		ControlView( EnableViewControls,FALSE,LoadSelectedButton );
+		ControlView( EnableViewControls,FALSE,LoadSelectedFastButton );
+		ControlView( EnableViewControls,FALSE,LoadPartialButton );
+	}
+
+	return TRUE;
+}
+
+TheOldWarningMessage = 
+~Note:  Archiving reads your database
+and saves the selected tables as 
+separate files in the directory of
+your choice.  It does not save images
+files, jobs files, layout files, or
+any another file that is stored external
+to the database.  
+
+So, don't throw away directories 
+containing images and jobs after
+archiving unless you have made back
+up copies using other means.~;
+
+TheWarningMessage = 
+~Note:  Archiving saves DATABASE
+TABLES and UserTableDefinitions
+Only.  It does NOT save:
+   * Images Files 
+   * Jobs Files 
+   * Layout Files
+or any another file that is stored
+external to the database.  DO NOT
+throw away the directories that
+contains these image, job, or layout
+files unless you have made backup
+copies using other means.
+
+If you need to restore your
+UserTableDefinitions, refer to Help
+before selecting Bulk Load/Load
+Selected Tables From Archive.~;
+
+CurrentDirectory = ~~;
+
+
+ButtonWidth = 210;  ButtonHeight = 20;  hGap = 5; vGap = 1;
+
+Define: DataWindow Using DDWinDef
+	Fields:		Position				55 00 35 95
+				IsPositionPercent		T
+				EnableStatusBar			T
+				WantsMinimizeBox		TRUE
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "SchemaData.htm" )
+							NoScroll				~T~
+				Contains:
+				{
+					Define: SelectAllButton Using DDWinCtrlDef AsSymbol SelectAllButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION Exec ( ControlView( ListBox,DBTablesListBox,SetSel,-1,TRUE ) )
+								POSITION		$hGap $vGap+20 $ButtonWidth $ButtonHeight
+								TEXT			Translate( ~Select All Tables~ )
+								TOOLTIP			Translate( ~Select All The Tables~ )
+								TYPENAME		BUTTON
+
+					Define: LocateArchiveButton Using DDWinCtrlDef AsSymbol LocateArchiveButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( LocateArchive(TRUE) )
+								POSITION		$hGap, SelectAllButton(GetBottom,Position) + $vGap, $ButtonWidth $ButtonHeight
+								TEXT			Translate( ~Locate Archive Directory~ )
+								TOOLTIP			Translate( ~Locate the directory containing the archived tables or the directory you wish to save the archive files to~ )
+								TYPENAME		BUTTON
+
+					Define: ArchiveSelectedButton Using DDWinCtrlDef AsSymbol ArchiveSelectedButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( ArchiveSelected(~~) )
+								POSITION		$hGap, LocateArchiveButton(GetBottom,Position) + $vGap + 10, $ButtonWidth $ButtonHeight
+								TEXT			Translate( ~Archive Selected Tables~ )
+								TOOLTIP			Translate( ~Archive the selected tables in binary format (Advanced Data Tablegram)~ )
+								TYPENAME		BUTTON
+
+					Define: ArchiveXMLButton Using DDWinCtrlDef AsSymbol ArchiveXMLButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( ArchiveSelected(~XML~) )
+								POSITION		$hGap, ArchiveSelectedButton(GetBottom,Position) + $vGap , $ButtonWidth $ButtonHeight
+								TEXT			Translate( ~Archive Selected Tables As XML~ )
+								TOOLTIP			Translate( ~Archive the selected tables in XML (Extensible Markup Language) Format.  This is slower and takes more space on disk.~ )
+								TYPENAME		BUTTON
+
+					Define: ViewSelectedButton Using DDWinCtrlDef AsSymbol ViewSelectedButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( ViewSelected() )
+								POSITION		$hGap, ArchiveXMLButton(GetBottom,Position) + $vGap + 20, $ButtonWidth $ButtonHeight
+								TEXT			Translate( ~View Selected Archived Tables~ )
+								TOOLTIP			Translate( ~View the selected archives~ )
+								TYPENAME		BUTTON;
+
+					Define: RemoveRecordsFromSelectedButton Using DDWinCtrlDef AsSymbol RemoveRecordsFromSelectedButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( RemoveRecordsFromSelected() )
+								POSITION		$hGap, ViewSelectedButton(GetBottom,Position) + $vGap + 20, $ButtonWidth $ButtonHeight
+								TEXT			Translate( ~Delete All Data From Selected Tables~ )
+								TOOLTIP			Translate( ~Remove all the records from the selected tables~ )
+								TYPENAME		BUTTON;
+
+					Define: LoadSelectedButton Using DDWinCtrlDef AsSymbol LoadSelectedButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( LoadSelected() )
+								POSITION		$hGap, RemoveRecordsFromSelectedButton(GetBottom,Position) + $vGap, $ButtonWidth $ButtonHeight
+								TEXT			Translate( ~Load Selected Tables From Archive~ )
+								TOOLTIP			Translate( ~Load the selected tables from the archive data in the directory you have selected.~ )
+								TYPENAME		BUTTON;
+
+					CurrentY = LoadSelectedButton(GetBottom,Position);
+
+					Define: LoadSelectedFastButton Using DDWinCtrlDef AsSymbol LoadSelectedFastButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( LoadSelectedFast() )
+								POSITION		$hGap, <CurrentY> + $vGap, $ButtonWidth $ButtonHeight
+								TEXT			Translate( ~Bulk Load Selected Tables From Archive~ )
+								TOOLTIP			Translate( ~Bulk load the selected tables from the archive data.  Make sure you have removed all records from the tables first.~ )
+								TYPENAME		BUTTON;
+
+					Define: LoadPartialButton Using DDWinCtrlDef AsSymbol LoadPartialButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( LoadArchivePartial() )
+								POSITION		$hGap, LoadSelectedFastButton(GetBottom,Position) + $vGap, $ButtonWidth $ButtonHeight
+								TEXT			Translate( ~Load Partial~ )
+								TOOLTIP			Translate( ~Load the database from a range of records in an archive file~ )
+								ISHIDDEN		T
+								TYPENAME		BUTTON;
+
+					Define: StartPrompt Using DDWinCtrlDef AsSymbol StartPrompt
+						Fields:	TYPENAME		StaticText	
+								RIGHTJUSTIFIED	TRUE
+								POSITION		$hGap, LoadPartialButton(GetBottom,Position) + 2, 25 $ButtonHeight
+								ISHIDDEN		T
+								TEXT			Translate( ~Start~ )
+
+					Define: StartField Using DDWinCtrlDef AsSymbol StartField         
+						Fields: TypeName		MaskedEditText
+								Position        StartPrompt(GetRight,Position)+$hGap,StartPrompt(GetTop,Position) 55 $ButtonHeight  
+								GenConName      THIS
+								GenConField		~StartRecord~ 
+								Mask			~#########~   
+								ISHIDDEN		T
+								Tooltip			Translate( ~Enter the start record~ ) ;
+
+					Define: EndPrompt Using DDWinCtrlDef AsSymbol EndPrompt
+						Fields:	TYPENAME		StaticText	
+								RIGHTJUSTIFIED	TRUE
+								POSITION		StartField(GetRight,Position)+$hGap*1, StartField(GetTop,Position), 25 $ButtonHeight
+								TEXT			Translate( ~End~ )
+								ISHIDDEN		T
+
+					Define: EndField Using DDWinCtrlDef AsSymbol EndField         
+						Fields: TypeName		MaskedEditText
+								Position        EndPrompt(GetRight,Position) + $hGap,EndPrompt(GetTop,Position) 55 $ButtonHeight
+								GenConName      THIS
+								GenConField		~EndRecord~   
+								Mask			~#########~ 
+								ISHIDDEN		T
+								Tooltip			Translate( ~Enter the end record~ ) ;
+
+					CurrentY = EndField(GetBottom,Position);
+
+					Define: StopButton Using DDWinCtrlDef AsSymbol StopButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( OnStopButton() )
+								POSITION		$hGap, <CurrentY> + $vGap, $ButtonWidth $ButtonHeight
+								ISENABLED		F
+								TEXT			Translate( ~Stop~ )
+								TOOLTIP			Translate( ~Stop the current activity~ )
+								TYPENAME		BUTTON;
+
+					CurrentY = StopButton(GetBottom,Position);
+
+					Define: WarningMsgText Using DDWinCtrlDef AsSymbol WarningMsgText
+						Fields:	GENCONNAME		This
+								IACTIONSTEXT	ACTIONS ( Get )
+								POSITION		$hGap, <CurrentY> + $vGap * 3, 220 250
+								TEXT			~<TheWarningMessage>~
+								FONTSIZE		15
+								FONTWEIGHT		600
+								TYPENAME		StaticText;
+
+					Define: DBTablesStatic Using DDWinCtrlDef AsSymbol DBTablesStatic
+						Fields:	TYPENAME		StaticText	
+								POSITION		SelectAllButton(GetRight,Position) + 10, 5, 100, 15
+								TEXT			Translate( ~Database Tables:~ )
+
+					Define: DBTablesListBox Using DDWinCtrlDef AsSymbol DBTablesListBox
+						Fields:	GENCONNAME		THIS
+								GENCONFIELD		~DBTables~
+								POSITION		SelectAllButton(GetRight,Position) + 10, DBTablesStatic(GetBottom,Position)+3, 100, 520
+								AllowMultipleSelection	TRUE
+								IACTIONSTEXT	ACTIONS ( Get )
+								DACTIONSTEXT	ACTIONS ( Save )
+								//DoubleClickActionsText	ACTION Exec ( ShowTableFields() )
+								OACTIONSTEXT	ACTIONS ( Save )
+								NoDuplicates	TRUE
+								ToolTip			Translate( ~Select the database tables to archive/load~ )
+								ResizeToFit		2
+								TYPENAME		ListBox ;
+				}
+	}
+
+Stopping = FALSE;

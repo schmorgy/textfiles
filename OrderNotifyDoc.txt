@@ -1,0 +1,320 @@
+IncludeClass(BaseDialog);
+
+Class( OrdNotify,Extends,BaseDialog,
+		Member,fOrderID,Str,~~ );
+
+VOID OrdNotify::OrdNotify( OrderID )
+{
+	Left = 200;
+	ButtonWidth = 100;
+	Title = ~Order Notification~;
+	Dictionary = ~DDOrderNotifyDialog~;
+	fOrderID = ~<OrderID>~;
+}
+
+NUMERIC OrdNotify::OnGoButton()
+{
+	if ( IsNULL( ~<$con.DlgData[OrderID]>~ ) )
+	{
+		return Warning( ~You must enter an OrderID first~ );
+	}
+	
+	return dlg( SetStatus,0,~The OrderID is '<$con.DlgData[Field1]>' in the <THIS> object~ );
+}
+
+
+VOID OrdNotify::WindowDefinition()
+{
+	//Fields:
+		//BgColorRed 250 BgColorGreen 130 BgColorBlue 130;
+}
+
+
+
+VOID OrdNotify::DefineControls()
+{
+	Define: OrderPrompt Using DDWinCtrlDef AsSymbol OrderPrompt Private
+			Fields:	TYPENAME			STATICTEXT
+					GENCONNAME			THIS
+					RightJustified		TRUE
+					Position			<hgap> <vGap> 50 <ButtonHeight>
+					Text				~Order ID~;
+
+	Define: OrderField Using DDWinCtrlDef AsSymbol OrderField Private
+			Fields:	TYPENAME			MASKEDEDITTEXT
+					Mask				~<$[DATABASE FieldTypes].OrderID[Mask]>~
+					PromptChar			~<$[DATABASE FieldTypes].OrderID[PromptChar]>~
+					AllowedChars		~<$[DATABASE FieldTypes].OrderID[AllowedChars]>~
+					DisallowedChars		~<$[DATABASE FieldTypes].OrderID[DisallowedChars]>~
+					GENCONNAME			THIS
+					GENCONFIELD			OrderID
+					IACTIONSTEXT		ACTIONS ( Get )
+					DACTIONSTEXT		ACTIONS ( Save )
+					OACTIONSTEXT		ACTIONS ( Save )
+					WantReturnKey		~T~
+					ReturnKeyActionsText ACTION EXEC ( <THIS>.OnRefreshButton() )
+					Position			OrderPrompt(GetRight,Position)+$hGap OrderPrompt(GetTop,Position)-2 100 <ButtonHeight>
+					Text				~~;
+
+	Define: NotifyField Using DDWinCtrlDef AsSymbol NotifyField Private
+			Fields:	TYPENAME			MLEDITTEXT
+					GENCONNAME			THIS
+					GENCONFIELD			NotifyText
+					IACTIONSTEXT		ACTIONS ( Get )
+					DACTIONSTEXT		ACTIONS ( Save )
+					OACTIONSTEXT		ACTIONS ( Save )
+					Position			OrderField(GetLeft,Position) OrderPrompt(GetBottom,Position)+$vGap 350 100
+					Text				~~;
+
+	DialogWidth = GetDialogCenter();
+
+	Define: RefreshButton Using DDWinCtrlDef AsSymbol RefreshButton Private
+			Fields:	TYPENAME			Button
+					GENCONNAME			THIS
+					DACTIONSTEXT		ACTION EXEC ( <THIS>.OnRefreshButton() )
+					TextColorRed		255	TextColorGreen 255,	TextColorBlue 255
+					BGColorRed			~200~ BGColorGreen	~50~ BGColorBlue ~50~
+					Position			<DialogWidth> -  <buttonwidth> * 2 NotifyField(GetBottom,Position) + $vGap <ButtonWidth> <ButtonHeight>
+					Text				~Refresh~;
+
+	Define: SaveButton Using DDWinCtrlDef AsSymbol SaveButton Private
+			Fields:	TYPENAME			Button
+					GENCONNAME			THIS
+					DACTIONSTEXT		ACTION EXEC ( <THIS>.OnSaveButton() )
+					TextColorRed		255	TextColorGreen 255,	TextColorBlue 255
+					BGColorRed			~200~ BGColorGreen	~50~ BGColorBlue ~50~
+					Position			RefreshButton(GetRight,Position) + $hGap, RefreshButton(GetTop,Position) RefreshButton(GetWidth,Position) RefreshButton(GetLength,Position)
+					Text				~Save~;
+
+	Define: DeleteButton Using DDWinCtrlDef AsSymbol DeleteButton Private
+			Fields:	TYPENAME			Button
+					GENCONNAME			THIS
+					DACTIONSTEXT		ACTION EXEC ( <THIS>.OnDeleteButton() )
+					TextColorRed		255	TextColorGreen 255,	TextColorBlue 255
+					BGColorRed			~200~ BGColorGreen	~50~ BGColorBlue ~50~
+					Position			SaveButton(GetRight,Position) + $hGap, SaveButton(GetTop,Position) RefreshButton(GetWidth,Position) RefreshButton(GetLength,Position)
+					Text				~Delete~;
+
+	Define: CloseButton Using DDWinCtrlDef AsSymbol CloseButton Private
+			Fields:	TYPENAME			Button
+					GENCONNAME			THIS
+					DACTIONSTEXT		ACTION EXEC ( <THIS>.OnCloseButton() )
+					TextColorRed		255	TextColorGreen 255,	TextColorBlue 255
+					BGColorRed			~200~ BGColorGreen	~50~ BGColorBlue ~50~
+					Position			DeleteButton(GetRight,Position) + $hGap, DeleteButton(GetTop,Position) RefreshButton(GetWidth,Position) RefreshButton(GetLength,Position)
+					Text				~Close~;
+}
+
+
+NUMERIC OrdNotify::OnRefreshButton()
+{
+	dlg( SetStatus,0,~~ );
+
+	if ( IsNULL( ~<$con.DlgData[OrderID]>~ ) )
+	{
+		return Warning( ~You must enter an OrderID first~ );
+	}
+
+	fOrderID = ~<$con.DlgData[OrderID]>~;
+
+	Query = ~Select * From OrderNotifications Where OrderID = '<fOrderID>'~;
+
+	if ( PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		if ( !List( GetFirst,Item ) )
+		{
+			dlg( SetStatus,0,~There is no notification for Order <fOrderID>~ );
+			dlg( SetStrings,NotifyText,~~ );
+			return FALSE;
+		}
+
+		Item( GetValue,NotifyText,NotifyText );
+
+		dlg( SetStringsFromContents,NotifyText,NotifyText );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OrdNotify::OnSaveButton()
+{
+	if ( IsNULL( ~<$con.DlgData[OrderID]>~ ) )
+	{
+		return Warning( ~You must enter an OrderID first~ );
+	}
+
+	fOrderID = ~<$con.DlgData[OrderID]>~;
+
+	Query = ~Select * From OrderNotifications Where OrderID = '<fOrderID>'~;
+
+	if ( PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		if ( !List( GetFirst,Item ) )
+		{
+			List( AddNew,Item );
+			Item( Set, OrderID, ~<fOrderID>~ );
+		}
+
+		dlg( GetStrings,NotifyText,NotifyText );
+		Item( SetFromContentsOf,~NotifyText~,NotifyText );
+		
+		if ( !List( Update ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( ~Update to OrderNotifications Failed.  <theErr>~ );
+		}
+	}
+
+	return dlg( SetStatus,0,~Saved the notification text for Order <fOrderID>~ );
+}
+
+
+NUMERIC OrdNotify::OnDeleteButton()
+{
+	if ( IsNULL( ~<$con.DlgData[OrderID]>~ ) )
+	{
+		return Warning( ~You must enter an OrderID first~ );
+	}
+
+	if ( MessageBox( ~Are you sure you want to delete the Notification for Order <$con.DlgData[OrderID]>? ~,YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	fOrderID = ~<$con.DlgData[OrderID]>~;
+ 
+	if ( !ADO( dBase,Connect,Cmd,~Delete From OrderNotifications Where OrderID = '<fOrderID>'~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Failed to connect to the shared database.  <theErr>~ );
+	}
+
+	dlg( SetStrings,OrderID,~~ );
+	dlg( SetStrings,NotifyText,~~ );
+
+	return dlg( SetStatus,0,~Deleted the notification text for Order <fOrderID>~ );
+}
+
+
+NUMERIC OrdNotify::OnCloseButton()
+{
+	DoCancelButton();
+
+	return TRUE;
+}
+
+NUMERIC OrdNotify::Initialize( OrderID )
+{
+	dlg( SetStatus,0,~~ );
+
+	fOrderID = ~<OrderID>~;
+
+	dlg( SetStrings,OrderID,~~ );
+	dlg( SetStrings,NotifyText,~~ );
+
+	if ( IsNULL( ~<OrderID>~ ) )
+	{	
+		return FALSE;
+	}
+
+	dlg( SetStrings,OrderID,~<OrderID>~ );
+
+	Query = ~Select NotifyText From OrderNotifications Where OrderID = '<OrderID>'~;
+
+	if ( ADO( dBase,Connect,GetValuesFor,~<Query>~,NotifyText ) )
+	{
+		dlg( SetStringsFromContents,NotifyText,NotifyText );
+	}
+
+	ReOpen();
+
+	return TRUE;
+}
+
+VOID OrdNotify::ReOpen()
+{
+	//dlg( Show,NORMALSTATE );
+
+	dlg( GetWindowPlacement,x,y,w,l );
+
+	PinOnScreen( 20,x,y,<w>,<l> );
+
+	//dlg( SetWindowPosition,<x>,<y> );
+}
+
+
+VOID OrdNotify::SetPosition()
+{
+	ScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+	ScreenHeight = thisApp( MainWindow,GetClientHeight );
+
+	DialogWidth = aDialog(GetMaxRight,Position) + $hGap * 2;
+	DialogHeight = aDialog(GetMaxBottom,Position) + $vGap + 30;
+
+	Left = <ScreenWidth> - <DialogWidth> - 4;
+	Top = <ScreenHeight> - <DialogHeight> - 48;
+
+	aDialog( Set,Position,~<Left> <Top> <DialogWidth> <DialogHeight>~ );
+}
+
+
+VOID OrdNotify::DefineDictionary()
+{
+	Dictionary: ~<Dictionary>~ 
+		Fields: Name OrderID		type text
+		Fields: Name NotifyText		type text
+}
+
+VOID Init( OrderID,AlwaysOpen )
+{
+	if ( IsNull(~<OrderID>~) && !<AlwaysOpen> )		// WON'T BE ABLE TO FIND A NULL ORDERID
+	{
+		if ( Defined( ThisDialog ))
+		{
+			ThisDialog.DoCancelButton();
+		}
+		else
+		{
+			Exit();
+		}
+
+		return;
+	}
+
+	if ( !IsNull(~<OrderID>~) && !<AlwaysOpen> )	// NOTIFICATION MUST EXIST OR NO OPEN
+	{
+		if ( !ADO( dBase,Connect,RecordCountFor,~Select * From OrderNotifications Where OrderID = '<OrderID>'~ ) )
+		{
+			if ( Defined( ThisDialog ))
+			{
+				ThisDialog.DoCancelButton();
+			}
+			else
+			{
+				Exit();
+			}
+
+			return;
+		}
+	}
+
+	if ( !Defined( ThisDialog ) )					// ALREADY ACTIVE?
+	{
+		OrdNotify( New,thisDialog,~<OrderID>~ );	// INSTANTIATE AN OBJECT OF CLASS ORDNOTIFY
+
+		Global( ThisDialog );
+
+		ThisDialog.DefineDialog();					// BRING UP THE DIALOG
+	}
+	else
+	{
+		ThisDialog.ReOpen();
+	}
+
+
+	ThisDialog.Initialize(~<OrderID>~);				// INITIALIZE THE FIELDS.
+}
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\OrderNotifyDoc.txt~ );
+

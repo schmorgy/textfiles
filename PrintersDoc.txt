@@ -1,0 +1,954 @@
+
+IncludeClass( BasePassword );
+
+Shutdown = 0 ;
+Run = 1 ;
+Suspend = 2 ;
+Quit = 3 ;
+Resume = 4 ;
+
+VOID RefreshDoc()
+{
+	RefreshListView();
+}
+
+
+NUMERIC RefreshListView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+	DataWindow( StatusBar,Text,~~ );
+
+	return TRUE;
+}
+
+NUMERIC OnButtonClick()
+{
+	DefaultDirectory = ~<$App.Volume>~;
+	Title = Translate( ~Find the desired file ...~ );
+	
+	DataView( GetActiveCell,Row,Col );
+
+	GenCon( Fields,Is,PrintersTableDefinition(GetReferenceTo,Fields) );
+
+	DataView( GetColumnName,<Col>,ColumnName );
+
+	if ( SimilarStr( ~<ColumnName>~,~CONTROLFOLDER~,~RESPONSEFOLDER~ ) )
+	{
+		Title = Translate( ~Find the Control File Directory ...~ );
+
+		if ( GetFolder( ~<Title>~,~~,Path ) )
+		{
+			DataView( SetCellValue,<Row>,<Col>,~<Path>~ );
+		}
+
+		return TRUE;
+	}
+
+	if ( ~<ColumnName>~ == ~OUTPUTPATH~ )
+	{
+		Title = Translate( ~Specify the output file specification  ...~ );
+
+		if ( FileDialog( DefaultDirectory,~<DefaultDirectory>~,Title,~<Title>~,Path,Path,Save ) )
+		{
+			DataView( SetCellValue,<Row>,<Col>,~<Path>~ );
+		}
+
+		return TRUE;
+	}
+
+	if ( ~<ColumnName>~ == ~HFExePath~ )
+	{
+		Title = Translate( ~Specify the Hot Folder Application file  ...~ );
+
+		if ( FileDialog( DefaultDirectory,~<DefaultDirectory>~,Title,~<Title>~,Path,Path,Save ) )
+		{
+			DataView( SetCellValue,<Row>,<Col>,~<Path>~ );
+		}
+
+		return TRUE;
+	}
+
+	if ( SimilarStr( ~<ColumnName>~,"LOGFILE" ) )
+	{
+		Title = Translate( ~Specify the Hot Folder Log file  ...~ );
+
+		if ( FileDialog( DefaultDirectory,~<DefaultDirectory>~,Title,~<Title>~,Path,Path,Save ) )
+		{
+			DataView( SetCellValue,<Row>,<Col>,~<Path>~ );
+		}
+
+		return TRUE;
+	}
+
+	if ( SimilarStr( ~<ColumnName>~,~STARTUPSCRIPT~, ~RESPONSESCRIPT~, ~STARTPRINTING~,
+					 ~ONPRINTCOMPLETE~, ~ONORDERCOMPLETE~, ~SHUTDOWNSCRIPT~ ) )
+	{
+		DefaultDirectory = ~<$App.Directory>\Scripts~;	// USE THE LOCAL DIRECTORY PLEASE !
+
+		Title = ~Find the desired script ...~;
+
+		if ( FileDialog( DefaultDirectory,~<DefaultDirectory>~,Title,~<Title>~,Path,Path,Open ) )
+		{
+			DataView( SetCellValue,<Row>,<Col>,~<$Str.$Path.Filename>~ );
+
+//			if ( !Files( FileExists,~<$App.ShareDirectory>\Scripts\<$Str.$Path.Filename>~ ) )
+//			{
+//				return Warning( Translate( ~<$App.ShareDirectory>\Scripts\<$Str.$Path.Filename> does not exist~ ) );
+//			}
+		}
+
+		return TRUE;
+	}
+
+	DefaultDirectory = ~<$App.Volume>~;
+
+	Title = Translate( ~Find the desired file ...~ );
+
+	if ( FileDialog( DefaultDirectory,~<DefaultDirectory>~,Title,~<Title>~,Path,Path,Open ) )
+	{
+		DataView( SetCellValue,<Row>,<Col>,~<Path>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SeeResolutions()
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	Count = SelectedRows( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( ~There were no rows selected~ ) ); }
+
+	while ( SelectedRows( GetNext,Item ) )
+	{
+		Model = ~<$Con.Item[PrinterModel]>~;
+		Name = ~<$Con.Item[PrinterName]>~;
+
+		if ( ~<Model>~ == ~~ || ~<Name>~ == ~~ )
+		{
+			return Warning( Translate( ~Printer Model and Name cannot be blank~ ) );
+		}
+		 
+		Query = ~Select Sequence,Resolution From PrinterRes Where PrinterModel = '<Model>' AND PrinterName = '<Name>' Order By Sequence~;
+
+		Actions = ACTIONS ( Doc( ~PrinterRes~ Open PrinterResDoc "Init( ~<Model>~,~<Name>~,~<Query>~);" ) );
+		PerformActions( Actions );
+	}
+	
+	return TRUE;
+
+}
+
+
+NUMERIC UpdateQueueNameCombo( &ColumnDefinition,Row,Col )
+{
+	DataView( GetCellValue,PrinterModel,<Row>,PrinterModel );
+
+	Query = STR ( Select QueueName From QueueDefinition Where PrinterModel = '<PrinterModel>' Order By QueueName );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( ~Database query failed: <Query> <theErr>~ );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,QueueNames,QueueName );
+
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,QueueNames(GetCopyOf) );
+
+		DataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC UpdatePrinterModelCombo( &ColumnDefinition,Row,Col )
+{
+	DataView( GetCellValue,PrinterModel,<Row>,PrinterModel );
+
+	Query = STR ( Select Model From PrinterModels  Order By Model );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( ~Database query failed: <Query> <theErr>~ );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,PrinterModels,Model );
+
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,PrinterModels(GetCopyOf) );
+
+		DataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC RefreshQueueList()
+{
+	DataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,PrintersTableDefinition(GetReferenceTo,Fields) );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+
+	if ( ~<ColumnName>~ == ~QUEUENAME~ )
+	{
+		UpdateQueueNameCombo( ColumnDefinition,<row>,<col> );
+	}
+
+	RefreshModelList();
+
+	return TRUE;
+}
+
+
+NUMERIC RefreshModelList()
+{
+	DataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,PrintersTableDefinition(GetReferenceTo,Fields) );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+
+	if ( ~<ColumnName>~ == ~PRINTERMODEL~ )
+	{
+		UpdatePrinterModelCombo( ColumnDefinition,<row>,<col> );
+	}
+
+	return TRUE;
+}
+
+
+
+VOID Run()
+{
+	if ( !DataView( GetSelectedRows,SelectedPrinters ) )		
+		{ return Warning( ~There were no selected printers~ ); }
+
+	WaitCursor( Begin );
+
+	while ( SelectedPrinters( GetNext,Printer ) )
+	{
+		CFunc( CRenderEngineMain, CRenderEngineMain, Printer(GetObject), 1 );
+		DataView( SetCellValue,Printer(GetRow),Status,1 );
+//		DataView( SetCellValue,Printer(GetRow),Status,~Run~ );
+	}
+
+	WaitCursor( End );
+
+	DataWindow( StatusBar,Text,Translate(~Selected printers were started~) );
+}
+
+
+NUMERIC SetPrinterStatus( Status )
+{
+	if ( !DataView( GetSelectedRows,SelectedPrinters ) )		
+		{ return Warning( ~There were no selected printers~ ); }
+
+	Query = ~Select * From Printers~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	List( GetConnection,dBase );
+
+	while ( SelectedPrinters( GetNext,Printer ) )
+	{
+		if ( <Status> == <Run> )
+		{
+			CFunc( CRenderEngineMain, CRenderEngineMain, Printer(GetObject), 1 );
+			DataView( SetCellValue,Printer(GetRow),Status,~<Status>~ );
+			continue;
+		}
+
+		ThisStatus = ~<Status>~ == ~<Resume>~ ? ~<Run>~ : ~<Status>~ ;
+
+		Key = ~PrinterName = '<$con.Printer[PrinterName]>'~;
+
+		Cmd = ~Update Printers Set Status = <ThisStatus> Where <Key>~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Could not set status to <ThisStatus> for <Key>. <theErr>~ );
+		}
+
+		Printer( ResetChanged,Set,Status,~<ThisStatus>~ );
+
+		DataView( SetCellValue,Printer(GetRow),Status,~<ThisStatus>~ );
+	}
+
+	DataView( CommitChanges );
+	return TRUE ;
+}
+
+
+NUMERIC CopyFiles( SrcPath,DstPath )
+{
+	if ( !Files( Copy,~<SrcPath>~,~<DstPath>~,FALSE ) )
+	{ 
+		GetLastError( ErrorString,err );
+		return Warning( ~Could not copy <SrcPath> to <DstPath>. <err>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CreateRenderer( Source,PrinterName )
+{
+	SrcPath = ~<$App.Directory>\<Source>_Text.txl~;
+	DstPath = ~<$App.Directory>\<PrinterName>_Text.txl~;
+
+	if ( !CopyFiles( ~<SrcPath>~,~<DstPath>~ ) )
+		{  return FALSE; }
+
+	SrcPath = ~<$App.Directory>\<Source>.exe~;
+	DstPath = ~<$App.Directory>\<PrinterName>.exe~;
+
+	if ( !CopyFiles( ~<SrcPath>~,~<DstPath>~ ) )
+		{  return FALSE; }
+
+	return TRUE;
+}
+
+
+NUMERIC CreateRenderers( WantDebug )
+{
+	if ( !DataView( GetSelectedRows,SelectedPrinters ) )		
+		{ return Warning( ~There were no selected printers~ ); }
+
+	Source = $WantDebug ? ~KpisreUD~ : ~KpisreU~;
+
+	ListOfPrinters = ~~;
+
+	while ( SelectedPrinters( GetNext,Printer ) )
+	{
+		CreateRenderer( ~<Source>~,~<$con.Printer[PrinterName]>~ );
+		Comma = ~<ListOfPrinters>~ == ~~ ? ~~ : ~, ~;
+		ListOfPrinters = ~<ListOfPrinters><Comma><$con.Printer[PrinterName]> (<$con.Printer[PrinterModel]>)~;
+	}
+
+	MessageBox( ~Completed creating renderers for: <ListOfPrinters>~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,ChangedPrinter,OrigPrinter,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$Con.ChangedPrinter[PrinterName]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Printer Name cannot be blank.~ ) ); }
+
+	if ( ~<$Con.ChangedPrinter[PrinterModel]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Model cannot be blank.~ ) ); }
+
+	if ( ~<$Con.ChangedPrinter[QueueName]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Queue Name cannot be blank.~ ) ); }
+
+	if ( ~<$Con.ChangedPrinter[ComputerName]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Computer Name cannot be blank.~ ) ); }
+
+	Query = ~Select PrinterModel From QueueDefinition where QueueName = '<$Con.ChangedPrinter[QueueName]>'~;
+
+	if ( ADO( dBase,Connect,GetValuesFor,~<Query>~,aPrinterModel ) )
+	{
+		if ( ~<aPrinterModel>~ != ~<$Con.ChangedPrinter[PrinterModel]>~ )
+		{
+			return Warning( Translate( ~Queue Name <$Con.ChangedPrinter[QueueName]> is already defined for a different printer model (<aPrinterModel>)~ ) );
+		}
+	} 
+
+	Key = STR ( PrinterName = '<$Con.OrigPrinter[PrinterName]>' );
+
+	Query = ~Select * From Printers Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,ChangedPrinter,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+		return Warning( Translate( ~Could not update Printer record where <Key>. <theErr>~ ) );
+	}
+
+	DataView( CommitChanges );
+
+	if ( !<IsNewRow> )
+	{
+		if ( ~<$con.OrigPrinter[Status]>~ != ~<$con.ChangedPrinter[Status]>~ )
+		{
+			retval = CFunc( CPrinterStatus,StatusChanged,~"<$con.ChangedPrinter[Status]>"~ );
+		}
+	}
+	else
+	{
+		QueueName = ~<$con.ChangedPrinter[QueueName]>~;
+
+		Model = ~<$con.ChangedPrinter[PrinterModel]>~;
+
+		SeeResolutions();
+
+		if ( !QueueNameExists( ~<QueueName>~,~<Model>~ ) )
+		{
+			Cmd = ACTION DOC ( PrinterQueuesDoc OpenOnce PrinterQueuesDoc "AddAQueueForPrinter(~<Model>~,~<QueueName>~);" );
+
+			return PerformActions( Cmd );
+		}
+	}
+	
+	return TRUE;
+}
+
+NUMERIC QueueNameExists( QueueName,PrinterModel )
+{
+	Key = ~QueueName = '<QueueName>' AND PrinterModel = '<PrinterModel>'~;
+
+	Query = ~Select PrinterModel From QueueDefinition Where <Key>~;
+
+	return PGenConList( List,Connect,GetExistingRecordFor,~<Query>~,Record );
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,PrintersToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	count = PrintersToDelete( ChildCount );
+
+	if ( MessageBox( ~Are you sure you want to delete the <count> selected Printers?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( PrintersToDelete( GetNext,Printer ) )
+	{
+		Key = STR ( PrinterName = '<$Con.Printer[PrinterName]>' );
+
+		Cmd = ~Delete From PrinterRes Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Database update failed: <Cmd>  <theErr>~ );
+			break;
+		}
+
+		Cmd = ~Delete From Printers Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Database update failed: <Cmd>  <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,PrintersToDelete(GetCurrentPosition) );
+	}
+		
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+
+
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+		
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	NewRow( SetValues,ComputerName,~<$app.ComputerName>~,Status,~Shutdown~,
+				QueueName,~~,RunAttended,TRUE, Gam, ~1.0~ );
+	
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,PrinterName );
+
+	return TRUE;
+}
+
+
+
+NUMERIC AddQueueForPrinter()
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( Translate( ~There was no row selected~ ) ); }
+
+	if ( !SelectedRows( GetFirst,PrinterToAddQueueFor ) )
+		{ return Warning( Translate( ~There were no row(s) selected~ ) ); }
+
+	QueueName = ~<$con.PrinterToAddQueueFor[QueueName]>~;
+
+	Model = ~<$con.PrinterToAddQueueFor[PrinterModel]>~;
+
+	if ( ~<QueueName>~ == ~~ || ~<Model>~ == ~~ )
+		{ return Warning( ~You must first fill in the Printer Model and the QueueName~ ); }
+
+	Cmd = ACTION DOC ( PrinterQueuesDoc OpenOnce PrinterQueuesDoc "AddAQueueForPrinter(~<Model>~,~<QueueName>~);" );
+
+	return PerformActions( Cmd );			
+}
+
+
+
+NUMERIC QueryQueuesForPrinters( &SelectedPrinters )
+{
+	InList = ~~;
+
+	while ( SelectedPrinters( GetNext,Printer ) )
+	{
+		InList = ~<InList>~ == ~~ ? ~'<$con.Printer[PrinterModel]>'~ : ~<InList>,'<$con.Printer[PrinterModel]>'~;
+	}
+
+	if ( ~<InList>~ != ~~ )
+	{
+		Query = ~Select * From QueueDefinition where PrinterModel In(<InList>) Order By QueueName~;
+
+		Cmd = ACTION DOC ( PrinterQueues Open PrinterQueuesDoc "Init(~~,~<Query>~);" );
+
+		return PerformActions( Cmd );		
+	}	
+
+	return TRUE;
+}
+
+
+NUMERIC ViewQueuesForSelectedPrinters()
+{
+	if ( !DataView( GetSelectedRows,SelectedPrinters ) )		
+		{ return Warning( ~There were no row(s) selected~ ); }
+
+	return QueryQueuesForPrinters( SelectedPrinters );
+}
+
+
+
+NUMERIC WatchPrinter( PrinterName )
+{
+	if ( !RenderJobHandler( Handler,GetFrom,~<PrinterName>~,~[Renderers]~ ) )
+	{
+		return Warning( ~There is no active renderer for <PrinterName>~ );
+	}
+
+	if ( !Handler( OpenStatusWindow ) )
+	{
+		return Warning( ~Could not open the render status window for <PrinterName>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC WatchActivity()
+{
+	if ( !DataView( GetSelectedRows,PrintersToWatch ) )		
+		{ return Warning( ~There was no printer(s) selected to watch~ ); }
+
+	while ( PrintersToWatch( GetNext,Printer ) )
+	{
+		WatchPrinter( ~<$con.Printer[PrinterName]>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC EmptyQueue( PrinterName )
+{
+	if ( !RenderJobHandler( Handler,GetFrom,~<PrinterName>~,~[Renderers]~ ) )
+	{
+		return Warning( ~There is no active renderer for <PrinterName>~ );
+	}
+
+	if ( !Handler( EmptyQueues ) )
+	{
+		return Warning( ~Could not empty queues for <PrinterName>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC EmptySelectedQueues()
+{
+	if ( !DataView( GetSelectedRows,PrintersToEmpty ) )		
+		{ return Warning( ~There was no printer(s) selected~ ); }
+
+	while ( PrintersToEmpty( GetNext,Printer ) )
+	{
+		EmptyQueue( ~<$con.Printer[PrinterName]>~ );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC RightClickInListView()
+{
+	DataView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,ListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,ListViewMenu,0,0  );
+	}
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new printers that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateModelInfo( Row,Model )
+{
+	Query = STR ( Select MaxPaperWidth,MaxPaperAdvance From PrinterModels Where Model = '<Model>' );
+//	Query = STR ( Select MaxPaperWidth,MaxPaperAdvance,ForeignDevice From PrinterModels Where Model = '<Model>' );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( ~<Query> Failed. <theErr>~ );
+	}
+
+	if ( !List( GetFirst,TheModel ) )
+		{ return FALSE; }
+
+	DataView( SetCellValue,Current,MaxPaperWidth,~<$pcon.TheModel[MaxPaperWidth]>~ );
+	DataView( SetCellValue,Current,MaxPaperAdvance,~<$pcon.TheModel[MaxPaperAdvance]>~ );
+
+//	DataView( SetCellValue,Current,ForeignDevice,~<$pcon.TheModel[ForeignDevice]>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC EndEdit()
+{
+	DataView( GetEditedCell,row,col );
+	DataView( GetEditedCellValue,value );
+
+	GenCon( Fields,Is,PrintersTableDefinition(GetReferenceTo,Fields) );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	if ( ~<ColumnName>~ == ~PRINTERMODEL~ )
+	{
+		UpdateModelInfo( <row>,~<value>~ );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnPrinterModelModified()
+{
+	DataView( GetActiveCellValue,value );
+
+	return TRUE;
+}
+
+
+NUMERIC TrapCellModifications( FieldName,TheAction )
+{
+	GenCon( Fields,Is,PrintersTableDefinition(GetReferenceTo,Fields) );
+
+	if ( !Fields( GetByName,~<FieldName>~,ColumnDefinition ) )
+		{ return FALSE; }
+
+	ColumnDefinition( Set,OnModify,~[ Call ( <TheAction>() ) ]~ );
+
+	return TRUE;
+}
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+NUMERIC Init( WhichPrinters,DocumentQuery )
+{
+	DataWindow( Set,Title,~<WhichPrinters>~ == ~~ ? ~Printer Data~ : ~Printer Data - <WhichPrinters>~ );
+
+	Global( WhichPrinters,DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,Cursor,Keyset,QUERY,~<DocumentQuery>~ ) )
+		{ 
+			List( GetErrorDescription,0,theErr,ClearErrors );
+			Error( ~Database query failed. <DocumentQuery>.  <theErr>~ ); 
+		}
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !DataWindow( CreateWindow,~Printers~ ) )
+		{ 
+			Error( ~Failed to create the window for Printers~ ); 
+		}
+
+		return TRUE;
+	}
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+Include: ~UtilityRoutines~;
+
+
+if ( !GenCon( PrintersTableDefinition,GetFrom,Printers,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The Printers Table is not properly defined~ ); }
+
+//TrapCellModifications( PrinterModel,OnPrinterModelModified ) ;
+	
+
+Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add Printer~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( InitPasswordDialog(~Delete Printers~,~To delete a printer you must enter a password.~,~DeleteRecord()~,SystemSettings,Password,DeletePrinter) )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(); )
+
+		Define:	NULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+		if 0
+		{
+
+			Define:	RunMenu	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Run~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SetPrinterStatus(<Run>); )
+
+			Define:	SuspendMenu	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Suspend~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SetPrinterStatus(<Suspend>); )
+
+			Define:	ResumeMenu	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Resume~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SetPrinterStatus(<Resume>); )
+
+			Define:	ShutDownGracefully	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Shut Down After Current Batch~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SetPrinterStatus(<Shutdown>); )
+
+			Define:	ShutDownHard	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Shut Down Now~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SetPrinterStatus(<Quit>); )
+
+			Define:	NULL3 using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+			Define:	CreateQueue	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Add Queue For Printer~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( AddQueueForPrinter(); )
+
+	
+		}
+		Define: Resolutions	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Resolutions~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SeeResolutions(); )
+
+		
+ 
+		Define:	CalibratePrinter	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Calibrate Printer~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SpawnCalibrationApp(); )
+
+		if 0
+		{
+			Define:	NULL4 using DDMenuItemDef
+				Fields:	Text		~~
+					IDText		~NULL~
+
+
+			Define:	WatchActivity	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Watch Activity~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( WatchActivity(); )
+		}
+	}
+
+Define: DataWindow Using DDWinDef
+	Fields:		Title					~Printers~
+				Position				0 0 90 15
+				IsPositionPercent		T
+				EnableStatusBar			F;
+
+	Contains:	INLISTORDER
+	{
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		PrintersTableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord(); )
+					DeleteRecordActionsText ACTION Exec ( InitPasswordDialog(~Delete Printers~,~To delete a printer you must enter a password.~,~DeleteRecord()~,SystemSettings,Password,DeletePrinter) )
+					DoubleClickActionsText	ACTION Exec ( ViewQueuesForSelectedPrinters() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView(); )
+					ComboBoxActionsText		ACTION Call ( RefreshQueueList() )
+					RefreshActionsText		ACTION Exec ( RefreshListView() )
+					ComboBoxChangedActionsText	ACTION Call ( EndEdit() )
+					EndEditActionsText		ACTION Call ( EndEdit() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "Printers.htm" )
+					CloseActionsText		ACTION Call ( OnCloseDataView() )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() )
+					ButtonClickActionsText	ACTION Exec ( OnButtonClick() );
+ ;
+	}
+	
+

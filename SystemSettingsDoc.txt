@@ -1,0 +1,312 @@
+
+
+NUMERIC RefreshListView()
+{
+	if ( SystemSettingsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	SystemSettingsDataWindow( StatusBar,Text,~Refreshing~ );
+	SystemSettingsDataWindow( RefreshWindow );
+	SystemSettingsDataWindow( StatusBar,Text,~~ );
+
+	return TRUE;
+}
+
+
+STR GetKey( &SystemSetting )
+{
+	Key = STR (	Category	= '<$con.SystemSetting[Category]>'	AND
+				Item		= '<$con.SystemSetting[Item]>' );
+
+	return ~<Key>~;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !SystemSettingsDataView( GetChangedRow,ChangedSystemSetting,OrigSystemSetting,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedSystemSetting[Category]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  Type cannot be blank.~ ); }
+
+	if ( ~<$con.ChangedSystemSetting[Item]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  Item cannot be blank.~ ); }
+		
+
+	Key = GetKey( OrigSystemSetting );
+
+	Query = ~Select * From SystemSettings Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <Query>. <theErr>~ ) );
+	}
+
+	if ( !List( UpdateFrom,ChangedSystemSetting,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+		return Warning( Translate( ~Could not update System Setting record where <Key>. <theErr>~ ) );
+	}
+
+	SystemSettingsDataView( CommitChanges );
+	
+	if ( ~<$con.ChangedSystemSetting[Category]>~ == ~OrderItemThumbnail~ )
+	{
+			Warning( ~You must restart DP2 for the new settings to take effect.~ );
+	}
+	return TRUE;
+}
+
+
+
+NUMERIC DuplicateRecord()
+{
+	if ( !SystemSettingsDataView( GetSelectedRows,SelectedItems ) )		
+		{ return Warning( Translate( UIMessages,NoRowsSelected ) ); }
+
+	if ( !SelectedItems( GetFirst,SelectedItem ) )
+		{ return Warning( Translate( UIMessages,NoRowsSelected ) ); }
+
+	
+	RowBeingAdded = SystemSettingsDataView( AddRow,SelectedItem );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	SystemSettingsDataView( SetActiveCell,<RowBeingAdded>,Item );
+
+	return TRUE;
+}
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !SystemSettingsDataView( GetSelectedRows,SystemSettingsToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	count = SystemSettingsToDelete( ChildCount );
+
+	if ( MessageBox( ~Are you sure you want to delete the <count> selected system setting(s)?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( SystemSettingsToDelete( GetNext,SystemSetting ) )
+	{
+		Key = GetKey( SystemSetting );
+
+		Cmd = ~Delete From SystemSettings Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Could not delete System Setting where <Key>. <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,SystemSettingsToDelete(GetCurrentPosition) );
+	}
+
+	SystemSettingsDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	RowBeingAdded = SystemSettingsDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	SystemSettingsDataView( SetActiveCell,<RowBeingAdded>,SystemSetting );
+
+	return TRUE;
+}
+
+
+
+
+
+NUMERIC RightClickInListView()
+{
+	SystemSettingsDataView( DisplayMenu,SystemSettingsListViewMenu );
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC OnCloseSystemSettingsDataView()
+{
+	if ( SystemSettingsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	SystemSettingsDataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( SystemSettingsDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !SystemSettingsDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new settings that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( SystemSettingsDataView( PendingChanges ) )
+	{
+		SystemSettingsDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+FirstTime = TRUE; // Only open a new window the first time
+
+NUMERIC Init( WhichSystemSettings,DocumentQuery )
+{
+	SystemSettingsDataWindow( Set,Title,~<WhichSystemSettings>~ == ~~ ? ~System Setting Data~ : ~System Setting Data - <WhichSystemSettings>~ );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( SystemSettingsList,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+			{ Error( ~Failed to query the SystemSettings table~ ); }
+
+		SetDocumentData( SystemSettingsList(GetObject) );
+
+		Global( WhichSystemSettings,DocumentQuery );
+
+		if ( !SystemSettingsDataWindow( CreateWindow,~System Settings~ ) )
+			{ Error( ~Failed to create the System Settings window~ ); }
+
+		return TRUE;
+	}
+
+	return TRUE;
+}
+
+
+if ( !GenCon( SystemSettingsTableDefinition,GetFrom,SystemSettings,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The SystemSettings Table is not properly defined~ ); }
+	
+
+Define:	SystemSettingsListViewMenu Using DDMenuDef AsSymbol SystemSettingsListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add Setting~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+					Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(); )
+					
+		Define:	Duplicate	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Duplicate~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DuplicateRecord(); )
+
+	}
+
+Define: SystemSettingsDataWindow Using DDWinDef
+	Fields:		Title					Translate( ~System Settings~ )
+				Position				0 0 50 50
+				IsPositionPercent		T
+				EnableStatusBar			F;
+
+	Contains:	INLISTORDER
+	{
+		Define: SystemSettingsDataView Using DDViewDef AsSymbol SystemSettingsDataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		SystemSettingsTableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord(); )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord(); )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView(); )
+					RefreshActionsText		ACTION Exec ( RefreshListView() )
+					HActionsText			ACTION SHOWHELPPAGE ( AdminHelpFile "SystemSettings.htm" )
+					CloseActionsText		ACTION Call ( OnCloseSystemSettingsDataView() ) ;
+	}
+	
+

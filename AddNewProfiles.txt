@@ -1,0 +1,448 @@
+Include: ~FormattingRoutines.txt~;
+
+NUMERIC AddNewProfile(&db, &Table,Name,Device,Type,EditableSpace,Path )
+{
+	// Remove the entry if it already exists.
+	db(Cmd, ~Delete FROM Profiles Where Name = '<Name>'~ );
+ 
+	err = Table(AddNew, Item);
+
+	if (<err> != 1)
+	{
+		return 0;
+	}
+
+	err = Item( SetValue,Name,~<Name>~,Device,~<Device>~,Type,~<Type>~,EditableSpace,~<EditableSpace>~,Path,~<Path>~ );
+
+	return Table( Update );
+}
+
+NUMERIC AddDCProfile( &db, &Table, ID, Make, Model, ColorSpace, Illuminant, Path, Description, Type )
+{
+	if (SimilarStr(~<Type>~, ~Abstract~))
+	{
+		Query = ~Select * from DCProfiles Where EquipmentMake = '<Make>' AND EquipmentModel='<Model>' AND Type='Abstract'~;
+	} else if ( IsNull(~<Make>~) && (SimilarStr(~<Type>~, ~Input~)) )		// If Make is NULL, then Model should be NULL also
+	{
+		Query = ~Select * from DCProfiles Where EquipmentMake Is NULL AND EquipmentModel Is NULL AND ColorSpace='<ColorSpace>' AND Illuminant=<Illuminant>~;
+	} else if ( IsNull(~<Model>~) && (SimilarStr(~<Type>~, ~Input~)) )
+	{
+		Query = ~Select * from DCProfiles Where EquipmentMake='<Make>' AND EquipmentModel Is NULL AND ColorSpace='<ColorSpace>' AND Illuminant=<Illuminant>~;
+	} else if ( SimilarStr(~<Type>~, ~Input~) )
+	{
+		Query = ~Select * from DCProfiles Where EquipmentMake = '<Make>' AND EquipmentModel='<Model>' AND ColorSpace='<ColorSpace>' AND Illuminant=<Illuminant>~;
+	} else
+	{
+		Log(Session, ~There was an error adding Digital Camera Profile <Path> Make <Make> Model <Model> Type <Type>~);
+	}
+
+	// Insert the entry if it doesn't exist, otherwise just update the entry that's there.
+	if (!db(RecordCountFor, ~<Query>~))
+	{
+		// Item does not yet exist
+		err = Table( AddNew,Item );
+
+		if (<err> != 1)
+		{
+			Log(Session, ~Error adding a new profile <Path>~);
+			return 0;
+		}
+
+		err = Item( SetValue,ID, ~<ID>~, EquipmentMake,~<Make>~,EquipmentModel,~<Model>~, ProfilePath,~<Path>~,ColorSpace,~<ColorSpace>~,Illuminant,~<Illuminant>~, Description, ~<Description>~, Type, ~<Type>~ );
+
+		if (<err> != 1)
+		{
+			err = Item( SetValue,ID, ~<ID>~, EquipmentMake,~<Make>~,EquipmentModel,~<Model>~, ProfilePath,~<Path>~,ColorSpace,~<ColorSpace>~,Illuminant,~<Illuminant>~, Description, ~<Description>~, Type, ~<Type>~ );
+
+			if (<err> != 1)
+			{
+				Log(Session, ~Error adding a new profile <Path>~);
+				return 0;
+			}
+		}
+	} else
+	{
+		// Item exists, so update it.
+
+		if (IsNULL(~<Make>~))
+		{
+			MakeClause = ~EquipmentMake Is NULL~;
+		} else
+		{
+			MakeClause = ~EquipmentMake = '<Make>'~;
+		}
+
+		if (IsNULL(~<Model>~))
+		{
+			ModelClause = ~EquipmentModel Is NULL~;
+		} else
+		{
+			ModelClause = ~EquipmentModel='<Model>'~;
+		}
+
+// Paul Forleo 5/27/04 I had to change the ColorSpace = '' to ColorSpace Is NULL to do the correct update
+// I tested it with Jet
+		if (IsNULL(~<ColorSpace>~))
+		{
+			ColorSpaceClause = ~ColorSpace Is NULL~;
+		} else
+		{
+			ColorSpaceClause = ~ColorSpace='<Model>'~;
+		}
+
+		if (IsNULL(~<Illuminant>~))
+		{
+			IlluminantClause = ~~;
+		} else
+		{
+			IlluminantClause = ~AND Illuminant=<Illuminant>~;
+		}
+
+		Key = ~<MakeClause> AND <ModelClause> AND <ColorSpaceClause> <IlluminantClause>~;
+		Values = ~ProfilePath='<Path>', Description='<Description>', Type='<Type>'~;
+		err = db(Cmd,~Update DCProfiles Set <Values> Where <Key>~);
+		if (<err> != 1)
+		{
+			Log(Session, ~Error updating an existing profile <Path>~);
+			return 0;
+		}
+	}
+	
+	return Table( Update );
+}
+
+
+VOID DeleteOldDCInputProfiles(&db)
+{
+	// Remove the entry if it already exists.
+	db(Cmd, ~Delete FROM Profiles Where Type = 'DCInput'~);
+}
+
+
+VOID AddNewInputProfiles(&db, &Table)
+{
+	// Version 5 Input Profiles Added
+	if ( Authorized( DP2 ) )
+	{
+		AddNewProfile( db, Table,~Kodak3570colnegV11~,~RFS 3570+~,Input,0,~<$App.ShareDirectory>\ICCProfiles\Input\Kodak3570colnegV11dmb.icm~ );
+		AddNewProfile( db, Table,~HR500 ColorNeg~,~HR500~,Input,0,~<$App.ShareDirectory>\ICCProfiles\Input\HR500_ColorNeg.icm~ );
+		AddNewProfile( db, Table,~HR500 Ektachrome~,~HR500~,Input,0,~<$App.ShareDirectory>\ICCProfiles\Input\HR500_Ektachrome.icm~ );
+		AddNewProfile( db, Table,~HR500 Kodachrome~,~HR500~,Input,0,~<$App.ShareDirectory>\ICCProfiles\Input\HR500_Kodachrome.icm~ );
+
+		AddNewProfile( db, Table,~HR500 ColorNeg V3 FH5~,~HR500~,Input,0,~<$App.ShareDirectory>\ICCProfiles\Input\HR500_ColNeg_V3_FH5.icm~ );
+		AddNewProfile( db, Table,~HR500 ColorNeg V3 FH10~,~HR500~,Input,0,~<$App.ShareDirectory>\ICCProfiles\Input\HR500_ColNeg_V3_FH10.icm~ );
+		AddNewProfile( db, Table,~Kodak3570colneg_V14~,~RFS 3570+~,Input,0,~<$App.ShareDirectory>\ICCProfiles\Input\Kodak3570colneg_V14.icm~ );
+	}
+	
+	AddNewProfile( db, Table,~KLI~,~KLI~,Input,0,~<$App.ShareDirectory>\ICCProfiles\Input\KLI.icm~ );
+	AddNewProfile( db, Table,~Kodak_Lab_Input_V2~,~Kodak_Lab_Input_V2~,Input,0,~<$App.ShareDirectory>\ICCProfiles\Input\Kodak_Lab_Input_V2.icm~ );
+}
+
+
+VOID AddNewWorkingSpaceProfiles(&db, &Table)
+{
+	// ADD NEW WORKING SPACE PROFILES HERE
+
+	AddNewProfile( db, Table,~ProPhoto RGB~,~Disk~,~WorkingSpace~,1,~<$App.ShareDirectory>\ICCProfiles\WorkingSpace\ProPhoto_RGB.icm~ );
+	AddNewProfile( db, Table,~srgb~,~Disk~,~WorkingSpace~,1,~<$App.ShareDirectory>\ICCProfiles\WorkingSpace\srgb.ICM~ );
+	AddNewProfile( db, Table,~KLRGB~,~Disk~,~WorkingSpace~,1,~<$App.ShareDirectory>\ICCProfiles\WorkingSpace\KLRGB.ICM~ );
+
+	// Version 5 Working Space Profiles Added
+	AddNewProfile( db, Table,~Adobe 1998 RGB~,~Disk~,~WorkingSpace~,1,~<$App.ShareDirectory>\ICCProfiles\WorkingSpace\Adobe 1998 RGB.ICM~ );
+	AddNewProfile( db, Table,~ColorMatch RGB~,~Disk~,~WorkingSpace~,1,~<$App.ShareDirectory>\ICCProfiles\WorkingSpace\ColorMatch RGB.ICM~ );
+}
+
+
+VOID AddNewOutputProfiles(&db, &Table)
+{
+	// ADD NEW OUTPUT PROFILES HERE
+
+	// Version 11.0 Output Profiles Added
+	if ( Authorized( DP2 ) )
+	{
+		AddNewProfile( db, Table,~KodakLED_UltraEndura_v5~,~KodakLED~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KodakLED_UltraEndura_v5.icm~ );
+		AddNewProfile( db, Table,~KPDM2_EnduraMetallicSD~,~KPDM2~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KPDM2_EnduraMetallicSD.icm~ );
+		AddNewProfile( db, Table,~KPDM2_Supra_VC~,~KPDM2~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KPDM2_Supra_VC.icm~ );
+		AddNewProfile( db, Table,~KPDM2_UltraEndurv5~,~KPDM2~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KPDM2_UltraEndurv5.icm~ );
+		AddNewProfile( db, Table,~KPDM_Supra_VC~,~KPDM~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KPDM_Supra_VC.icm~ );
+	}
+
+	if ( Authorized( KEXDSS ) )
+	{
+		AddNewProfile( db, Table,~DL2100 Futura Laser Gloss~,~Windows Printer~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\DL2100 Copt300 v3.icm~ );
+		AddNewProfile( db, Table,~Epson 7880 lustre paper~,~Windows Printer~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\Kiosk E7880 v3.icm~ );
+		AddNewProfile( db, Table,~Epson 7880 semi-gloss canvas~,~Windows Printer~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\E7880 Can20mil copt3 720x720 v7.icm~ );
+		AddNewProfile( db, Table,~KODAK 70XX Xtralife II Std~,~Kodak7000Thermal~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KODAK 70XX Photo Printer Xtralife II V4.1 Std.icm~ );
+		AddNewProfile( db, Table,~KODAK 70XX Xtralife II Pro~,~Kodak7000Thermal~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KODAK 70XX Photo Printer Xtralife II V4.1 Pro.icm~ );
+		AddNewProfile( db, Table,~KODAK 8810 Xtralife Std~,~Kodak8810Thermal~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KODAK 8810 Photo Printer Xtralife V4.1 Std.icm~ );
+		AddNewProfile( db, Table,~KODAK 8810 Xtralife Pro~,~Kodak8810Thermal~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KODAK 8810 Photo Printer Xtralife V4.1 pro.icm~ );
+		AddNewProfile( db, Table,~KODAK D4000 Xtralife Std~,~KodakD4000Thermal~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KODAK D4000 Duplex Photo Printer Xtralife V5.0 Std.icm~ );
+		AddNewProfile( db, Table,~KODAK D4000 Xtralife Pro~,~KodakD4000Thermal~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KODAK D4000 Duplex Photo Printer Xtralife V5.0 Pro.icm~ );
+	}
+
+	AddNewProfile( db, Table,~DurstEpsilon_Supra_VC~,~DurstEpsilon~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\DurstEpsilon_Supra_VC.icm~ );
+	AddNewProfile( db, Table,~DurstLambda_Supra_VC~,~DurstLambda~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\DurstLambda_Supra_VC.icm~ );
+	AddNewProfile( db, Table,~DurstLambda_UltraEndurv5~,~DurstLambda~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\DurstLambda_UltraEndurv5.icm~ );
+	AddNewProfile( db, Table,~DurstLambdaKodakDuraClear~,~DurstLambda~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\DurstLambdaKodakDuraClearDigital.icm~ );
+	AddNewProfile( db, Table,~DurstLambdaKodakDuraTrans~,~DurstLambda~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\DurstLambdaKodakDuraTransDigital.icm~ );
+	AddNewProfile( db, Table,~DurstTheta50_Supra_VC~,~DurstTheta~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\DurstTheta50_Supra_VC.icm~ );
+	AddNewProfile( db, Table,~DurstTheta50_UltraEndurv5~,~DurstTheta~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\DurstTheta50_UltraEndurv5.icm~ );
+	AddNewProfile( db, Table,~DurstTheta76_Supra_VC~,~DurstTheta~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\DurstTheta76_Supra_VC.icm~ );
+	AddNewProfile( db, Table,~DurstTheta76_UltraEndurv5~,~DurstTheta~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\DurstTheta76_UltraEndurv5.icm~ );
+	AddNewProfile( db, Table,~DurstZeta_Supra_VC~,~DurstZeta~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\DurstZeta_Supra_VC.icm~ );
+	AddNewProfile( db, Table,~Kodak_RP30_Supra_VC~,~KODAK_RP30~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\Kodak_RP30_Supra_VC.icm~ );
+	AddNewProfile( db, Table,~KodakRP50_EnduraMetallic~,~KodakRP50~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KodakRP50_EnduraMetallic.icm~ );
+	AddNewProfile( db, Table,~KodakRP50_Supra_VC~,~KodakRP50~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KodakRP50_Supra_VC.icm~ );
+	AddNewProfile( db, Table,~ENDURACLEAR_Durst_Lambda_v1~,~DurstLambda~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KPro ENDURACLEAR_Durst_Lambda_Digital_Dev_v1.icm~ );
+	AddNewProfile( db, Table,~ENDURATRANS_Durst_Lambda_v1~,~DurstLambda~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\KPro ENDURATRANS_Durst_Lambda_Digital_Dev_v1.icm~ );
+	AddNewProfile( db, Table,~Noritsu31Pro_Supra_VC~,~QSS31Pro~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\Noritsu31Pro_Supra_VC.icm~ );
+	AddNewProfile( db, Table,~Noritsu32Pro_Supra_VC~,~QSS31Pro~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\Noritsu32Pro_Supra_VC.icm~ );
+	AddNewProfile( db, Table,~Noritsu34Pro_Supra_VC~,~QSS31Pro~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\Noritsu34Pro_Supra_VC.icm~ );
+	AddNewProfile( db, Table,~OCELightjet_SupraEnduraVCv1~,~OCELightJet~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\OCELightjet_SupraEnduraVCv1.icm~ );
+	AddNewProfile( db, Table,~Polieletronica_Supra_VC~,~Polieletronica~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\Polieletronica_Supra_VC.icm~ );
+	AddNewProfile( db, Table,~PoliLaserLab_UltraEndurv5~,~PoliLaserLab~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\PoliLaserLab_UltraEndurv5.icm~ );
+	AddNewProfile( db, Table,~Pro_Image_II_Lambda130_131~,~DurstLambda~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\Pro_Image_II_Lambda130_131_Pi50_HS.icm~ );
+	AddNewProfile( db, Table,~Pro_Image_II_Theta_50~,~DurstTheta~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\Pro_Image_II_Theta_50_.icm~ );
+	AddNewProfile( db, Table,~RR30_Supra_VC~,~Kodak RR30~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\RR30_Supra_VC.icm~ );
+	AddNewProfile( db, Table,~ZBEChromira_Supra_VC~,~ZBEChromira~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\ZBEChromira_Supra_VC.icm~ );
+	AddNewProfile( db, Table,~ZBEChromira_UltraEndurv5~,~ZBEChromira~,Output,0,~<$App.ShareDirectory>\ICCProfiles\Output\ZBEChromira_UltraEndurv5.icm~ );
+}
+
+
+VOID AddNewExposureProfiles(&db, &Table)
+{
+	// ADD NEW EXPOSURE PROFILES HERE
+
+	if ( Authorized( DP2 ) )
+	{
+		AddNewProfile( db, Table,~SizzleEx~,~RFS 3570 Speedup~,~Exposure~,1,~<$App.ShareDirectory>\Scan\RFS 3570 Plus\sizzleEx.pf~ );
+		AddNewProfile( db, Table,~HR500 Exposure~,~HR500~,~Exposure~,1,~<$App.ShareDirectory>\Scan\HR500\HR5v5.pf~ );
+		AddNewProfile( db, Table,~HR500 Reverse Exposure~,~HR500~,~Exposure~,1,~<$App.ShareDirectory>\Scan\HR500\RevHR500Exp.pf~ );
+	}
+}
+
+
+VOID AddNewDCInputProfiles(&db, &Table)
+{
+	// NOTE: Illuminant must be done by number, not description! Here is the translation
+	// which will be the same as it appears in the stringlist of FieldTypes.txt:
+	//		0 = Unused
+	//		1 = Daylight
+	//		2 = Tungsten
+	//		3 = Flash
+	//		4 = Fluorescent
+
+	// DCS760C INPUT PROFILES //
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS760C~, ~RGB~, ~1~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCS760CDaylightSource.pf~, ~DCS Pro760 Daylight~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS760C~, ~RGB~, ~2~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCS760CTungstenSource.pf~, ~DCS Pro760 Tungsten~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS760C~, ~RGB~, ~3~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCS760CFlashSource.pf~, ~DCS Pro760 Flash~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS760C~, ~RGB~, ~4~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCS760CFluorescentSource.pf~, ~DCS Pro760 Fluorescent~, ~Input~);
+
+	// DCS760M Support
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS760M~, ~RGB~, ~0~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCS760CDaylightSource.pf~, ~DCS Pro760 Daylight~, ~Input~);
+
+	// DCS720X INPUT PROFILES //
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS720X~, ~RGB~, ~1~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLR2MPDaylightSource.pf~, ~DCS 720X Daylight~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS720X~, ~RGB~, ~2~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLR2MPTungstenSource.pf~, ~DCS 720X Tungsten~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS720X~, ~RGB~, ~3~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLR2MPFlashSource.pf~, ~DCS 720X Flash~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS720X~, ~RGB~, ~4~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLR2MPFluorSource.pf~, ~DCS 720X Fluorescent~, ~Input~);
+
+	// ProBack INPUT PROFILES //
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~PROBACK~, ~RGB~, ~1~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPBDaylightSource.pf~, ~DCS ProBack~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~PROBACK~, ~RGB~, ~2~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPBTungstenSource.pf~, ~DCS ProBack Tungsten~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~PROBACK~, ~RGB~, ~3~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPBFlashSource.pf~, ~DCS ProBack Flash~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~PROBACK~, ~RGB~, ~4~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPBFluorescentSource.pf~, ~DCS ProBack Fluorescent~, ~Input~);
+
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS700C~, ~RGB~, ~1~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPBDaylightSource.pf~, ~DCS ProBack~, ~Input~);
+
+	// ProBack645 INPUT PROFILES //
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~PROBACK645~, ~RGB~, ~1~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPB645DaylightSource.pf~, ~DCS ProBack645 Daylight~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~PROBACK645~, ~RGB~, ~2~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPB645TungstenSource.pf~, ~DCS ProBack645 Tungsten~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~PROBACK645~, ~RGB~, ~3~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPB645FlashSource.pf~, ~DCS ProBack645 Flash~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~PROBACK645~, ~RGB~, ~4~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPB645FluorescentSource.pf~, ~DCS ProBack645 Fluorescent~, ~Input~);
+
+	// Kodak 3x, 5x and 6x Series Camera INPUT PROFILES //
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~~, ~RGB~, ~0~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSRGB.ICM~, ~Kodak Legacy Camera Input Profile~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~~, ~RGB~, ~1~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSRGB.ICM~, ~Kodak Legacy Camera Input Profile~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~~, ~RGB~, ~2~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSRGB.ICM~, ~Kodak Legacy Camera Input Profile~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~~, ~RGB~, ~3~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSRGB.ICM~, ~Kodak Legacy Camera Input Profile~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~~, ~RGB~, ~4~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSRGB.ICM~, ~Kodak Legacy Camera Input Profile~, ~Input~);
+
+	// DEFAULT SRGB PROFILE - USED IF NO OTHER INPUT PROFILES MATCH UP //
+	// NOTE: Set up one each for each base illuminant!
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~~, ~~, ~RGB~, ~0~,	 ~<$App.ShareDirectory>\ICCProfiles\WorkingSpace\srgb.ICM~, ~Default RGB Input Profile~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~~, ~~, ~RGB~, ~1~, ~<$App.ShareDirectory>\ICCProfiles\WorkingSpace\srgb.ICM~, ~Default RGB Input Profile~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~~, ~~, ~RGB~, ~2~, ~<$App.ShareDirectory>\ICCProfiles\WorkingSpace\srgb.ICM~, ~Default RGB Input Profile~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~~, ~~, ~RGB~, ~3~, ~<$App.ShareDirectory>\ICCProfiles\WorkingSpace\srgb.ICM~, ~Default RGB Input Profile~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~~, ~~, ~RGB~, ~4~, ~<$App.ShareDirectory>\ICCProfiles\WorkingSpace\srgb.ICM~, ~Default RGB Input Profile~, ~Input~);
+
+	// Pro 14N INPUT PROFILES
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro 14N~, ~RGB~, ~1~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPro14Daylight.icm~, ~DCS Pro14 Daylight~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro 14N~, ~RGB~, ~2~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPro14Tungsten.icm~, ~DCS Pro14 Tungsten~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro 14N~, ~RGB~, ~3~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPro14Flash.icm~, ~DCS Pro14 Flash~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro 14N~, ~RGB~, ~4~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPro14Fluorescent.icm~, ~DCS Pro14 Fluorescent~, ~Input~);
+
+	// Pro 14nx INPUT PROFILES
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro 14nx~, ~RGB~, ~1~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRnDaylight.icm~, ~DCS Pro 14nx Daylight~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro 14nx~, ~RGB~, ~2~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRnTungsten.icm~, ~DCS Pro 14nx Tungsten~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro 14nx~, ~RGB~, ~3~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRnFlash.icm~, ~DCS Pro 14nx Flash~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro 14nx~, ~RGB~, ~4~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRnFluorescent.icm~, ~DCS Pro 14nx Fluorescent~, ~Input~);
+
+	// Pro SLR/n INPUT PROFILES
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro SLR/n~, ~RGB~, ~1~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRnDaylight.icm~, ~DCS Pro SLR/n Daylight~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro SLR/n~, ~RGB~, ~2~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRnTungsten.icm~, ~DCS Pro SLR/n Tungsten~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro SLR/n~, ~RGB~, ~3~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRnFlash.icm~, ~DCS Pro SLR/n Flash~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro SLR/n~, ~RGB~, ~4~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRnFluorescent.icm~, ~DCS Pro SLR/n Fluorescent~, ~Input~);
+
+	// Pro SLR/c INPUT PROFILES
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro SLR/c~, ~RGB~, ~1~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRcDaylight.icm~, ~DCS Pro SLR/c Daylight~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro SLR/c~, ~RGB~, ~2~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRcTungsten.icm~, ~DCS Pro SLR/c Tungsten~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro SLR/c~, ~RGB~, ~3~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRcFlash.icm~, ~DCS Pro SLR/c Flash~, ~Input~);
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro SLR/c~, ~RGB~, ~4~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRcFluorescent.icm~, ~DCS Pro SLR/c Fluorescent~, ~Input~);
+
+	// Pro 14N ABSTRACT PROFILE
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro 14N~, ~~, ~~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSPro14ToneCurve.icm~, ~DCS Pro14 Abstract Look~, ~Abstract~);
+
+	// Pro 14nx ABSTRACT PROFILE
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro 14nx~, ~~, ~~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRnToneCurve.icm~, ~DCS Pro 14nx Abstract Look~, ~Abstract~);
+
+	// Pro SLR/n ABSTRACT PROFILE
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro SLR/n~, ~~, ~~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRnToneCurve.icm~, ~DCS Pro SLR/n Abstract Look~, ~Abstract~);
+
+	// Pro SLR/c ABSTRACT PROFILE
+	ID = UniqueDCProfileID();
+	AddDCProfile(db, Table, <ID>, ~Kodak~, ~DCS Pro SLR/c~, ~~, ~~, ~<$App.ShareDirectory>\ICCProfiles\DCInput\DCSProSLRcToneCurve.icm~, ~DCS Pro SLR/c Abstract Look~, ~Abstract~);
+}
+
+VOID AddNewDigitalCameraLookProfiles(&db, &Table)
+{
+	// Add the digital camera look profiles
+	AddNewProfile(db, Table,~Portrait~,~Digital Camera~,~Look~,0,~<$App.ShareDirectory>\ICCProfiles\Look\KodakDCSPortrait.pf~ );
+	AddNewProfile(db, Table,~Portrait Reduced~,~Digital Camera~,~Look~,0,~<$App.ShareDirectory>\ICCProfiles\Look\KodakDCSPortraitReduced.pf~ );
+	AddNewProfile(db, Table,~Product~,~Digital Camera~,~Look~,0,~<$App.ShareDirectory>\ICCProfiles\Look\KodakDCSProduct.pf~ );
+	AddNewProfile(db, Table,~Product Reduced~,~Digital Camera~,~Look~,0,~<$App.ShareDirectory>\ICCProfiles\Look\KodakDCSProductReduced.pf~ );
+	AddNewProfile(db, Table,~Reduced Flare~,~Digital Camera~,~Look~,0,~<$App.ShareDirectory>\ICCProfiles\Look\DCSReducedFlareLook.icm~ );
+	AddNewProfile(db, Table,~<Use Embedded>~,~Digital Camera~,~Look~,0,~<$App.ShareDirectory>\ICCProfiles\Look\ignorethispath~ );
+	AddNewProfile(db, Table,~Product Grayscale~,~Digital Camera~,~Look~,0,~<$App.ShareDirectory>\ICCProfiles\Look\DCSProductGrayscale.icm~ );
+	AddNewProfile(db, Table,~Event~,~Digital Camera~,~Look~,0,~<$App.ShareDirectory>\ICCProfiles\Look\DCSEventLook.icm~ );
+	AddNewProfile(db, Table,~Commercial Product~,~Digital Camera~,~Look~,0,~<$App.ShareDirectory>\ICCProfiles\Look\DCSCommercialProductLook.icm~ );
+	AddNewProfile(db, Table,~Wedding~,~Digital Camera~,~Look~,0,~<$App.ShareDirectory>\ICCProfiles\Look\DCSWeddingLook.icm~ );
+	AddNewProfile(db, Table,~Portrait Grayscale~,~Digital Camera~,~Look~,0,~<$App.ShareDirectory>\ICCProfiles\Look\DCSPortraitGrayscale.icm~ );
+}
+
+VOID AddNewMonitorProfiles(&db, &Table)
+{
+	MoreFiles = findfile( aDirectoryEntry,Find,~<$App.ShareDirectory>\ICCProfiles\Monitor\*.icm~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+			continue;
+
+		aDirectoryEntry( Get,Title,Filename );
+
+		AddNewProfile(db, Table,~<FileName>~,~Monitor~,~Monitor~,0,~<aPath>~ );
+	}
+}
+
+VOID AddNewProfiles(&db)
+{
+	if ( !PGenConList( Table,Connection,db,Cursor,Keyset,Lock,Optimistic,Query,~SELECT * FROM Profiles~ ) )
+	{
+		if ( Defined( dlg ) ) { dlg( END ); }
+		Error( ~Could not open Profiles recordset~ );
+	}
+
+	DeleteOldDCInputProfiles(db);
+	AddNewInputProfiles(db, Table);
+
+	if ( Authorized( DP2 ) )
+	{
+		AddNewDigitalCameraLookProfiles(db, Table);
+	}
+	
+	AddNewWorkingSpaceProfiles(db, Table);
+	AddNewOutputProfiles(db, Table);
+	AddNewExposureProfiles(db, Table);
+	AddNewMonitorProfiles(db, Table);
+
+	if ( !PGenConList( DCTable,Connection,db,Cursor,Keyset,Lock,Optimistic,Query,~SELECT * FROM DCProfiles~ ) )
+	{
+		if ( Defined( dlg ) ) { dlg( END ); }
+		Error( ~Could not open Profiles recordset~ );
+	}
+
+	if ( Authorized( DP2 ) )
+	{
+		AddNewDCInputProfiles(db, DCTable);
+	}
+
+}
+
+
+NUMERIC AddProfiles()
+{
+	if ( !PGenConList( Table,Connection,db,Cursor,Keyset,Lock,Optimistic,Query,~SELECT * FROM Profiles~ ) )
+	{
+		if ( Defined( dlg ) ) { dlg( END ); }
+		Error( ~Could not open Profiles recordset~ );
+	}
+
+	return TRUE;
+}
+
+

@@ -1,0 +1,1064 @@
+Include: ~DeleteOrder~;
+
+IncludeClass( BaseDialog );
+IncludeClass( BaseThread );
+
+////////////////////////////////////////////////////////
+//	PreviewThread -- reconverts raw image for Preview
+///////////////////////////////////////////////////////
+Class( PreviewThread,Extends,BaseThread );
+
+
+VOID PreviewThread::PreviewThread( )	
+{ 
+	DefineThreadMessages(); 
+}
+
+VOID PreviewThread::!PreviewThread()	
+{ 
+}
+
+
+NUMERIC	PreviewThread::HandleThread( Path,WhiteBalance,Exposure,PreviewSize,MaxWidth,MaxHeight )	
+{ 
+	result = PreviewRaw( ~<Path>~,~<WhiteBalance>~,<Exposure>,<PreviewSize>,<MaxWidth>,<MaxHeight> );
+	return <result>;
+}
+
+VOID PreviewThread::DefineThreadMessages()
+{
+
+	if ( Defined( RawTranslations ) )
+	{
+		return;
+	}
+
+	Define:	RawTranslations Using DDSymbol Private;	// Translations object for English
+
+	// DEFINE THE BASE TRANSLATIONS OBJECT FOR ALL THE OTHER LANGUAGES IN THE HELP MENU
+
+	Index = 0;
+
+	while ( GenCon( HelpObj,GetFrom,Language<++Index>,~[UI Menus HelpMenuObj]~ ) )
+	{
+		if ( !SimilarStr(~<$con.HelpObj[EnglishText]>~,~English~) )
+		{
+			Define:	~Translations<$con.HelpObj[EnglishText]>~ Using DDSymbol Private;
+		}
+		ForgetLocal( HelpObj );
+	}
+
+	RawTranslations( AddText,ReconvertingImage,~Previewing raw image for Path: '%1'~ );
+	RawTranslations( AddText,ConvertFailed,~Unable to preview Raw Camera file: '%1'.~ );
+
+	RawTranslations( AddText,AbortMessage,~Preview process stopped.~ );
+	RawTranslations( AddText,CompleteMessage,~Preview complete.~ );
+}
+
+NUMERIC PreviewThread::PreviewRaw(Path,WhiteBalance,Exposure,PreviewSize,MaxWidth,MaxHeight )
+{
+	result = FALSE;
+
+	if ( <faborting> )
+	{
+		Invoke( OnPreviewComplete, FALSE, Translate( RawTranslations,ConvertFailed,~<Path>~ ), ~~ );
+		return FALSE;
+	}
+			
+	if ( !PreviewRawFile( ~<Path>~,~<WhiteBalance>~,<Exposure>,<PreviewSize>,<MaxWidth>,<MaxHeight>,theBitmap ) )
+	{
+		Invoke( StatusBarText, Translate( RawTranslations,ConvertFailed,~<Path>~) );
+		Log( Session,Translate( RawTranslations,ConvertFailed,~<Path>~ ) );
+		Invoke( OnPreviewComplete, FALSE, Translate( RawTranslations,ConvertFailed,~<Path>~ ), ~~ );
+		return FALSE;
+	}
+	
+	if ( <faborting> )
+	{
+		Invoke( OnPreviewComplete, FALSE, Translate( RawTranslations,ConvertFailed,~<Path>~ ), ~~ );
+		return FALSE;
+	}
+			
+	if ( Defined( theBitmap ) )
+	{
+		theBitmap( Permanent );
+	}
+	else
+	{
+		Invoke( StatusBarText, Translate( RawTranslations,ConvertFailed,~<Path>~) );
+		Log( Session,Translate( RawTranslations,ConvertFailed,~<Path>~ ) );
+		Invoke( OnPreviewComplete, FALSE, Translate( RawTranslations,ConvertFailed,~<Path>~ ), ~~ );
+		return FALSE;
+	}
+
+	Invoke( OnPreviewComplete, TRUE, ~~, theBitmap( Get ) );
+	
+	return <result>;
+}
+
+
+Class( RawDialog,Extends,BaseDialog,
+		Member,MinExposure,Numeric,(-2.0),
+		Member,MaxExposure,Numeric,2.0,
+		Member,DCWhiteBalList,Object,StringList,
+		Member,MinImageWidth,Numeric,250,
+		Member,MinImageHeight,Numeric,250,
+		Member,PreviewWidth,Numeric,350,	// current Preview
+		Member,PreviewHeight,Numeric,350,
+		Member,ImageWidth,Numeric,350,		// size from Bibble
+		Member,ImageHeight,Numeric,350,
+		Member,MinDialogWidth,Numeric,0,
+		Member,MinDialogHeight,Numeric,0,
+		Member,Priority,Numeric,50,
+		Member,FileType,Str,~TIFF~,
+		Member,JPEGQuality,Numeric,100,
+		Member,ShowPreview,Numeric,1,
+		Member,MaxHeight,Numeric,350,
+		Member,MaxWidth,Numeric,350
+ );
+ 
+VOID RawDialog::RawDialog()					// CONSTRUCTOR
+{
+	DialogWidth = 1000;
+	ButtonWidth = 60;
+	Dictionary = ~DDRawDialogData~;
+	Title = ~Reconvert Raw Image(s)~;
+
+	StringList( DCWhiteBalList,New,InListOrder,AddStrings,~AS_SHOT~,~INCANDESCENT~,~FLUORESCENT~,~SUNNY~,~CLOUDY~,~SHADE~,~FLASH~ );
+	
+	Enabled = FALSE;
+	if ( GetWorkstationSettings( ~RawCamera~,~FileType~, FileType, Enabled ) )
+	{
+		if ( !<Enabled> || IsNull( ~<FileType>~ ) )
+		{
+			if ( GetSystemSettings( ~RawCamera~,~FileType~, FileType, Enabled ) )
+			{
+				if ( !<Enabled> || IsNull( ~<FileType>~ ) )
+				{
+					FileType = ~TIFF~;
+				}
+			}
+			else
+			{
+				FileType = ~TIFF~;
+			}
+		}
+	}
+	else
+	{
+		if ( GetSystemSettings( ~RawCamera~,~FileType~, FileType, Enabled ) )
+		{
+			if ( !<Enabled> || IsNull( ~<FileType>~ ) )
+			{
+				FileType = ~TIFF~;
+			}
+		}
+		else
+		{
+			FileType = ~TIFF~;
+		}
+	}
+	
+	Enabled = FALSE;
+	if ( GetWorkstationSettings( ~RawCamera~,~JPEGQuality~, JPEGQuality, Enabled ) )
+	{
+		if ( !<Enabled> || IsNull( ~<JPEGQuality>~ ) )
+		{
+			if ( GetSystemSettings( ~RawCamera~,~JPEGQuality~, JPEGQuality, Enabled ) )
+			{
+				if ( !<Enabled> || IsNull( ~<JPEGQuality>~ ) )
+				{
+					JPEGQuality = 100;
+				}
+			}
+			else
+			{
+				JPEGQuality = 100;
+			}
+		}
+	}
+	else
+	{
+		if ( GetSystemSettings( ~RawCamera~,~JPEGQuality~, JPEGQuality, Enabled ) )
+		{
+			if ( !<Enabled> || IsNull( ~<JPEGQuality>~ ) )
+			{
+				JPEGQuality = 100;
+			}
+		}
+		else
+		{
+			JPEGQuality = 100;
+		}
+	}
+	
+	HelpPage = ~RawImageConversionDialog.htm~;
+}
+
+
+VOID RawDialog::!RawDialog()					// DESTRUCTOR
+{
+}
+
+
+VOID RawDialog::DefineDictionary()
+{
+	if ( !DictionaryExists( DDRawDialogData ) )
+	{
+		Dictionary: ~DDRawDialogData~ 
+			Fields: Name WhiteBalance		Type Text
+			Fields: Name Exposure			Type Double	Precision	2	Scale 2 LowValue (-2.0)	HighValue 2.0
+			Fields: Name PreviewSlider		Type Long	LowValue 1	HighValue 5
+			Fields: Name Priority			Type Long   LowValue 1	HighValue 100
+			Fields: Name CurrentWhiteBal	Type Text
+			Fields: Name CurrentExposure	Type Double	Precision	2	Scale 2 LowValue (-2.0)	HighValue 2.0
+			;
+	}
+}
+
+VOID RawDialog::InitDialogData()
+{
+	DlgData( SetValues,WhiteBalance,~As Shot~,Exposure,0.0,Priority,50 );
+}
+
+
+NUMERIC RawDialog::DefineControls()
+{
+	DialogHeight = aDialog(GetMaxBottom,Position);
+	
+    ComboBoxWidth	= 100;	
+    ComboBoxHeight	= 120;
+
+	EditTextWidth	= 50;     
+	EditTextHeight	= 20;
+
+	StaticTextWidth  = 50;   
+	StaticTextHeight = 20;
+
+	x				= 2;
+	y				= 10;
+
+    Define: WhiteBalStaticText Using DDWinCtrlDef AsSymbol WhiteBalStaticText 
+            Fields: TypeName        StaticText
+                    Text            ~White Balance~
+					RightJustified	TRUE
+                    Position        <x> , <y>,  100 , <StaticTextHeight>;
+
+    Define: WhiteBalComboBox Using DDWinCtrlDef AsSymbol WhiteBalComboBox 
+            Fields: TypeName		SComboBox  
+                    Position		WhiteBalStaticText(GetRight,Position) + $hGap, WhiteBalStaticText(Gettop,Position),<ComboBoxWidth> ,<ComboBoxHeight> 
+                    IActionsText		ACTION EXEC ( <THIS>.UpdateWhiteBalComboBox(TRUE) )
+                    DropDownActionsText	ACTION EXEC ( <THIS>.UpdateWhiteBalComboBox(FALSE) )
+					DActionsText	~[Save ]~
+                    OActionsText    ~[Save]~
+                    GenConName       THIS
+                    GenConField      ~WhiteBalance~
+                    Tooltip          ~Select the white balance option for the selected image(s)~;
+
+	Define: ExposurePrompt Using DDWinCtrlDef AsSymbol ExposurePrompt
+		Fields:	TypeName		StaticText
+				Text			~Exposure~
+				RightJustified	TRUE
+				Position		WhiteBalComboBox(GetRight,Position) + $hGap, <y>,  <StaticTextWidth>*2 , <StaticTextHeight>;
+
+	Define: ExposureField Using DDWinCtrlDef AsSymbol ExposureField
+		Fields:	DACTIONSTEXT	ACTIONS ( Save Update(ExposureSlider) )
+				GENCONFIELD		~Exposure~
+				GENCONNAME		THIS
+				IACTIONSTEXT	ACTIONS ( Get )
+				OACTIONSTEXT	ACTIONS ( Save )
+				POSITION		(ExposurePrompt(GetRight,Position) + $hGap) $y 30 $EditTextHeight
+				TEXT			~~
+				TOOLTIP			~Apply Exposure correction to the selected image(s)~
+				TYPENAME		MaskedEditText
+				Mask			~####~
+				AllowedChars	~-.~
+				PromptChar		~ ~ ;
+
+	Define: ExposureSlider Using DDWinCtrlDef AsSymbol ExposureSlider
+		Fields:	DACTIONSTEXT	ACTIONS ( Save Update(ExposureField))
+				GENCONFIELD		~Exposure~
+				GENCONNAME		THIS
+				IACTIONSTEXT	~[Get]~
+				OACTIONSTEXT	~[Save]~
+				POSITION		ExposureField(GetRight,Position) , $y 120 $EditTextHeight
+				TOOLTIP			~Apply Exposure correction to the selected image(s)~
+				TYPENAME		~SLIDER~ 
+				UNITS			0.1 ;
+
+	Define: ExposureMinusButton Using DDWinCtrlDef AsSymbol ExposureMinusButton
+		Fields:	DACTIONSTEXT	ACTIONS ( Save "Exec(<THIS>.ChangeExposure(-0.1))" Update(ExposureSlider) )
+				POSITION		ExposureSlider(GetRight,Position)+$hGap * 2, $y, 15, $EditTextHeight
+				TOOLTIP			~Decrease by 0.1~
+				TYPENAME		~Button~ 
+				TEXT			~-~;
+
+	Define: ExposureZeroButton Using DDWinCtrlDef AsSymbol ExposureZeroButton
+		Fields:	DACTIONSTEXT	ACTIONS ( Save "Exec(<THIS>.ChangeExposure(0.0))" Update(ExposureSlider) )
+				POSITION		ExposureMinusButton(GetRight,Position) + $hGap, $y, 15, $EditTextHeight
+				TOOLTIP			~Reset to 0~
+				TYPENAME		~Button~ 
+				TEXT			~0~;
+
+	Define: ExposurePlusButton Using DDWinCtrlDef AsSymbol ExposurePlusButton
+		Fields:	DACTIONSTEXT	ACTIONS ( Save "Exec(<THIS>.ChangeExposure( 0.1 ))" Update(ExposureSlider) )
+				POSITION		ExposureZeroButton(GetRight,Position)+$hGap, $y, 15, $EditTextHeight
+				TOOLTIP			~Increase by 0.1~
+				TYPENAME		~Button~ 
+				TEXT			~+~;
+
+	Define: PreviewSizePrompt Using DDWinCtrlDef AsSymbol PreviewSizePrompt
+		Fields:	TypeName		StaticText
+				Text			~Preview Size~
+				RightJustified	TRUE
+				Position		ExposurePlusButton( GetRight,Position) + $hGap , <y>,  80 , <StaticTextHeight>;
+
+
+	Define: PreviewSizeSlider Using DDWinCtrlDef AsSymbol PreviewSizeSlider
+		Fields:	DACTIONSTEXT	ACTIONS ( Save )
+				GENCONFIELD		~PreviewSlider~
+				GENCONNAME		THIS
+				IACTIONSTEXT	~[Get]~
+				OACTIONSTEXT	~[Save]~
+				POSITION		PreviewSizePrompt(GetRight,Position) + $hGap, $y 100 $EditTextHeight
+				TOOLTIP			~Select preview size~
+				TYPENAME		~SLIDER~ 
+				UNITS			1 ;
+
+	Define: PreviewLowLabel Using DDWinCtrlDef AsSymbol PreviewLowLabel
+		Fields:	TypeName		StaticText
+				Text			~Fastest~
+				RightJustified	TRUE
+				Position		PreviewSizePrompt(GetRight,Position) - 15, PreviewSizeSlider(GetBottom,Position) + 1,  40 , <StaticTextHeight>;
+
+	Define: PreviewHighLabel Using DDWinCtrlDef AsSymbol PreviewHighLabel
+		Fields:	TypeName		StaticText
+				Text			~Best Quality~
+				RightJustified	TRUE
+				Position		PreviewSizeSlider(GetRight,Position) - 30, PreviewLowLabel(GetTop,Position), 60, <StaticTextHeight>;
+
+	Define: CurBalPrompt Using DDWinCtrlDef AsSymbol CurBalPrompt
+		Fields:	TypeName		StaticText
+				Text			~Last White Balance~
+				RightJustified	TRUE
+				Position		WhiteBalStaticText(GetLeft,Position),WhiteBalStaticText(GetBottom,Position)+ $vGap*2,  WhiteBalStaticText(GetWidth,Position) , <StaticTextHeight>;
+
+	Define: CurBalField Using DDWinCtrlDef AsSymbol CurBalField
+		Fields:	GENCONFIELD		~CurrentWhiteBal~
+				GENCONNAME		THIS
+				POSITION		CurBalPrompt(GetRight,Position) + $hGap CurBalPrompt(GetTop,Position) <ComboBoxWidth> $EditTextHeight
+				TOOLTIP			~The white balance used the last time this image was converted.~
+				TYPENAME		StaticText
+				IsEnabled		FALSE
+				PromptChar		~ ~ ;
+	
+	Define: CurExpPrompt Using DDWinCtrlDef AsSymbol CurExpPrompt
+		Fields:	TypeName		StaticText
+				Text			~Last Exposure~
+				RightJustified	TRUE
+				Position		ExposurePrompt(GetLeft,Position),ExposurePrompt(GetBottom,Position)+ $vGap*2,  ExposurePrompt(GetWidth,Position) , <StaticTextHeight>;
+
+	Define: CurExpField Using DDWinCtrlDef AsSymbol CurExpField
+		Fields:	GENCONFIELD		~CurrentExposure~
+				GENCONNAME		THIS
+				POSITION		CurExpPrompt(GetRight,Position) + $hGap CurExpPrompt(GetTop,Position) 40 $EditTextHeight
+				TOOLTIP			~The exposure used the last time this image was converted.~
+				TYPENAME		StaticText
+				IsEnabled		False
+				Mask			~####~
+				PromptChar		~ ~ ;
+	
+	Define: PriorityPrompt Using DDWinCtrlDef AsSymbol PriorityPrompt
+		Fields:	TypeName		StaticText
+				Text			~Priority~
+				RightJustified	TRUE
+				Position		CurExpField(GetRight,Position) +$hGap*10,CurExpPrompt(GetTop,Position),  CurExpField(GetWidth,Position) , <StaticTextHeight>;
+
+	Define: PriorityField Using DDWinCtrlDef AsSymbol PriorityField
+		Fields:	DACTIONSTEXT	ACTIONS ( Save )
+				GENCONFIELD		~Priority~
+				GENCONNAME		THIS
+				IACTIONSTEXT	ACTIONS ( Get )
+				OACTIONSTEXT	ACTIONS ( Save )
+				POSITION		PriorityPrompt(GetRight,Position) + $hGap PriorityPrompt(GetTop,Position)-2 40 $EditTextHeight
+				TOOLTIP			~Set the priority for conversion.  1 is the lowest and 100 is the highest priority.~
+				TYPENAME		MaskedEditText
+				Mask			~###~
+				PromptChar		~ ~ ;
+	
+	y = PriorityPrompt(GetBottom,Position) + $vGap*2;
+	
+	Define: PreviewButton Using DDWinCtrlDef AsSymbol PreviewButton
+		Fields:	GENCONNAME			THIS
+					DACTIONSTEXT			ACTION EXEC ( <THIS>.OnPreviewButton() )
+					POSITION				<x>+ $hGap,<y>,
+												$ButtonWidth*1.5, $ButtonHeight
+					TEXT					Translate( ~Preview~ )
+					TOOLTIP					Translate( ~Preview first image selected.~ )
+					TYPENAME				BUTTON
+					ISTABSTOP				TRUE;
+
+	Define: ClosePreviewButton Using DDWinCtrlDef AsSymbol ClosePreviewButton
+			Fields:	GENCONNAME		THIS
+					DACTIONSTEXT	ACTION EXEC ( <THIS>.OnClosePreviewButton() )
+					POSITION		PreviewButton(GetRight,Position) + $hGap, <y>,
+									$ButtonWidth*1.5, $ButtonHeight
+					TEXT			Translate( ~Close Preview~ )
+					IsEnabled		FALSE
+					TOOLTIP			Translate( ~Close the Preview image section of the window.~ )
+					TYPENAME		BUTTON;
+
+	xcenter = (aDialog(GetMaxRight,Position) / 2) - $ButtonWidth;
+	
+	Define: SubmitButton Using DDWinCtrlDef AsSymbol SubmitButton
+		Fields:	GENCONNAME			THIS
+					DACTIONSTEXT			ACTION EXEC ( <THIS>.OnSubmitButton() )
+					POSITION				<xcenter>,<y>,
+												$ButtonWidth*1.8, $ButtonHeight
+					TEXT					Translate( ~Convert Selected~ )
+					TOOLTIP					Translate( ~Queue selected raw images for re-conversion.~ )
+					TYPENAME				BUTTON;
+					
+	Define: ViewQueueButton Using DDWinCtrlDef AsSymbol ViewQueueButton
+		Fields:	GENCONNAME			THIS
+					DACTIONSTEXT			ACTION EXEC ( <THIS>.OnViewQueueButton() )
+					POSITION				SubmitButton(GetRight,Position) + $hGap,<y>,
+												$ButtonWidth*1.8, $ButtonHeight
+					TEXT					Translate( ~Conversion Queue~ )
+					TOOLTIP					Translate( ~View the queue of raw images to convert~ )
+					TYPENAME				BUTTON;
+
+
+	xRight = aDialog(GetMaxRight,Position) - $ButtonWidth - $hGap;
+	Define: CloseButton Using DDWinCtrlDef AsSymbol CloseButton
+		Fields:	GENCONNAME			THIS
+					DACTIONSTEXT			ACTION EXEC ( <THIS>.DoCancelButton() )
+					POSITION				<xRight>,<y>,
+												$ButtonWidth, $ButtonHeight
+					TEXT					Translate( ~Close~ )
+					TOOLTIP					Translate( ~Close dialog~ )
+					TYPENAME				BUTTON;
+
+	MinDialogHeight = aDialog(GetMaxBottom,Position);
+
+	y = SubmitButton(GetBottom,Position) + $vGap * 2;
+
+	Define: TheImage Using DDWinCtrlDef AsSymbol TheImage 
+			Fields:	GENCONNAME		THIS
+					ISBITMAP		TRUE
+					POSITION		<x> ,  <y>, $PreviewWidth,$PreviewHeight
+					IsHidden		TRUE
+					TOOLTIP			Translate( ~Preview of converted image~ )
+					TYPENAME		StaticText;
+	
+	MinDialogWidth = aDialog(GetMaxRight,Position) + $hGap *2;
+	
+	return TRUE;
+}
+
+
+NUMERIC RawDialog::ReOpen()
+{
+	BaseDialog::ReOpen();
+	return Initialize();
+}
+
+NUMERIC RawDialog::Initialize()
+{
+	OnClosePreviewButton();
+	StatusBar( 0, ~~ );
+	GetMaxWindow();
+	Enabled = FALSE;
+
+	exp = 0;
+	WhiteBal = ~<AS_SHOT>~;
+
+	GetSettingsForImage( exp,WhiteBal );
+
+	if ( GetSystemSettings( ~RawCamera~,~WhiteBlance~, Whitebalance, Enabled ) )
+	{
+		DlgData( SetValue, WhiteBalance,~<WhiteBalance>~ );
+	}
+	else
+	{
+		DlgData( SetValue, WhiteBalance,~AS_SHOT~ );
+	}
+	
+	UpdateWhiteBalComboBox( FALSE );
+
+	if ( GetSystemSettings( ~RawCamera~,~Exposure~, Exposure, Enabled ) )
+	{
+		DlgData( SetValue, Exposure,<Exposure> );
+	}
+	else
+	{
+		DlgData( SetValue, Exposure,0 );
+	}
+	
+	if ( GetSystemSettings( ~RawCamera~,~PreviewSize~, PreviewSlider, Enabled ) )
+	{
+		DlgData( SetValue, PreviewSlider,<PreviewSlider> );
+		
+	}
+	else
+	{
+		DlgData( SetValue, PreviewSlider,2 );
+	}
+
+	DlgData( SetValue, CurrentWhiteBal,~<WhiteBal>~ );
+	DlgData( SetValue, CurrentExposure,<exp> );
+
+	dlg( Update );
+	
+	return TRUE;
+}
+
+
+
+VOID RawDialog::WindowDefinition()
+{
+	Fields:
+		HACTIONSTEXT	ACTION EXEC ( <THIS>.OpenHelpPage(~/RawConversion/RawConversion.kpl#Reconvert~,~Reconvert Raw Images~) )
+}
+
+
+NUMERIC RawDialog::GetMaxWindow()
+{
+	MaxHeight = App( thisApp,MainWindow,GetClientHeight ) - <MinDialogHeight> * 2;
+	MaxWidth  = App( thisApp,MainWindow,GetClientWidth );
+	
+	return TRUE;
+}
+
+
+NUMERIC RawDialog::UpdateWhiteBalComboBox( firstEntry )
+{
+	dlg( SetControlFromStringList,WhiteBalComboBox,DCWhiteBalList,NoSelection );
+	
+	if ( <firstEntry> )
+	{
+		dlg( ListBox,WhiteBalComboBox,select,0 );
+	}
+	else
+	{
+		dlg( SelectString,WhiteBalComboBox,~<$con.DlgData[WhiteBalance]>~ );
+	}
+
+	return TRUE;
+}
+
+VOID RawDialog::ChangeExposure( Amount )
+{
+	sum = (<amount> == 0) ? 0 : dlgData( GetNumeric,Exposure ) + <amount>;
+
+	sum = Pin( <sum>,<MinExposure>,<MaxExposure> );
+
+	dlg( SetString,~<sum>~,Exposure );
+}
+
+NUMERIC RawDialog::OnClosePreviewButton()
+{
+	dlg( ControlRect,TheImage,SetSize,0,0 );
+	dlg( SetWindowSize,<MinDialogWidth>,<MinDialogHeight> );
+	EnablePreview( FALSE );
+
+	return TRUE;
+}
+
+VOID RawDialog::EnableButtons( value )
+{
+	dlg( EnableControls,<value>,SubmitButton );
+	dlg( EnableControls,<value>,PreviewButton );
+	dlg( EnableControls,<value>,CloseButton );
+}
+
+VOID RawDialog::EnablePreview( value )
+{
+	dlg( EnableControls,<value>,ClosePreviewButton );
+
+	dlg( ShowControls,<value>,TheImage );
+}
+
+
+NUMERIC RawDialog::GetPreviewSize()
+{
+	dlg( GetInput );
+	DlgData( GetValue,PreviewSlider,Setting );
+	
+	if ( <Setting> == 1 )
+	{
+		PreviewSize = 250;
+	}
+	else if ( <Setting> == 2 )
+	{
+		PreviewSize = 500;
+	}
+	else if ( <Setting> == 3 )
+	{
+		PreviewSize = 1000;
+	}
+	else if ( <Setting> == 4 )
+	{
+		PreviewSize = 2000;
+	}
+	else if ( <Setting> == 5 )
+	{
+		PreviewSize = 5000;
+	}
+	
+	return <PreviewSize>;
+}
+
+NUMERIC RawDialog::OnPreviewButton()
+{
+	EnableButtons( FALSE );
+
+	StatusBar( 0, ~Preparing preview for first selected image~ );
+
+	if ( !AddSelectedToRawQueue( TRUE ) )
+	{ 
+		EnableButtons( TRUE );
+		WaitCursor( End );
+		StatusBar( 0, ~~ );
+		return FALSE;
+	}
+	
+//	EnableButtons( TRUE );
+//	StatusBar( 0, ~~ );
+//	WaitCursor( End );
+	return TRUE;
+}
+
+NUMERIC RawDialog::OnSubmitButton()
+{
+	OnClosePreviewButton();
+	EnableButtons( FALSE );
+	StatusBar( 0, ~Submitting images for raw conversion~ );
+	
+	if ( !AddSelectedToRawQueue( FALSE ) )
+	{ 
+		WaitCursor( End );
+		StatusBar( 0, ~~ );
+		EnableButtons( TRUE );
+		return FALSE;
+	}
+	
+	WaitCursor( End );
+	StatusBar( 0, ~Images submitted.~ );
+	EnableButtons( TRUE );
+	
+	BibbleServer( Wakeup );
+	DocumentRefresh( RawConversionQueueWin,~RefreshDoc()~ );
+	return TRUE;
+}
+
+NUMERIC RawDialog::OnViewQueueButton()
+{
+	Action = ACTION DOC ( RawConversionQueueWin OpenOnce RawConversionQueueWin "Init();" );
+	return PerformActions( Action );
+}
+
+
+NUMERIC RawDialog::GetSettingsForImage( &Exposure,&WhiteBalance )
+{
+	result = FALSE;
+	foundThumbnails = FALSE;
+	ImagesCount = 0;
+	
+	if ( GenCon( TheWindow,GetWindow,~ImageWindow~ ) )
+	{
+		if ( TheWindow( GetActiveViewOfWindow,View ) )
+		{ 
+			if ( !View( GetSelected,SelectedImages ) )		
+			{ 
+				return Warning( ~There were no images selected~ );
+			}
+			foundThumbnails = TRUE;
+		}
+	}
+	
+	if ( <foundThumbnails> )
+	{
+		ImagesCount = SelectedImages( ChildCount );
+	}
+	
+	if ( !<foundThumbnails> || <ImagesCount> == 0 )
+	{
+		if ( GenCon( TheWindow,GetWindow,~ImagesThumbNailWindow~ ) )
+		{
+			if ( TheWindow( GetActiveViewOfWindow,View ) )
+			{ 
+				if ( !View( GetSelected,SelectedImages ) )		
+				{ 
+					return Warning( ~There were no images selected~ );
+				}
+				foundThumbnails = TRUE;
+			}
+		}
+		else
+		{
+			return Warning( ~There is no thumbnail window to select images from.~ );
+		}
+	}
+
+	if ( !<foundThumbnails> )
+	{
+		return Warning( ~There is no thumbnail window to select images from.~ );
+	}
+	
+	ImagesCount = SelectedImages( ChildCount );
+	if ( <ImagesCount> <= 0 )
+	{ 
+		WaitCursor( End );
+		return Warning( ~There were no images selected~ );
+	}
+
+	SetupConnection();
+	
+	rawCount = 0;
+	RawSettingsQuery = ~Select Exposure,WhiteBalance From RawImages~;
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		Key = ~OrderID='<$con.Image[OrderID]>' and Roll='<$con.Image[Roll]>' AND Frame='<$con.Image[Frame]>'~;
+		RawQuery = ~<RawSettingsQuery> Where <Key>~;
+		
+		if ( !dBase( GetValuesFor,~<RawQuery>~,Exp,WhiteBal ) )
+		{
+			Log( Session, ~RawDialog::GetSettingsForImage: Query failed: <RawQuery>~ );
+			continue;
+		}
+		else
+		{
+			++rawCount;
+			WhiteBalance = ~<WhiteBal>~;
+			if ( ~<Exp>~ == ~~ )
+			{
+				Exposure = 0;
+			}
+			else
+			{
+				Exposure = <Exp>;
+			}
+			break;
+		}
+	}
+	
+	ForgetPrivate( dBase );
+	
+	if ( <rawCount> == 0 )
+	{
+		Warning( ~No raw images were selected~ );
+		result = FALSE;
+	}
+	return TRUE;
+}
+
+
+// check for the analyzer light table view first
+// then check for order images
+NUMERIC RawDialog::AddSelectedToRawQueue( Preview )
+{
+	result = FALSE;
+	foundThumbnails = FALSE;
+	ImagesCount = 0;
+	
+	if ( GenCon( TheWindow,GetWindow,~ImageWindow~ ) )
+	{
+		if ( TheWindow( GetActiveViewOfWindow,View ) )
+		{ 
+			if ( !View( GetSelected,SelectedImages ) )		
+			{ 
+				return Warning( ~There were no images selected~ );
+			}
+			foundThumbnails = TRUE;
+		}
+	}
+	
+	if ( <foundThumbnails> )
+	{
+		ImagesCount = SelectedImages( ChildCount );
+	}
+	
+	if ( !<foundThumbnails> || <ImagesCount> == 0 )
+	{
+		if ( GenCon( TheWindow,GetWindow,~ImagesThumbNailWindow~ ) )
+		{
+			if ( TheWindow( GetActiveViewOfWindow,View ) )
+			{ 
+				if ( !View( GetSelected,SelectedImages ) )		
+				{ 
+					return Warning( ~There were no images selected~ );
+				}
+				foundThumbnails = TRUE;
+			}
+		}
+		else
+		{
+			return Warning( ~There is no thumbnail window to select images from.~ );
+		}
+	}
+
+	WhiteBalance = ~<$con.dlgData[WhiteBalance]>~;
+	Exposure	 = ~<$con.dlgData[Exposure]>~;
+	Priority	 = ~<$con.dlgData[Priority]>~;
+	PreviewSize	 = GetPreviewSize();
+	
+	if ( !<foundThumbnails> )
+	{
+		return Warning( ~There is no thumbnail window to select images from.~ );
+	}
+	
+	ImagesCount = SelectedImages( ChildCount );
+	if ( <ImagesCount> <= 0 )
+	{ 
+		WaitCursor( End );
+		return Warning( ~There were no images selected~ );
+	}
+
+	if ( !<Preview> )
+	{
+		WarnMsg = ~You have selected <ImagesCount> image to reconvert from raw. Do you want to continue?~;
+		if ( MessageBox( ~<WarnMsg>~, YESNO ) == NO )
+		{
+			return FALSE;
+		}
+	}
+
+	SetupConnection();
+	
+	dcrCount = 0;
+	rawCount = 0;
+	RawPathQuery = ~Select Path,ImageType,WhiteBalance,Exposure From RawImages~;
+	ImagePathQuery = ~Select Path From Images~;
+	CurrentWhiteBal = ~~;
+	CurrentExp		= 0;
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		Path = ~~;
+		Key = ~OrderID='<$con.Image[OrderID]>' and Roll='<$con.Image[Roll]>' AND Frame='<$con.Image[Frame]>'~;
+		RawQuery = ~<RawPathQuery> Where <Key>~;
+		
+		if ( !dBase( GetValuesFor,~<RawQuery>~,Path,ImageType,CurrentWhiteBal,CurrentExp ) )
+		{
+			Log( Session, ~RawDialog::AddSelectedToRawQueue: Query failed: <RawQuery>~ );
+			continue;
+		}
+
+		if ( !Files( FileExists, ~<Path>~ ) )
+		{
+			Warning( ~There is no raw camera file at '<Path>' for <Key>~ );
+			break;
+		}
+
+		
+		DlgData( SetValue, CurrentWhiteBal,~<CurrentWhiteBal>~ );
+		DlgData( SetValue, CurrentExposure,<CurrentExp> );
+
+		dlg( Update );
+
+		if ( !Defined( ImageType ) )
+		{
+			Log( Session, ~RawDialog::AddSelectedToRawQueue: Unable to convert. ImageType undefined: <RawQuery>~ );
+			continue;
+		}
+		
+		if ( <ImageType> != 4 )
+		{
+			++dcrCount;
+			continue;
+		}
+		if ( IsNull( Path ) || ~<Path>~ == ~~ )
+		{	
+			continue;
+		}
+		++rawCount;
+		
+		if ( <Preview> )
+		{
+			if ( !Defined( aThread ) )
+			{
+				PreviewThread( New,aThread );
+				Private( aThread );
+			}
+			
+//			aThread.DebugThread();
+
+			result = aThread.NewOneShot( ~<Path>~,~<WhiteBalance>~,<Exposure>,<PreviewSize>,<MaxWidth>,<MaxHeight> );
+
+			break;
+		}
+
+		ImagesQuery = ~<ImagePathQuery> Where <Key>~;
+		dBase( GetValuesFor,~<ImagesQuery>~,OutputPath );
+
+		ResetImagesForReprocess( dBase,~<$con.Image[OrderID]>~,~<$con.Image[Roll]>~,~<$con.Image[Frame]>~,~<OutputPath>~ );
+		
+		UpdateSettingsCmd = ~Update RawImages Set Exposure = <Exposure>, WhiteBalance = '<WhiteBalance>' WHERE <Key>~;
+		if ( !dBase( CMD,~<UpdateSettingsCmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Log( Session, ~Could not update RawImages table with settings for <key>. <theErr>~ );
+		}
+
+		result = QueueRawFile( ~<Path>~,~<OutputPath>~,~<FileType>~,<JPEGQuality>,<Priority>,~<WhiteBalance>~,<Exposure> );
+	}
+	
+	ForgetPrivate( dBase );
+	
+	if ( <dcrCount> > 0 )	
+	{
+		Warning( ~<dcrCount> of the selected images had been converted using the legacy Digital Camera Importer.\nPlease select the image in the thumbnail view and select Reconvert to add the image to the Digital Camera Import queue.\nThen use the Digital Camera Importer to reprocess the image(s).~ ); 
+		if ( <dcrCount> == <imagesCount> )
+		{
+			result = FALSE;
+		}
+	}
+	else if ( <rawCount> == 0 )
+	{
+		Warning( ~No raw images were selected~ );
+		result = FALSE;
+	}	
+
+	return <result>;
+}
+
+NUMERIC RawDialog::OnPreviewComplete( previewStatus, statusMsg, newBitmap )
+{
+	if ( <previewStatus> == FALSE )
+	{
+		EnableButtons( TRUE );
+		StatusBar( 0, ~<statusMsg>~ );
+		WaitCursor( End );
+		return FALSE;
+	}
+
+	App( ThisApp,MessagePump,100 );
+	Bitmap( theBitmap, Is, ~<newBitmap>~, Temporary );
+
+	ImageWidth  = theBitmap( GetWidth );
+	ImageHeight = theBitmap( GetHeight );
+	
+	newDialogHeight = <MinDialogHeight> + <ImageHeight>;
+	newDialogWidth  = <MinDialogWidth>;
+	if ( <MinDialogWidth> < <ImageWidth> )
+	{
+		newDialogWidth  = <ImageWidth>  + <hGap> * 2;
+	}
+
+	StatusBar( 0, ~~ );
+	EnablePreview( TRUE );
+
+	dlg( SetWindowSize,<newDialogWidth>,<newDialogHeight> );
+	
+	dlg( ControlRect,TheImage,SetSize,<ImageWidth>,<ImageHeight> );
+	
+	bitMapAddr = theBitmap( Detach );
+	
+	dlg( SetControlBitMap,TheImage,<bitMapAddr> );
+
+	EnableButtons( TRUE );
+	StatusBar( 0, ~<statusMsg>~ );
+	WaitCursor( End );
+	
+	return TRUE;
+}
+
+NUMERIC RawDialog::SetupConnection()
+{
+	if ( Defined( dBase ) )
+	{
+		return TRUE;
+	}
+	
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	Private( dBase );
+
+	return TRUE;
+}
+
+NUMERIC RawDialog::OnDialogEnd()
+{
+	OnClosePreviewButton();
+	
+	DlgData( GetValues, WhiteBalance,WhiteBalance,Exposure,Exposure,PreviewSlider,PreviewSlider );
+	
+	SetSystemSettings( ~RawCamera~,~WhiteBlance~, ~<Whitebalance>~, TRUE );
+	SetSystemSettings( ~RawCamera~,~Exposure~, <Exposure>, Enabled );
+	SetSystemSettings( ~RawCamera~,~PreviewSize~, <PreviewSlider>, Enabled );	
+	
+	if ( Defined( aThread ) )
+	{
+		aThread.Abort();
+		aThread.WaitForThreadDeath();
+		ForgetPrivate( aThread );
+	}
+
+	ForgetPrivate( dBase );
+
+	return TRUE;
+}
+
+
+VOID Init()
+{
+	if ( !Defined( RawDlg ) )
+	{
+		RawDialog( New,RawDlg );
+
+		RawDlg.DefineDialog();
+		RawDlg.Initialize();
+		
+		Global( RawDlg );
+
+		return;
+	}
+
+	RawDlg.ReOpen();
+}
+
+NUMERIC CloseWindowOfPath( Path )
+{
+	Count = Index = 0;
+
+	app( ThisApp,MessagePump,3 );
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( Window( GETNEXT,aView ) )
+		{
+			aView( GET,ViewType,ViewType );
+
+			if ( ~<ViewType>~ == ~ImageEditView~ || ~<ViewType>~ == ~PIEEditView~)
+			{
+				aView( GetDocumentPath,DocumentPath );
+
+				if ( ~<DocumentPath>~ == ~<Path>~ )
+				{ 
+					Window( CloseWindow );
+					ThisApp( MessagePump,3 );
+					++Count;
+					Index = 0;
+				}
+			}
+		}
+	}
+
+	ThisApp( MessagePump,0 );
+
+	return TRUE;
+}
+
+NUMERIC OnPreviewComplete( previewStatus, previewMsg, theBitmap )
+{
+	if ( Defined( RawDlg ) )
+	{
+		RawDlg.OnPreviewComplete( <previewStatus>, ~<previewMsg>~, ~<theBitmap>~ );
+	}
+	
+	return TRUE;
+}

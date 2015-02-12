@@ -1,0 +1,124 @@
+NUMERIC ResequenceProductInCategory( Key,Category,FromLocation,ToLocation )
+{
+	if ( $FromLocation == $ToLocation )		// DID IT REALLY MOVE?
+		{ return TRUE; }					// NOPE, THERE IS NOTHING TO UPDATE
+
+	db( BeginTransaction );
+
+	if ( $FromLocation > $ToLocation )		// A DRAG TO EARLIER IN THE LIST?
+	{
+		theSQL = ~UPDATE Products SET Sequence = Sequence + 1 WHERE Category = '<Category>' AND 
+					Sequence < <FromLocation> AND Sequence >= <ToLocation>~;
+	}
+	else									// NOPE, A DRAG TO LATER IN THE LIST
+	{
+		theSQL = ~UPDATE Products SET Sequence = Sequence - 1 WHERE Category = '<Category>' AND 
+					Sequence > <FromLocation> AND Sequence <= <ToLocation>~;
+	}
+
+	if ( !db( CMD,~<theSQL>~ ) )			// SHUFFLE THE AFFECTED PRODUCTS
+	{
+		db( GetErrorDescription,theErr );
+		Error( ~Error: <theErr>~ );
+	}
+
+	if ( !db( CMD,~UPDATE Products SET Sequence = <ToLocation> WHERE <Key>~ ) )	// MOVE THE TARGET PRODUCT
+	{
+		db( GetErrorDescription,theErr );
+		Error( ~Error: <theErr>~ );
+	}
+
+	if ( !db( CommitTransaction ) )			// MAKE SURE IT ALL WORKED
+	{
+		db( GetErrorDescription,theErr );
+		Error( ~Error: <theErr>~ );
+	}
+
+	return TRUE;
+}
+
+
+VOID MoveProductToNewCategory( NewCategory,Key )
+{
+	db( BeginTransaction );
+
+	if ( !db( RECORDSET,ProductsInCategory,~SELECT MAX(Sequence) FROM Products Where Category = '<NewCategory>'~ ) )
+		{ Error( ~Could not find the highest sequence # for a Product in Category <NewCategory>~ ); }	// *Translate*
+
+	ProductsInCategory( MoveFirst );
+	MaxSequence = ~<$rs.ProductsInCategory[#0]>~;
+
+	if ( !db( CMD,~Update Products Set Category = '<NewCategory>', Sequence = <MaxSequence> + 1 Where <$CON.Item[Key]>~ ) )
+	{
+		db( GetErrorDescription,theErr );
+		Error( ~Error: <theErr>~ );
+	}
+
+	db( CommitTransaction );
+}
+
+
+NUMERIC GetSourceLocation( Key )
+{
+	if ( !db( RECORDSET,ProductThatIsMoving,~SELECT Sequence FROM Products Where <Key>~ ) )
+		{ Error( ~Could not open the Products table~ );	}	// *Translate*
+
+	FromLocation = ~<$rs.ProductThatIsMoving[Sequence]>~;
+
+	if ( ~<FromLocaton>~ == ~~ )
+		{ Error( ~Product Where <Key> does not exist~ ); }	// *Translate*
+
+	return <FromLocation>;
+}
+
+
+if ( !GenCon( DragDropInfo,GetGenCon,DragDropInfo,Temporary ) )
+	{ Error( ~There was no DragDropInfo for the item dragged into the Products window~ ); }		// *TRANSLATE*
+
+Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );		// REMOVE THE DRAG INFO FROM THE TREE
+
+if ( !GenCon( SrcView,Is,~<$CON.DragDropInfo[SrcView]>~ ) ) 
+	{ Error( ~The Source View is invalid~ ); }					// *TRANSLATE*
+
+if ( !GenCon( DstView,Is,~<$CON.DragDropInfo[DstView]>~ ) ) 
+	{ Error( ~The Destination View is invalid~ ); }				// *TRANSLATE*
+
+if ( ~<$con.SrcView[ViewDataType]>~ != Products )
+	{ Error( ~The DstView contains <$con.DstView[ViewDataType]> instead of Products~ ); }	// *TRANSLATE*
+
+if ( ~<$con.DstView[ViewDataType]>~ != Products )
+	{ Error( ~The DstView contains <$con.DstView[ViewDataType]> instead of Products~ ); }	// *TRANSLATE*
+
+if ( !ado( db,CONNECT ) )
+	{ Error( ~Could not open KPIS Database~ ); }		// *TRANSLATE*
+
+while ( SrcView( GetNext,Item ) )						// LOOP FOR EACH ITEM IN THE VIEW
+{
+	if ( ~<$con.Item[IsSelected]>~ != T )				// WAS THIS ITEM SELECTED?
+		continue;
+	
+	SrcView( Get,Text,Category );
+	DstView( Get,Text,NewCategory );	
+	FromLocation = GetSourceLocation( ~<$CON.Item[Key]>~ );
+	ToLocation = ~<$CON.DragDropInfo[DropLocation]>~;
+
+	if ( ~<Category>~ == ~<NewCategory>~ )		// JUST A RESEQUENCE IN THE CURRENT CATEGORY?
+	{
+
+		ResequenceProductInCategory( ~<$CON.Item[Key]>~,~<Category>~,~<FromLocation>~,~<ToLocation>~ );
+		SrcView( MoveChild,<FromLocation>,SrcView,<ToLocation> );
+		SrcView( RefreshView );
+	}
+	else										// MOVING THIS LAYOUT TO A DIFFERENT CATEGORY
+	{
+		MoveProductToNewCategory( ~<NewCategory>~,~<$CON.Item[Key]>~ );
+		SrcView( MoveChild,<FromLocation>,DstView,Back );
+		SrcView( RefreshView );
+		DstView( RefreshView );
+	}
+}
+
+Sleep(200);
+HandleActions( ~Refresh(LayoutDataView)~ );
+
+

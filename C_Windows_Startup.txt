@@ -1,0 +1,552 @@
+//	C_Windows_Startup.cpp
+
+ExecC() ;
+
+//	THIS FILE CONTAINS THE STARTUP SCRIPT FOR THE Windows Printer HOT FOLDER APPLICATION
+
+char	*NULL ;
+int		 FALSE = 0L ;
+int		 TRUE  = ! FALSE ;
+TCHAR	configFileName[2048] ;
+TCHAR	*gControlFolder = NULL;
+TCHAR	*gResponseFolder = NULL;
+int		 gTesting = FALSE ;
+TCHAR	*gPrinterName = NULL;
+TCHAR	*gQueueName = NULL;
+
+main()
+{
+}
+
+int Advertize()
+{
+	SessionLogDirect( _T("C_Windows_Startup.Advertize: (V9.00)")) ;
+	return( TRUE ) ;
+}
+Test()
+{
+	LaunchProgram(_T("C:\\Winnt\\System32\\Notepad.exe")) ;
+}
+
+//	VERIFY THIS DEVICE HAS A POINTER TO A HOT FOLDER APPLICATION
+//	VERIFY WE HAVE THE PATH TO THE CONTRL AND RESPONSE FOLDERS
+//	WRITE THE CONFIGURATION FILE
+//	INVOKE THE HOT FOLDER APPLICATION AND RETURN
+
+int Init(UGenCon *PrinterSetup)
+{
+	int		 Result = FALSE ;
+//	Debug(1) ;
+	TCHAR	*AppPath = PrinterSetup->GetStringValue(_T("HFExePath")) ;
+	if( AppPath == NULL )		{ return( Result ) ; }
+	if( AppPath[0] == 0x00 )	{ return( Result ) ; }
+
+	gControlFolder = PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+	if( gControlFolder == NULL )
+	{
+		return( Result ) ;
+	}
+	
+	gResponseFolder = PrinterSetup->GetStringValue(_T("ResponseFolder")) ;
+	if( gResponseFolder == NULL )
+	{
+		return( Result ) ;
+	}
+
+	//	DELETE PREVIOUS RESPONSE FILES.
+//	Result = CleanResponseFiles( gResponseFolder ) ;
+	Result = CleanFolder( gResponseFolder, _T("*.sta") ) ;
+	Result = CleanFolder( gControlFolder, _T("*.act") ) ;
+
+	//check for any other printers running on this PC with the same control or response folders.
+	long sts = Conflicts(); //-1 means error trying to access info, 0-no conflicts, 1-another windows IPS with same folders already running
+
+	if(sts == 1)
+	{
+		MessageBox(_T("Conflicts exist with this printer and another printer render engine that is running. The control and response folders must not be the same for different Windows printers running at the same time. This render engine can not be started."),_T("MB_OK")); 
+		return( FALSE);
+	}
+
+	Result = CreateConfigFile(PrinterSetup, gControlFolder) ;
+
+	if( Result )
+	{
+		LaunchProgram( AppPath ) ;
+	}
+
+//	if( Result == 1 )
+//	{
+//		Result = 0 ;
+//	}
+
+	return( Result ) ;
+}
+
+int LaunchProgram( TCHAR *AppPath )
+{
+	int		 Result = FALSE ;
+	TCHAR	*verb = _T("open") ;
+	TCHAR	*file = AppPath ;
+	TCHAR	 AppDir[2048] ;
+	TCHAR	 ConfigFile[2048];
+
+	if( AppPath )
+	{
+		if( AppPath[0] )
+		{
+			GetAppDirectory( AppPath, AppDir ) ;
+
+			TCHAR	*defaultDirectory = AppDir ;
+		//	TCHAR	*cmd = _T("SW_SHOW") ;
+		//	TCHAR	*cmd = _T("MAXIMIZE") ;
+			TCHAR	*cmd = _T("MINIMIZE") ;
+			sprintf( ConfigFile, _T("\"%s\""), configFileName ) ;
+
+			Result = ShellExecute(verb, file, ConfigFile, defaultDirectory, cmd ) ;
+		}
+	}
+	return( Result ) ;
+}
+
+int	GetAppDirectory( TCHAR *FullPath, TCHAR *Directory )
+{
+	strcpy( Directory, FullPath ) ;
+	long	loop ;
+	long	length = strlen( FullPath ) ;
+
+	while( length > 0 )
+	{
+		if( Directory[length] == '\\' )
+		{
+			Directory[length] = 0 ;
+			length = 0 ;
+		}
+		length-- ;
+	}
+}
+
+int CreateConfigFile( UGenCon *PrinterSetup, TCHAR *ControlFolder )
+{
+	TCHAR	LogFileName[2048] ;
+	TCHAR	TimeStamp[128] ;
+	TCHAR	configFilePath[2048];
+
+	TCHAR		*ExeDirectory = GetExeDirectory() ;
+	sprintf( configFileName, _T("%s\\IPS\\%sWindowsSettings.cfg"), ExeDirectory,PrinterSetup->GetStringValue(_T("PrinterName")) ) ;
+	sprintf( configFilePath, _T("%s\\IPS"), ExeDirectory ) ;
+	CreateFullDirectoryPath( configFilePath ) ;
+	SessionLogDirect(_T("C_Windows_Startup configFileName is \"%s\""), configFileName ) ;
+
+	GetSortableTimeNow(TimeStamp) ;
+
+	char	*fp = fopen(configFileName, _T("wb")) ;
+	if( fp )
+	{
+		TCHAR	*Model ;
+		TCHAR	*Type  ;
+		TCHAR	*Logo  ;
+
+		TCHAR	IOBuff[2048] ;
+		IOBuff[0] = 0xFEFF ; IOBuff[1] = 0x0000 ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+//		fprintf( fp, _T("#\n")) ;
+//		fprintf( fp, _T("# KODAK PROFESSIONAL Windows Printer Image Print Server Configuration\n")) ;
+//		fprintf( fp, _T("#\n")) ;
+//		fprintf( fp, _T("WindowsPrinterIPSApp:\n")) ;
+
+		sprintf( LogFileName, _T("%s\\SessionLogs\\IPS"), ExeDirectory ) ;
+		CreateFullDirectoryPath( LogFileName ) ;
+
+		sprintf( LogFileName, _T("%s\\SessionLogs\\IPS\\%s_%s.log"),
+				ExeDirectory, PrinterSetup->GetStringValue(_T("PrinterName")), TimeStamp ) ;
+
+		sprintf( IOBuff, _T("\tLogFile: %s\n"), LogFileName) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		PrinterSetup->SetAttrValue(_T("LogFile"), LogFileName ) ;
+
+		sprintf( IOBuff, _T("\tName: %s\n"), PrinterSetup->GetStringValue(_T("PrinterName"))) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("\tHotFolder: %s\n"), PrinterSetup->GetStringValue(_T("ControlFolder"))) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		CreateFullDirectoryPath( PrinterSetup->GetStringValue(_T("ControlFolder")) ) ;
+
+		sprintf( IOBuff, _T("\tResponseFolder: %s\n"), PrinterSetup->GetStringValue(_T("ResponseFolder"))) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		CreateFullDirectoryPath( PrinterSetup->GetStringValue(_T("ResponseFolder")) ) ;
+
+		sprintf( IOBuff, _T("\tMaxJobs: 50\n")) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		if( gTesting )
+		{
+			sprintf( IOBuff, _T("\tSTUB: TRUE\n")) ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+		}
+
+		fclose(fp) ;
+		return( TRUE ) ;
+	}
+	return( FALSE ) ;
+}
+
+
+int CleanFolder( TCHAR *Folder, TCHAR *FileExtn )
+{
+	TCHAR			 FilePath[2048] ;
+	TCHAR			*FileName ;
+
+	sprintf( FilePath, _T("%s\\%s"), Folder, FileExtn ) ;
+
+	UList			*theFiles = GetFileList(FilePath) ;
+	UListIterator	*anIter = new UListIterator(theFiles) ;
+
+	UGenCon	*aFileGC = anIter->GetLast() ;
+	while( aFileGC )
+	{
+		FileName = aFileGC->GetStringValue(_T("FileName")) ;
+		sprintf( FilePath, _T("%s\\%s"), Folder, FileName ) ;
+		SessionLogDirect(_T("C_Windows_Startup.CleanFolder: deleting \"%s\""), FilePath ) ;
+		unlink( FilePath ) ;
+		aFileGC = anIter->GetPrev() ;
+	}
+
+	delete anIter ;
+	delete theFiles ;
+	return( TRUE ) ;
+}
+
+
+UList *GetFileList(TCHAR *Path)
+{
+	long	*FileHandle ;
+	char	 FileData[2048] ;
+	TCHAR	 FileName[2048] ;
+	TCHAR	 FileDate[1024] ;
+	int		 Result ;
+	long	 FileAttr ;
+	long	 longHandle ;
+	UGenCon	*FileDataGC ;
+
+	UList	*theList = new UList ;
+
+	strcpy( FileName, Path ) ;
+	FileHandle = FindFirstFile( FileName, FileData ) ;
+	longHandle = FileHandle ;
+	if( longHandle != 0xFFFFFFFF )
+	{
+		FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+		Result = FindFileConvToGC( FileData, FileDataGC ) ;
+		FindFileConvTime( FileDataGC, _T("ACCESSED"), FileDate ) ;
+
+		theList->InsertBack(FileDataGC) ;
+
+		FileAttr = FileDataGC->GetLongValue(_T("FileAttributes")) ;
+		while( Result )
+		{
+			Result = FindNextFile( FileHandle, FileData ) ;
+			if( Result )
+			{
+				FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+				FindFileConvToGC( FileData, FileDataGC ) ;
+				theList->InsertBack(FileDataGC) ;
+			}
+		}
+
+		Result = FindClose( FileHandle ) ;
+	}
+	return( theList ) ;
+}
+
+WriteUnicodeFile( char *fp, TCHAR *Text )
+{
+	long	Length = strlen( Text ) ;
+	fwrite( Text, 2, Length, fp ) ;
+
+	long	EndOfLine = 0x000A000D ;
+	fwrite( &EndOfLine, 2, 2, fp ) ;
+}
+
+//	get printer info on running Windows printers and see if control and response folders match
+long Conflicts()
+{
+	TCHAR	*queueName;
+	TCHAR	theQuery[256] ;
+	TCHAR	*tmpControlFolder;
+	TCHAR	*tmpResponseFolder;
+	TCHAR	expandedControlFolder[2048];
+	TCHAR	expandedResponseFolder[2048];
+	int		result ;
+	UGenCon *theQueueGC;
+
+	UADO	*anADO = ConnectToADO() ;
+	if( anADO == NULL )	{ return( -1L ) ; }
+
+	// CREATE A NEW UPGENCONLIST.
+	UPGenConList	*PrinterGCList = new UPGenConList(anADO);
+	if( PrinterGCList == NULL )
+	{
+		HandleDBError(anADO) ;
+		delete anADO ;
+		return( -1L ) ;
+	}
+	UPGenConList	*QueueGCList = new UPGenConList(anADO);
+	if( QueueGCList == NULL )
+	{
+		HandleDBError(anADO) ;
+		delete anADO ;
+		return( -1L ) ;
+	}
+
+	TCHAR		ComputerName[256] ;
+	long		ComputerNameSize = 256 ;
+
+	GetComputerName( ComputerName, &ComputerNameSize ) ;
+	SessionLogDirect( _T("C_Windows_Startup.Computer Name = %s"),ComputerName) ;
+
+	PrinterGCList->SetName( _T("GetPrinterStatus_UPGCList") ) ;
+	sprintf( theQuery, _T("Select * from Printers where ComputerName = 'ComputerName' and PrinterModel = 'Windows Printer' and Status = 1")) ;
+
+	// GET THE PRINTER INFO FROM THE DATABASE.
+	result = Query( PrinterGCList, theQuery, _T("ReadOnly"),  _T("Static") ) ;
+
+	if( result == 0L )
+	{
+		HandleDBError(anADO) ;
+		delete QueueGCList;
+		delete PrinterGCList ;
+		delete anADO ;
+		return( -1L ) ;
+	}
+
+	UGenCon *thePrinterGC = PrinterGCList->GetFirst() ;
+
+	while(thePrinterGC != NULL)
+	{
+		//	WE FOUND THE RECORD
+		tmpControlFolder = thePrinterGC->GetStringValue( _T("ControlFolder") ) ;
+		tmpResponseFolder = thePrinterGC->GetStringValue( _T("ResponseFolder") ) ;
+		gPrinterName = thePrinterGC->GetStringValue( _T("PrinterName") ) ;
+		gQueueName = thePrinterGC->GetStringValue( _T("QueueName") ) ;
+		if((*tmpControlFolder == 0) || (*tmpResponseFolder == 0))
+		{ //get control folder and response folder from printer queue
+			sprintf( theQuery, _T("Select ControlFolder, ResponseFolder from QueueDefinition where QueueName = '%s'"),gQueueName) ;
+			result = Query( QueueGCList, theQuery, _T("ReadOnly"),  _T("Static") ) ;
+			if( result == 0L )
+			{
+				HandleDBError(anADO) ;
+				delete QueueGCList ;
+				delete QueueGCList;
+				delete anADO ;
+				return( -1L ) ;
+			}
+			theQueueGC = QueueGCList->GetFirst() ;
+			if((tmpControlFolder == NULL) || (tmpResponseFolder == NULL)) 
+			{
+				return(-1L);
+			}
+			if(*tmpControlFolder == 0)
+			{
+				tmpControlFolder = theQueueGC->GetStringValue(_T("ControlFolder")); 
+			}
+			if(*tmpResponseFolder == 0)
+			{
+				tmpResponseFolder = theQueueGC->GetStringValue(_T("ResponseFolder")); 
+			}
+		}
+		//expand the macros
+		ExpandFolderPath(tmpControlFolder, expandedControlFolder);
+		ExpandFolderPath(tmpResponseFolder, expandedResponseFolder);
+
+		if( (strcmp(expandedControlFolder, gControlFolder) == 0) || (strcmp(expandedResponseFolder, gResponseFolder) == 0) )
+		{ //don't run this render engine, one with matching control/response folders is already running
+			
+			return( 1 ) ; //conflict
+		}
+		thePrinterGC = PrinterGCList->GetNext() ;
+	} //while
+	
+	result = anADO->RefreshConnectionCache() ;
+
+	delete QueueGCList;	
+	delete PrinterGCList ;
+	delete anADO ;
+	return( 0 ) ; //no conflicts  
+}
+
+//	CONNECT TO THE ACCESS DATA OBJECT (THE DATABASE)
+UADO *ConnectToADO()
+{
+	int		 result ;
+
+	UADO	*theADO = new UADO ;
+
+	if( theADO == NULL )
+	{
+		return(NULL) ;
+	}
+
+	result = ConnectKPIS( theADO ) ;
+	if( result )
+	{
+		delete theADO ;
+		return(NULL) ;
+	}
+
+	return( theADO ) ;
+}
+
+
+//	GET ENGLISH LANGUAGE TRANSLATION OF DATABASE ERROR
+HandleDBError(UADO *anADO)
+{
+	long	ErrorCount, ErrorIndex ;
+	TCHAR	ADOErrDesc[2048] ;
+	TCHAR	theMsg[4096] ;
+	long	StopHere = 0 ;
+
+	Debug(StopHere) ;
+
+	ErrorCount = GetErrorCount( anADO ) ;
+	if( ErrorCount == 0L )
+	{
+		ShowDialog( _T("Lost Database Connection.") ) ;
+	}
+	else
+	{
+		for( ErrorIndex = 0L ; ErrorIndex < ErrorCount ; ErrorIndex++ )
+		{
+			GetErrorDescription( anADO, ErrorIndex, ADOErrDesc ) ;
+			sprintf( theMsg, "Database Error: %s", ADOErrDesc ) ;
+			ShowDialog( theMsg) ;
+		}
+	}
+}
+
+
+int ExpandFolderPath(TCHAR *SrcPath, TCHAR *DstPath)
+{
+	TCHAR	 AppInstance[4096] ;
+	TCHAR	 Title[2048];
+	TCHAR	 Instance[2048];
+	TCHAR	*ExeDirectory = GetExeDirectory() ;  
+
+
+	if( SrcPath )
+	{
+		int	SrcPos = 0 ;
+		int	DstPos = 0 ;
+		int TmpPos ;
+
+		StripTrailingBlanks( SrcPath ) ;
+
+		while( SrcPath[SrcPos] )
+		{
+			if( SrcPath[SrcPos] == '[' )
+			{
+				if( SrcPath[SrcPos+1] == 'E' )	//	GET QUEUE NAME
+				{
+					if( gQueueName )
+					{
+						StripTrailingBlanks( gQueueName ) ;
+						DstPos = CopyString( DstPath, DstPos, gQueueName ) ;
+					}
+				}
+
+				if( SrcPath[SrcPos+1] == 'F' )	//	GET EXE NAME
+				{
+					if( ExeDirectory )
+					{
+						DstPos = CopyString( DstPath, DstPos, ExeDirectory ) ;
+					}
+				}
+
+				if( SrcPath[SrcPos+1] == 'T' )	//	GET PRINTER NAME
+				{
+					if( gPrinterName )
+					{
+						StripTrailingBlanks( gPrinterName ) ;
+						DstPos = CopyString( DstPath, DstPos, gPrinterName ) ;
+					}
+				}
+
+				if( SrcPath[SrcPos+1] == 'A' )	//	GET APPLICATION INSTANCE
+				{
+					strcpy( Title, GetExeName() );
+
+					//	REMOVE TRAILING BLANKS CAUSED BY RUNNING FROM THE PROFILER !
+					StripTrailingBlanks( Title ) ;
+
+					ApplicationInstance( Instance );
+					sprintf( AppInstance, _T("%s_%s"), Title, Instance );
+
+					if( AppInstance[0] )
+					{
+						DstPos = CopyString( DstPath, DstPos, AppInstance ) ;
+					}
+				}
+
+				if( SrcPath[SrcPos+1] == 'V' )	//	GET DISK VOLUME
+				{
+					if( ExeDirectory )
+					{
+						ExeDirectory[1] = 0x00 ;
+						DstPos = CopyString( DstPath, DstPos, ExeDirectory ) ;
+					}
+				}
+
+				//	SKIP PAST THE SPECIAL SYMBOL "[X]"
+				SrcPos = SrcPos + 2 ;
+			}
+			else
+			{
+				DstPath[DstPos]	  = SrcPath[SrcPos] ;
+			}
+			SrcPos++ ;
+			DstPos++ ;
+		}
+	}
+	DstPath[DstPos] = 0x00 ;
+
+	SessionLogDirect( _T("**\tC_Windows_Startup.ExpandFolderPath: Orig: \"%s\", FullPath: \"%s\""),
+								SrcPath, DstPath ) ;
+
+	CreateFullDirectoryPath( DstPath ) ;
+
+	return( DstPos ) ;
+}
+
+ShowDialog( TCHAR *theMsg )
+{
+	UGenCon	*aGC = new UGenCon( GetDataDictionary( _T("DDMessageDialog"))) ;
+	aGC->SetLongValue( _T("xPosition"), -1L ) ;
+	aGC->SetLongValue( _T("yPosition"), -1L ) ;
+	aGC->SetAttrValue( _T("Message1"), theMsg ) ;
+	aGC->SetLongValue( _T("DefaultButton"), 1L ) ;
+	aGC->SetAttrValue( _T("Button1"), _T("Oh...") ) ;
+	aGC->SetAttrValue( _T("Button1Response"), _T("Cancel") ) ;
+
+	SessionLogDirect( theMsg ) ;
+
+	MessageDialog( aGC, TRUE ) ;
+
+	delete aGC ;
+}
+
+
+int CopyString( TCHAR *Dst, int DstPos, TCHAR *Src )
+{
+	int TmpPos = 0 ;
+	while( Src[TmpPos] )
+	{
+		Dst[DstPos] = Src[TmpPos] ;
+		DstPos++ ;
+		TmpPos++ ;
+	}
+	return( DstPos - 1 ) ;
+}
+

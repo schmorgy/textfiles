@@ -1,0 +1,621 @@
+
+VOID ReOpen()
+{
+}
+
+
+VOID RefreshDoc()
+{
+	GetTasks( TRUE );
+
+	ShowingCategories = FALSE;
+
+	ShowInitial();
+}
+
+LastSelectedTask = ~~;
+LastCategory = ~~;
+
+NUMERIC OnHelpKey()
+{
+	return Warning( ~There is no help for this view.  Select an option and then press F1.~ );
+
+	if ( <ShowingCategories> )
+	{
+		return CategoryHelpPage();	
+	}
+
+	if ( !dlg( GetControlWithFocus,ControlName ) )
+	{ 
+		return Warning( ~Use the arrow keys to select one of the buttons and press F1 again~ );
+	}
+
+	dlg( GetControlTitle,~<ControlName>~,LastSelectedTask );
+
+	if ( ~<LastSelectedTask>~ == ~~ )
+	{ 
+		return Warning( ~Use the arrow keys to select one of the buttons and press F1 again~ );
+	}
+
+	if ( !GetTasks( FALSE ) )		
+	{ 
+		return Warning( ~Failed to retrieve the tasks from the database~ );
+	}
+
+	if ( !TaskList( Filter,~Name = '<LastSelectedTask>'~ ) ) 
+	{ 
+		return Warning( ~Could not select the task '<LastSelectedTask>'~ );
+	}
+
+	if ( !TaskList( GetFirst,Task )  )
+	{ 
+		return Warning( ~Could not find the task '<LastSelectedTask>'~ );
+		return DefaultHelpPage();		
+	}
+
+	Task( Get,HelpAction,TheAction );
+	
+	return PerformActions( TheAction );				
+}
+
+
+NUMERIC DefaultHelpPage()
+{
+	TheAction = ACTION ShowHelpPage ( KPISHelpFile "tasks\TaskIntro.htm" );
+	return PerformActions( TheAction );		
+}
+
+NUMERIC CategoryHelpPage()
+{
+	TheAction = ACTION ShowHelpPage ( KPISHelpFile "CategoriesIntro.htm" );
+	return PerformActions( TheAction );		
+}
+
+
+NUMERIC GetTasks( Reread )
+{
+	if ( <Reread> )		{ ForgetGlobal( TaskList ); }
+
+	if ( !Defined( TaskList ) )
+	{
+		if ( !ADO( dBase,Connect ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate( ~Database Connection Failed. <theErr>~) );
+		}
+
+		if ( !PGenConList( TaskList,Connection,dBase,CursorLocation,Client,Cursor,Static,Lock,BatchOptimistic,QUERY,~Select * From Tasks~ ) )	
+			{ return Warning( Translate( ~Failed to query the Tasks table~ ) ); }
+
+		TaskList( SetConnection,~~ );	// DISCONNECT FROM THE DATABASE
+
+		Global( TaskList );
+	}
+
+	return TRUE;
+}
+
+NUMERIC PerformTask( SelectedTask )
+{
+	if ( ~<SelectedTask>~ == ~~ )	{ return FALSE; }
+
+	LastSelectedTask = ~<SelectedTask>~;
+
+	if ( !GetTasks( FALSE ) )	{ return FALSE; }
+
+	if ( !TaskList( Filter,~Name = '<SelectedTask>'~ ) ) { return Warning( Translate( ~Failed to Query the Tasks Table~ ) ); }
+
+	if ( !TaskList( GetFirst,Task )  )	{ return Warning( Translate( ~Failed to find <SelectedTask> in the Tasks table~ ) ); }
+
+	if ( !Task( GetNumeric,Enabled ) )	{ return Warning( Translate( ~Sorry, "<SelectedTask>" has been disabled by the adminstrator~ ) ); }
+
+	if ( ~<$pcon.Task[Type]>~ == ~ACTION~ )		// one or more KPL statements
+	{
+		Task( Get,Process,Process );
+		PerformActions( Process );
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~DOC~ )		// execute an action
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		PerformDocActions( Process );
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~Script~ )		// execute an action
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		Open( Script,~<Process>~, ) ;
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~KPL~ )		// one or more KPL statements
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		<Process> ;
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~Open~ )		// a script to run
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		Open( Job,~<Process>~ ) ;
+		return TRUE;
+	}
+
+	if ( ~<$pcon.Task[Type]>~ == ~HTML~ )		// execute an action
+	{
+		Task( Get,Process,Process );
+		ParseDelayed( Process );
+		Process = ACTION DOC ( BrowserDoc Open BrowserDoc "<Process>");
+		PerformActions( Process );
+		return TRUE;
+	}
+
+	Process = ~<$pcon.Task[Process]>~;
+	
+	if ( ~<Process>~ == ~~ )
+		{ return Warning( ~There is no process defined for this task~ ); }
+		
+	ParseDelayed( Process );
+
+	Process = ContentsOf( Process, 1 );	// Parse any macros before doing the UserTasks
+
+	Actions = ACTION Doc ( ~UserTasks~ OpenOnce <$pcon.Task[Type]>Doc 
+							"Init( ~<$pcon.Task[Description]>~,~<Process>~ );" );
+
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+
+Minimized = FALSE;
+
+NUMERIC MinimizeMaximize()
+{
+	Minimized = !<Minimized>;
+	
+	if ( <Minimized> )
+	{
+		yPos = 5;
+
+		GenCon( aDialog,New,DDWindef ); 
+
+		count = 0;
+
+		GenCon( Button<++count>,New,DDWinCtrlDef ); 
+
+		ButtonWidthMinus10 = $ButtonWidth - 30;
+		xPosPlus5 = <xPos> + 5;
+		yPosPlus5 = <yPos> + 5;
+
+		if ( <ShowingCategories> )
+		{
+			Button<count>( SetValues,	POSITION,	~<xPosPlus5> <yPosPlus5> <ButtonWidthMinus10> <ButtonHeight>~,
+										TOOLTIP,	~Reread the tasks to pick up changes that have been made since starting the app~,
+										TYPENAME,	~Button~ ,
+										TEXT,		Translate(~Refresh~),
+										BGColorRed,		190,
+										BGColorGreen,	190,
+										BGColorBlue,	190,
+										IsTabStop,	~T~ );
+
+			theAction = ACTION EXEC ( RefreshDoc() );
+
+			Button<count>( SetValuesFrom,DACTIONSTEXT,theAction );
+
+			aDialog( InsertBack,Button<count> );
+			
+			PositionRight = <xPosPlus5>+<ButtonWidthMinus10> + 2;
+			
+			GenCon( RefreshArrowButton,New,DDWinCtrlDef );
+
+			RefreshArrowButton( SetValues,	POSITION,	~<PositionRight> <yPosPlus5> 18 <ButtonHeight>~,
+											TOOLTIP,	~Click (or type ALT-Z) to toggle window size~,
+											TYPENAME,	~Button~ ,
+											TEXT,		<Minimized> ? ~v~ : ~^~,
+											IsTabStop,	~F~ );
+
+			theAction = ACTION EXEC ( MinimizeMaximize() );
+
+			RefreshArrowButton( SetValuesFrom,DACTIONSTEXT,theAction );
+
+			aDialog( InsertBack,RefreshArrowButton );	
+		}
+		else
+		{
+			Button<count>( SetValues,	Position,		~<xPosPlus5> <yPosPlus5> <ButtonWidthMinus10> <ButtonHeight>~,
+										TOOLTIP	,		~Show the various categories of tasks that are available to user <$App.UserName>.  You may also right click to see the categories.~,
+										TYPENAME,		~Button~ ,
+										TEXT,			Translate(~Categories~),
+										IsEnabled,		TRUE,
+										BGColorRed,		190,
+										BGColorGreen,	190,
+										BGColorBlue,	190,
+										IsTabStop,		~T~ );
+
+			theAction = ACTION EXEC ( ShowCategories() );
+
+			Button<count>( SetValuesFrom,DACTIONSTEXT,theAction );
+
+			aDialog( InsertBack,Button<count> );
+
+			PositionRight = <xPosPlus5>+<ButtonWidthMinus10>+2;
+			
+			GenCon( CategoriesArrowButton,New,DDWinCtrlDef ); 
+			
+			CategoriesArrowButton( SetValues,	Position,	~<PositionRight> <yPosPlus5> 18 <ButtonHeight>~,
+												TOOLTIP	,	~Click (or type ALT-Z) to toggle window size and position.  Add SHIFT to only toggle window size.~,
+												TYPENAME,	~Button~ ,
+												TEXT,		<Minimized> ? ~v~ : ~^~,
+												IsEnabled,	TRUE,
+												IsTabStop,	~F~ );
+
+			theAction = ACTION EXEC ( MinimizeMaximize() );
+
+			CategoriesArrowButton( SetValuesFrom,DACTIONSTEXT,theAction );
+
+			aDialog( InsertBack,CategoriesArrowButton );
+		}
+		
+		GenCon( HiddenArrowButton,New,DDWinCtrlDef ); 
+		
+		HiddenArrowButton( SetValues,TYPENAME,~Button~ ,TEXT,~&z~);
+		HiddenArrowButton( SetValuesFrom,DACTIONSTEXT,theAction );
+		
+		aDialog( InsertBack,HiddenArrowButton );
+
+		dlg( ReplaceControls,aDialog );
+
+		dlg( SetWindowSize,<DialogWidth>,34 );
+		dlg( SetControlTitle,RefreshArrowButton,~v~ );
+		dlg( SetControlTitle,CategoriesArrowButton,~v~ );
+		
+		if ( !KeyState( Shift ) )
+		{
+			dlg( SetWindowPosition,<LeftEdge>+4,28 );
+		}
+	}
+	else
+	{
+		if ( <ShowingCategories> )
+		{
+			ShowCategories();
+		}
+		else
+		{
+			SwitchCategory( ~<$App.Username>~,~<LastCategory>~ );
+		}
+
+		dlg( SetControlTitle,RefreshArrowButton,~^~ );
+		dlg( SetControlTitle,CategoriesArrowButton,~^~ );
+		
+		if ( !KeyState( Shift ) )
+		{
+			dlg( SetWindowPosition,<LeftEdge>+4,118 );
+		}
+	}
+	
+	return dlg( SetFocus );
+}
+
+NUMERIC SwitchCategory( User,Category )
+{
+	DocumentQuery = ~Select UserTasks.Name,Tasks.Description From UserTasks,Tasks Where (UserTasks.Name = Tasks.Name) AND (Category = '<Category>') AND (UserName = '<User>' OR UserName = '*') AND (UserTasks.Enabled = 1) AND (Tasks.Enabled = 1) Order By Sequence~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Tasks table. <theErr>~ );
+	}
+
+	yPos = 5;
+
+	GenCon( aDialog,New,DDWindef ); 
+
+	count = 0;
+
+	while ( List( GetNext,Item ) )
+	{
+		GenCon( Button<++count>,New,DDWinCtrlDef ); 
+
+		Button<count>( SetValues,	Position,		~<xPos> <yPos> <ButtonWidth> <ButtonHeight>~,
+									TOOLTIP	,		~<$pcon.Item[Description]>~,
+									TYPENAME,		~Button~ ,
+									TEXT,			~<$pcon.Item[Name]>~,
+									IsTabStop,		~T~ );
+
+		theAction = ACTION EXEC ( OnButton( ~<$pcon.Item[Name]>~ ) );
+
+		Button<count>( SetValuesFrom,DACTIONSTEXT,theAction );
+
+		aDialog( InsertBack,Button<count> );
+
+		yPos = <yPos> + $ButtonHeight + $ButtonSeparation;
+
+	}
+	
+	GenCon( Button<++count>,New,DDWinCtrlDef ); 
+
+	ButtonWidthMinus10 = $ButtonWidth - 30;
+	xPosPlus5 = <xPos> + 5;
+	yPosPlus5 = <yPos> + 5;
+
+	Button<count>( SetValues,	Position,		~<xPosPlus5> <yPosPlus5> <ButtonWidthMinus10> <ButtonHeight>~,
+								TOOLTIP	,		~Show the various categories of tasks that are available to user <$App.UserName>.  You may also right click to see the categories.~,
+								TYPENAME,		~Button~ ,
+								TEXT,			Translate(~Categories~),
+								IsEnabled,		TRUE,
+								BGColorRed,		190,
+								BGColorGreen,	190,
+								BGColorBlue,	190,
+								IsTabStop,		~T~ );
+
+	theAction = ACTION EXEC ( ShowCategories() );
+
+	Button<count>( SetValuesFrom,DACTIONSTEXT,theAction );
+
+	aDialog( InsertBack,Button<count> );
+
+	PositionRight = <xPosPlus5>+<ButtonWidthMinus10>+2;
+	
+	GenCon( CategoriesArrowButton,New,DDWinCtrlDef ); 
+	
+	CategoriesArrowButton( SetValues,	Position,	~<PositionRight> <yPosPlus5> 18 <ButtonHeight>~,
+										TOOLTIP	,	~Click (or type ALT-Z) to toggle window size.   Add SHIFT to only toggle window size.~,
+										TYPENAME,	~Button~ ,
+										TEXT,		<Minimized> ? ~v~ : ~^~,
+										IsEnabled,	TRUE,
+										IsTabStop,	~F~ );
+
+	theAction = ACTION EXEC ( MinimizeMaximize() );
+
+	CategoriesArrowButton( SetValuesFrom,DACTIONSTEXT,theAction );
+
+	aDialog( InsertBack,CategoriesArrowButton );
+	
+	GenCon( HiddenArrowButton,New,DDWinCtrlDef ); 
+	
+	HiddenArrowButton( SetValues,TYPENAME,~Button~ ,TEXT,~&z~);
+	HiddenArrowButton( SetValuesFrom,DACTIONSTEXT,theAction );
+	
+	aDialog( InsertBack,HiddenArrowButton );
+
+	yPos = Button<count>(GetBottom,Position) + $ButtonSeparation + 4;
+
+	if ( !Defined( dlg ) )
+	{
+		yPos = $yPos + $top;
+
+		TasksDialog( Set,Position,~<LeftEdge> 40 <DialogWidth> <yPos>~ );
+
+		GenDlg( dlg,Definition,TasksDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+		Global( dlg );
+		dlg( AdjustWindowPosition );
+	}
+	else
+	{
+		dlg( SetWindowSize,$DialogWidth ,$yPos );
+	}
+	
+	DialogHeight = <yPos>;
+	Global( DialogHeight );	
+
+	dlg( ReplaceControls,aDialog );
+	dlg( Title,~<Category>~ );
+	ShowingCategories = FALSE;
+
+	return TRUE;
+}
+
+VOID ShowCategories()
+{
+	Query = ~Select Distinct Category From UserTasks Where ((Enabled = 1) AND (UserName = '<$App.UserName>' OR  UserName = '*'))~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( ~Failed to query the Tasks table. <theErr>~ );
+		return;
+	}
+
+	yPos = 5;
+
+	GenCon( aDialog,New,DDWinDef );
+	
+	count = 0;
+
+	while ( List( GetNext,Item ) )
+	{
+		if ( !(KeyState( CONTROL ) && KeyState( RSHIFT )) )
+		{
+			if ( Translate(~<$pcon.Item[Category]>~) == Translate(~Admin~) )
+			{
+				if ( !GetUserPermissions( Admin ) )
+					continue;
+			}
+
+			if ( Translate(~<$pcon.Item[Category]>~) == Translate(~DatabaseInfo~) )
+			{
+				if ( !GetUserPermissions( DatabaseInfo ) )
+					continue;
+			}
+
+			if ( Translate(~<$pcon.Item[Category]>~) == Translate(~Diagnostic~) )
+			{
+				if ( !GetUserPermissions( Diagnostic ) )
+					continue;
+			}
+		}
+		
+		GenCon( Button<++count>,New,DDWinCtrlDef );
+
+		Button<count>( SetValues,	POSITION,	~<xPos> <yPos> <ButtonWidth> <ButtonHeight>~,
+									TOOLTIP	,	~See Tasks for <$pcon.Item[Category]>~,
+									TYPENAME,	~Button~ ,
+									TEXT,		~<$pcon.Item[Category]>~,
+									IsTabStop,	~T~ );
+
+		theAction = ACTION EXEC ( OnCategory( ~<$pcon.Item[Category]>~ ) );
+
+		Button<count>( SetValuesFrom,DACTIONSTEXT,theAction );
+
+		aDialog( InsertBack,Button<count> );
+
+		yPos = <yPos> + $ButtonHeight + $ButtonSeparation;
+	}
+	
+	GenCon( Button<++count>,New,DDWinCtrlDef );
+
+	ButtonWidthMinus10 = $ButtonWidth - 30;
+	xPosPlus5 = <xPos> + 5;
+	yPosPlus5 = <yPos> + 5;
+
+	Button<count>( SetValues,	POSITION,	~<xPosPlus5> <yPosPlus5> <ButtonWidthMinus10> <ButtonHeight>~,
+								TOOLTIP,	~Reread the tasks to pick up changes that have been made since starting the app~,
+								TYPENAME,	~Button~ ,
+								TEXT,		Translate(~Refresh~),
+								BGColorRed,		190,
+								BGColorGreen,	190,
+								BGColorBlue,	190,
+								IsTabStop,	~T~ );
+
+	theAction = ACTION EXEC ( RefreshDoc() );
+
+	Button<count>( SetValuesFrom,DACTIONSTEXT,theAction );
+
+	aDialog( InsertBack,Button<count> );
+	
+	PositionRight = <xPosPlus5>+<ButtonWidthMinus10> + 2;
+	
+	GenCon( RefreshArrowButton,New,DDWinCtrlDef );
+
+	RefreshArrowButton( SetValues,	POSITION,	~<PositionRight> <yPosPlus5> 18 <ButtonHeight>~,
+									TOOLTIP,	~Click (or type ALT-Z) to toggle window size~,
+									TYPENAME,	~Button~ ,
+									TEXT,		<Minimized> ? ~v~ : ~^~,
+									IsTabStop,	~F~ );
+
+	theAction = ACTION EXEC ( MinimizeMaximize() );
+
+	RefreshArrowButton( SetValuesFrom,DACTIONSTEXT,theAction );
+
+	aDialog( InsertBack,RefreshArrowButton );
+	
+	GenCon( HiddenArrowButton,New,DDWinCtrlDef ); 
+	
+	HiddenArrowButton( SetValues,TYPENAME,~Button~ ,TEXT,~&z~);
+	HiddenArrowButton( SetValuesFrom,DACTIONSTEXT,theAction );
+	
+	aDialog( InsertBack,HiddenArrowButton );
+	
+	yPos = Button<count>(GetBottom,Position) + $ButtonSeparation + 4;
+
+	if ( !Defined( dlg ) )
+	{
+		yPos = $yPos + $top;
+
+		TasksDialog( Set,Position,~<LeftEdge> 8 <DialogWidth> <yPos>~ );
+
+		GenDlg( dlg,Definition,TasksDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+		Global( dlg );
+	}
+	else
+	{
+		dlg( SetWindowSize,$DialogWidth ,$yPos );
+	}
+
+	dlg( SetWindowSize,$DialogWidth ,$yPos + $top);
+	dlg( ReplaceControls,aDialog );
+	dlg( Title,~Categories~ );
+	ShowingCategories = TRUE;
+}
+
+
+VOID OnCategory( Category )
+{
+	SwitchCategory( ~<$App.UserName>~,~<Category>~ );
+	LastCategory = ~<Category>~;
+}
+
+
+VOID OnButton( TheTask )
+{
+	PerformTask( ~<TheTask>~ );
+}
+
+
+VOID CloseDialog()
+{
+	dlg( END );
+	Exit();
+}
+
+VOID OnKeyDown()
+{
+	return;
+
+	//key = View( GetLastKeyStateless,KeyString );
+	//KeyString = Upper( ~<KeyString>~ );
+
+	if ( <key> == 0x74 )	// F5
+		{ return RefreshDoc(TRUE); }
+
+}
+
+VOID ShowInitial()
+{
+	if ( ADO( dBase,Connect,GetValuesFor,~Select Category From Users Where UserName = '<$App.Username>'~,UsersCategory ) )
+	{
+		if ( ~<UsersCategory>~ != ~~ ) 
+		{ 
+			SwitchCategory( ~<$App.Username>~,~<UsersCategory>~ );
+			LastCategory = ~<UsersCategory>~;
+			return;
+		}
+	}
+
+	ShowCategories();
+}
+
+ScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+ScreenHeight = thisApp( MainWindow,GetClientHeight );
+
+
+
+Top = 1; xPos = 1; yPos = $Top;  ButtonSeparation = 0;
+
+DialogWidth = ($ScreenWidth * .1) - 10;
+
+DialogWidth = ( <ScreenWidth> <= 1152 ) ? <DialogWidth> + 30 : <DialogWidth>;
+
+LeftEdge = $ScreenWidth - $DialogWidth - 20;
+
+ButtonWidth = $DialogWidth - ($xPos * 2); ButtonHeight = 20;
+
+Define: TasksDialog Using DDWinDef
+	Fields:	POSITION			$LeftEdge,-20, $DialogWidth, $ScreenHeight * .5 + 20
+			TITLE				Translate(~Tasks~)
+			TYPENAME			~DialogBar~ 
+			ALLOWDOCKING		FALSE
+			WantsMinimizeBox	TRUE
+			OACTIONSTEXT		ACTION EXEC ( CloseDialog() )
+			HACTIONSTEXT		ACTION EXEC ( OnHelpKey() )
+			RCLICKDNACTIONSTEXT ACTION EXEC ( ShowCategories(1) )
+
+Define: DlgData Using DDLong;
+
+GetTasks( TRUE );
+
+ShowingCategories = FALSE;
+
+ShowInitial();
+
+
+

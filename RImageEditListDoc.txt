@@ -1,0 +1,166 @@
+Include: ~FormattingRoutines~;
+
+IncludeClass( BaseGrid );
+
+VOID RImage::RImage()					// CONSTRUCTOR
+{
+	TableName = ~RImageEditList~;
+	DocumentQuery = ~Select * from <TableName> Order By ID~;
+	Title = RunningVersion(14) ? ~File List Records~ : ~RImage File List Records~;
+	WindowTop = 50;
+	WindowWidth = 90;
+	WindowHeight = 40;
+	DragAcceptFiles = TRUE;
+	SplitterRows = ~2 8 92~;
+	HelpPage = ~FileList.htm~;
+}
+
+STR RImage::GetKey( &Item )					// PRIMARY KEY FOR THE TABLE
+{
+	return ~ID = '<$con.Item[ID].SQLSafe>' AND ToPath = '<$con.Item[ToPath].SQLSafe>' AND FromPath = '<$con.Item[FromPath].SQLSafe>'~;
+}
+
+
+NUMERIC RImage::ChangeRecordAudits( &Changed )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[ID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  ID cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[ToPath]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  ToPath cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[FromPath]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  FromPath cannot be blank.~ ) ); }
+
+	return TRUE;
+}
+
+
+NUMERIC RImage::OnAddRecord( &NewRow )
+{
+	NewRow( Set,ID,~<fID>~ );
+	
+	return TRUE;
+}
+
+
+NUMERIC RImage::StartDrop( &DraggedFileList )
+{
+	fMinLevels = DraggedFileList(GetNumeric,MinLevels);
+	return TRUE;
+}
+
+NUMERIC RImage::ApproveExternalDrop( DraggedFileList,count)	// OVERRIDE TO ALLOW USER TO APPROVE THE THE DRAG
+{
+	return MessageBox( Translate(~Are you sure you would like to copy the <count> files to CD?~),YESNO ) == YES;
+}
+
+// NUMERIC RImage::EndDrop( &DragDropInfo )				{ return SaveAllChanges(); }	// So User doesn't have to hit save button
+
+NUMERIC RImage::SortExternalDrop( &DraggedFileList )	{ return TRUE; }				// No sorting needed
+
+
+NUMERIC RImage::ProcessDraggedFile( FromPath )
+{ 
+	Row = AddRecord();
+
+	ToPath = ~\~;
+
+	if ( !IsNull(~<fToPath>~) )
+	{
+		ToPath = ~<fToPath>~;
+	}
+
+	ToPath = MakePath( SubstrFromLevel,~<FromPath>~,<fMinLevels>-1 );
+
+	Grid.SetCellValue(<Row>,ToPath,~<fToPath>\<ToPath>~ );
+	Grid.SetCellValue(<Row>,FromPath,~<FromPath>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC RImage::AddControls( position )
+{
+	Define: ToPrompt Using DDWinCtrlDef AsSymbol ToPrompt Private
+		Fields:	TYPENAME		StaticText
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnToField() )
+				POSITION		$position + $hGap*3,$vGap+2 50 $ButtonHeight
+				TEXT			Translate( ~CD Path~ )
+				TOOLTIP			Translate( ~Specify how to name the file on CD~ );
+
+	Define: ToField Using DDWinCtrlDef AsSymbol ToField Private
+		Fields:	TYPENAME		MaskedEditText
+				MASK			RepeatStr(300,~%~)
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnToField() )
+				POSITION		ToPrompt(GetRight,Position)+$hGap,ToPrompt(GetTop,Position)-2 300 $ButtonHeight
+				TEXT			Translate( ~Destination Path On CD~ )
+				TOOLTIP			Translate( ~Specify how to name the file on CD~ );
+
+	Define: ValidateButton Using DDWinCtrlDef AsSymbol ValidateButton Private
+		Fields:	TYPENAME		Button
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnValidateButton() )
+				POSITION		ToField(GetRight,Position),$vGap 50 $ButtonHeight
+				TEXT			Translate( ~Validate~ )
+				ISHIDDEN		T
+				TOOLTIP			Translate( ~Check your paths for validity~ );
+
+	Define: DragStaticText Using DDWinCtrlDef AsSymbol DragStaticText Private
+		Fields:	TYPENAME		StaticText
+				// DACTIONSTEXT	ACTION EXEC ( <THIS>.OnValidateButton() )
+				POSITION		ValidateButton(GetRight,Position)+15,$vGap+2 230 $ButtonHeight
+				TEXT			Translate( ~Drag Files From Explorer On To This Window~ );
+
+
+	return DragStaticText( GetRight,Position );
+}
+
+NUMERIC RImage::OnValidateButton()
+{
+	return Warning( ~Not Implemented Yet~ );
+}
+	
+
+NUMERIC RImage::OnToField()
+{
+	ControlView( GetControlValue,ToField,fToPath );
+
+	return DataWindow( StatusBar,Text,~<fToPath>~ );
+}
+
+
+Class(  RImage,Extends,BaseGrid,
+		Member,fWriter,Str,~<Writer>~,
+		Member,fID,Str,~<ID>~,
+		Member,fMinLevels,Numeric,0,
+		Member,fToPath,Str,~~ );
+
+
+
+NUMERIC Init( Writer,ID,Query )
+{
+	if ( Defined(Grid) )
+	{
+		Grid.Set( DocumentQuery,~<Query>~ );
+		Grid.Set( fWriter,~<Writer>~ );
+		Grid.Set( fID,~<ID>~ );
+		Grid.Set( Title,~EditList for RImage Writer <fWriter> - Job <fID>~ );
+		Grid.RefreshListView();
+		Grid.ReOpen();
+		return TRUE;
+	}
+
+
+	RImage( New,Grid );
+
+	Grid.Set( fWriter,~<Writer>~ );
+	Grid.Set( fID,~<ID>~ );
+	Grid.Set( DocumentQuery,~<Query>~ );
+	Grid.Set( Title,~RImage Writer <Writer> - File List for Job <ID>~ );
+
+	Grid.DefineWindow();
+	Grid.Init();
+
+	return Global( Grid );
+}
+

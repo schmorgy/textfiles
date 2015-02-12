@@ -1,0 +1,169 @@
+
+NUMERIC DefineDialog()
+{
+	if ( !DictionaryExists(ListOfTablesDictionary) )
+	{
+		Dictionary: ListOfTablesDictionary
+			Fields: Name	TableName			type text
+	}
+
+	Define:	DialogData Using ListOfTablesDictionary
+		Fields:	TableName		~~ ;
+
+	DialogWidth = 300;
+	vGap = 1;				hGap = 5;
+	PromptX		= $hGap;	PromptY		= 10;	PromptWidth	= 50;	PromptHeight = 20;		ValueWidth	= 150;
+	ButtonWidth	= 90;		ButtonHeight	= 20;
+
+	Left = 100;				Top = 400;
+
+	Define: TheDialog Using DDWinDef
+		Fields:	POSITION				<Left>, <Top>, $DialogWidth, 300
+				TITLE					~Select a Table to Open~
+				TYPENAME				~Dialog~ 
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "OpenDatabase.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: TableNameComboBox Using DDWinCtrlDef AsSymbol TableNameComboBox
+				Fields: TypeName		ComboBox  
+						Position		$PromptX, $PromptY, 250, 200
+						GenConName		THIS
+						GenConField		TableName;
+
+			DialogWidth = TableNameComboBox( GetRight,Position ) + ($hGap * 3);
+
+			Define: OpenButton Using DDWinCtrlDef AsSymbol OpenButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( DoOpenButton() )
+						POSITION		($DialogWidth/2) - ($ButtonWidth) - $hGap,
+										TableNameComboBox(GetTop,Position) + ($ButtonHeight * 2) + $vGap, $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Open~ )
+						TOOLTIP			Translate( ~Open the selected table~ )
+						TYPENAME		DefaultButton
+
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( DoCancelButton() )
+						POSITION		OpenButton(GetRight,Position) + $hGap,
+										OpenButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Cancel~ )
+						TOOLTIP			Translate( ~Exit without opening~ )
+						TYPENAME		BUTTON
+		}
+
+
+	ScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+	x = $ScreenWidth / 2;
+	y = 40;
+
+	RightEdge = <x> + <DialogWidth>;
+
+	if ( <RightEdge> > <ScreenWidth> )
+	{
+		x = <ScreenWidth> - <DialogWidth> - 10;
+	}
+
+
+	DialogHeight = OpenButton(GetBottom,Position) + $PromptY + 20;
+	TheDialog( Set,Position,~<x> <y>  <DialogWidth>  <DialogHeight>~ );
+	GenDlg( dlg,Definition,TheDialog,Data,DialogData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DialogData );
+
+	return TRUE;
+}
+
+
+NUMERIC DoCancelButton()
+{
+	dlg( End );
+	Exit();
+}
+
+
+NUMERIC DoOpenButton()
+{
+	dlg( GetInput,GetString,TableName,TableName );
+
+	dlg( End );
+
+	OpenTheRecordset(~<TableName>~);
+
+	Exit();
+}
+
+
+NUMERIC SelectATable()
+{
+	return DefineDialog();
+}
+
+
+NUMERIC OpenTheRecordset(TableName)
+{
+	Action = ACTION DOC ( Test Open SearchDoc "ConnectAndSearch( ~<Path>~,~<Provider>~,~<User>~,~<Password>~,~<TableName>~,~Select * From <TableName>~);" );	
+	return PerformActions( Action );
+}
+
+
+NUMERIC OpenAFile( Path,User,Password,TableName )
+{
+	Extension = ~<$Str.$Path.Ext>~;
+
+	if ( SimilarStr( ~<Extension>~,~UDL~ ) )	// is this really a UDL?
+	{
+		User = ~~;
+		Password = ~~;
+		Provider = ~~;
+		Source = ~File Name=<Path>~;
+	}
+	else
+	{
+		Provider = ~Microsoft.Jet.OLEDB.4.0~;
+		Source = ~<Path>~;
+	}
+
+	if ( !ADO( dBase,User,~<User>~,Password,~<Password>~,Provider,~<Provider>~,Source,~<Source>~,Connect ) ) 
+	{
+		dBase( GetErrorInformation,theErr );
+		return Warning( Translate( ~Could not open from <Path>.  <theErr>~ ) );
+	}
+
+	Global( Path,User,Password,Provider );
+
+	if ( ~<TableName>~ == ~~ )
+	{
+		if ( !PGenConList( SchemaList,Connection,dBase,Cursor,Static,Schema,Tables ) )
+		{ 
+			SchemaList( GetErrorDescription,0,theErr );
+			return Warning( Translate( ~Failed to find tables from <Path>.  <theErr>~ ) );
+		}
+
+		SchemaList( Filter,~TABLE_TYPE = 'TABLE'~ );
+
+		count = 0;
+
+		while ( SchemaList( GetNext,Table ) )
+		{
+			TableName<++count> = ~<$pcon.Table[TABLE_NAME]>~;
+		}
+
+		if ( <count> < 0 )
+		{
+			return Warning( Translate( ~There are no tables from <Path>~ ) );
+		}
+
+		SelectATable();
+		SchemaList( MakeStringList,Tables,TABLE_NAME );
+		return dlg( SetControlFromStringList,TableNameComboBox,Tables );
+
+		TableName = ~<TableName1>~;
+	}
+
+	ForgetLocal( dBase );
+
+	OpenTheRecordset(~<TableName>~);
+
+	return TRUE;
+}

@@ -1,0 +1,409 @@
+//
+// Simple customer and order search dialog
+//
+// $Id: SimpleCustomerSearch.txt,v 1.2 2005/03/25 11:14:52 david Exp $
+//
+//      Copyright (c) 2005 Abelon Systems Limited.
+//      All rights reserved.
+//      Use of copyright notice does not imply publication.
+//
+//
+//                      CONFIDENTIAL INFORMATION
+//                      ------------------------
+//      This Document contains Confidential Information or Trade Secrets,
+//      or both, which are the property of Abelon Systems Limited.
+//      This document may not be copied, reproduced, reduced to any
+//      electronic medium or machine readable form or otherwise
+//      duplicated and the information herein may not be used,
+//      disseminated or otherwise disclosed, except with the prior
+//      written consent of Abelon Systems Limited.
+//
+//
+// Presents the user with a simple interface for searching for customers
+// and work orders.
+//
+// For customer lookups:
+//     Matches on the Customer table's "Name" field, "Contact" field and/or
+//     "ID" field in any combination.
+//     For the "Name" and "Contact" field matches if the provided strings
+//     are found anywhere in the fields.
+//     For the ID field, matches if the provided string is found at the
+//     beginning of the field.
+//
+// For work order lookups:
+//     Requires an exact match on the full work order ID and then displays
+//     the order images and order items for the found work order.
+//
+
+Include: ~FormattingRoutines~;
+Include: ~Utilities2~;
+
+// FUNCTION: ViewCustomer
+//
+// Opens the Customer window to display the resulting/matching customers.
+//
+VOID ViewCustomer( WhereClause )
+{
+    connected = ADO( dBase,Connect );
+    if ( !<connected> ) 
+    {
+        Warning( ~ViewCustomer: Could not connect to database~ );
+        return;
+    }
+
+    // First see how many rows match...
+    //
+    Count = dBase( RecordCountFor, ~Select ID From Customers <WhereClause>~ );
+
+    if ( <count> == 0 )
+    {
+        Warning( ~No matching records found. Try again.~ );
+        return;
+    }
+    
+    // Don't want to select all CustomerFields as there are too many tedious
+    //  ones.
+    CustomerFields = ~ID, Name, Contact, Street, City, Phone1, Phone2, Email~;
+    Query = ~Select <CustomerFields> From Customers <WhereClause>~;
+
+    Actions = ACTION DOC ( ~Customers~ Open CustomersDoc "Init( ~Matching Customers~,~<Query>~ );" ); 
+    PerformActions( Actions );
+//    CloseDialog();
+}
+
+// FUNCTION: ViewOrder
+//
+// Opens the order images and order items windows for the given OrderID.
+//
+VOID ViewOrder( OrderID )
+{
+    connected = ADO( dBase,Connect );
+    if ( !<connected> ) 
+    {
+        Warning( ~ViewOrder: Could not connect to database~ );
+        return;
+    }
+
+    // First check that OrderID is valid - i.e. a record exists for it.
+    //
+    Count = dBase( RecordCountFor, ~Select ID From Orders WHERE ID='<OrderID>'~ );
+    if ( <count> == 0 )
+    {
+        Warning( ~No order found matching Work Order ID (<OrderID>). Try again.~ );
+        // Return to the dialog - and re-focus on the Work Order edit box.
+        MaintainWOFocus();
+        return;
+    }
+
+    if ( <count> > 1 )
+    {
+        // This should not happen. DB corruption if it does.
+        Log( Session, ~ViewOrder: DB corruption: Work Order ID (<OrderID>) does not uniquely identify one order.~ );
+        Warning( ~Work Order ID (<OrderID>) does not uniquely identify one order. Notify your system administrator.~ );
+
+        // Return to the dialog - and re-focus on the Work Order edit box.
+        MaintainWOFocus();
+        return;
+    }
+    
+    // Ok - got a valid work order ID which matches one row in the Orders table.
+    //
+    // Now create OrderImages window with all images for the order
+    //
+    Query = ~SELECT * FROM Images WHERE OrderID='<OrderID>' ORDER BY OrderID, Roll, Frame~;
+    Actions = ACTION Doc ( ~<OrderID>~ OpenOnce ImagesDoc "Init( ~<OrderID>~, TRUE, ~<Query>~, 0 );" );
+    PerformActions( Actions );
+
+    // And now open an OrderItems window.
+    //
+    // Modified to allow display of orderitems derived from a single layout.
+//    Query = ~SELECT OrderItems.*, Products.LayoutName FROM OrderItems, Products WHERE OrderItems.OrderID = '<OrderID>' AND OrderItems.ProductID = Products.ID ORDER BY OrderID,OrderItems.Sequence~ ;
+    Query = ~SELECT * FROM OrderItems WHERE OrderID = '<OrderID>' ORDER BY OrderID,OrderItems.Sequence~ ;
+    Actions = ACTION Doc ( ~OrderItems~ OpenOnce OrderItemsDoc "Init(~<OrderID>~,~<Query>~,TRUE );" );
+    PerformActions( Actions );
+
+//    CloseDialog();
+}
+
+
+// FUNCTION: AddConstraint
+//
+// Utility used within BuildWhereClause() below to add a single constaint.
+// It figures out whether to preface the constrain with WHERE or AND as
+// appropriate.
+//
+STR AddConstraint( WhereClause, Constraint )
+{
+    if ( ~<WhereClause>~ == ~~ )
+    {
+        WhereClause = ~WHERE <Constraint>~;
+    }
+    else
+    {
+        WhereClause = ~<WhereClause> AND <Constraint>~;
+    }
+    return ~<WhereClause>~;
+}
+
+// FUNCTION: DoSearch()
+//
+// Called to handle user clicking the Search button.
+//
+// For a customer search:
+//  - Builds up SQL WHERE clause to find matching customers.
+//  - Then displays the DP2 customers window.
+//
+// For a work order lookup:
+//  - Displays the matching 
+//
+VOID DoSearch()
+{
+    dlg( GetInput );
+    DlgData( GetValues,ID,CustID );
+    DlgData( GetValues,Company,Company );
+    DlgData( GetValues,Contact,Contact );
+    DlgData( GetValues,OrderID,OrderID );
+
+    
+    if ( ~<OrderID>~ != ~~ )
+    {
+        // User has entered at least a partial OrderID - so ignore customer
+        //  settings and concentrate on the Order.
+        ViewOrder( ~<OrderID>~ );
+    }
+    else
+    {
+        // No Order ID has been entered, so concentrate on finding customers
+        //  who match the search criteria.
+        //
+        // About to call ViewCustomer, but first need to build up the SQL where
+        //  clause including whatever clues/fields the user entered.
+        //
+        WhereClause = ~~;
+        if ( ~<CustID>~ != ~~ )
+        {
+            WhereClause = AddConstraint( ~<WhereClause>~,
+                                         ~ID LIKE '<CustID>%'~ );
+        }
+        if ( ~<Company>~ != ~~ )
+        {
+            WhereClause = AddConstraint( ~<WhereClause>~,
+                                         ~Name LIKE '%<Company>%'~ );
+        }
+        if ( ~<Contact>~ != ~~ )
+        {
+            WhereClause = AddConstraint( ~<WhereClause>~,
+                                         ~Contact LIKE '%<Contact>%'~ );
+        }
+
+        // Ok - got the WHERE clause. Now get on and display matching customers.
+        ViewCustomer( ~<WhereClause>~ );
+    }
+}
+
+// FUNCTION: MaintainWOFocus
+//
+// Set the focus onto the OrderID field and blank out any existing value.
+// Used to gain focus at startup and also when an OrderID fails (e.g. no match).
+//
+VOID MaintainWOFocus()
+{
+    dlg( SetFocus );
+    dlg( SetControlValue,~OrderIDEditBox~,~~ );
+    dlg( SetControlFocus,~OrderIDEditBox~ ); 
+    dlg( EditText,OrderIDEditBox,SetSel,0,999,TRUE );
+}
+
+// FUNCTION: DefineDialog
+//
+// Define and display the customer search dialog.
+//
+VOID DefineDialog()
+{
+    vGap = 5;
+    hGap = 10;
+    DialogWidth = 310;
+    PromptWidth = 80;
+    PromptHeight = 20;
+    ValueWidth  = 150;
+    IntroWidth  = $DialogWidth - $hGap * 2;
+    ButtonWidth = 80;
+    ButtonHeight = 30;
+
+    AllowableChrs = ~<$[Symbols].AllowableSpecialCharacters[Value]>~;
+    Mask150 = RepeatStr(150,~*~);
+
+    Define: DlgData Using DDSimpleCustomerSearch;
+
+    Define: TheDialog Using DDWinDef
+        Fields: POSITION                100, 100, $DialogWidth, 300
+                TITLE                   ~Find Customer or Work Order~
+                TYPENAME                ~Dialog~ 
+                WantsMinimizeBox        TRUE
+                OACTIONSTEXT            ACTION EXEC ( CloseDialog() )
+                HACTIONSTEXT            ACTION SHOWHELPPAGE ( KPISHelpFile "All Searches.htm" ) 
+
+        Contains: INLISTORDER
+        {
+            Define: IntroText Using DDWinCtrlDef AsSymbol IntroText
+                Fields: POSITION        $hGap, $vGap, $IntroWidth, $PromptHeight
+                        TEXT            ~Enter company or contact name and/or ID to find customers.~
+                        TYPENAME        StaticText ;
+
+            Define: CompanyPrompt Using DDWinCtrlDef AsSymbol CompanyPrompt
+                Fields: POSITION        $hGap, IntroText(GetBottom,Position)+$vGap, $PromptWidth, $PromptHeight
+                        TEXT            ~Company Name~
+                        TOOLTIP         ~If you enter any part of the company name, then all customers whose company name contains this value will be displayed.~
+                        IsEnabled       T
+                        RightJustified  TRUE
+                        TYPENAME        StaticText ;
+
+            Define: CompanyEditBox Using DDWinCtrlDef AsSymbol CompanyEditBox
+                Fields: TypeName        MaskedEditText
+                        IActionsText    ACTIONS ( Get )
+                        DActionsText    ACTIONS ( Save )
+                        OActionsText    ACTIONS ( Save )
+                        GENCONFIELD     ~Company~
+                        GENCONNAME      THIS
+                        ISTABSTOP       TRUE
+                        DISALLOWEDCHARS STR ( ~ )
+                        POSITION        CompanyPrompt(GetRight,Position) + $hGap, CompanyPrompt(GetTop,Position), $ValueWidth, $PromptHeight
+                        TOOLTIP         ~If you enter any part of the company name, then all customers whose company name contains this value will be displayed.~
+                        Mask            ~<Mask150>~ 
+                        AllowedChars    ~<AllowableChrs>~
+                        PromptChar      ~ ~ ;
+
+            Define: CustIDPrompt Using DDWinCtrlDef AsSymbol CustIDPrompt
+                Fields: POSITION        $hGap CompanyPrompt(GetBottom,Position) $PromptWidth $PromptHeight
+                        TEXT            ~Customer ID~
+                        TOOLTIP         ~If you enter just the initial digits of the customer's ID, then all customers whose ID begins with those digits will be displayed.~
+                        IsEnabled       T
+                        RightJustified  TRUE
+                        TYPENAME        StaticText ;
+
+            Define: CustIDEditBox Using DDWinCtrlDef AsSymbol CustIDEditBox
+                Fields: TYPENAME        MaskedEditText
+                        GENCONFIELD     ~ID~
+                        GENCONNAME      THIS
+                        ISTABSTOP       TRUE
+                        IActionsText    ACTIONS ( Get )
+                        DActionsText    ACTIONS ( Save )
+                        OActionsText    ACTIONS ( Save )
+                        DISALLOWEDCHARS STR ( ~ )
+                        POSITION        CustIDPrompt(GetRight,Position) + $hGap, CustIDPrompt(GetTop,Position), $ValueWidth, $PromptHeight
+                        TOOLTIP         ~Enter all or start of customer ID~
+                        Mask            ~<Mask150>~ 
+                        AllowedChars    ~<AllowableChrs>~
+                        PromptChar      ~ ~ ;
+
+            Define: ContactPrompt Using DDWinCtrlDef AsSymbol ContactPrompt
+                Fields: POSITION        $hGap, CustIDPrompt(GetBottom,Position), $PromptWidth, $PromptHeight
+                        TEXT            ~Contact Name~
+                        TOOLTIP         ~If you enter any part of the contact name, then all customers whose contact name contains this value will be displayed.~
+                        IsEnabled       T
+                        RightJustified  TRUE
+                        TYPENAME        StaticText ;
+
+            Define: ContactEditBox Using DDWinCtrlDef AsSymbol ContactEditBox
+                Fields: TypeName        MaskedEditText
+                        IActionsText    ACTIONS ( Get )
+                        DActionsText    ACTIONS ( Save )
+                        OActionsText    ACTIONS ( Save )
+                        GENCONFIELD     ~Contact~
+                        GENCONNAME      THIS
+                        ISTABSTOP       TRUE
+                        DISALLOWEDCHARS STR ( ~ )
+                        POSITION        ContactPrompt(GetRight,Position) + $hGap, ContactPrompt(GetTop,Position), $ValueWidth, $PromptHeight
+                        TOOLTIP         ~If you enter any part of the contact name, then all customers whose contact name contains this value will be displayed.~
+                        Mask            ~<Mask150>~ 
+                        AllowedChars    ~<AllowableChrs>~
+                        PromptChar      ~ ~ ;
+
+            Define: WOIntroText Using DDWinCtrlDef AsSymbol WOIntroText
+                Fields: POSITION        $hGap, ContactEditBox(GetBottom,Position)+$vGap*2, $IntroWidth, $PromptHeight
+                        TEXT            ~OR enter Work Order ID to display an Order.~
+                        TYPENAME        StaticText ;
+
+            Define: OrderIDPrompt Using DDWinCtrlDef AsSymbol OrderIDPrompt
+                Fields: POSITION        $hGap, WOIntroText(GetBottom,Position), $PromptWidth, $PromptHeight
+                        TEXT            ~Work Order ID~
+                        TOOLTIP         ~Enter an existing work order ID in full.~
+                        IsEnabled       T
+                        RightJustified  TRUE
+                        TYPENAME        StaticText ;
+
+            Define: OrderIDEditBox Using DDWinCtrlDef AsSymbol OrderIDEditBox
+                Fields: TYPENAME        MaskedEditText
+                        GENCONFIELD     ~OrderID~
+                        GENCONNAME      THIS
+                        ISTABSTOP       TRUE
+                        IActionsText    ACTIONS ( Get )
+                        DActionsText    ACTIONS ( Save )
+                        OActionsText    ACTIONS ( Save )
+                        POSITION        OrderIDPrompt(GetRight,Position) + $hGap, OrderIDPrompt(GetTop,Position), $ValueWidth, $PromptHeight
+                        TOOLTIP         ~Enter an existing work order ID in full.~
+                        Mask            ~***************~ 
+                        PromptChar      ~ ~ ;
+
+            Define: SearchButton Using DDWinCtrlDef AsSymbol SearchButton
+                Fields: TypeName        DefaultButton
+                        Text            ~Search~
+                        DActionsText    ACTION EXEC ( DoSearch() )
+                        Position        ($DialogWidth-$ButtonWidth)/2, OrderIDPrompt(GetBottom,Position)+$vGap*2, $ButtonWidth, $PromptHeight
+                        TOOLTIP         ~Enter Company name, contact name and/or ID of customer to search for OR Work Order ID of order to display.~
+        }
+
+    DialogHeight = SearchButton(GetBottom,Position) + ($vGap * 2) + 30;
+
+    ScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+    x = $ScreenWidth / 2 + 100;
+    RightEdge = <x> + <DialogWidth>;
+    if ( <RightEdge> > <ScreenWidth> )
+    {
+        x = <ScreenWidth> - <DialogWidth> - 10;
+    }
+
+    TheDialog( Set,Position,~<x>  0  <DialogWidth>  <DialogHeight>~ );
+
+    GenDlg( dlg,Definition,TheDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    Global(dlg, TheDialog, DlgData);
+
+    // Ensure focus on the Work Order edit box to start with.
+    MaintainWOFocus();
+}
+
+// FUNCTION: CloseDialog
+//
+// Close the window and end.
+//
+   VOID CloseDialog()
+{
+    dlg( End );
+    Exit();
+}
+
+if ( !DictionaryExists( DDSimpleCustomerSearch ) )
+{
+    // Dictionary used to get hold of whatever values the user enters into
+    // the dialog box.
+    Dictionary: DDSimpleCustomerSearch
+        Fields: Name    ID               Type text
+        Fields: Name    Company          Type text
+        Fields: Name    Contact          Type text
+        Fields: Name    OrderID          Type text
+}
+
+AlreadyOpen = FALSE;
+
+// Main entry point.
+VOID Init()
+{
+    if ( !$AlreadyOpen )
+    {
+        // Create and display the dialog.
+        DefineDialog();
+        AlreadyOpen = TRUE;
+    }
+}
+

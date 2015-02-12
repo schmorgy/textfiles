@@ -1,0 +1,457 @@
+
+VOID RefreshDoc()
+{
+	RefreshListView();
+}
+
+
+NUMERIC RefreshListView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+	DataWindow( StatusBar,Text,~~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,Changed,Original,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate( ~There was no changed row.~ ) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$Con.Changed[Model]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Model Name cannot be blank.~ ) ); }
+
+	Key = STR ( Model = '<$Con.Original[Model]>' );
+
+	Query = ~Select * From PrinterModels Where <Key>~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,Changed,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update Printer Model record where <Key>. <theErr>~ );
+	}
+	
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	Count = SelectedRows( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( ~There were no rows selected~ ) ); }
+
+	if ( MessageBox( Translate( ~Are you sure you want to delete the <Count> selected rows?~ ),YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( SelectedRows( GetNext,Item ) )
+	{
+		Key = STR ( Model = '<$Con.Item[Model]>' );
+		 
+		Cmd = ~Delete From PrinterModels Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Database update failed: <Cmd>  <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,SelectedRows(GetCurrentPosition) );
+	}
+		
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC SeeResolutions()
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	Count = SelectedRows( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( ~There were no rows selected~ ) ); }
+
+	while ( SelectedRows( GetNext,Item ) )
+	{
+		Model = ~<$Con.Item[Model]>~;
+		 
+		Query = ~Select * From PrinterRes Where PrinterModel = '<Model>' Order By PrinterName,Sequence~;
+
+		Actions = ACTIONS ( Doc( ~PrinterRes~ Open PrinterResDoc "Init( ~<Model>~,~<Query>~);" ) );
+		PerformActions( Actions );
+	}
+	
+	return TRUE;
+
+}
+
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+//	NewRow( SetValues,ForeignDevice,~1~ );
+	
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Model );
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	DataView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new printer models that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddHOPModels()
+{
+	count = 0;
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~<$App.Directory>\HopConfig\*.Att~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+			continue;
+
+		Model = ~<$Str.$aPath.FileName.WithoutExt>~;
+
+		List( AddNew,Item );
+
+		Item( Set,Model,~<Model>~ );
+
+		List( Update );
+		
+		++count;
+	}
+
+	return <count>;
+}
+
+
+NUMERIC AddPrinterModel( &List,Model,Advance,Width )
+{
+	List( AddNew,Item );
+
+	Item( Set,Model,~<Model>~ );
+	Item( Set,MaxPaperWidth,~<Width>~ );
+	Item( Set,MaxPaperAdvance,~<Advance>~ );
+
+	return List( Update );
+}
+
+
+NUMERIC AddDefaultPrinterModels()
+{
+	if ( !GenCon( FieldTypes,GetFrom,FieldTypes,~[DATABASE]~ ) )
+		{ return FALSE; }
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		Error( ~Database Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	AddPrinterModel( List,~Disk~,0,0 );
+	AddPrinterModel( List,~KODAK LED~,30,20 );
+	AddPrinterModel( List,~KODAK CRT~,14,11 );
+	AddPrinterModel( List,~KODAK LFCRT~,14,11 );
+	AddPrinterModel( List,~KPDM~,18,12 );
+	AddPrinterModel( List,~KPDM II~,18,12 );
+	AddPrinterModel( List,~RP30~,18,12 );
+	AddPrinterModel( List,~RR30~,18,12 );
+	AddPrinterModel( List,~Windows~,17,11 );
+	AddPrinterModel( List,~Noritsu~,12,18 );
+	AddPrinterModel( List,~Durst~,40,60 );
+	AddPrinterModel( List,~NexPress~,8,10 );
+	AddPrinterModel( List,~Kodak7000Thermal~,6,8 );
+	AddPrinterModel( List,~Kodak8810Thermal~,8,12 );
+	AddPrinterModel( List,~KodakD4000Thermal~,8,12 );
+
+	RefreshListView( TRUE );
+
+	return TRUE;
+}
+
+
+
+NUMERIC EndEdit()
+{
+	DataView( GetEditedCell,row,col );
+	DataView( GetEditedCellValue,value );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	Fields( GetAt,<col> - 1,ColumnDefinition );
+
+	ColumnDefinition( GetName,ColumnName );
+
+	MessageBox( ~EndEdit On Field <ColumnName> Value is <value>~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnFieldModified()
+{
+	DataView( GetActiveCellValue,value );
+
+	// MessageBox( ~OnFieldModified(). Value is <value>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC TrapCellModifications( FieldName,TheAction )
+{
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	if ( !Fields( GetByName,~<FieldName>~,ColumnDefinition ) )
+		{ return FALSE; }
+
+	ColumnDefinition( Set,OnModify,~[ Call ( <TheAction>() ) ]~ );
+
+	return TRUE;
+}
+
+FirstTime = TRUE; // Only open a new window the first time
+
+
+NUMERIC Init( WhichPrinterModel,DocumentQuery )
+{
+	DataWindow( Set,Title,~<WhichPrinterModel>~ == ~~ ? ~Printer Model Data~ : ~Printer Model Data - <WhichPrinterModel>~ );
+
+	Global( WhichPrinterModel,DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			Error( ~Database Query Failed: <DocumentQuery>. <theErr>~ );
+		}
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !DataWindow( CreateWindow,~PrinterModels~ ) )
+		{ 
+			Error( ~Failed to create the window for PrinterModels~ ); 
+		}
+
+		if ( FALSE )	// List( Empty )
+		{
+			AddDefaultPrinterModels();
+			RefreshListView( TRUE );
+		}
+
+		return TRUE;
+	}
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+
+if ( !GenCon( TableDefinition,GetFrom,PrinterModels,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The PrinterModels Table is not properly defined~ ); }
+	
+
+Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add Printer Model~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		IF 0
+		{
+			Define:	AddDefaults	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Add Default Models~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( AddDefaultPrinterModels(); )
+		}
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	NULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		IF 0
+		{
+			Define:	Resolutions	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Resolutions~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeResolutions(); )
+		}
+	}
+
+
+Define: DataWindow Using DDWinDef
+	Fields:		Title					~PrinterModels~
+				Position				0 70 80 25
+				IsPositionPercent		T
+				EnableStatusBar			F;
+
+	Contains:	INLISTORDER
+	{
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord(); )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord(); )
+				//	DoubleClickActionsText	ACTION Exec (  )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView(); )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+				//	EndEditActionsText		ACTION Call ( EndEdit() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "PrinterModels.htm" )
+					CloseActionsText		ACTION Call ( OnCloseDataView() ) ;
+	}
+	
+

@@ -1,0 +1,406 @@
+IncludeClass(BaseDialog);
+
+
+Class( RawCameraSetup,Extends,BaseDialog);
+
+
+VOID RawCameraSetup::RawCameraSetup()
+{
+	Left = 600;
+	Top = 300;
+	Dictionary = ~DDRCSetupDialog~;
+	Title = ~Bibble Setup~;
+	HelpPage = ~RawCameraSetup.htm~;
+	GoButtonText = ~Apply~;
+	CancelButtonText = ~Cancel~;
+	
+	
+	if ( !Defined( CameraOutputFileTypes ) )
+	{
+		StringList( CameraOutputFileTypes, New );
+		CameraOutputFileTypes( AddString, ~TIFF~ );
+		CameraOutputFileTypes( AddString, ~JPEG~ );
+		Global( CameraOutputFileTypes );
+	}
+
+	if ( !Defined( CameraOutputFileExtensions ) )
+	{
+		StringList( CameraOutputFileExtensions, New );
+		CameraOutputFileExtensions( AddString, ~.tif~ );
+		CameraOutputFileExtensions( AddString, ~.jpg~ );
+		Global( CameraOutputFileExtensions );
+	}
+}
+
+VOID RawCameraSetup::DefineDictionary()
+{
+	Dictionary: ~<Dictionary>~ 
+		Fields: Name SaveFileType				Type text
+		Fields: Name RCSavePath					Type text
+		Fields: Name SystemSetting				Type Long	LowValue 0	HighValue 1
+		Fields: Name JPEGQuality				Type Long	LowValue 0	HighValue 100;
+}
+
+VOID RawCameraSetup::InitDialogData()
+{
+	DlgData( SetValues, SystemSetting, 0 );
+}
+
+VOID RawCameraSetup::DefineControls()
+{
+			Define: FileTypeStaticText Using DDWinCtrlDef AsSymbol FileTypeStaticText 
+					Fields: TypeName        StaticText
+							Text            ~File Type~
+							RightJustified	FALSE
+							Position        $hGap, $hGap*4 + 16, 85, 20
+
+			Define: FileTypeComboBox Using DDWinCtrlDef AsSymbol FileTypeComboBox 
+					Fields: TypeName		ComboBox 
+							Position		FileTypeStaticText(GetRight,Position) + $hGap, FileTypeStaticText(Gettop,Position),100 ,20*8 
+							IActionsText	ACTIONS ( Get )
+							DActionsText	~[Save Exec("<THIS>.OnFileTypeChange(FALSE)")]~
+							OActionsText    ~[Save]~
+							GenConName       THIS
+							GenConField      ~SaveFileType~
+							Tooltip          ~Select a file type~
+
+			Define: JPEGQualityPrompt Using DDWinCtrlDef AsSymbol JPEGQualityPrompt
+					Fields:	TYPENAME		StaticText
+							POSITION		FileTypeStaticText(GetLeft,Position), FileTypeStaticText(GetBottom,Position) + $vGap ,85,20
+							RightJustified	FALSE
+							TEXT			~JPEG Quality~
+
+			Define: JPEGQualityField Using DDWinCtrlDef AsSymbol JPEGQualityField
+					Fields:	DActionsText	~[Save Exec("<THIS>.OnFileTypeChange(FALSE)")]~
+							GENCONFIELD		~JPEGQuality~
+							GENCONNAME		THIS
+							IACTIONSTEXT	ACTIONS ( Get )
+							OACTIONSTEXT	ACTIONS ( Save )
+							POSITION		JPEGQualityPrompt(GetRight,Position) + $hGap,JPEGQualityPrompt(GetTop,Position),30,20
+							TEXT			~~
+							TOOLTIP			~Adjust the quality of the JPEG output file~
+							TYPENAME		MaskedEditText
+							Mask			~###~
+							PromptChar		~ ~ 
+							IsTabStop		T;
+
+			Define: SavePathStaticText Using DDWinCtrlDef AsSymbol SavePathStaticText 
+					Fields: TypeName        StaticText
+							Text            ~Path To Save Converted Raw File~
+							RightJustified	FALSE
+							Position        $hGap, JPEGQualityPrompt(GetBottom,Position) + $vGap*4, 300, 20
+							
+			Define: SavePathField Using DDWinCtrlDef AsSymbol SavePathField
+				Fields:	TYPENAME				EDITTEXT
+						GENCONNAME				THIS
+						GENCONFIELD				~RCSavePath~
+						DACTIONSTEXT			ACTION EXEC ( <THIS>.EnableDisableGoButton( TRUE ) )
+						IACTIONSTEXT			ACTIONS ( Get )
+						OACTIONSTEXT			ACTIONS ( Save )
+						Position				FileTypeStaticText(GetLeft,Position), SavePathStaticText(GetBottom,Position) - 5, 300, 20;
+		
+			Define: SavePathBrowseButton Using DDWinCtrlDef AsSymbol SavePathBrowseButton 
+				Fields: TypeName				Button
+						Text					Translate( ~?~ )
+						Position				SavePathField(GetRight,Position) + $hGap,SavePathField(GetTop,Position),20,20
+						DActionsText			ACTION EXEC  ( <THIS>.OnBrowseForSavePath() ) 
+						IsEnabled				T
+						Tooltip					Translate( ~Locate the path to save converted RAW camera files~ );	
+									
+			if ( GetUserPermissions( ~Admin~ ) )
+			{				
+				Define: SystemSettingCheckBox Using DDWinCtrlDef AsSymbol SystemSettingCheckBox
+					Fields: TypeName				CheckBox
+							GENCONFIELD				~SystemSetting~
+							GENCONNAME				THIS
+							IACTIONSTEXT			ACTIONS ( Get )
+							OACTIONSTEXT			ACTIONS ( Save )
+							Text					Translate( ~Apply the above settings as system defaults.~ )
+							Position				SavePathField(GetLeft,Position),SavePathField(GetBottom,Position) + $hGap,300,40 
+							Tooltip					Translate( ~Setting this checkbox will setup defaults for the system.  The system defaults will only be used if the workstation defaults haven't been setup.~ );			
+			}				
+							
+			DialogWidth = aDialog(GetMaxRight,Position) + $hGap * 2;
+			DialogHeight = aDialog(GetMaxBottom,Position);
+
+			if ( $DialogWidth < $ButtonWidth * 2 + $hGap * 2 )
+			{
+				DialogWidth = $ButtonWidth * 2 + $hGap * 4;
+			}
+
+			Define: OKButton Using DDWinCtrlDef AsSymbol OKButton
+				Fields:	GENCONNAME			THIS
+							DACTIONSTEXT			ACTION EXEC ( <THIS>.OnGoButton( TRUE ) )
+							POSITION				($DialogWidth/3) - ($ButtonWidth) + $hGap,$DialogHeight+$vGap * 2 + 3, $ButtonWidth, $ButtonHeight
+							TEXT						Translate( ~OK~ )
+							TOOLTIP					Translate( ~Save changes and close dialog.~ )
+							IsEnabled				F
+							TYPENAME				BUTTON
+							ISTABSTOP				TRUE
+
+			Define: GoButton Using DDWinCtrlDef AsSymbol GoButton
+				Fields:	GENCONNAME			THIS
+							DACTIONSTEXT			ACTION EXEC ( <THIS>.OnGoButton( FALSE ) )
+							POSITION				OKButton(GetRight,Position) + $hGap,OKButton(GetTop,Position),
+													$ButtonWidth, $ButtonHeight
+							TOOLTIP					Translate( ~Save changes~ )
+							IsEnabled				F
+							TYPENAME				BUTTON
+							ISTABSTOP				TRUE
+							TEXT					~Apply~
+
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				Fields:	GENCONNAME			THIS
+							DACTIONSTEXT			ACTION EXEC ( <THIS>.DoCancelButton() )
+							POSITION				GoButton(GetRight,Position) + $hGap,GoButton(GetTop,Position),
+													$ButtonWidth, $ButtonHeight
+							TEXT					Translate( ~<CancelButtonText>~ )
+							TOOLTIP					Translate( ~Close dialog. If changes haven't been save they will be lost.~ )
+							TYPENAME				BUTTON
+							ISTABSTOP				TRUE
+
+}
+
+VOID RawCameraSetup::WindowDefinition()
+{
+	Fields:
+		HACTIONSTEXT	ACTION EXEC ( <THIS>.OpenHelpPage(~/RawConversion/RawConversion.kpl#BibbleSetup~,~Setup Bibble~) )
+}
+
+
+VOID RawCameraSetup::OnFileTypeChange(LoadingSettings)
+{
+
+	dlg( GetInput );
+
+	JPEGEnabled = SimilarStr( ~<$con.dlgData[SaveFileType]>~, JPEG );
+	TIFFEnabled = SimilarStr( ~<$con.dlgData[SaveFileType]>~, TIFF );
+
+	dlg( EnableControls, <JPEGEnabled>, JPEGQualityField, JPEGQualityPrompt);
+	
+	if ( !<LoadingSettings> )
+	{
+		dlg( EnableControls, TRUE, GoButton );
+		dlg( EnableControls, TRUE, OKButton );
+	}
+
+}
+
+VOID RawCameraSetup::PopulateFileTypes()
+{
+	dlg( SetControlFromStringList,FileTypeComboBox,CameraOutputFileTypes,Selection  );
+}
+
+VOID RawCameraSetup::LoadSavedSettings()
+{
+	usingSystemSetting = FALSE;
+	
+	// Get the filetype system setting
+	if ( GetWorkstationSettings( ~RawCamera~, ~FileType~, fileType, Enabled ) )
+	{
+		if ( !<Enabled> || SimilarStr( ~<fileType>~, ~~ ) )
+		{
+			if ( GetSystemSettings( ~RawCamera~, ~FileType~, fileType, Enabled ) )
+			{
+				usingSystemSetting = TRUE;
+				if ( !<Enabled> || SimilarStr( ~<fileType>~, ~~ ) )
+				{
+					fileType = ~JPEG~;
+				}
+			}
+			else
+			{
+				fileType = ~JPEG~;
+			}
+		}
+	}
+	else
+	{
+		if ( GetSystemSettings( ~RawCamera~, ~FileType~, fileType, Enabled ) )
+		{
+			usingSystemSetting = TRUE;
+			if ( !<Enabled> || SimilarStr( ~<fileType>~, ~~ ) )
+			{
+				fileType = ~JPEG~;
+			}
+		}
+		else
+		{
+			fileType = ~JPEG~;
+		}
+	}
+	
+	// Get the JPEG compression value
+	if ( GetWorkstationSettings( ~RawCamera~, ~JPEGQuality~, JPGQuality, Enabled ) )
+	{
+		if ( !<Enabled> || SimilarStr( ~<JPGQuality>~, ~~ ) )
+		{
+			usingSystemSetting = TRUE;
+			if ( GetSystemSettings( ~RawCamera~, ~JPEGQuality~, JPGQuality, Enabled ) )
+			{
+				if ( !<Enabled> || SimilarStr( ~<JPGQuality>~, ~~ ) )
+				{
+					JPGQuality = ~100~;
+				}
+			}
+			else
+			{
+				JPGQuality = ~100~;
+			}
+		}
+	}
+	else
+	{
+		if ( GetSystemSettings( ~RawCamera~, ~JPEGQuality~, JPGQuality, Enabled ) )
+		{
+			usingSystemSetting = TRUE;
+			if ( !<Enabled> || SimilarStr( ~<JPGQuality>~, ~~ ) )
+			{
+				JPGQuality = ~100~;
+			}
+		}
+		else
+		{
+			JPGQuality = ~100~;
+		}
+	}
+	
+	// Get the default convert folder path
+	if ( GetWorkstationSettings( ~RawCamera~, ~ConvertPath~, convertPath, Enabled ) )
+	{
+		if ( !<Enabled> || SimilarStr( ~<convertPath>~, ~~ ) )
+		{
+			usingSystemSetting = TRUE;
+			if ( GetSystemSettings( ~RawCamera~, ~ConvertPath~, convertPath, Enabled ) )
+			{
+				if ( !<Enabled> || SimilarStr( ~<convertPath>~, ~~ ) )
+				{
+					convertPath = ~<$App.ShareDirectory>\Images~;
+				}
+			}
+			else
+			{
+				convertPath = ~<$App.ShareDirectory>\Images~;
+			}
+		}
+	}
+	else
+	{
+		if ( GetSystemSettings( ~RawCamera~, ~ConvertPath~, convertPath, Enabled ) )
+		{
+			usingSystemSetting = TRUE;
+			if ( !<Enabled> || SimilarStr( ~<convertPath>~, ~~ ) )
+			{
+				convertPath = ~<$App.ShareDirectory>\Images~;
+			}
+		}
+		else
+		{
+			convertPath = ~<$App.ShareDirectory>\Images~;
+		}
+	}
+	
+	PopulateFileTypes();
+	dlg( SetControlValue, FileTypeComboBox, ~<fileType>~ );
+	
+	dlg( SetControlValue,JPEGQualityField,~<JPGQuality>~);
+	
+	// Enable of disable the JPGquality field based on the file type
+	OnFileTypeChange(TRUE);
+	
+	dlg( SetControlValue, SavePathField, ~<convertPath>~ );
+	
+	if ( <usingSystemSetting> )
+	{
+		dlg( SetStatus, 0, ~Using system defaults.  No workstation defaults found.~ );
+	}
+	
+	return;
+}
+
+VOID RawCameraSetup::OnBrowseForSavePath()
+{
+	Title = ~Choose Path~;
+	SubTitle = ~Select Path To Save Converted RAW camera file~;
+	if ( !GetFolder( ~<Title>~,~<SubTitle>~,Path,~\\~ ) )
+	{
+		return;
+	}
+
+	dlg( SetControlValue, SavePathField, ~<Path>~ );
+	dlg( SetStrings,RCSavePath,~<Path>~ );
+}
+
+VOID RawCameraSetup::OnGoButton( CloseDialog )
+{
+	dlg( GetInput );
+	
+	// Check validity of values before saving
+	if ( !Files( IsUNC,~<$con.DlgData[RCSavePath]>~ ) && NetworkOperation() )
+	{
+		Msg = Translate( ~The path to save converted raw file(s) must be a network path (\\servername\example ).\nPlease enter a valid network path.~ );
+		MessageBox( ~<Msg>~);
+		return;
+	}
+	
+	if ( !SimilarStr( ~<$con.DlgData[SaveFileType]>~, ~TIFF~ ) )
+	{
+		if ( MakeNumber( ~<$con.DlgData[JPEGQuality]>~ ) < 0 || MakeNumber( ~<$con.DlgData[JPEGQuality]>~ ) > 100 )
+		{
+			Msg = Translate( ~The JPEG quality must be between 0 and 100.  Please enter a valid JPEG quality.~ );
+			MessageBox( ~<Msg>~);
+			return;
+		}
+	}
+	
+	// If the system setting checkbox is checked, update the system settings instead.
+	updateSystemSetting = MakeNumber( ~<$con.DlgData[SystemSetting]>~ );
+	
+	if ( <updateSystemSetting> )
+	{
+		SetSystemSettings( ~RawCamera~, ~ConvertPath~, ~<$con.DlgData[RCSavePath]>~, TRUE );
+		SetSystemSettings( ~RawCamera~, ~FileType~, ~<$con.DlgData[SaveFileType]>~, TRUE );
+		SetSystemSettings( ~RawCamera~, ~JPEGQuality~, ~<$con.DlgData[JPEGQuality]>~, TRUE );
+	}
+	else
+	{
+		SetWorkstationSettings( ~RawCamera~, ~ConvertPath~, ~<$con.DlgData[RCSavePath]>~, TRUE );
+		SetWorkstationSettings( ~RawCamera~, ~FileType~, ~<$con.DlgData[SaveFileType]>~, TRUE );
+		SetWorkstationSettings( ~RawCamera~, ~JPEGQuality~, ~<$con.DlgData[JPEGQuality]>~, TRUE );
+	}
+	
+	EnableDisableGoButton( FALSE );
+	
+	// Write status to control bar.
+	dlg( SetStatus, 0, ~Updates Saved Successfully~ );
+	
+	if ( <CloseDialog> )
+	{
+		DoCancelButton();
+	}
+}
+
+VOID RawCameraSetup::EnableDisableGoButton( Setting )
+{
+	//dlg( EnableControls, <Setting>, GoButton );
+}
+
+VOID Init()
+{
+	if ( Defined( RCSDialog ) )
+	{
+		RCSDialog.ReOpen();
+		return;
+	}
+
+	RawCameraSetup( New,RCSDialog,~<ID>~ );	
+
+	RCSDialog.DefineDialog();
+
+	Global( RCSDialog );
+	
+	RCSDialog.LoadSavedSettings();
+	RCSDialog.EnableDisableGoButton( FALSE );
+}
+
+Init();

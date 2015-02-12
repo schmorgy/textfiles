@@ -1,0 +1,199 @@
+//	CPlayTunes.txt
+
+//	THIS 'C' INTERPRETED  FILE WILL INTERPRET A TUNE STRING
+//	AND PLAY THE NOTES ON THE COMPUTERS SPEAKER.  NT ONLY.
+
+//	THE TUNES ARE DEFINED IN THE FOLLOWING WAY:
+//	SAMPLE TUNE:
+//		"Tempo 100 OctaveOffset -1 3C2 3D2 3E2 3G4 3E2 3G8"
+//	THE TEMPO IS SET BY "Tempo 100". THIS SPECIFIES HOW LONG
+//	IN MILISECONDS EACH 'BEAT' GETS
+//
+//	"OCTAVEOFFSET -1" INDICATES THAT WE WISH TO LOWER THE WHOLE
+//	TUNE BY ONE COMPLETE OCTAVE. (A POSITIVE NUMBER WILL RAISE
+//	THE TUNE BY THAT MANY OCTAVES.
+//
+//	3C2 =	THIRD OCTAVE UP FROM LOWEST TONE OCTAVE
+//			PLAY THE 'C' NOTE FOR 2 BEATS.
+//
+//	4C#4 =  FOURTH OCTAVE UP FROM THE LOWEST TONE OCTAVE
+//			PLAY THE 'C SHARP' NOTE FOR 4 BEATS
+//
+//	3Bb2 =	THIRD OCTAVE UP FROM THE LOWEST TONE OCTAVE
+//			PLAY THE 'B FLAT' NOTE FOR 2 BEATS
+//
+//	3H2	 =	REST FOR 2 BEATS
+//
+
+ExecC() ;
+
+//	USEFUL GLOBALS
+TCHAR	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+
+double	gFreq[96] ;	//	TONE FREQUENCIES 8 OCTAVES * 12 TONES / OCTAVE
+long	gNotes[8] ;	//	THE WHOLE LETTER NOTES
+
+main()
+{
+	InitSound() ;
+}
+
+
+PlayTune( TCHAR *TuneName )
+{
+	char *TuneTreeObj = GetTreeObject( TuneName, "[STRINGS TUNES]" ) ;
+
+	TCHAR	*theTune = GetStringValue( TuneTreeObj, "Text" ) ;
+
+	if( theTune )
+	{
+		InterpretMusic( theTune ) ;
+	}
+}
+
+
+InterpretMusic( TCHAR *Text )
+{
+	char		*theParser ;
+	TCHAR		 word[64] ;
+	long		 Tempo = 125 ;
+	long		 Octave, Note, Duration ;
+	long		 OctaveOffset = 0L ;
+	long		 Tone ;
+	long		 lFreq ;
+
+	theParser = New( "UParser" ) ;
+	SetText( theParser, Text ) ;
+
+	GetWord( theParser, word, TRUE ) ;
+	if( stricmp( word, "TEMPO" ) == 0 )
+	{
+		Tempo = GetLong( theParser ) ;
+		GetWord( theParser, word, TRUE ) ;
+	}
+
+	if( stricmp( word, "OCTAVEOFFSET" ) == 0 )
+	{
+		OctaveOffset = GetLong( theParser ) ;
+		GetWord( theParser, word, TRUE ) ;
+	}
+
+	while( *word )
+	{
+		GetNote( word, &Octave, &Note, &Duration ) ;
+		Duration *= Tempo ;
+		Octave += OctaveOffset ;
+		lFreq = 0L ;
+
+		if( Note != -1L )
+		{
+			Tone = Octave * 12 + Note ;
+			lFreq = gFreq[Tone] ;
+		}
+
+		if( lFreq == 0L )
+		{
+			Sleep( Duration ) ;
+		}
+		else
+		{
+			Beep( lFreq, Duration ) ;
+		}
+
+		GetWord( theParser, word, TRUE ) ;
+	}
+
+	SetText( theParser, NULL ) ;
+	theParser = Delete( theParser ) ;
+}
+
+
+GetNote( TCHAR *word, long *Octave, long *Note, long *Duration )
+{
+	long	temp ;
+	long	wordPos = 0 ;
+
+	temp = word[wordPos] ;
+	*Octave = temp - 48 ;
+	wordPos++ ;
+
+	temp = word[wordPos] ;
+	temp = temp - 65 ;
+	temp = gNotes[temp] ;
+	wordPos++ ;
+
+	if( temp != -1L )
+	{
+		if( word[wordPos] == '#' )
+		{
+			temp++ ;
+			wordPos++ ;
+		}
+
+		if( word[wordPos] == 'b' )
+		{
+			temp-- ;
+			wordPos++ ;
+		}
+	}
+
+	*Note = temp ;
+
+	temp = atoi( &word[wordPos] ) ;
+	*Duration = temp ;
+}
+
+
+
+
+InitSound()
+{
+	long	loop, loop1 ;
+	long	lFreq ;
+
+	for( loop = 0 ; loop < 8 ; loop++ )
+	{
+		GetScaleFreq( &gFreq[loop * 12], loop ) ;
+	}
+
+	gNotes[0] =  0 ;	//	A
+	gNotes[1] =  2 ;	//	B
+	gNotes[2] =  3 ;	//	C
+	gNotes[3] =  5 ;	//	D
+	gNotes[4] =  7 ;	//	E
+	gNotes[5] =  8 ;	//	F
+	gNotes[6] = 10 ;	//	G
+	gNotes[7] = -1 ;	//	H (NO TONE)
+
+}
+
+
+//	THE Mpyer IS DEFINED TO BE THE 12 ROOT OF 2 OR
+//	1.059463094359 TO THE 12 POWER = 2
+GetScaleFreq(double *Freq, long Octave)
+{
+	int		loop ;
+	double	OneTwelfth ;
+	double	Octaves[10] ;
+	double  Mpyer = 1.059463094359 ;
+
+	Octaves[0] =    55 ;
+	Octaves[1] =   110 ;
+	Octaves[2] =   220 ;
+	Octaves[3] =   440 ;	//	THESE ARE A's
+	Octaves[4] =   880 ;
+	Octaves[5] =  1760 ;
+	Octaves[6] =  3520 ;
+	Octaves[7] =  7040 ;
+	Octaves[8] = 14080 ;
+	Octaves[9] = 28160 ;
+
+	Freq[0] = Octaves[Octave] ;
+	for( loop = 1 ; loop < 12 ; loop++ )
+	{
+		Freq[loop] = Freq[loop-1] * Mpyer ;
+	}
+}
+

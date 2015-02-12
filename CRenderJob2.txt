@@ -1,0 +1,584 @@
+//	CRenderJob2.txt
+
+//	THIS IS THE SECOND PART OF THE CRENDERJOB.TXT CODE.
+//	THIS FILE CONTAINS MOST OF THE IMA TRANSFORM CODE.
+
+//	ApplyZoomFactor( double *rect, double ZoomFactor ) ;
+//	CenterRect( double *src, double *dst, double *centered ) ;
+//	CompareRects( double *rect1, double *rect2 ) ;
+//	CopyRect( double *dst, double *src ) ;
+//	CreateMatrix() ;
+//	CreateNodeRect(double *ILocation,double *TLocation,double *NodeRect);
+//	DoLUT( char *aLUT, long ImaXform, char *type ) ;
+//	DoMatrix( char *theMatrix, long ImaXform, char *type ) ;
+//	GetNodeRect( char *theNode, double *theRect ) ;
+//	GetRotationText(double Rotate, double *aRect ) ;
+//	HandleCDRGB( char *theNode, long ImaXform ) ;
+//	HandleColorMatrix( char *theNode, long ImaXform ) ;
+//	HandleXGamma( char *theNode, long ImaXform ) ;
+//	HandleLUT( char *theNode, long ImaXform ) ;
+//	HandleMirror( char *theNode, long ImaXform, double *theRect, double ZoomFactor ) ;
+//	HandleSaturation( char *theNode, long ImaXform ) ;
+//	HandleSharpen( char *theNode, long ImaXform ) ;
+//	LoadLut( char *LutName ) ;
+//	LoadMatrix( char *MatrixPath ) ;
+//	NormalRect( double *aRect ) ;
+//	RoundOffRect( double *rect, double offset ) ;
+//	PrintChar( char *format, char iVal ) ;
+//	PrintDouble( char *format, double dVal ) ;
+//	PrintInt( char *format, int iVal ) ;
+//	PrintLong( char *format, long lVal ) ;
+//	PrintRect( char *name, double *rect ) ;
+//	PrintString( char *format, char *string ) ;
+
+
+ApplyZoomFactor( double *rect, double ZoomFactor )
+{
+	if( ZoomFactor > 0.0 )
+	{
+		rect[x] = rect[x] * ZoomFactor ;
+		rect[y] = rect[y] * ZoomFactor ;
+		rect[w] = rect[w] * ZoomFactor ;
+		rect[h] = rect[h] * ZoomFactor ;
+	}
+}
+
+
+CenterRect( double *src, double *dst, double *centered )
+{
+	double	srcWidth, dstWidth, srcHeight, dstHeight ;
+
+	srcWidth  = src[w] - src[x] ;
+	srcHeight = src[h] - src[y] ;
+
+	dstWidth  = dst[w] - dst[x] ;
+	dstHeight = dst[h] - dst[y] ;
+
+	centered[x] = (dstWidth  - srcWidth) / 2 ;
+	centered[y] = (dstHeight - srcHeight) / 2 ;
+	centered[w] =  srcWidth  + centered[x] ;
+	centered[h] =  srcHeight + centered[y] ;
+}
+
+
+
+CompareRects( double *rect1, double *rect2 )
+{
+	double	Width1,  Width2 ;
+	double	Height1, Height2 ;
+
+	if( gTraceLevel == 5 )
+	{
+		PrintRect( "CompareRects: Rect1 = ", rect1 ) ;
+		PrintRect( "CompareRects: Rect2 = ", rect2 ) ;
+	}
+
+	if( rect1[x] == rect2[x] && rect1[y] == rect2[y] &&
+		rect1[w] == rect2[w] && rect1[h] == rect2[h] )
+	{
+		return( 0 ) ;
+	}
+
+	Width1 = rect1[w] - rect1[x] ;
+	Width2 = rect2[w] - rect1[x] ;
+
+	Height1 = rect1[h] - rect1[y] ;
+	Height2 = rect2[3] - rect2[y] ;
+
+	if( Width1 == Width2 && Height1 == Height2 )
+	{
+		return( 0 ) ;
+	}
+
+	if( Width1 > Width2 || Height1 > Height2 )
+	{
+		return( 1 ) ;
+	}
+
+	return( -1 ) ;
+
+}
+
+
+CopyRect( double *dst, double *src )
+{
+	dst[0] = src[0] ;
+	dst[1] = src[1] ;
+	dst[2] = src[2] ;
+	dst[3] = src[3] ;
+}
+
+CreateMatrix()
+{
+	char	*theMatrix ;
+
+	theMatrix = malloc( 100 ) ;
+
+//						 R		 G		 B
+	strcpy( theMatrix, "0.3		0.6		0.1\
+						0.3		0.6		0.1\
+						0.3		0.6		0.1" ) ;
+
+	return( theMatrix ) ;
+}
+
+CreateNodeRect( double *ILocation, double *TLocation, double *NodeRect )
+{
+	NodeRect[x] = ILocation[x] + TLocation[x] ;
+	NodeRect[y] = ILocation[y] + TLocation[y] ;
+	NodeRect[w] = ILocation[x] + ILocation[w] ;
+	NodeRect[h] = ILocation[y] + ILocation[h] ;
+}
+
+
+DoLUT( char *aLUT, long ImaXform, char *type, char *source )
+{
+	long	 ImaLutRef ;
+	double	 ViewRect[4] ;
+
+	ViewRect[0] = 128 ;
+	ViewRect[1] = aLUT[128] ;
+	ViewRect[2] = aLUT[384] ;
+	ViewRect[3] = aLUT[640] ;
+
+	ImaLutRef = ImaLUT( gIma, ImaXform, aLUT, 3, 256L, type ) ;
+
+	AddTransformData( ImaXform,  0L, 0L, ImaLutRef, source, ViewRect, 0.0 ) ;
+
+	return( ImaLutRef ) ;
+}
+
+DoMatrix( char *theMatrix, long ImaXform, char *type )
+{
+	long ImaColorMatrixRef ;
+
+	ImaColorMatrixRef = ImaCMatrix( gIma, ImaXform, theMatrix ) ;
+
+	AddTransformData( ImaXform, 0L, 0L, ImaColorMatrixRef, type, theMatrix, 0.0 ) ;
+
+	return( ImaColorMatrixRef ) ;
+}
+
+
+GetNodeRect( char *theNode, double *theRect )
+{
+	double	ILocation[4], TLocation[4] ;
+
+	GetRectValue( theNode, "ILocation:", ILocation ) ;
+	GetRectValue( theNode, "TLocation:", TLocation ) ;
+	CreateNodeRect( ILocation, TLocation, theRect ) ;
+}
+
+
+GetRotationText(double Rotate, double *aRect )
+{
+	double		temp ;
+	if( Rotate == 90.0 || Rotate == 1.0 )
+	{
+		temp = aRect[x] ;
+		aRect[x] = aRect[y] ;
+		aRect[y] = temp ;
+		temp = aRect[w] ;
+		aRect[w] = aRect[h] ;
+		aRect[h] = temp ;
+		return( "RCW" ) ;
+	}
+	if( Rotate == 180.0 || Rotate == 2.0 )
+	{
+		return( "R180" ) ;
+	}
+	if( Rotate == 270.0 || Rotate == 3.0 )
+	{
+		temp = aRect[x] ;
+		aRect[x] = aRect[y] ;
+		aRect[y] = temp ;
+		temp = aRect[w] ;
+		aRect[w] = aRect[h] ;
+		aRect[h] = temp ;
+		return( "RCCW" ) ;
+	}
+	return( "" ) ;
+}
+
+
+
+//	DRGB LUT
+HandleCDRGB( char *theNode, long ImaXform )
+{
+	char	*theLutObj ;
+	char	*theLut ;
+	char	*aParser ;
+	char	 value[128] ;
+	long	 contrast = 1L ;
+	long	 den, red, grn, blu, invert ;
+	long	 LutXform ;
+
+	den		= 0L ;
+	invert	= 0L ;
+
+	if( AttrChanged( theNode, "DENSITY:" ))
+	{
+		den = GetLongValue( theNode, "DENSITY:" ) ;
+	}
+
+	if( AttrChanged( theNode, "RGB:" ))
+	{
+		GetAttrValue( theNode, "RGB:", value ) ;
+		aParser = NewParser() ;
+		SetText( aParser, value ) ;
+		den = den + GetLong( aParser ) ;
+		red = GetLong( aParser ) ; 
+		grn = GetLong( aParser ) ; 
+		blu = GetLong( aParser ) ; 
+		SetText( aParser, NULL ) ;
+		Delete( aParser ) ;
+	}
+	
+	if( AttrChanged( theNode, "CONTRAST:" ))
+	{
+		contrast = GetLongValue( theNode, "CONTRAST:" ); 
+	}
+
+	if( AttrChanged( theNode, "NEGATIVE:" ))
+	{
+		invert = GetLongValue( theNode, "NEGATIVE:" ) ;
+	}
+
+	LutXform = den + red + grn + blu ;
+
+	if( LutXform || contrast != 1L || invert )
+	{
+		theLutObj = NewLut() ;
+		//						 D	  R    G    B    Con		G   Sat
+		SetLutValues( theLutObj, den, red, grn, blu, contrast, 100,  0 , invert ) ;
+		theLut = GetLutPtr( theLutObj ) ;
+		LutXform = DoLUT( theLut, ImaXform, "CHAR", "CDRGB" ) ;
+		Delete( theLutObj ) ;
+		return( LutXform ) ;
+	}
+
+	return( ImaXform ) ;
+}
+
+
+
+HandleColorMatrix( char *theNode, long ImaXform )
+{
+	char	matrix[256] ;
+	long	ImaColorMatrixRef ;
+	double	*theMatrix ;
+
+	if( AttrChanged( theNode, "ColorMatrix:" ) )
+	{
+		GetAttrValue( theNode, "ColorMatrix:", matrix ) ;
+
+		theMatrix = LoadMatrix( matrix ) ;
+
+		ImaColorMatrixRef = DoMatrix( theMatrix, ImaXform, "ColorMatrix" ) ;
+
+		theMatrix = free( theMatrix ) ;
+
+		return( ImaColorMatrixRef ) ;
+	}
+
+	return( ImaXform ) ;
+}
+
+
+
+//	GAMMA LUT
+HandleXGamma( char *theNode, long ImaXform )
+{
+	char	*theLutObj ;
+	char	*theLut ;
+	long	 gamma ;
+	long	 gammaXform ;
+
+	if( AttrChanged( theNode, "XGAMMA:" ))
+	{
+		gamma = GetDoubleValue( theNode, "XGAMMA:" ) ;
+		theLutObj = NewLut() ;
+		//						 D	 R   G   B   Con  G     Sat Invert
+		SetLutValues( theLutObj, 0L, 0L, 0L, 0L, 0,   gamma, 0,   0 ) ;
+		theLut = GetLutPtr( theLutObj ) ;
+		gammaXform = DoLUT( theLut, ImaXform, "CHAR", "XGamma" ) ;
+		return( gammaXform ) ;
+	}
+	return( ImaXform ) ;
+}
+
+
+
+//	LUT FROM FILE
+HandleLUT( char *theNode, long ImaXform )
+{
+	char	LutPath[256] ;
+	char	*theLuts[3] ;
+	char	*aLut ;
+	long	ImaLutRef ;
+
+	if( AttrChanged( theNode, "LUT:" ) )
+	{
+		GetAttrValue( theNode, "LUT:", LutPath ) ;
+
+		aLut = LoadLut( LutPath ) ;
+
+		ImaLutRef = DoLUT( aLut, ImaXform, "CHAR", "File Lut" ) ;
+
+		aLut = free( aLut ) ;
+
+		return( ImaLutRef ) ;
+	}
+
+	return( ImaXform ) ;
+}
+
+
+HandleMirror( char *theNode, long ImaXform, double *theRect, double ZoomFactor )
+{
+	long	 Xform = ImaXform ;
+	long	 Flip  = FALSE ;
+
+	if( AttrChanged( theNode, "MIRRORHORIZONTAL:" ))
+	{
+		Flip = GetLongValue( theNode, "MIRRORHORIZONTAL:" ) ;
+		if( Flip )
+		{
+			Xform = ImaReorient( gIma, Xform, "FHOR" ) ;
+			AddTransformData(ImaXform, 0L, 0L, Xform, "Flip Horizontal", theRect, 0.0);
+		}
+	}
+
+	if( AttrChanged( theNode, "MIRRORVERTICAL:" ))
+	{
+		Flip = GetLongValue( theNode, "MIRRORVERTICAL:" ) ;
+		if( Flip )
+		{
+			Xform = ImaReorient( gIma, Xform, "FVER" ) ;
+			AddTransformData(ImaXform, 0L, 0L, Xform, "Flip Horizontal", theRect, 0.0);
+		}
+	}
+
+	return( Xform ) ;
+}
+
+
+//	SATURATION
+HandleSaturation( char *theNode, long ImaXform )
+{
+	char	*theLutObj ;
+	char	*theMatrix ;
+	long	 Sat ;
+	long	 satXform ;
+
+	if( AttrChanged( theNode, "SATURATION:" ))
+	{
+		Sat = GetLongValue( theNode, "SATURATION:" ) ;
+		theLutObj = NewLut() ;
+		//						 D	 R   G   B   Con  Gam  Sat  Negate
+		SetLutValues( theLutObj, 0L, 0L, 0L, 0L,  0,  100, Sat,  0 ) ;
+		theMatrix = GetMatrixPtr( theLutObj ) ;
+		satXform = DoMatrix( theMatrix, ImaXform, "Saturation Matrix" ) ;
+		Delete( theLutObj ) ;
+		return( satXform ) ;
+	}
+	return( ImaXform ) ;
+}
+
+
+
+HandleSharpen( char *theNode, long ImaXform )
+{
+	double	kernel[4] ;
+	double	SharpenAmt ;
+	long	ImaSharpenRef ;
+
+	if( AttrChanged( theNode, "SharpenFaster:" ) )
+	{
+		SharpenAmt = GetDoubleValue( theNode, "SharpenFaster:" ) ;
+
+		if( SharpenAmt > 0.0 )
+		{
+			//	MUST ADD TO 1.0
+			kernel[0] = 0.25 ; kernel[1] = 0.5 ; kernel[2] = 0.25 ;
+
+			ImaSharpenRef = ImaUnSharpMask(gIma, ImaXform, kernel,
+												SharpenAmt/100.0, "MIRROR" ) ;
+
+			AddTransformData( ImaXform, 0L, 0L, ImaSharpenRef,
+													"SharpenFaster:", kernel, 0.0);
+
+			return( ImaSharpenRef ) ;
+		}
+	}
+
+	return( ImaXform ) ;
+}
+
+/*
+		SharpenAmt = GetDoubleValue( theNode, "SharpenFaster:" ) ;
+		SharpenAmt = SharpenAmt / 1000 ;
+
+			kernel[0] = -SharpenAmt ;
+			kernel[1] = -SharpenAmt ;
+			kernel[2] = -SharpenAmt ;
+			kernel[3] = -SharpenAmt ;
+			kernel[4] =  SharpenAmt * 8 + 1 ;
+			kernel[5] = -SharpenAmt ;
+			kernel[6] = -SharpenAmt ;
+			kernel[7] = -SharpenAmt ;
+			kernel[8] = -SharpenAmt ;
+
+			ImaSharpenRef = ImaConvolve( gIma, ImaXform, kernel, "MIRROR", 1 ) ;
+
+			AddTransformData( ImaXform, 0L, 0L, ImaSharpenRef,
+											"SharpenFaster:", &kernel[4] ) ;
+*/
+
+//	THIS ROUTINE WILL READ IN A LUT FROM A DISK FILE.
+LoadLut( char *LutName )
+{
+	char *theLutObj ;
+	char *theLut ;
+
+	theLutObj = NewLut() ;
+	theLut = Load8BitLut( theLutObj, LutName ) ;
+	Delete( theLutObj ) ;
+	return( theLut ) ;
+}
+
+
+
+LoadMatrix( char *MatrixPath, double *theMatrix )
+{
+	char	*theText ;
+
+	theText = GetFile( MatrixPath ) ;
+	if( theText )
+	{
+		//	CREATE A PARSER
+		aParser = NewParser() ;
+		if( aParser )
+		{
+			SetText( aParser, theText ) ;
+	
+			theMatrix[0] = GetDouble( aParser ) ;
+			theMatrix[1] = GetDouble( aParser ) ;
+			theMatrix[2] = GetDouble( aParser ) ;
+			GetDouble( aParser ) ;	//	IGNORE THE 4th VALUE
+			theMatrix[3] = GetDouble( aParser ) ;
+			theMatrix[4] = GetDouble( aParser ) ;
+			theMatrix[5] = GetDouble( aParser ) ;
+			GetDouble( aParser ) ;	//	IGNORE THE 4th VALUE
+			theMatrix[6] = GetDouble( aParser ) ;
+			theMatrix[7] = GetDouble( aParser ) ;
+			theMatrix[8] = GetDouble( aParser ) ;
+										//	IGNORE THE 4th VALUE
+			
+			//	DELETE THE PARSER
+			SetText( aParser, NULL ) ;
+			Delete( aParser ) ;
+		}
+		theText = free( theText ) ;
+	}
+	return( theMatrix ) ;
+}
+
+
+NormalRect( double *aRect )
+{
+	aRect[2] = aRect[2] - aRect[0] ;
+	aRect[3] = aRect[3] - aRect[1] ;
+	aRect[0] = 0.0 ;
+	aRect[1] = 0.0 ;
+}
+
+
+RoundOffRect( double *rect, double offset )
+{
+	long	lval ;
+
+	lval = rect[0] + offset ;
+	rect[0] = lval ;
+
+	lval = rect[1] + offset ;
+	rect[1] = lval ;
+
+	lval = rect[2] + offset ;
+	rect[2] = lval ;
+
+	lval = rect[3] + offset ;
+	rect[3] = lval ;
+}
+
+
+
+PrintChar( char *format, char iVal )
+{
+	if( gDebug )
+	{
+		printf( format, iVal ) ;
+	}
+}
+
+PrintDouble( char *format, double dVal )
+{
+	if( gDebug )
+	{
+		printf( format, dVal ) ;
+	}
+}
+
+PrintInt( char *format, int iVal )
+{
+	if( gDebug )
+	{
+		printf( format, iVal ) ;
+	}
+}
+
+PrintLong( char *format, long lVal )
+{
+	if( gDebug )
+	{
+		printf( format, lVal ) ;
+	}
+}
+
+PrintRect( char *name, double *rect )
+{
+	char	word[128] ;
+	char	word2[128] ;
+	
+	if( gDebug )
+	{
+		strcpy( word, name ) ;
+		strcat( word, ": [" ) ;
+		sprintf( word2, "%lf ", rect[0] ) ;
+		strcat( word, word2 ) ;
+		sprintf( word2, "%lf ", rect[1] ) ;
+		strcat( word, word2 ) ;
+		sprintf( word2, "%lf ", rect[2] ) ;
+		strcat( word, word2 ) ;
+		sprintf( word2, "%lf]", rect[3] ) ;
+		strcat( word, word2 ) ;
+		printf( "%s", word ) ;
+	}
+}
+
+PrintString( char *format, char *string )
+{
+	if( gDebug )
+	{
+		printf( format, string ) ;
+	}
+}
+
+
+
+
+
+
+
+
+

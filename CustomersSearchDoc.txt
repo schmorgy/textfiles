@@ -1,0 +1,190 @@
+NUMERIC Search()
+{
+	WindowLocation = ~<$User.WindowLocation[CustomersSearchDialog]>~;
+
+//	if ( ~<WindowLocation>~ != ~~ )
+//		{ SearchCriteraDialog( Set,Position,~<WindowLocation>~ ); }
+
+	GenDlg( SearchDialog,Definition,SearchCriteraDialog,Data,SearchCriteraData,Document,$Doc.This,New,Temporary );
+	Global( SearchDialog );
+
+	return TRUE;
+}
+
+IF 0	// NOT CURRENTLY USED
+{
+	NUMERIC DoASearchByCustomerName()
+	{
+		SearchDialog( GetInput,GetString,NameBeginsWith,NameBeginsWith );
+
+		Query = ~SELECT * FROM Customers WHERE Name LIKE '<NameBeginsWith>%' Order By Name~;
+
+		Actions = ACTIONS ( Doc( ~Customers~ Open CustomersDoc "Init( ~~,~<Query>~);" ) );
+
+		PerformActions( Actions );
+
+		return DoCancelButton();
+	}
+
+	NUMERIC DoASearchByCustomerID()
+	{
+		SearchDialog( GetInput,GetString,IDBeginsWith,IDBeginsWith );
+
+		Query = ~SELECT * FROM Customers WHERE ID LIKE '<IDBeginsWith>%' Order By  ID~;
+
+		Actions = ACTIONS ( Doc( ~Customers~ Open CustomersDoc "Init( ~~,~<Query>~);" ) );
+
+		PerformActions( Actions );
+
+		return DoCancelButton();
+	}
+}
+
+
+STR AddCriteria( &Selection, Combiner, Criteria )
+{
+	if ( ~<Selection>~ != ~~ )
+	{
+		Selection = ~ <Selection> <Combiner> <Criteria> ~;
+	}
+	else
+	{
+		Selection = ~ Where <Criteria> ~;
+	}
+
+	return ~<Selection>~;
+}
+
+NUMERIC DoACombinationSearch()
+{
+	SearchDialog( GetInput,GetStrings,NameBeginsWith,NameBeginsWith,IDBeginsWith,IDBeginsWith );
+
+	Query = ~SELECT * FROM Customers~;
+
+	Selection = ~~;
+	
+	if ( ~<IDBeginsWith>~ != ~~ )
+	{
+		Query = ~<Query>~ + AddCriteria( Selection,OR,~ID LIKE '<IDBeginsWith>%'~ );
+	}
+
+	if ( ~<NameBeginsWith>~ != ~~ )
+	{
+		Query = ~<Query>~ + AddCriteria( Selection,AND,~Name LIKE '<NameBeginsWith>%'~ );
+	}
+
+	Actions = ACTIONS ( Doc( ~Customers~ Open CustomersDoc "Init( ~<Selection>~,~<Query>~);" ) );
+
+	PerformActions( Actions );
+
+	return DoCancelButton();
+}
+
+
+NUMERIC DoCancelButton()
+{
+	SearchCriteraDialog( SaveWindowLocation,WindowLocation,CustomersSearchDialog );
+
+	SearchDialog( End );
+	Exit();
+
+	return TRUE;
+}
+
+
+
+Define:	SearchCriteraData Using SearchCriteraDictionary
+	Fields:	IDBeginsWith				~~
+	Fields:	NameBeginsWith				~~ ;
+
+DialogWidth = 400;
+PromptX		= 10;	PromptY		= 10;	PromptWidth	= 150;	PromptHeight = 20;
+ValueWidth	= 100;
+
+vGap = 10;			hGap = 10;
+
+ButtonWidth	= 90;	ButtonHeight	= 20;
+
+Define: SearchCriteraDialog Using DDWinDef
+	Fields:	POSITION				100, 100, $DialogWidth, 300
+			TITLE					~Customers Search Criteria~
+			TYPENAME				~Dialog~ 
+			OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+			HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "T_Customer Search.htm" ) 
+
+	Contains: INLISTORDER
+	{
+		Define: NameBeginsWithPrompt Using DDWinCtrlDef AsSymbol NameBeginsWithPrompt
+			Fields:	POSITION		$PromptX $PromptY $PromptWidth $PromptHeight
+					TEXT			~Customer Name Begins With~
+					DACTIONSTEXT	ACTION EXEC ( DoASearchByCustomerName() )
+					TYPENAME		StaticText
+
+		Define: NameBeginsWithField Using DDWinCtrlDef AsSymbol NameBeginsWithField
+			Fields:	DACTIONSTEXT	ACTIONS ( Save )
+					GENCONFIELD		NameBeginsWith
+					GENCONNAME		THIS
+					IACTIONSTEXT	ACTIONS ( Get )
+					OACTIONSTEXT	ACTIONS ( Save )
+					POSITION		(NameBeginsWithPrompt(GetRight,Position) + 5) $PromptY $ValueWidth $PromptHeight
+					TEXT			~~
+					TOOLTIP			~Select the first letters of the customer name~
+					TYPENAME		EditText
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "SearchCriteriaBeginsWith.html" )
+
+		Define: IDBeginsWithPrompt Using DDWinCtrlDef AsSymbol IDBeginsWithPrompt
+			Fields:	POSITION		$PromptX (NameBeginsWithPrompt(GetBottom,Position) + $vGap) $PromptWidth $PromptHeight
+					TEXT			~Customer ID Begins With~
+					DACTIONSTEXT	ACTION EXEC ( DoASearchByCustomerID() )
+					TYPENAME		StaticText
+
+		Define: IDBeginsWithField Using DDWinCtrlDef AsSymbol IDBeginsWithField
+			Fields:	DACTIONSTEXT	ACTIONS ( Save )
+					GENCONFIELD		IDBeginsWith
+					GENCONNAME		THIS
+					IACTIONSTEXT	ACTIONS ( Get )
+					OACTIONSTEXT	ACTIONS ( Save )
+					POSITION		(IDBeginsWithPrompt(GetRight,Position) + 5) 
+									IDBeginsWithPrompt(GetY,Position)  $ValueWidth $PromptHeight
+					TEXT			~~
+					TOOLTIP			~Select the first characters of the Customer ID~
+					TYPENAME		EditText
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "SearchCriteriaBeginsWith.html" ) ;
+
+		DialogWidth = IDBeginsWithField(GetRight,Position) + $hGap;
+
+		Define: SearchButton Using DDWinCtrlDef AsSymbol SearchButton
+			Fields:	GENCONNAME		THIS
+					DACTIONSTEXT	ACTION EXEC ( DoACombinationSearch() )
+					POSITION		($DialogWidth/2) - ($ButtonWidth) - $hGap,
+									IDBeginsWithPrompt(GetBottom,Position) + $vGap, $ButtonWidth, $ButtonHeight
+					TEXT			~Search~
+					TOOLTIP			~Search for Customers matching the above criteria~
+					TYPENAME		BUTTON
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "Search.htm" ) 
+
+		Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+			Fields:	GENCONNAME		THIS
+					DACTIONSTEXT	ACTION EXEC ( DoCancelButton() )
+					POSITION		SearchButton(GetRight,Position) + $hGap,
+									SearchButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+					TEXT			~Cancel~
+					TOOLTIP			~Exit without searching~
+					TYPENAME		BUTTON
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "Cancel.htm" ) 
+	}
+
+// TRY TO POSITION THIS WINDOW NEXT TO THE WINDOW ACTIVE WINDOW
+
+x = 100; y = 100;
+
+if ( GenCon( CallersWindow,GetWindow,~~ ) )
+{
+	CallersWindow( GetWindowPosition,Left,Top,Right,Bottom );
+	x = <Left> - <DialogWidth> - 5;
+	y = <Top>;
+}
+
+
+DialogHeight = CancelButton(GetBottom,Position) + $vGap + 20;
+SearchCriteraDialog( Set,Position,~<x>  <y>  <DialogWidth>  <DialogHeight>~ );

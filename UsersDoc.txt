@@ -1,0 +1,327 @@
+
+NUMERIC RefreshListView( Requery )
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate( ~Would you like to save your pending changes?~ ),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+	DataWindow( StatusBar,Text,~~ );
+
+	RefreshCategoryList();
+
+	return TRUE;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,Changed,Orig,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate( ~There was no changed row.~ ) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.Changed[UserName]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  UserName cannot be blank.~ ); }
+
+	Key = STR ( UserName = '<$con.Orig[UserName]>' );
+	
+	Query = ~Select * From Users Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,Changed,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update User record where <Key>. <theErr>~ );
+	}
+
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,UsersToDelete ) )		
+		{ return Warning( Translate( ~There were no row selected to delete~ ) ); }
+
+	Count = UsersToDelete( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( ~There were no items selected to delete~ ) ); }
+
+	if ( MessageBox( Translate( ~Are you sure you want to delete the <Count> selected user(s)?~ ),YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( UsersToDelete( GetNext,User ) )
+	{
+		Key = ~UserName = '<$con.User[UserName]>'~;
+
+		Cmd = ~Delete From Users Where <Key>~;
+
+		if ( !dbase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate( ~Error on <Cmd>.  <theErr>~ ) );
+		}
+		else
+		{
+			RowsToDelete( AddString,UsersToDelete(GetCurrentPosition) );
+		}
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	RefreshCategoryList();
+
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate( ~You are too low on memory to add any more rows~ ) ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,UserName );
+
+	return TRUE;
+}
+
+
+NUMERIC AddAllFields( ID )
+{
+	if ( ~<ID>~ == ~~ )
+		{ ID = Default; }
+
+	Query = ~Select * from Users~;
+
+	if ( !PGenConList( List,Connection,db,Cursor,Keyset,QUERY,~<Query>~ ) )
+		{ Error( Translate( ~Failed to query the Users table~ ) ); }
+
+	Sequence = 10;
+	Index = -1;
+
+	GenCon( NewRow,NewFrom,List(GetDataDictionary) );
+
+	LastField = List( FieldCount ) - 1;
+
+	while ( List( FieldInfo,<++Index>,Name,Name,Length,Length,Type,Type ) )
+	{
+		Delimiter = (<Index> != <LastField>) ? ~,~ : ~CarriageReturn~;
+
+		NewRow( SetValues,ID,~<ID>~,Users,~Users~,Sequence,~<Sequence>~,FieldName,~<Name>~,
+					FieldSize,~<Length>~,Quoted,~1~,QuoteChar,~"~,FieldType,~<Type>~,Delimiter,~<Delimiter>~ );
+
+		RowBeingAdded = DataView( AddRow, NewRow );
+
+		Sequence += 10;
+	}
+
+	return TRUE;
+}
+
+NUMERIC RefreshCategoryList()
+{
+	Query = ~Select Distinct Category From UserTasks Order By Category~;
+
+	if ( !PGenConList( TasksList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		TasksList( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Tasks table. <theErr>~ );
+	}
+
+	TasksList( MakeStringList,CategoryNames,Category );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	Fields( GetByName,Category,CategoryField );
+
+	return CategoryField( DeleteReference,ChoiceList,Set,ChoiceList,CategoryNames(GetCopyOf) );	
+}
+
+
+
+
+
+NUMERIC OnButtonClick()
+{
+	DataView( GetActiveCell,Row,Col );
+	
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	DataView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+
+NUMERIC Init( WhichSettings,DocumentQuery )
+{
+	DataWindow( Set,Title,~<WhichSettings>~ == ~~ ? ~User Data~ : ~User Data - <WhichSettings>~ );
+
+	if ( !PGenConList( List,Connection,db,Cursor,Keyset,QUERY,~<DocumentQuery>~ ) )
+		{ Error( Translate( ~Failed to query the Users table~ ) ); }
+
+	SetDocumentData( List(GetObject) );
+
+	Global( WhichSettings,DocumentQuery );
+
+	RefreshCategoryList();
+
+	if ( !DataWindow( CreateWindow,Translate( ~Users~ ) ) )
+		{ Error( Translate( ~Failed to create the window~ ) ); }
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate( ~Would you like to save your pending changes?~ ),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	return DataWindow( ForceCloseWindow );
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new users that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+if ( !GenCon( TableDefinition,GetFrom,Users,~[DATABASE TableDefinitions]~ ) )
+	{ Error( Translate( ~The Users Table is not properly defined~ ) ); }
+	
+if ( !ado( db,CONNECT ) )
+	{ Error( Translate( ~Could not open Database to access the Users Table~ ) ); }	
+
+Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add User~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+		
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+	}
+
+Define: DataWindow Using DDWinDef
+	Fields:		Title					Translate( ~Users~ )
+				Position				0 65 100 15
+				IsPositionPercent		T
+
+	Contains:	INLISTORDER
+	{
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				ListView
+					GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					CloseActionsText		ACTION Call ( OnCloseDataView() )
+					HActionsText			ACTION SHOWHELPPAGE ( AdminHelpFile "UsersData.htm" );
+	}
+	
+

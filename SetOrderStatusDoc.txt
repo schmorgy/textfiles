@@ -1,0 +1,375 @@
+IncludeClass( BaseDialog );
+
+Class( SetOrderStatus,Extends,BaseDialog,
+		Member,OrderID,Str,~~,
+		Member,OrderStatus,Str,~~ );
+
+VOID SetOrderStatus::SetOrderStatus( ID,Xpos,Ypos )
+{
+	OrderID = ~<ID>~;
+	Title = ~Set Order Status~;
+	Left = DefinedAndNotNull(Xpos) ? ~<Xpos>~ : ~100~;
+	Top =  DefinedAndNotNull(Ypos) ? ~<Ypos>~ : ~100~;
+
+	HelpPage = ~SetStatus.htm~;
+
+	Dictionary = ~DDSetOrderStatusDoc~;
+}
+
+
+VOID SetOrderStatus::DefineDictionary()
+{
+	Dictionary: <Dictionary>
+		Fields: Name OrderID type text;
+}
+
+VOID SetOrderStatus::DefineControls()
+{
+	Define: OrderIDField Using DDWinCtrlDef AsSymbol OrderIDField 
+		Fields: TypeName		ComboBox  
+				IActionsText	ACTIONS ( Get )
+				DActionsText	ACTION EXEC ( OrderSelected() )
+				OActionsText	ACTIONS ( Save )
+				GenConName       THIS
+				GenConField		~OrderID~
+				Tooltip         ~Type one or more characters of an Order and press the down arrow or F4 to see orders that begin with those characters.  Press Enter to add a new order. ~
+				Mask			~<$[DATABASE FieldTypes].OrderID[Mask]>~
+				PromptChar		~<$[DATABASE FieldTypes].OrderID[PromptChar]>~
+				AllowedChars	~<$[DATABASE FieldTypes].OrderID[AllowedChars]>~
+				DisallowedChars ~<$[DATABASE FieldTypes].OrderID[DisallowedChars]>~
+				WantReturnKey	~T~
+				DropDownActionsText ACTION CALL ( <THIS>.FindOrdersLike(TRUE)  )
+				ReturnKeyActionsText ACTION EXEC ( <THIS>.FindOrdersLike(FALSE) )
+				POSITION		$hGap,$vGap,250,$ButtonHeight
+
+	Define: StatusListBox Using DDWinCtrlDef AsSymbol StatusListBox
+		Fields:	POSITION		OrderIDField(GetLeft,Position),OrderIDField(GetBottom,Position)+$vGap,
+									OrderIDField(GetWidth,Position),$ButtonHeight * 15
+				GENCONNAME		THIS
+				GENCONFIELD		~str1~
+				IACTIONSTEXT	ACTIONS ( Get )
+				DACTIONSTEXT	ACTIONS ( Save )
+				OACTIONSTEXT	ACTIONS ( Save )
+				TOOLTIP			~Select an new status for order <OrderID>~
+				TYPENAME		ListBox ;
+
+	Define: SetButton Using DDWinCtrlDef AsSymbol SetButton
+		Fields:	POSITION		GetDialogCenter() - $ButtonWidth - $hGap/2,StatusListBox(GetBottom,Position)+$vGap,
+								$ButtonWidth,$ButtonHeight
+				DACTIONSTEXT	ACTION EXEC ( <This>.OnItemSelected() )
+				TOOLTIP			~Set the order status to the selected item~
+				TEXT			~Set Status~
+				TYPENAME		DefaultButton ;
+
+	Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+		Fields:	POSITION		SetButton(GetRight,Position)+$hGap,SetButton(GetTop,Position),
+								$ButtonWidth,$ButtonHeight
+				DACTIONSTEXT	ACTION EXEC ( <This>.DoCancelButton() )
+				TOOLTIP			~Close the dialog~
+				TEXT			~Cancel~
+				TYPENAME		Button ;
+
+}
+
+NUMERIC SetOrderStatus::DoCancelButton()
+{
+	return BaseDialog::DoCancelButton();
+}
+
+
+NUMERIC SetOrderStatus::AuditOrderID()
+{
+	dlg( GetInput );
+
+	if ( IsNULL(~<$con.DlgData[OrderID]>~) )
+	{
+		Warning( Translate( ~Enter an OrderID or enter one or more characters of the OrderID and press Enter~ ) );
+		dlg( SetControlFocus,OrderIDField );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC SetOrderStatus::OrderSelected()
+{
+	dlg( GetInput );
+
+	Query = ~Select Status From Orders Where ID = '<$con.DlgData[OrderID]>'~;
+
+	Status = ~~;
+
+	ADO( dBase,Connect,GetValuesFor,~<Query>~,Status );
+
+	if ( IsNull( ~<Status>~ ) )
+	{
+		Status = ~Not Assigned~;
+	}
+
+	dlg( SetStatus,0,~Status is <Status>~ );
+
+	dlg( ListBox,StatusListBox,SelectString,-1,~<Status>~ );
+
+	dlg( SetControlFocus,StatusListBox );
+
+	Actions = ACTION Doc ( OrderNotifyDoc OpenOnce OrderNotifyDoc "Init( ~<$con.DlgData[OrderID]>~,FALSE );" );
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+NUMERIC SetOrderStatus::FindOrdersLike( FindSimilarOrders )
+{
+	if ( !AuditOrderID() )
+	{
+		return FALSE;
+	}
+
+	Query = ~~;
+	if ( <FindSimilarOrders> )
+	{
+		Query = ~Select ID From Orders Where ID Like '<$con.DlgData[OrderID]>%' Order By ID~;
+	}
+	else
+	{
+		Query = ~Select ID From Orders Where ID = '<$con.DlgData[OrderID]>' Order By ID~;
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		OrderSelected();
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	Count = List( NumEntries );
+
+	if ( !<Count> && !<FindSimilarOrders> )
+	{
+		if ( MessageBox( Translate(~Order <$con.DlgData[OrderID]> does not exist.\n\nAdd a new order? ~ ),YESNO ) != YES )
+		{
+			OrderSelected();
+			return FALSE;
+		}
+
+		List( GetConnection,dBase );
+
+		Cmd =  ~Insert Into Orders(ID,OrderDate,ShipDate) Values('<$con.DlgData[OrderID]>',<$Date.DataBaseDate.SharedDateQuoted>,<$Date.DataBaseDate.SharedDateQuoted>)~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			OrderSelected();
+
+			dBase( GetErrorDescription,theErr );
+
+			return Warning( Translate( ~Database update Failed.\n\n<Cmd>\n\n<theErr>~ ) ); 
+		}
+
+		if ( MessageBox( Translate(~Order <$con.DlgData[OrderID]> was added.  Would you like to edit it? ~ ),YESNO ) == YES )
+		{
+			Query = ~Select * From Orders Where ID = '<$con.DlgData[OrderID]>'~;
+
+			Actions = ACTIONS ( Doc( ~Orders~ OpenOnce OrdersDoc "Init( ~<$con.DlgData[OrderID]>~,~<Query>~);" ) );
+			PerformActions( Actions );
+			OrderSelected();
+			return FALSE;
+		}
+
+		Count = 1;
+
+		OrderSelected();
+
+		return StatusBarText( ~There are <Count> order(s) that begin with <$con.DlgData[OrderID]>~ );
+	}
+
+	if ( <count> )
+	{
+		List( MakeStringList,OrdersList,ID );
+
+		dlg( SetControlFromStringList,OrderIDField,OrdersList,Selection,SelectString,OrderIDField,~~  );
+	}
+
+	dlg( SetControlFocus,StatusListBox );
+
+	return StatusBarText( ~There are <Count> order(s) that begin with <$con.DlgData[OrderID]>~ );
+}
+
+NUMERIC SetOrderStatus::OnItemSelected()
+{
+	dlg( GetInput );
+
+	OrderID = ~<$con.DlgData[OrderID]>~;
+
+	if ( IsNull( ~<OrderID>~ ) )	
+	{ 
+		return Warning( ~You must select an order first~ );
+	}
+
+	OrderStatus = ~~;
+
+	if ( !GetOrderStatus(OrderStatus) )
+	{
+		return Warning( ~<OrderID> does not exist~ );
+	}
+
+	if ( IsNull( ~<OrderStatus>~ ) )
+	{
+		OrderStatus = ~Not Assigned~;
+	}
+
+	Status = ~~;
+
+	dlg( ListBox,StatusListBox,GetSelectedItem,Status );
+
+	if ( IsNull( ~<Status>~ ) )
+	{
+		return Warning( ~You must select a status~ );
+	}
+
+	if ( SimilarStr( ~<OrderStatus>~,~<Status>~ ) )
+	{
+		return Warning( ~Order <OrderID> already has a status of <Status>~ );
+	}
+		
+	msg = ~Change the status of Order <OrderID> from '<OrderStatus>' to '<Status>'~;
+	
+	if ( MessageBox( ~<msg>~,YESNO ) == YES )
+	{
+		Cmd = ~~;
+		if ( SimilarStr( ~<Status>~,~Create Proxies~ ) )
+		{
+			Cmd = ~Update Orders Set Status = '<Status>', OrderSource = 1 Where ID = '<OrderID>'~;
+		}
+		else
+		{
+			Cmd = ~Update Orders Set Status = '<Status>' Where ID = '<OrderID>'~;
+		}
+
+		if ( !ADO( dBase,Connect,Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Database Update Failed: <Cmd>.  <theErr>~ ); 
+		}
+
+		return DoCancelButton();
+	}
+
+	return TRUE;
+}
+
+NUMERIC SetOrderStatus::LoadComboBox()
+{
+	Query = ~Select * From WorkstationSettings Where Computer = '<$App.ComputerName>' AND Category = 'OrderStatus' AND Enabled <> 0 Order By Item~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the WorkstationSettings table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		ForgetLocal( List );
+
+		Query = ~Select * From SystemSettings Where Category = 'OrderStatus' AND Enabled <> 0 Order By Item~;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ 
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate( ~Failed to query the SystemSettings table.\n\n<Query>\n\n<theErr>~ ) ); 
+		}
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		StringList( theStringList,New,Is,~<$[DATABASE FieldTypes].OrderStatus[ChoiceList]>~ );
+
+		more = theStringList( GetFirstString,aString );
+
+		while ( <more> )
+		{
+			dlg( ListBox,StatusListBox,AddString,~<aString>~ );
+			more = theStringList( GetNextString,aString );
+		}
+	}
+	else
+	{
+		while ( List( GetNext,Item ) )
+		{
+			dlg( ListBox,StatusListBox,AddString,~<$pcon.Item[SettingsText]>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC SetOrderStatus::GetOrderStatus(&Status)
+{
+	Query = ~Select Status From Orders Where ID = '<OrderID>'~;
+
+	return ADO( dBase,Connect,GetValuesFor,~<Query>~,Status );
+}
+
+
+NUMERIC SetOrderStatus::AskForCurrentOrderID()
+{
+	OrderID = ~~;
+
+	if ( Document( Doc,FindByName,~FrameSelectorDoc~ ) )
+	{
+		Action = STR ( FrameSelectorDoc "SendOrderID(SetOrderStatusDoc,~OrderStatusDialog.GetCurrentOrderID~);" );
+		return PerformDocActions( Action );
+	}
+
+	if ( GenCon( TheWindow,GetWindow,~ImagesThumbNailWindow~ ) )
+	{
+		if ( TheWindow(GetActiveViewOfWindow,View) )
+		{ 
+			Action = STR ( ImagesDoc "SendOrderID(SetOrderStatusDoc,~OrderStatusDialog.GetCurrentOrderID~);" );
+			return PerformDocActions( Action );
+		}
+	}
+
+	return FALSE;
+}
+
+
+
+NUMERIC SetOrderStatus::GetCurrentOrderID( ID )
+{
+	dlg( SetStrings,OrderID,~<ID>~ );
+
+	return OrderSelected();
+}
+
+
+
+VOID Init( ID,X,Y )
+{
+	SetOrderStatus( New,OrderStatusDialog,~<ID>~,~<X>~,~<Y>~ );
+
+	OrderStatusDialog.DefineDialog();
+
+	OrderStatusDialog.LoadComboBox();
+	
+	OrderStatusDialog( Global );
+
+	Action = STR ( GetTheOrderID(~<ID>~) ); 
+
+	QueueContentsAfter( Action,100 );
+}
+
+
+VOID GetTheOrderID(ID)
+{
+	if ( IsNull( ~<ID>~ ) )
+	{
+		OrderStatusDialog.AskForCurrentOrderID(SetOrderStatusDoc,GetCurrentOrderID);
+	}
+	else
+	{
+		OrderStatusDialog.GetCurrentOrderID(~<ID>~);
+	}
+
+	OrderStatusDialog.OrderSelected();
+}

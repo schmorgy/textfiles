@@ -1,0 +1,4036 @@
+Include: ~AppFuncs.txt~;
+
+IncludeClass(BaseHTML);
+IncludeClass( BaseScript );
+
+Class( Prn,Extends,BaseHTML,
+		Member,fInitialQueueName,Str,~~,
+		Member,fModelForNewQueue,Str,~~,
+		Member,fWizardPrinterName,Str,~~,
+		Member,fWizardQueueName,Str,~~,
+		Member,fWizardTypeOfPrinter,Str,~~,
+		Member,fTopFrame,Str,~top.frames['Selector']~,
+		Member,fBottomFrame,Str,~top.frames['Variable']~,
+		Member,fQueueAlreadyExists,Numeric,FALSE,
+		Member,fPrinterAlreadyExists,Numeric,FALSE,
+		Member,fWizardModifyingExistingPrinter,Numeric,FALSE,
+		Member,fWizardModifyingExistingQueue,Numeric,FALSE,
+		Member,fShowPrinterWizard,Numeric,FALSE,
+		Member,fCloseWindowOnWizardExit,Numeric,FALSE,
+		Member,fIsKEX,Numeric,FALSE,
+		Member,fCalledFromStartup,Numeric,FALSE,
+		Member,fNumLoadCompletes,Numeric,0,
+		Member,fLicenseLevel,Numeric,0,
+		Member,fAdvancePrintersLoaded,Numeric,FALSE );
+
+StringList( gOEMPageTriggers,New,NoDuplicateValues,InAlphaOrder );
+StringList( gOEMAdvancedPageTriggers,New,NoDuplicateValues,InAlphaOrder );
+StringList( gOEML10PageTriggers,New,NoDuplicateValues,InAlphaOrder );
+StringList( gOEMKEXPageTriggers,New,NoDuplicateValues,InAlphaOrder );
+StringList( gOEMDP2PageTriggers,New,NoDuplicateValues,InAlphaOrder );
+
+StringList( gOEMServerTriggers,New,NoDuplicateValues,InAlphaOrder );
+StringList( gOEMAdvancedServerTriggers,New,NoDuplicateValues,InAlphaOrder );
+StringList( gOEML10ServerTriggers,New,NoDuplicateValues,InAlphaOrder );
+StringList( gOEMKEXServerTriggers,New,NoDuplicateValues,InAlphaOrder );
+StringList( gOEMDP2ServerTriggers,New,NoDuplicateValues,InAlphaOrder );
+
+
+VOID Prn::Prn(NoBorders,IsKEX,CalledFromStartup)
+{
+	if ( DefinedAndTRUE(IsKEX) )
+	{
+		fIsKEX = <IsKEX>;
+	}
+
+	if ( DefinedAndTRUE(CalledFromStartup) )
+	{
+		fCalledFromStartup = <CalledFromStartup>;
+	}
+
+	if ( DefinedAndTRUE(NoBorders) )
+	{ 
+		Static();
+	}
+	else
+	{
+		WindowWidth = 718 / App( thisApp,MainWindow,GetClientWidth ) * 100;
+		WindowHeight = 100;
+	}
+
+	if ( Authorized(KEXDSS) )
+	{
+		GetKspL(fLicenseLevel);
+	}
+
+	HelpPage = ~WaysToPrint.htm~;
+}
+
+VOID Prn::StaticPosition()
+{
+	if ( <fIsKEX> && <fCalledFromStartup> )
+	{
+		WindowLeft = 0;
+		WindowTop = 0;
+		WindowWidth = 100;
+		WindowHeight = 100;
+	}
+	else
+	{
+		WindowLeft = 20;
+		WindowTop = 0;
+		WindowWidth = 80;
+		WindowHeight = 100;
+	}
+}
+
+
+VOID	Prn::OnLoadComplete()
+{
+	QueueTriggers();
+
+	fNumLoadCompletes = <fNumLoadCompletes> + 1;
+	if ( <fNumLoadCompletes> == 2 )
+	{
+		if ( <fIsKEX> && <fCalledFromStartup> )
+		{
+			Warning( TR(PrintWizardTrans,PrinterSetupNotComplete) );
+		}
+	}
+}
+
+VOID	Prn::HelpRoutineSetup()		
+{
+	if ( Authorized(KEXDSS) )
+	{ 
+		OpenHelpPage(~/Printing/Printing.kpl#Setup~,TR(PrintWizardTrans,PrinterSetup));
+	}
+	else
+	{
+		OnChmHelp();
+	}
+ }
+
+VOID	Prn::DefineMessages()
+{
+	BaseHtml::DefineMessages();
+	LoadTranslationFile( Printing,PrintWizardTrans,PrintWizardTrans );
+	LoadTranslationFile( Products,ProductOutputDevices,ProductOutputDevices );
+	
+	LoadOEMTranslations();
+}
+
+VOID	Prn::LoadOEMTranslations()
+{
+	MoreFiles = findfile( aDirectoryEntry,Find,~<$App.ShareDirectory>\Translations\Printing\OEMPrinters\*.xml~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Title,Title );
+
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )      
+			continue;
+			
+		LoadTranslationFile( ~Printing\OEMPrinters~,~<Title>~,~<Title>~ );
+	}
+}
+
+VOID	Prn::LoadOEMPrinterMethods()	
+{ 	
+
+	if ( Authorized(KEXDSS) && (( <fLicenseLevel> == 3 ) || ( <fLicenseLevel> == 4 )) )
+	{ //load 7000 thermal printer if kex and license level 3 or 4
+		more = gOEML10ServerTriggers( GetFirstString,Routine );
+	
+		while ( <more> )
+		{
+			<This>.<Routine>();
+			more = gOEML10ServerTriggers( GetNextString,Routine );
+		}
+	}
+
+	if ( Authorized(KEXDSS) )
+	{ //load kex only printers (like 8810 thermal)
+		more = gOEMKEXServerTriggers( GetFirstString,Routine );
+	
+		while ( <more> )
+		{
+			<This>.<Routine>();
+			more = gOEMKEXServerTriggers( GetNextString,Routine );
+		}
+	}
+	more = gOEMServerTriggers( GetFirstString,Routine );
+	
+	while ( <more> )
+	{
+		<This>.<Routine>();
+		more = gOEMServerTriggers( GetNextString,Routine );
+	}
+	
+	if ( !Authorized(KEXDSS) )
+	{ //load the more advanced printers for KCPS and dp2 only printers (NexPress NJP)
+		more = gOEMDP2ServerTriggers( GetFirstString,Routine );
+	
+		while ( <more> )
+		{
+			<This>.<Routine>();
+			more = gOEMDP2ServerTriggers( GetNextString,Routine );
+		}
+		
+		more = gOEMAdvancedServerTriggers( GetFirstString,Routine );
+	
+		while ( <more> )
+		{
+			<This>.<Routine>();
+			more = gOEMAdvancedServerTriggers( GetNextString,Routine );
+		}
+	}
+}	
+
+
+VOID	Prn::LoadAdvancedOEMPrinterMethods()	
+{
+	//load the more advanced printers for KCPS
+	if (<fAdvancePrintersLoaded> == FALSE)
+	{
+		more = gOEMAdvancedServerTriggers( GetFirstString,Routine );
+
+		while ( <more> )
+		{
+			<This>.<Routine>();
+			more = gOEMAdvancedServerTriggers( GetNextString,Routine );
+		}
+		fAdvancePrintersLoaded = TRUE;
+	}
+}
+
+
+//************************** Default Values for Printer Resolutions *************************
+
+
+/*
+	Standard Resolutions for Kodak CRT Printer
+	To compute resolutions, use the formula:   resolution = raster width / (paper width * 1.02)
+
+					Pixel
+					Raster 
+					Width	4 inch		5 inch		6 inch		8 inch		10 inch		11 inch		12 inch
+	CRT Model		
+
+	4 inch CRT		1024	250.980		200.784		NA			NA			NA			NA			NA
+
+	LF CRT			2048	501.961		401.569		334.641		250.980		200.784		182.531		NA
+
+	KPDM			2048	501.961		401.569		334.641		250.980		200.784		182.531		167.320
+
+	KPDM II			2810	688.725		550.980		459.150		344.363		275.490		250.446		229.575
+*/
+
+
+NUMERIC	Prn::DefineDefaultResolutions()
+{
+	ReturnOnSuccess( MemberDefined(KodakCRTResolutions) );	// Only do this once
+
+	StringList( KodakCRTResolutions,New,Private,AddStrings,~200.784~,~250.980~ );
+	StringList( KodakLEDResolutions,New,Private,AddStrings,~250~,~125~ );						//	Note that 250 must be at index 0, 125 at index 1 to be keyword consistent
+	StringList( KodakLFCRTResolutions,New,Private,AddStrings,~182.531~,~200.784~,~250.980~,~334.641~,~401.569~ );
+	StringList( KodakRP30Resolutions,New,Private,AddStrings,~200~,~250~,~300~,~350~,~400~ );
+	StringList( KodakRR30Resolutions,New,Private,AddStrings,~182.531~,~200.784~ );
+	StringList( KPDMResolutions,New,Private,AddStrings,~167.320~,~182.531~,~200.784~,~250.980~,~401.569~ );
+	StringList( KPDMIIResolutions,New,Private,AddStrings,~229.610~,~250.480~,~275.530~,~344.415~,~551.060~ );
+	StringList( WindowsPrinterResolutions,Resolutions,New,Private,AddStrings,~300~ );
+	StringList( DiskResolutions,New,Private,AddStrings,~72~,~100~,~200~,~300~ );
+	StringList( NexPressResolutions,New,Private,AddStrings,~300~ );
+	StringList( Kodak7000ThermalResolutions,New,Private,AddStrings,~300~ );
+	StringList( Kodak8810ThermalResolutions,New,Private,AddStrings,~300~ );
+	StringList( KodakD4000ThermalResolutions,New,Private,AddStrings,~300~ );
+
+
+	//StringList( DurstResolutions,New,Private,AddStrings,~300~ );
+	//StringList( NoritsuResolutions,New,Private,AddStrings,~300~ );
+
+	//StringList( KodakXLSResolutions,New,Private,AddStrings,~300~ );
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::UpdateResolutionsFor(Model,PrinterName)
+{
+	TheModel = ~<$str.$Model.NoSpaces>~;	// Remove the spaces
+
+	Index = -1;
+
+	ReturnOnFailure( Connect() );
+
+	while ( <TheModel>Resolutions( GetStringAt,<++Index>,aResolution ) )
+	{
+		InsertPrinterRes( ~<Model>~,~<PrinterName>~,<Index>,~<aResolution>~ );
+	}
+
+	return ReleaseConnection();
+}
+
+
+
+NUMERIC Prn::SetResolutionDefaults(Model,PrinterName)
+{
+	TheModel = ~<$str.$Model.NoSpaces>~;	// Remove the spaces
+
+	if ( !MemberDefined(~<TheModel>Resolutions~) )
+	{
+		return Warning( TR(PrintWizardTrans,ModelNotSupported,~<TheModel>~) );
+	}
+	
+	return UpdateResolutionsFor(~<Model>~,~<PrinterName>~);
+}
+
+
+VOID Prn::RemoveJobsForModel(ModelName)
+{
+	ReturnOnFailure( Connect() );
+
+	Query = ~Select JobID From JobQueue Where QueueName in (Select QueueName from QueueDefinition Where PrinterModel = '<ModelName>')~;
+
+	if ( !PGenConList( List,Connection,fConnection,Cursor,Static,Query,~<Query>~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		ReleaseConnection();
+		Log( Session,~Couldn't JobQueue for Jobs of Model <ModelName>.  <theErr>.  <Query>~ );
+		return Warning( TR( PrintWizardTrans,JobQueueLoadFailed, ~<ModelName>~) );
+	}
+
+	while ( List( GetNext,Job ) )
+	{
+		Files( Delete,~<$con.Job[JobPath]>~ );
+	}
+
+	ReleaseConnection();
+}
+
+
+
+NUMERIC Prn::RemoveModel(ModelName)				// Database cleanup
+{
+	ReturnOnFailure( Connect() );
+
+	RemoveJobsForModel(ModelName);
+
+	fConnection( IgnoreErrors,Cmd,~Delete From JobQueue Where QueueName in (Select QueueName from QueueDefinition Where PrinterModel = '<ModelName>')~ );	// Do first because of a referential constraint
+
+	fConnection( IgnoreErrors,Cmd,~Delete From PrinterRes Where PrinterModel = '<ModelName>'~ );	
+
+	fConnection( IgnoreErrors,Cmd,~Delete From QueueDefinition Where PrinterModel = '<ModelName>'~ );
+
+	fConnection( IgnoreErrors,Cmd,~Delete From PrinterModels Where Model = '<ModelName>'~ );
+
+	fConnection( ReportErrors );			// In case another routine uses the same connection
+
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::InsertPrinterRes( device,name,index,resolution )
+{
+	cmd = ~Insert Into PrinterRes( PrinterModel,PrinterName,Sequence,Resolution ) Values( '<device>','<name>',<index>,<resolution> )~;
+
+	if ( !fConnection( IgnoreErrors,Cmd,~<cmd>~ )  )
+	{
+		fConnection( ReportErrors,GetErrorDescription,theErr,GetErrorNumber,errNumber );
+
+		if ( !fConnection( ErrorIs,<errNumber>,Duplicate) )
+		{
+			Log( Session, ~Database update failed: <cmd>. <theErr>~ );
+			return Warning( TR( PrintWizardTrans,DatabaseUpdateFailed ) );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::InsertPrinterModel( Model,MaxPaperWidth,MaxPaperAdvance,HSpillOver,VSpillOver )
+{
+	cmd = ~Insert Into PrinterModels( Model,MaxPaperWidth,MaxPaperAdvance,HSpillOver,VSpillOver ) Values( '<Model>',<MaxPaperWidth>,<MaxPaperAdvance>,<HSpillOver>,<VSpillOver> )~;
+
+	if ( !fConnection( IgnoreErrors,Cmd,~<cmd>~ )  )
+	{
+		fConnection( ReportErrors,GetErrorDescription,theErr,GetErrorNumber,errNumber );
+
+		if ( !fConnection( ErrorIs,<errNumber>,Duplicate) )
+		{
+			Log( Session,~Database insert failed: <cmd>. <theErr>~ );
+			return Warning( TR( PrintWizardTrans,DatabaseInsertFailed ) );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::AddPrinterModelsToDatabase()
+{
+	ReturnOnFailure( Connect() );
+
+	InsertPrinterModel( ~Disk~,0,0,0,0 );
+
+	InsertPrinterModel( ~KODAK LED~,20,30,.304,.304 );
+
+	InsertPrinterModel( ~KODAK CRT~,5,7,.02,.02 );
+	InsertPrinterModel( ~KODAK LFCRT~,11,14,.02,.02 );
+	InsertPrinterModel( ~KPDM~,12,18,.02,.02 );
+	InsertPrinterModel( ~KPDM II~,12,18,.02,.02 );
+
+	InsertPrinterModel( ~KODAK RP30~,12,18,.03,.03  );
+
+	//InsertPrinterModel( ~KODAK RR30~,12,18,.03,.03 );  Save this for V7.1
+
+	InsertPrinterModel( ~Windows Printer~,30,30,0,0 );
+	InsertPrinterModel( ~NexPress~,30,30,0,0 );
+	InsertPrinterModel( ~Kodak7000Thermal~,6,8,0,0 );
+	InsertPrinterModel( ~Kodak8810Thermal~,8,12,0,0 );
+	InsertPrinterModel( ~KodakD4000Thermal~,8,12,0,0 );
+
+	//InsertPrinterModel( ~Noritsu~,MaxPaperWidth,MaxPaperAdvance,HSpillOver,VSpillOver );
+	//InsertPrinterModel( ~Durst~,MaxPaperWidth,MaxPaperAdvance,HSpillOver,VSpillOver );
+
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+
+
+//*************************** Default Values for Printer Queues *****************************
+
+NUMERIC Prn::SetCommonQueueDefaults( &obj )		// Set fields that are the same for every printer queue
+{
+
+	return obj( SetFieldsIn,
+				PaperSurface,~Lustre~,
+				ICCProfile,~~,
+				PackageCut,~0~,
+				PaperWidth,10,
+				PaperAdvance,0,
+				Resolution,0,
+				PaperFill,0,
+				BreakOnNewImage,0,			
+				SpillOverType,0,
+				SpillOverAmt,1.02,
+				OutputFileType,~1~,
+				OutputPath,~[V]:\[A]\Printing\[T]\[E]\Images\[-].[X]~,
+				StartPrinting,~~,
+				OnPrintComplete,~~,
+				OnOrderComplete,~~,
+				ControlFolder,~[V]:\[A]\Printing\[T]\[E]\ControlFolder~,
+				ResponseFolder,~[V]:\[A]\Printing\[T]\[E]\ResponseFolder~,	
+				UseOverrides,~0~,		
+				QualityOR,~100~,
+				DeltaRotation,~0~,
+				DeltaSharpen,~60~,
+				PaperSurfaceOR,~Smooth Lustre~,
+				PaperWidthOR,~10~,		
+				ResolutionOR,~250~,
+				Brt,~0~,
+				Red,~0~,
+				Grn,~0~,
+				Blu,~0~,
+				Con,~0~,
+				Gam,~1.0~,
+				Sat,~0~ );
+
+	// No longer used PaperType,PaperOpacity,PaperPack,CalibrationLUT,AvgProductLength,AvgPrintSpeed
+}
+
+
+NUMERIC Prn::SetDiskQueueDefaults( &obj )			// Set fields that are unique to a Disk Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				PaperWidth,50,
+				PaperAdvance,50,
+				NoiseReduction,0,
+				PrinterModel,~Disk~ );
+}
+
+NUMERIC Prn::SetKodakCRTQueueDefaults( &obj )		// Set fields that are unique to a Kodak CRT Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				PaperAdvance,4,
+				PaperWidth,5,
+				Resolution,200.784,
+				ResolutionOR,200.784,
+				PrinterModel,~Kodak CRT~ );
+}
+
+NUMERIC Prn::SetKodakLEDQueueDefaults( &obj )		// Set fields that are unique to a Kodak LED Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				PaperAdvance,32.99,
+				SpillOverAmt,.304,
+				PrinterModel,~Kodak LED~ );
+}
+
+NUMERIC Prn::SetKodakLFCRTQueueDefaults( &obj )		// Set fields that are unique to a Kodak LFCRT Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				PaperAdvance,8,
+				Resolution,200.784,
+				ResolutionOR,200.784,
+				PrinterModel,~Kodak LFCRT~ );
+}
+
+NUMERIC Prn::SetKodakRP30QueueDefaults( &obj )	// Set fields that are unique to a Kodak RP30 Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				PaperAdvance,18,
+				SpillOverAmt,1.03,
+				OutputPath,~c:\KPro Laser Printers\Image\[-].[X]~,
+				ControlFolder,~C:\KPro Laser Printers\Control~,
+				ResponseFolder,~C:\KPro Laser Printers\Response~,	
+				PrinterModel,~Kodak RP30~ );
+}
+
+
+NUMERIC Prn::SetKodakRR30QueueDefaults( &obj )	// Set fields that are unique to a Kodak RR30 Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				PaperAdvance,150,
+				SpillOverAmt,0,
+				Resolution,400,
+				ResolutionOR,400,
+				PrinterModel,~Kodak RR30~ );
+}
+
+
+
+NUMERIC Prn::SetKodakXLSQueueDefaults( &obj )	// Set fields that are unique to a Kodak XLS Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				PaperAdvance,32.99,
+				Resolution,300,
+				PrinterModel,~Kodak XLS~ );
+}
+
+NUMERIC Prn::SetKPDMQueueDefaults( &obj )		// Set fields that are unique to a KPDM Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				PaperAdvance,15,
+				Resolution,200.784,
+				ResolutionOR,200.784,
+				PrinterModel,~KPDM~ );
+}
+
+NUMERIC Prn::SetKPDMIIQueueDefaults( &obj )		// Set fields that are unique to a KPDMII Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				PaperAdvance,15,
+				Resolution,275.530,
+				ResolutionOR,275.530,
+				PrinterModel,~KPDM II~ );
+}
+
+NUMERIC Prn::SetWindowsPrinterQueueDefaults( &obj )		// Set fields that are unique to a Windows Printer Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				PaperAdvance,50,
+				Configuration,Default,
+				NoiseReduction,0,
+				PrinterModel,~Windows Printer~ );
+}
+
+NUMERIC Prn::SetNexPressQueueDefaults( &obj )		// Set fields that are unique to a NexPress Printer Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				SpillOverAmt,0.125,
+				SpillOverType,0,
+				PaperAdvance,17,
+				ResolutionOR,300,
+				NoiseReduction,0,
+				ICCProfile,~srgb~,
+				EmbedProfile,1,
+				PrinterModel,~NexPress~ );
+}
+
+NUMERIC Prn::SetKodak7000ThermalQueueDefaults( &obj )		// Set fields that are unique to a 7000 Printer Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				SpillOverAmt,0,
+				SpillOverType,0,
+				PaperAdvance,17,
+				ResolutionOR,300,
+				NoiseReduction,0,
+				ICCProfile,~srgb~,
+				EmbedProfile,1,
+				PrinterModel,~Kodak7000Thermal~ );
+}
+
+NUMERIC Prn::SetKodak8810ThermalQueueDefaults( &obj )		// Set fields that are unique to a 8810 Printer Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				PaperSurface,~Glossy~,
+				SpillOverAmt,0,
+				SpillOverType,0,
+				PaperAdvance,12,
+				ResolutionOR,300,
+				Resolution,300,
+				NoiseReduction,0,
+				ICCProfile,~srgb~,
+				EmbedProfile,1,
+				PrinterModel,~Kodak8810Thermal~ );
+}
+
+NUMERIC Prn::SetKodakD4000ThermalQueueDefaults( &obj )		// Set fields that are unique to a D4000 Printer Queue
+{
+	SetCommonQueueDefaults( obj );
+
+	return obj( SetFieldsIn,
+				PaperSurface,~Glossy~,
+				SpillOverAmt,0,
+				SpillOverType,0,
+				PaperAdvance,17,
+				ResolutionOR,300,
+				NoiseReduction,0,
+				ICCProfile,~srgb~,
+				EmbedProfile,1,
+				PrinterModel,~KodakD4000Thermal~ );
+}
+//***************************** Default Values for Printers *******************************
+
+
+
+NUMERIC Prn::SetCommonPrinterDefaults( &obj )
+{
+	return obj( SetFieldsIn,
+				Status,~0~,
+				QueueName,~~,
+				RunAttended,~1~,
+				ComputerName,~<$App.ComputerName>~,
+				ProgramPath,~~,
+				//MaxPaperWidth,~20~,		No longer used?
+				MaxPaperAdvance,0,
+				BackPrinter,~0~,
+				OrderPunch,~0~,
+				ForeignDevice,~0~,
+				RollToRoll,~0~,
+				OutputFileType,~1~,
+				OutputPath,~~,
+				StartUpScript,~~,
+				HFExePath,~~,
+				StartPrinting,~~,
+				OnOrderComplete,~~,
+				ControlFolder,~~,
+				ResponseScript,~~,
+				ResponseFolder,~~,
+				ShutDownScript,~~,
+				Brt,~0~,
+				Red,~0~,
+				Grn,~0~,
+				Blu,~0~,
+				Con,~0~,
+				Gam,~1.0~,
+				Sat,~0~,
+				LogFile,~~ );
+}
+
+
+NUMERIC Prn::SetDiskPrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,50,
+				Resolution,250,
+				PrinterModel,~Disk~ );
+}
+
+NUMERIC Prn::SetKodakCRTPrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,20,
+				PrinterModel,~Kodak CRT~ );
+}
+
+NUMERIC Prn::SetKodakLEDPrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,20,
+				Resolution,250,
+				PrinterModel,~Kodak LED~ );
+}
+
+NUMERIC Prn::SetKodakLFCRTPrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,20,
+				PrinterModel,~Kodak LFCRT~ );
+}
+
+
+NUMERIC Prn::SetKodakRP30PrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,20,
+				Resolution,250,
+				PrinterModel,~Kodak RP30~ );
+}
+
+
+
+NUMERIC Prn::SetKodakRR30PrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,20,
+				PrinterModel,~Kodak RR30~ );
+}
+
+
+NUMERIC Prn::SetKodakXLSPrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,10.0,
+				PrinterModel,~Kodak XLS~ );
+}
+
+NUMERIC Prn::SetKPDMPrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,10.0,
+				PrinterModel,~KPDM~ );
+}
+
+NUMERIC Prn::SetKPDMIIPrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,10.0,
+				PrinterModel,~KPDM II~ );
+}
+
+NUMERIC Prn::SetWindowsPrinterPrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,10.0,
+				Resolution,300,
+				PrinterModel,~Windows Printer~ );
+}
+
+NUMERIC Prn::SetNexPressPrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,50.0,
+				Resolution,300,
+				EnableNoiseReduction,1,
+				CreateSpotColorMaskFile,1,
+				PrinterModel,~NexPress~ );
+}
+
+NUMERIC Prn::SetKodak7000ThermalPrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,50.0,
+				Resolution,300,
+				PrinterModel,~Kodak7000Thermal~ );
+}
+
+NUMERIC Prn::SetKodak8810ThermalPrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,12.0,
+				Resolution,300,
+				PrinterModel,~Kodak8810Thermal~ );
+}
+
+NUMERIC Prn::SetKodakD4000ThermalPrinterDefaults( &obj )
+{
+	SetCommonPrinterDefaults( obj );
+
+	return obj( SetFieldsIn,
+				MaxPaperAdvance,50.0,
+				Resolution,300,
+				PrinterModel,~KodakD4000Thermal~ );
+}
+
+NUMERIC Prn::OnModelChanged()				// Refresh everything when a new model is selected
+{
+	fHtmlView( Get,ModelsList,0,value,Model );
+
+	OnNewModel(~<Model>~);
+
+	return TRUE;
+}
+
+NUMERIC Prn::OnNewModel(Model)				// Refresh everything when a new model is selected
+{
+
+	ReturnOnFailure( Connect() );
+	RefreshPrinters( ~<Model>~ );
+	RefreshQueues( ~<Model>~ );
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+NUMERIC Prn::RefreshModels()		// Refresh the list of models
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Execute,~ResetList(ModelsList)~ );
+	ignoreModels = (authorized(DP1)) ? ~ and not Model in ( 'KPDM','Kodak LFCRT','KPDM II','Kodak CRT','NexPress') ~ : ~~;
+	if ( authorized(DP2) && !GetSystemSettings( ~NexPress~,~Install~,Value,Enabled ))
+	{	
+		ignoreModels = ~ and not Model in ( 'NexPress') ~;	
+	}
+	else if ( authorized(DP2) )
+	{
+		if (<Enabled> && <Value> )
+		{
+			ignoreModels = ~ and not Model in ('Kodak7000Thermal','Kodak8810Thermal','KodakD4000Thermal') ~;// leave nexpress in printer setup if enabled system setting and value = 1
+		}
+		else
+		{
+			ignoreModels = ~ and not Model in ( 'NexPress', 'Kodak7000Thermal','Kodak8810Thermal','KodakD4000Thermal') ~;		
+		}
+	}
+
+
+	Query = ~Select Model From PrinterModels Where Model <> 'NT Printer' <ignoreModels> Order by Model~;
+
+	ReturnOnFailure( Connect() );
+
+	if ( !PGenConList( ModelsList,Connection,fConnection,Query,~<Query>~ ) )
+	{
+		ReleaseConnection();
+		Log( Session,~Failed to query the database for <Query>~ );
+		return Warning( TR(PrintWizardTrans,ModelsQueryFailed) );
+	}
+
+	while ( ModelsList( GetNext,Item ) )
+	{
+		ModelText = TR(PrintWizardTrans,~Model_<$pcon.Item[Model].NoSpaces>~);
+		
+		if ( SimilarStr( ~<$pcon.Item[Model]>~,~Disk~ ) )
+		{
+			ModelText = TR(PrintWizardTrans,~Other~);
+		}
+
+		fHtmlView( Execute,~AddListOption(GetElement('ModelsList'),'<$pcon.Item[Model]>','<ModelText>')~ );
+	}
+
+	ReleaseConnection();
+
+	return fHtmlView( Wait );
+}
+
+
+
+NUMERIC Prn::RefreshPrinters( Model )		// Refresh the list of printers
+{
+	//ReturnOnFailure( GetActiveView() );
+	
+	ReturnOnFailure( GetViewByName(View) );
+
+	fHtmlView( Execute,~ResetList(PrintersList)~ );
+	
+	Query = ~Select PrinterName From Printers Where PrinterModel = '<Model>' Order By PrinterName~;
+
+	ReturnOnFailure( Connect() );
+
+	if ( !PGenConList( QueueList,Connection,fConnection,Query,~<Query>~ ) )
+	{
+		ReleaseConnection();
+		Log( Session,~failed to query the database for <Query>~ );
+		return Warning( TR( PrintWizardTrans,ModelsQueryFailed ) );
+	}
+
+	while ( QueueList( GetNext,Item ) )
+	{
+		fHtmlView( Execute,~AddToPrinters('<$pcon.Item[PrinterName].cpath>','<$pcon.Item[PrinterName].cpath>')~ );
+	}
+
+	ReleaseConnection();
+
+	return fHtmlView( Wait );
+}
+
+
+NUMERIC Prn::RefreshListOfPrinters( Model,List )	
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Execute,~ResetList(VariableElement('<List>'))~ );
+	
+	Query = ~Select PrinterName From Printers Where PrinterModel = '<Model>' Order By PrinterName~;
+
+	ReturnOnFailure( Connect() );
+
+	if ( !PGenConList( QueueList,Connection,fConnection,Query,~<Query>~ ) )
+	{
+		ReleaseConnection();
+		Log( Session,~failed to query the database for <Query>~ );
+		return Warning( TR( PrintWizardTrans,PrinterNamesQueryFailed ) );
+	}
+
+	while ( QueueList( GetNext,Item ) )
+	{
+		fHtmlView( Execute,~AddListOption( VariableElement('<List>'),'<$pcon.Item[PrinterName].cpath>','<$pcon.Item[PrinterName].cpath>')~ );
+	}
+
+	ReleaseConnection();
+
+	return fHtmlView( Wait );
+}
+
+
+NUMERIC Prn::RefreshQueues( Model )			// Refresh the list of Printer Queues
+{
+	//ReturnOnFailure( GetActiveView() );
+	
+	ReturnOnFailure( GetViewByName(View) );
+
+	fHtmlView( Execute,~ResetList(PrinterQueueList)~ );
+
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select QueueName From QueueDefinition Where PrinterModel = '<Model>' Order By QueueName~;
+
+	if ( !PGenConList( QueueList,Connection,fConnection,Query,~<Query>~ ) )
+	{
+		ReleaseConnection();
+		Log( Session,~failed to query the database for <Query>~ );
+		return Warning( TR( PrintWizardTrans,PrinterQueuesQueryFailed ) );
+	}
+
+	while ( QueueList( GetNext,Item ) )
+	{
+		fHtmlView( Execute,~AddToQueues('<$pcon.Item[QueueName]>','<$pcon.Item[QueueName]>')~ );
+	}
+
+	ReleaseConnection();
+
+	return fHtmlView( Wait );
+}
+
+NUMERIC Prn::DeletePrinterFolders( PrinterName )	// Delete the printer folders we created
+{
+	ReturnOnSuccess( IsNull(~<PrinterName>~) );
+
+	Path = ~<$App.Volume>\<$App.Title>_<$App.Instance>\Printing\<PrinterName>~;
+	
+	Directory( DeleteRecursive,~<Path>~,~*.*~ );
+
+	Directory( Remove,~<Path>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::DeletePrinterByName( )	// Delete a printer from the database
+{
+	ReturnOnFailure( GetActiveView() );
+	fHtmlView( Get, ~PrintersList~, 0, value, PrinterName);
+
+	fHtmlView( Get,PrinterModel,0,value,Model );
+
+	ReturnOnFailure( Connect() );
+	//if ( !fConnection( GetValuesFor,~Select Status From Printers Where PrinterName='<PrinterName>'~,PrinterStatus ) )
+	//{
+	//	fConnection( GetErrorDescription,theErr );
+	//	ReleaseConnection();
+	//	Log( Session,~Couldn't get the status for printer  <PrinterName>, <theErr>~ );
+	//	return Warning( TR( PrintWizardTrans,GetPrinterStatusFailed,~<PrinterName>~ ) );
+	//}
+	//
+	//if ( Numeric( ~<PrinterStatus>~ ) )	// Status of 0 is Shutdown
+	
+	if ( Tree( Name,~<PrinterName>~,Location,~[Renderers]~,Exists ) )
+	{
+		ReleaseConnection();
+		return Warning( TR( PrintWizardTrans,CantDeleteRendersStillRunning,~<PrinterName>~ ) );
+		return FALSE;
+	}
+	
+	Query = ~Select Distinct BatchID from JobQueue Where PrinterName = '<PrinterName>'~;
+	
+	if ( PGenConList( PrinterList,Connection,fConnection,Cursor,Static,Query,~<Query>~ ) )
+	{
+		if ( !PrinterList( Empty ) )
+		{
+			PrinterList( MakeSQLList,ListOfBatches,TRUE,BatchID );
+			ReleaseConnection();
+			return Warning( TR( PrintWizardTrans,CantDeleteJobsExist,~<PrinterName>~,~<ListOfBatches>~) );
+		}
+	}
+	
+	if ( !fConnection( Cmd,~Delete From PrinterRes Where PrinterName='<PrinterName>'~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		ReleaseConnection();
+		Log( Session,~Couldn't delete printer resolutions for <PrinterName>~,~<theErr>~ );
+		return Warning( TR( PrintWizardTrans,DeleteResolutionsFailed,~<PrinterName>~ ) );
+	}
+
+	if ( !fConnection( Cmd,~Delete From Printers Where PrinterName='<PrinterName>'~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		ReleaseConnection();
+		Log( Session,~Couldn't delete printer <PrinterName>~,~<theErr>~ );
+		return Warning( TR( PrintWizardTrans,DeletePrinterFailed,~<PrinterName>~ ) );
+	}
+
+	DeletePrintRecords( ~<PrinterName>~,~<Model>~ );
+
+	DeletePrinterFolders( ~<PrinterName>~ );
+	
+	fHtmlView( Execute,~RemoveListOption( SelectorElement('PrintersList'),'<PrinterName>' )~ );
+
+	ReleaseConnection();
+
+	return fHtmlView( Execute,~VariablePage('<$TR.PrintWizardTrans(PrinterDeleted,`<PrinterName>`)>')~ );
+}
+
+
+NUMERIC Prn::LoadOtherPrinterInfo( PrinterName )
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Get,~PrinterModel~,0,value,PrinterModel );
+
+	if ( SimilarStr( ~<PrinterModel>~,~Windows Printer~ ) )
+	{
+		RefreshPrintRecords(PrinterName,~PrintRecordsList~);
+	}
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC Prn::LoadPrinter( )		// Load Printer Info from the database into the view
+{
+	ReturnOnFailure( GetActiveView() );
+	fHtmlView( Get, ~PrintersList~, 0, value, PrinterName);
+	ReturnOnFailure( Connect() );
+
+	PGenConList( List,Connection,fConnection,Query,~Select * From Printers Where PrinterName='<PrinterName>'~ );
+
+	if ( !List( GetFirst,Item ) )
+	{
+		ReleaseConnection();
+		return fHtmlView( Execute,~UserMsg('<$TR.PrintWizardTrans(PrinterDoesNotExist,`<PrinterName>`)>')~ );
+	}
+
+	fHtmlView( UpdateFrom,Item );
+
+	ReleaseConnection();
+
+	fHtmlView( Set,~PrinterName~,0,value,~<PrinterName>~ );
+
+	fHtmlView( Wait );
+
+	ReturnOnFailure( LoadOtherPrinterInfo( ~<PrinterName>~ ) );
+
+	fHtmlView( Wait );
+
+	return TRUE;
+}
+
+VOID	Prn::SelectThisQueue(QueueName)
+{
+	fInitialQueueName = ~<QueueName>~;
+}
+
+VOID	Prn::AddNewQueue(Model)
+{
+	fModelForNewQueue = ~<Model>~;
+}
+
+VOID	Prn::SelectThisModel(Model)
+{
+	return;
+	Action = STR ( Printer.SelectThisModelAsync(~<Model>~); );
+	QueueContentsAfter(Action,1000);
+}
+	
+VOID	Prn::SelectThisModelAsync(Model)
+{
+	ReturnOnFailure( GetViewByName(View) );
+	
+	fHtmlView( Execute,~SelectModel('<Model>');~ );
+}
+
+NUMERIC Prn::LoadQueueFromExternal()
+{	
+	ReturnOnSuccess( IsNull(~<fInitialQueueName>~) );
+
+	ReturnOnFailure( GetViewByName(View) );
+	
+	ReturnOnFailure( Connect() );
+		
+	if ( fConnection( GetValuesFor,~Select PrinterModel From QueueDefinition Where QueueName='<fInitialQueueName>'~,PrinterModel ) )
+	{
+		fHtmlView( Execute,~SelectModel('<PrinterModel>');~ );
+		
+		OnNewModel(~<PrinterModel>~);
+			
+		fHtmlView( Execute,~SelectQueue('<fInitialQueueName>');~ );
+		
+		fHtmlView( Execute,~OnQueueChange()~ );
+		
+		fHtmlView( Execute,~MakePrintersQueuesVisible()~ );
+	}
+	
+	fInitialQueueName = ~~;
+	
+	return ReleaseConnection();
+}
+
+NUMERIC Prn::NewQueueFromExternal()
+{	
+	ReturnOnSuccess( IsNull(~<fModelForNewQueue>~) );
+
+	ReturnOnFailure( GetViewByName(View) );
+	
+	fHtmlView( Execute,~MakePrintersQueuesVisible()~ );
+		
+	fHtmlView( Execute,~SelectModel('<fModelForNewQueue>');~ );
+		
+	OnNewModel(~<fModelForNewQueue>~);
+					
+	fHtmlView( Execute,~AddNewPrinterQueue()~ );
+		
+	fModelForNewQueue = ~~;
+	
+	return TRUE;
+}
+
+NUMERIC Prn::LoadQueue()			// Load Queue Info from the database into the view
+{
+	fHtmlView( Get, ~PrinterQueueList~, 0, value, QueueName);
+
+	ReturnOnFailure( GetActiveView() );
+
+	ReturnOnFailure( Connect() );
+
+	PGenConList( List,Connection,fConnection,Query,~Select * From QueueDefinition Where QueueName='<QueueName>'~ );
+
+	if ( !List( GetFirst,Item ) )
+	{
+		ReleaseConnection();
+		return fHtmlView( Execute,~UserMsg('<$TR.PrintWizardTrans(QueueDoesNotExist,`<QueueName>`)>')~ );
+	}
+
+	fHtmlView( UpdateFrom,Item );
+
+	fHtmlView( Set,~QueueName~,0,value,~<QueueName>~ );
+
+	fHtmlView( Wait );
+
+	fHtmlView( Execute,~RefreshQueueView();~ );
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::UpdatePrinterFromView(OriginalPrinterName)
+{
+	ReturnOnFailure( GetActiveView() );
+
+	ReturnOnFailure( Connect() );
+
+	PGenConList( List,Connection,fConnection,Query,~Select * From Printers Where PrinterName='<OriginalPrinterName>'~ );
+
+	if ( !List( GetFirst,Item ) )
+	{
+		List( AddNew,Item );
+	}
+
+	fHtmlView( Update,Item );
+
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		Log( Session,~Can't add <OriginalPrinterName>.  <theErr>~ );
+		return Warning( TR( PrintWizardTrans,AddPrinterFailed,~<OriginalPrinterName>~ ) );
+	}
+
+	return TRUE;
+}
+
+NUMERIC Prn::WindowsPrinterAudits()				
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Get,~PrinterName~,0,value,PrinterName );
+
+	Count = 0;
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~<$App.ShareDirectory>\PrintRecords\Windows Printer\<PrinterName>\*.*~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+
+		if ( aDirectoryEntry( Dots ) )
+				continue;
+
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )      
+			continue;
+
+		++Count;
+	}
+
+	if ( !<Count> )
+	{
+		fHtmlView( Execute,~MakeVisible(VariableElement('EditConfigurations'))~ );
+
+		return Warning( TR( PrintWizardTrans,NoConfiguration) );
+	}
+
+	return TRUE;
+}
+
+NUMERIC Prn::SpecificPrinterAudits(PrinterModel)				
+{
+	Model = ~<$str.$PrinterModel.NoSpaces>~;
+
+	if ( MethodDefined( ~<Model>Audits~ ) )
+	{
+		return <Model>Audits();
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::SavePrinter( )					// Save Printer Info in the database
+{
+	ReturnOnFailure( GetActiveView() );
+	fHtmlView( Get, ~PrintersList~, 0, value, OriginalPrinterName);
+
+	fHtmlView( Get,~QueueName~,0,value,QueueName );
+	fHtmlView( Get,~PrinterModel~,0,value,PrinterModel );
+	fHtmlView( Get,~PrinterName~,0,value,PrinterName );
+	
+	ReturnOnFailure( SpecificPrinterAudits(~<PrinterModel>~) );
+
+	ReturnOnFailure( Connect() );
+
+	PrinterHasJobs = fConnection( RecordCountFor,~Select count(*) From JobQueue Where PrinterName='<OriginalPrinterName>'~ );
+
+	if ( !SimilarStr( ~<OriginalPrinterName>~,~<PrinterName>~ ) && <PrinterHasJobs> )
+	{
+		fHtmlView( Set,~PrinterName~,0,value,~<OriginalPrinterName>~ );
+		fHtmlView( Execute,~ShowBlock(PrinterHasJobs)~,PrinterScriptControl );
+		return FALSE;
+	}
+
+	PrinterAlreadyExists = PrinterExists(~<PrinterName>~);
+
+	if ( !SimilarStr( ~<OriginalPrinterName>~,~<PrinterName>~ ) && <PrinterAlreadyExists> )
+	{
+		fHtmlView( Execute,~ShowBlock(PrinterAlreadyExists)~,PrinterScriptControl );
+		return FALSE;
+	}
+
+	SetResolutionDefaults(~<PrinterModel>~,~<PrinterName>~);
+	
+	NewQueue = !QueueExists( ~<QueueName>~ );
+	
+	Configuration = ~~;
+	
+	if ( <NewQueue> && SimilarStr( ~<PrinterModel>~,~Windows Printer~ ) )
+	{
+		fHtmlView( Get,PrintRecordsList,0,value,Configuration );
+		
+		if ( IsNull(~<Configuration>~) )
+		{
+			return Warning( ~<$TR.PrintWizardTrans(ConfigurationError)>~ );
+		}
+	}
+	
+	DefaultQueue( ~<QueueName>~,~<PrinterModel>~,~<Configuration>~ );				// Add a queue if one doesn't exist
+
+	ReturnOnFailure( UpdatePrinterFromView(~<OriginalPrinterName>~) );
+
+	if ( !SimilarStr( ~<OriginalQueueName>~,~<QueueName>~,~<Configuration>~ ) )	// Added a new record?
+	{
+		RefreshPrinters( ~<PrinterModel>~ );
+
+		fHtmlView( Execute,~SelectPrinter('<PrinterName>')~ );
+	}
+
+	fHtmlView( Execute,~PrinterChangesSaved('<PrinterName>',<NewQueue>)~,PrinterScriptControl );
+
+	ReleaseConnection();
+	
+	return TRUE;
+}
+
+
+NUMERIC Prn::DeleteQueueByName( )		// Delete a queue from the database
+{
+	fHtmlView( Get, ~PrinterQueueList~, 0, value, QueueName);
+
+	ReturnOnFailure( GetActiveView() );
+
+	ReturnOnFailure( Connect() );
+
+	PrinterCount = fConnection(  RecordCountFor,~Select * From Printers Where QueueName='<QueueName>'~ );
+
+	JobCount = fConnection( RecordCountFor,~Select * From JobQueue Where QueueName='<QueueName>'~ );
+
+	if ( <JobCount> )
+	{
+		ReleaseConnection();
+		return fHtmlView( Message,DeleteThisQueueMsg,0,ErrorMessage,TR(PrintWizardTrans,DeleteQueueJobsFailed,<JobCount>,~<QueueName>~ ) );
+	}
+
+	if ( <PrinterCount> )
+	{
+		ReleaseConnection();
+		return fHtmlView( Message,DeleteThisQueueMsg,0,ErrorMessage,TR(PrintWizardTrans,DeleteQueuePrintersFailed,<PrinterCount>,~<QueueName>~ ) );
+	}
+
+	if ( !fConnection( Cmd,~Delete From QueueDefinition Where QueueName='<QueueName>'~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		ReleaseConnection();
+		Log( Session,~Couldn't delete printer queue <QueueName>~,~<theErr>~ );
+		return Warning( TR(PrintWizardTrans,DeleteQueueFailed, ~<QueueName>~ ) );
+	}
+	
+	fHtmlView( Execute,~RemoveListOption( SelectorElement('PrinterQueueList'),'<QueueName>' )~ );
+
+	ReleaseConnection();
+
+	return fHtmlView( Execute,~VariablePage('<$TR.PrintWizardTrans(QueueDeleted,`<QueueName>`)>')~ );
+}
+
+
+NUMERIC Prn::UpdateQueueFromView(OriginalQueueName)
+{
+	ReturnOnFailure( GetActiveView() );
+
+	ReturnOnFailure( Connect() );
+
+	PGenConList( List,Connection,fConnection,Query,~Select * From QueueDefinition Where QueueName='<OriginalQueueName>'~ );
+
+	if ( !List( GetFirst,Item ) )
+	{
+		List( AddNew,Item );
+	}
+
+	fHtmlView( Update,Item );
+
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		Log( Session,~Can't add <OriginalQueueName>~,~<theErr>~ );
+		return Warning( TR(PrintWizardTrans,AddQueueFailed,~<OriginalQueueName>~ ) );
+	}
+
+	return TRUE;
+}
+
+NUMERIC Prn::KodakCRTQueueAudits()				
+{
+	retval = TRUE;
+
+	fHtmlView( Get,~CalibrationLut~,0,value,CalibrationLut );
+
+	if ( IsNull( ~<CalibrationLut>~ ) )
+	{
+		fHtmlView( Execute,~ShowStatus(VariableElement('CalibrationLutError'),'<$TR.PrintWizardTrans(CalibrationLutNull)>')~ );
+		retval = FALSE;
+	}
+
+	fHtmlView( Get,~PaperPack~,0,value,PaperPack );
+
+	if ( IsNull( ~<PaperPack>~ ) )
+	{
+		fHtmlView( Execute,~ShowStatus(VariableElement('PaperPackError'),'<$TR.PrintWizardTrans(PaperPackNull)>')~ );
+		retval = FALSE;
+	}
+
+	return <retval>;
+}
+
+NUMERIC Prn::WindowsPrinterQueueAudits()				
+{
+	fHtmlView( Get,~Configuration~,0,value,Configuration );
+
+	if ( IsNull( ~<Configuration>~ ) )
+	{
+		fHtmlView( Execute,~ShowStatus(VariableElement('ConfigurationError'),'<$TR.PrintWizardTrans(ConfigurationError)>')~ );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC Prn::OtherQueueAudits()		{ return TRUE; }
+
+
+NUMERIC Prn::SpecificQueueAudits(PrinterModel)				
+{
+	if ( SimilarStr( ~<PrinterModel>~,~KPDM~,~KPDM II~,~KODAK CRT~,~Kodak LFCRT~ ) )
+	{
+		return KodakCRTQueueAudits();
+	}
+
+	if ( SimilarStr( ~<PrinterModel>~,~Windows Printer~ ) )
+	{
+		return WindowsPrinterQueueAudits();
+	}
+
+	return OtherQueueAudits();
+}
+
+
+NUMERIC Prn::SaveQueue( )		// Save the Queue info in the database
+{
+	fHtmlView( Get, ~PrinterQueueList~, 0, value, OriginalQueueName);
+
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Get,~PrinterModel~,0,value,PrinterModel );
+
+	ReturnOnFailure( SpecificQueueAudits(~<PrinterModel>~) );
+
+	fHtmlView( Get,~QueueName~,0,value,QueueName );
+
+	if ( !SimilarStr( ~<OriginalQueueName>~,~<QueueName>~ ) && QueueExists(~<QueueName>~) )
+	{
+		fHtmlView( Execute,~ShowBlock(QueueAlreadyExists)~,QueueScriptControl );
+		return FALSE;
+	}
+
+	ReturnOnFailure( UpdateQueueFromView(~<OriginalQueueName>~) );
+		
+	if ( !SimilarStr( ~<OriginalQueueName>~,~<QueueName>~ ) )
+	{
+		RefreshQueues( ~<PrinterModel>~ );
+
+		fHtmlView( Execute,~SelectQueue('<QueueName>')~ );
+	}
+
+	fHtmlView( Execute,~QueueChangesSaved('<QueueName>')~,QueueScriptControl );
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::PrinterExists( PrinterName )		// Determine if a PrinterName already exists
+{
+	ReturnOnFailure( Connect() );
+
+	Count = fConnection( RecordCountFor,~Select PrinterName From Printers Where PrinterName = '<PrinterName>'~ );
+
+	ReleaseConnection();
+
+	return <Count> > 0;
+}
+
+
+NUMERIC Prn::QueueExists( QueueName )			// Determine if a Queuename already exists
+{
+	ReturnOnFailure( Connect() );
+
+	Count = fConnection( RecordCountFor,~Select QueueName From QueueDefinition Where QueueName = '<QueueName>'~ );
+	
+	ReleaseConnection();
+
+	return <Count> > 0;
+}
+
+
+STR		Prn::NewPrinterName( PrinterModel )		// Auto generate a new Printer using Model and an index
+{
+	index = 0;
+
+	while ( TRUE )
+	{
+		PrinterName = ~<PrinterModel> <++index>~;
+
+		if ( !PrinterExists( ~<PrinterName>~ ) )
+		{
+			return ~<PrinterName>~;
+		}
+	}
+}
+
+
+NUMERIC Prn::AddDefault( PrinterModel,DesiredPaperWidth,PrinterName,QueueName, OutputProfile )	// Add a new Printer and Queue using default names
+{
+	ReturnOnFailure( GetActiveView() );
+
+	if ( IsNull( ~<DesiredPaperWidth>~ ) )
+	{
+		return Warning( TR(PrintWizardTrans,NoPaperWidth) );
+	}
+
+	ReturnOnFailure( Connect() );
+	
+	if ( IsNull(~<PrinterName>~) )
+	{
+		PrinterName = NewPrinterName( ~<PrinterModel>~ );
+	}
+
+	if ( IsNull(~<QueueName>~) )
+	{
+		QueueName = ~<PrinterModel> <DesiredPaperWidth>~;
+	}	
+
+	fQueueAlreadyExists = QueueExists( ~<QueueName>~ );
+	fPrinterAlreadyExists = PrinterExists( ~<PrinterName>~ );
+
+	if ( !DefaultPrinter( ~<PrinterName>~,~<PrinterModel>~,~<QueueName>~ ) )
+	{
+		ReleaseConnection();
+		return fHtmlView( Execute,~FailedToAddPrinter('<PrinterName>')~ );
+	}	
+
+	if ( !<fQueueAlreadyExists> )
+	{
+		if ( !DefaultQueue( ~<QueueName>~,~<PrinterModel>~ ) )
+		{
+			ReleaseConnection();
+			return fHtmlView( Execute,~FailedToAddQueue('<QueueName>')~ );
+		}
+	}
+
+	RefreshPrinters( ~<PrinterModel>~ );
+	RefreshQueues( ~<PrinterModel>~ );
+
+	//DesiredPaperWidth = PreferredUOMConversionToInches(~<DesiredPaperWidth>~);
+
+	Cmd = ~Update QueueDefinition Set PaperWidth=<DesiredPaperWidth> Where QueueName = '<QueueName>'~;
+	fConnection( Cmd,~<Cmd>~ );
+
+	Cmd = ~Update QueueDefinition Set ICCProfile='<OutputProfile>' Where QueueName = '<QueueName>'~;
+	fConnection( Cmd,~<Cmd>~ );
+
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+NUMERIC Prn::PrintRecordExists( PrinterName,Model,PrintRecordName)
+{
+	PrinterRecordPath = PrintRecordPath(~<PrinterName>~,~Windows Printer~,~<PrintRecordName>~);
+
+	DeviceContext( dc );
+	
+	return dc( LoadPrintPropertySheet,~<PrinterRecordPath>~ );
+}
+
+
+NUMERIC Prn::SetPrinterDefaults( )	// Initialize all the default values in the view
+{
+	fHtmlView( Get, ~ModelsList~, 0, value, Model);
+
+	ReturnOnFailure( GetActiveView() );
+
+	TheModel = ~<$str.$Model.NoSpaces>~;	// Remove the spaces
+
+	if ( MethodDefined( ~Set<TheModel>PrinterDefaults~ ) )
+	{
+		Set<TheModel>PrinterDefaults( fHtmlView );
+		return fHtmlView( Execute,~Enable(VariableElement('SaveButton'))~ );
+	}
+	
+	return Warning( TR( PrintWizardTrans,ModelNotSupported,~<Model>~ ) );
+}
+
+
+NUMERIC Prn::DefaultPrinter( PrinterName,PrinterModel,QueueName )		// Add a default printer to the database
+{
+	TheModel = ~<$str.$PrinterModel.NoSpaces>~;	// Remove the spaces
+
+	if ( !MethodDefined( Set<TheModel>PrinterDefaults ) )
+	{
+		return Warning( TR( PrintWizardTrans,ModelNotSupported,~<Model>~ ) );
+	}
+
+	ReturnOnFailure( Connect() );
+
+	PGenConList( List,Connection,fConnection,Query,~Select * From Printers Where PrinterName='<PrinterName>'~ );
+
+	IsANewPrinter = !List( GetFirst,Item );
+
+	if ( <IsANewPrinter> )
+	{
+		List( AddNew,Item );
+		Item( Set,PrinterName,~<PrinterName>~ );
+		Item( Set,PrinterModel,~<PrinterModel>~ );
+	}
+
+	Set<TheModel>PrinterDefaults( Item );
+
+	Item( Set,QueueName,~<QueueName>~ );
+
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		Log( Session,~Can't add <PrinterName>~,~<theErr>~ );
+		return Warning( TR( PrintWizardTrans,AddPrinterFailed,~<PrinterName>~ ) );
+	}
+
+	if ( <IsANewPrinter> )
+	{
+		SetResolutionDefaults(~<PrinterModel>~,~<PrinterName>~);
+	}
+
+	return ReleaseConnection();
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::SetQueueDefaults(  )			// Initialize all the default values in the view
+{
+	fHtmlView( Get, ~ModelsList~, 0, value, Model);
+
+	ReturnOnFailure( GetActiveView() );
+
+	TheModel = ~<$str.$Model.NoSpaces>~;		// Remove the spaces
+
+	if ( MethodDefined( ~Set<TheModel>QueueDefaults~ ) )
+	{
+		Set<TheModel>QueueDefaults( fHtmlView );
+		return fHtmlView( Execute,~Enable(VariableElement('SaveButton'))~ );
+	}
+	
+	return Warning( TR( PrintWizardTrans,ModelNotSupported,~<Model>~ ) );
+}
+
+
+NUMERIC Prn::DefaultQueue( QueueName,PrinterModel,Configuration )
+{
+	TheModel = ~<$str.$PrinterModel.NoSpaces>~;	// Remove the spaces
+
+	if ( !MethodDefined( ~Set<TheModel>QueueDefaults~ ) )
+	{
+		return Warning( TR( PrintWizardTrans,ModelNotSupported,~<Model>~ ) );
+	}
+
+	ReturnOnFailure( Connect() );
+
+	PGenConList( List,Connection,fConnection,Query,~Select * From QueueDefinition Where QueueName='<QueueName>'~ );
+
+	ThisIsANewQueue = -1;
+
+	if ( !List( GetFirst,Item ) )					// Does the QueueName already exist?
+	{
+		List( AddNew,Item );
+		Item( Set,QueueName,~<QueueName>~ );
+		ThisIsANewQueue = 1;
+		Set<TheModel>QueueDefaults( Item );
+		
+		if ( !IsNull(~<Configuration>~) )
+		{
+			Item( Set,Configuration,~<Configuration>~ );
+		}
+		
+		//Item( Set,PrinterModel,~<PrinterModel>~ );
+	}
+
+
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		Log( Session,~Can't add <PrinterName>~,~<theErr>~ );
+		return Warning( TR( PrintWizardTrans,AddPrinterFailed,~<PrinterName>~ ) );
+	}
+
+	ReleaseConnection();
+
+	if ( <ThisIsANewQueue> )
+	{
+		RefreshQueueChoices( SelectorElement,PrinterQueueList );
+		fHtmlView( Execute,~ShowBlock(IsANewQueue)~,PrinterScriptControl );
+	}
+
+	return <ThisIsANewQueue>;
+}
+
+
+STR		Prn::PrintRecordPath(PrinterName,Model,PrintRecordName)
+{
+	dirname = ~<$App.ShareDirectory>\PrintRecords\<Model>\<PrinterName>~;
+	if ( !Directory( Create,~<dirname>~ ) )
+	{
+		theErr = GetLastError();
+		Log( Session,~Failed to create directory <dirname>. <theErr>~ );
+		return Warning( TR( PrintWizardTrans,DirectoryCreateFailed.~<dirname>~ ) );
+	}
+
+	return ~<dirname>\<PrintRecordName>~;
+}
+
+
+NUMERIC Prn::NewPrintRecord(PrinterNameElement,PrintRecordElement,List)
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Get,~<PrinterNameElement>~,0,value,PrinterName );
+
+	fHtmlView( Get,~<PrintRecordElement>~,0,value,PrintRecordName );
+
+	if ( IsNull(~<PrintRecordName>~) )
+	{
+		return Warning( TR( PrintWizardTrans,ConfigurationNameEmpty ) );
+	}
+
+	PrinterRecordPath = PrintRecordPath(~<PrinterName>~,~Windows Printer~,~<PrintRecordName>~);
+
+	if ( Files( FileExists,~<PrinterRecordPath>~ ) )
+	{
+		return Warning( TR( PrintWizardTrans,PrintRecordPathExists,~<PrinterRecordPath>~ ) );
+	}
+
+	if ( UpdatePrintRecord(~<PrinterName>~,~Windows Printer~,~<PrintRecordName>~) )
+	{
+		List = IsNull(~<List>~) ? PrintRecordsList : ~<List>~;
+		
+		return RefreshPrintRecords(~<PrinterNameElement>~,~<List>~);
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC Prn::UpdatePrintRecord(PrinterName,Model,PrintRecordName)
+{
+	PrinterRecordPath = PrintRecordPath(~<PrinterName>~,~<Model>~,~<PrintRecordName>~);
+
+	DeviceContext( dc );
+	if ( IsVista() )
+	{
+/*  Not going to get this complicated yet, but thought I'd save the ideas
+	WinPrinter(win,New,GetPrinterNameList, list);
+		//show list and have them choose printer
+
+		//set this printer to the default
+		BaseScript( new,js );
+
+		BeginSCRIPT(js);
+			function DefaultPrinter(Server,Printer)  
+			{ 
+				var net;
+
+				net = new ActiveXObject("WScript.Network");
+				var path = "\\\\" + Server + "\\" + Printer;
+				net.SetDefaultPrinter(path);
+				return path;
+			}
+		EndSCRIPT();
+		Global(js);
+		x = js.DefaultPrinter(String,~KPWPS205B1~,String,~KPW-CLR-B490~);
+
+		warning( ~Default Printer is <x>~ );
+*/
+		MessageBox( TR( PrintWizardTrans, SetDefaultPrinter) );
+		//MessageBox( ~Please make your desired printer the default printer.  Set your configuration options in Printing->Preferences. We will bring up your printer control panel window next.~,MBOK );
+
+		ExecuteProcess(~<$Sys.WindowsDirectory>\system32\rundll32.exe~,~"<$Sys.WindowsDirectory>\system32\rundll32.exe" shell32.dll,SHHelpShortcuts_RunDLL PrintersFolder~);
+		if ( MessageBox( TR(PrintWizardTrans,ReadyToSaveConfig), YESNO ) == NO )
+		{
+			return FALSE;
+		}
+	}
+ 
+	dc( CreatePrintPropertySheet );
+
+	if ( dc( DisplayPrintPropertySheet ) )
+	{
+		dc( SaveAsPrintPropertySheet,~<PrinterRecordPath>~ );
+
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC Prn::DeletePrintRecords(PrinterName,Model)
+{
+	ReturnOnSuccess( !Files( DirectoryExists,~<$App.ShareDirectory>\PrintRecords\<Model>\<PrinterName>~ ) );
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~<$App.ShareDirectory>\PrintRecords\<Model>\<PrinterName>\*.*~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+
+		if ( aDirectoryEntry( Dots ) )
+				continue;
+
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )      
+			continue;
+
+		if ( !Files( Delete,~<aPath>~ ) )
+		{
+			Log( Session,~Could not delete <aPath>.  <$Func.GetLastErrorMsg()>~ );
+		}
+	}
+
+	DirectoryPath = ~<$App.ShareDirectory>\PrintRecords\<Model>\<PrinterName>~;
+
+	if ( !Directory( Remove,~<DirectoryPath>~ ) )
+	{
+		//Log( Session,~Could not delete <DirectoryPath>.  <$Func.GetLastErrorMsg()>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::DeletePrintRecord(PrinterNameElement,List,Element)
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Get,~<PrinterNameElement>~,0,value,PrinterName );
+
+	if ( IsNull(~<Element>~) )
+	{
+		fHtmlView( Get,~<List>~,0,value,PrintRecordName );
+	}
+	else
+	{
+		fHtmlView( Get,~<Element>~,0,value,PrintRecordName );
+	}
+
+	if ( IsNull(~<PrintRecordName>~) )
+	{
+		return Warning( TR( PrintWizardTrans,ConfigurationNameEmpty ) );
+	}
+
+	PrinterRecordPath = PrintRecordPath(~<PrinterName>~,~Windows Printer~,~<PrintRecordName>~);
+
+	if ( MessageBox( TR( PrintWizardTrans,DeleteConfigConfirmation,~<PrintRecordName>~),YESNO ) == YES )
+	{
+		if ( !Files( Delete,~<PrinterRecordPath>~ ) )
+		{
+			Log( Session,~Could not delete path <PrinterRecordPath>.  <$Func.GetLastErrorMsg()>~ );
+			return Warning( TR( PrintWizardTrans,DeletePathFailed,~<PrinterRecordPath>~ ) );
+		}
+
+		RefreshPrintRecords(~<PrinterNameElement>~,~<List>~);
+		
+		if ( !IsNull(~<Element>~) )
+		{
+			fHtmlView( Set,~<Element>~,0,value,~~ );
+		}
+		
+		fHtmlView( Execute,~VariableFunction().ValidWindowsConfiguration()~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::ViewPrintRecord(PrinterNameElement,List)
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Execute,~ClearWizardMsg()~ );
+
+	fHtmlView( Get,~<PrinterNameElement>~,0,value,PrinterName );
+
+	fHtmlView( Get,~<List>~,0,value,PrintRecordName );
+
+	if ( IsNull(~<PrintRecordName>~) )
+	{
+		return FALSE;
+	}
+
+	PrinterRecordPath = PrintRecordPath(~<PrinterName>~,~Windows Printer~,~<PrintRecordName>~);
+
+	DeviceContext( dc );
+	
+	IsNewConfiguration = FALSE;
+	if ( IsVista() )
+	{
+		//dialog box telling them to change printer settings
+		MessageBox( TR( PrintWizardTrans, SetDefaultPrinter) );
+
+		ExecuteProcess(~<$Sys.WindowsDirectory>\system32\rundll32.exe~,~"<$Sys.WindowsDirectory>\system32\rundll32.exe" shell32.dll,SHHelpShortcuts_RunDLL PrintersFolder~);
+		if ( MessageBox( TR(PrintWizardTrans,ReadyToSaveConfig), YESNO ) == NO )
+		{
+			return FALSE;
+		}
+		dc(CreatePrintPropertySheet);
+	}
+	else
+	{
+		if ( !dc( LoadPrintPropertySheet,~<PrinterRecordPath>~ ) )
+		{
+			dc( CreatePrintPropertySheet );
+			IsNewConfiguration = TRUE;
+		}
+	}
+
+	if ( dc( DisplayPrintPropertySheet ) )
+	{
+		if ( Authorized(KEXDSS) )
+		{	
+			tmpstr = ~DL2100(PCL)~;
+			
+			dc( GetFromPropertySheet,DriverName,driver  );
+			if ( StringContainsString( driver, tmpstr ) )
+			{
+				warning( TR(PrintWizardTrans,NotDL2100PSDriver));
+			}
+			
+			if ( <fLicenseLevel> < 2 || <fLicenseLevel> == 3 || <fLicenseLevel> == 4 || <fLicenseLevel> == 5 )
+			{
+				if ( dc( GetFromPropertySheet,KodakPrinter,mfg  ) )
+				{
+					if (String(StringInString,~KODAK~,Upper(~<mfg>~)) == ~~)
+					{ //not a kodak printer
+						if ( (String(StringInString,~EPSON STYLUS PRO 7800~,Upper(~<mfg>~)) == ~~) && (String(StringInString,~EPSON STYLUS PRO 7880~,Upper(~<mfg>~)) == ~~)
+							&& (String(StringInString,~EPSON STYLUS PRO 7890~,Upper(~<mfg>~)) == ~~) && (String(StringInString,~EPSON STYLUS PRO 9890~,Upper(~<mfg>~)) == ~~) )
+						{ //not an epson 7800 or 7880 either
+							WizardError( TR(PrintWizardTrans,NoLicenseNotKodakPrinter) );		
+							return FALSE;
+						}
+					}
+				}
+				else
+				{
+					WizardError( TR(PrintWizardTrans,NoLicenseUnableToGetPrinter) );		
+					return FALSE;
+				}
+			}
+		}
+
+		if ( dc( SaveAsPrintPropertySheet,~<PrinterRecordPath>~ ) )
+		{
+			ShowPrintRecordPrinter(~<PrinterNameElement>~,~<List>~);
+		}
+		else
+		{
+			err = DC( GetLastError );
+			warning( ~failed to save <PrinterRecordPath>.  <$func.SystemErrorMsg(<err>)>~ );
+		}		
+	}
+	
+	if ( <IsNewConfiguration> )
+	{
+		RefreshPrintRecords(PrinterName,~ConfigurationFileList~);
+	}
+
+	return TRUE;
+}
+
+NUMERIC Prn::ShowPrintRecordPrinter(PrinterNameElement,List)
+{
+
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Get,~<PrinterNameElement>~,0,value,PrinterName );
+
+	fHtmlView( Get,~<List>~,0,value,PrintRecordName );
+
+	if ( IsNull(~<PrintRecordName>~) )
+	{
+		return FALSE;
+	}
+	
+	fHtmlView( Execute,~VariableFunction().EnableWizardConfigurationButton(true)~ );
+
+	PrinterRecordPath = PrintRecordPath(~<PrinterName>~,~Windows Printer~,~<PrintRecordName>~);
+
+	DeviceContext( dc );
+	
+	fHtmlView( SetInnerHTML, PrinterDeviceUse, 0,~~ );
+	fHtmlView( SetInnerHTML,~PrinterDeviceName~,0,~~ );
+
+	if ( dc( LoadPrintPropertySheet,~<PrinterRecordPath>~ ) )
+	{
+		if ( dc( GetFromPropertySheet,DeviceName,DeviceName,ResolutionString,Resolution  ) )
+		{
+			// fHtmlView( SetInnerHTML, PrinterDeviceName, 0,TR( PrintWizardTrans,ConfigStatus,~<PrintRecordName>~,~<DeviceName>~,~<Resolution>~) );
+			fHtmlView( SetInnerHTML, PrinterDeviceConfig, 0,TR( PrintWizardTrans,ConfigStatus1,~<PrintRecordName>~) );
+			fHtmlView( SetInnerHTML, PrinterDeviceUse, 0,TR( PrintWizardTrans,ConfigStatus2,~<DeviceName>~) );
+			fHtmlView( SetInnerHTML, PrinterDeviceResolution, 0,TR( PrintWizardTrans,ConfigStatus3,~<Resolution>~) );
+			
+			fHtmlView( Execute,~VariableFunction().EnableWizardConfigurationDeleteButton(true)~ );
+			WizardEnableNextButton(true);
+		}
+	}
+
+	return TRUE;
+}
+
+
+
+VOID Prn::RefreshPrintRecordResolution(Printername,PrintRecordName,element)
+{
+	ReturnOnFailure( GetActiveView() );
+
+	PrinterRecordPath = PrintRecordPath(~<PrinterName>~,~Windows Printer~,~<PrintRecordName>~);
+
+	DeviceContext( dc,LoadPrintPropertySheet,~<PrinterRecordPath>~ );
+
+	if ( dc( GetFromPropertySheet,ResolutionString,Resolution  ) )
+	{
+		fHtmlView( Set,~<element>~,0,value,~<Resolution>~ );
+	}
+}
+
+
+NUMERIC Prn::RefreshPrintRecords(PrinterNameElement,List)
+{
+
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Get,~<PrinterNameElement>~,0,value,PrinterName );
+
+	ReturnOnSuccess( IsNull( ~<PrinterName>~ ) );
+
+	fHtmlView( Get,PrinterModel,0,value,Model );
+
+	ReturnOnSuccess( IsNull( ~<Model>~ ) );
+
+	fHtmlView( Execute,~ResetList( VariableElement('<List>') )~ );
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~<$App.ShareDirectory>\PrintRecords\<Model>\<PrinterName>\*.*~ );
+
+	count = 0;
+	
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+
+		if ( aDirectoryEntry( Dots ) )
+				continue;
+
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )      
+			continue;
+
+		fHtmlView( Execute,~AddListOption( VariableElement('<List>'),'<$str.$aPath.filename>','<$str.$aPath.filename>')~ );
+		++count;
+	}
+	
+	if ( <count> )
+	{
+
+		//	fHtmlView( SetInnerHTML, PrinterDeviceName, 0,~~);
+		//fHtmlView( SetInnerHTML,~PrinterDeviceConfig~,0,~~ );
+		//fHtmlView( SetInnerHTML,~PrinterDeviceUse~,0,~~ );
+		fHtmlView( SetInnerHTML,~PrinterDeviceResolution~,0,~~ );
+	}
+		
+	fHtmlView( SetStyle,ConfigurationControlsExisting,0,display,<count> ? ~block~ : ~none~ );
+	fHtmlView( Execute,~VariableFunction().ValidWindowsConfiguration()~ );	
+
+	return fHtmlView( Wait );
+}
+
+
+NUMERIC Prn::RefreshAllPrintRecords(Model,List)	// For all printers of the specified model
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Execute,~ResetList( VariableElement('<List>') )~ );
+
+	StringList( PrintRecords,New,NoDuplicateValues,InAlphaOrder );
+
+	PopulatePrintRecordsRecursively(PrintRecords,~<$App.ShareDirectory>\PrintRecords\<Model>\*.*~);	
+
+	more = PrintRecords( GetFirstString,PrintRecord );
+
+	while ( <more> )
+	{
+		fHtmlView( Execute,~AddListOption( VariableElement('<List>'),'<PrintRecord>','<PrintRecord>')~ );
+
+		more = PrintRecords( GetNextString,PrintRecord );
+	}
+
+	return fHtmlView( Wait );
+}
+
+
+NUMERIC Prn::PopulatePrintRecordsRecursively( &List,SearchCriteria )	
+{
+	MoreFiles = findfile( aDirectoryEntry,Find,~<SearchCriteria>~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )      
+		{
+			<THIS>.PopulatePrintRecordsRecursively( List ,~<aPath>\*.*~);	
+		}
+		else
+		{
+			List( AddString,~<$str.$aPath.filename>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC Prn::RefreshPrintersWithPrintRecords(Model,List,PrintRecordsList)	// For all printers of the specified model
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Get,PrintRecordsList,0,value,PrintRecordName );
+
+	ReturnOnSuccess( IsNull(~<PrintRecordName>~) );
+
+	fHtmlView( Execute,~ResetList( VariableElement('<List>') )~ );
+
+	StringList( Printers,New,NoDuplicateValues,InAlphaOrder );
+
+	PopulatePrintersRecursively(Printers,~<$App.ShareDirectory>\PrintRecords\<Model>\*.*~,~<PrintRecordName>~);	
+
+	more = Printers( GetFirstString,Printer );
+
+	while ( <more> )
+	{
+		fHtmlView( Execute,~AddListOption( VariableElement('<List>'),'<$str.$Printer.cpath>','<$str.$Printer.cpath>')~ );
+
+		more = Printers( GetNextString,Printer );
+	}
+
+	return fHtmlView( Wait );
+}
+
+
+NUMERIC Prn::PopulatePrintersRecursively( &List,SearchCriteria,PrintRecordName )	
+{
+	MoreFiles = findfile( aDirectoryEntry,Find,~<SearchCriteria>~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )      
+		{
+			<THIS>.PopulatePrintersRecursively( List ,~<aPath>\*.*~,~<PrintRecordName>~);	
+		}
+		else if ( SimilarStr( ~<PrintRecordName>~,~<$str.$aPath.filename>~ ) )
+		{
+			List( AddString,~<$str.$aPath.folder.cpath>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC Prn::RefreshListOfComputers( List )	
+{
+	//ReturnOnFailure( GetViewByName(~View~) );
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Execute,~ResetList( VariableElement('<List>') )~ );
+
+	Connect();
+
+	if ( !PGenConList( ComputersList,Connection,fConnection,Query,~Select ComputerName From Users Order By ComputerName~ ) )
+	{
+		ReleaseConnection();
+		return FALSE;
+	}
+
+	while ( ComputersList( GetNext,Computer ) )
+	{
+		fHtmlView( Execute,~AddListOption( VariableElement('<List>'),'<$pcon.Computer[ComputerName]>','<$pcon.Computer[ComputerName]>')~ );
+	}
+
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+
+
+NUMERIC Prn::ShowNTPrintersToConvert( List )	
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Execute,~ResetList( VariableElement('<List>') )~ );
+	
+	Connect();
+
+	Query = ~Select PrinterName From Printers Where PrinterModel='NT Printer' Order By PrinterName~;
+
+	if ( !PGenConList( PrintersList,Connection,fConnection,Query,~<Query>~ ) )
+	{
+		ReleaseConnection();
+		return FALSE;
+	}
+
+	while ( PrintersList( GetNext,Item ) )
+	{
+		fHtmlView( Execute,~AddListOption( VariableElement('<List>'),'<$pcon.Item[PrinterName].cpath>','<$pcon.Item[PrinterName].cpath>')~ );
+	}
+
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::ConvertToWindowsPrinter(List)
+{
+	ReturnOnFailure( GetActiveView() );
+
+	Connect();
+
+	i = -1;
+
+	while ( fHtmlView( Get,<List>_Options,<++i>,selected, OptionIsSelected ) )
+	{
+		if ( <OptionIsSelected>  )
+		{
+			fHtmlView( Get,<List>_Options,<i>,value, PrinterName );
+
+			if ( !IsNull(~<PrinterName>~) )
+			{
+				Warning( TR( PrintWizardTrans,FindPrinterWarning ) );
+
+				if ( UpdatePrintRecord(~<PrinterName>~,~Windows Printer~,~Default~) )
+				{
+					ChangeQueueToWindows(~<PrinterName>~,~Default~);
+
+					ChangePrinterToWindows(~<PrinterName>~);
+				
+					fHtmlView( Execute,~DeleteByValue(VariableElement('<List>'),'<$str.$PrinterName.cpath>')~ );
+
+					--i;
+				}
+				else	// tell em we didn't update anything
+				{
+					Warning( TR( PrintWizardTrans,PrinterNameUnchanged,~<PrinterName>~ ) );
+				}
+			}
+		}
+	}
+
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::ChangeQueueToWindows(PrinterName,Configuration)
+{
+	Cmd = ~Select QueueName From Printers Where PrinterName = '<PrinterName>'~;
+
+	if ( !fConnection( GetValuesFor,~<Cmd>~,QueueName ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		Log( Session,~Failed to query the printer.  <theErr>.  <Cmd>~ );
+		return Warning( TR( PrintWizardTrans,PrinterQueryFailed,~<PrinterName>~) );
+	}
+
+	ReturnOnSuccess( IsNull(~<Queuename>~ ) );
+
+	Cmd = ~Update QueueDefinition Set PrinterModel='Windows Printer',Configuration='<Configuration>' Where Queuename='<Queuename>'~;
+
+	if ( !fConnection( Cmd,~<Cmd>~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		Log( Session,~Failed to update the queue.  <theErr>.  <Cmd>~ );
+		return Warning( TR( PrintWizardTrans,QueueUpdateFailed,~<Queuename>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::ChangePrinterToWindows(PrinterName)
+{
+	Cmd = ~Update Printers Set PrinterModel='Windows Printer' Where PrinterName='<PrinterName>'~;
+
+	if ( !fConnection( Cmd,~<Cmd>~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		Log( Session,~Failed to update the printer.  <theErr>.  <Cmd>~ );
+		return Warning( TR( PrintWizardTrans,PrinterUpdateFailed,~<PrinterName>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC Prn::ShowDiskPrintersToConvert( List,Like )	
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Execute,~ResetList( VariableElement('<List>') )~ );
+	
+	Connect();
+
+	Query = ~Select PrinterName From Printers Where PrinterModel='Disk'~;
+
+	if ( !IsNull(~<Like>~) )
+	{
+		Query = ~<Query> AND OnPrintComplete Like '<Like>%'~;
+	}
+
+	Query = ~<Query> Order By PrinterName~;
+
+	if ( !PGenConList( PrintersList,Connection,fConnection,Query,~<Query>~ ) )
+	{
+		ReleaseConnection();
+		return FALSE;
+	}
+
+	while ( PrintersList( GetNext,Item ) )
+	{
+		fHtmlView( Execute,~AddListOption( VariableElement('<List>'),'<$pcon.Item[PrinterName].cpath>','<$pcon.Item[PrinterName].cpath>')~ );
+	}
+
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+
+
+NUMERIC Prn::ChangeQueueToRP(PrinterName)
+{
+	Cmd = ~Select QueueName From Printers Where PrinterName = '<PrinterName>'~;
+
+	if ( !fConnection( GetValuesFor,~<Cmd>~,QueueName ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		Log( Session,~Failed to query the printer.  <theErr>.  <Cmd>~ );
+		return Warning( TR( PrintWizardTrans,PrinterQueryFailed,~<PrinterName>~ ) );
+	}
+
+	ReturnOnSuccess( IsNull(~<Queuename>~ ) );
+
+	Cmd = ~Update QueueDefinition Set PrinterModel='Kodak RP30' Where Queuename='<Queuename>' and PrinterModel='Disk'~;
+
+	if ( !fConnection( Cmd,~<Cmd>~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		Log( Session,~Failed to update the queue.  <theErr>.  <Cmd>~ );
+		return Warning( TR( PrintWizardTrans,QueueUpdateFailed,~<Queuename>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::ChangePrinterToRP(PrinterName)
+{
+	Fields = ~StartUpScript=NULL,StartPrinting=NULL,OnPrintComplete=NULL,OnOrderComplete=NULL,ResponseScript=NULL,ShutDownScript=NULL~;
+
+	Cmd = ~Update Printers Set <Fields>,PrinterModel='Kodak RP30' Where PrinterName='<PrinterName>'~;
+
+	if ( !fConnection( Cmd,~<Cmd>~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		Log( Session,~Failed to update the printer.  <theErr>.  <Cmd>~ );
+		return Warning( TR( PrintWizardTrans,PrinterUpdateFailed,~<PrinterName>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::ConvertToRP(List)
+{
+	ReturnOnFailure( GetActiveView() );
+
+	Connect();
+
+	i = -1;
+
+	while ( fHtmlView( Get,<List>_Options,<++i>,selected, OptionIsSelected ) )
+	{
+		if ( <OptionIsSelected> )
+		{
+			fHtmlView( Get,<List>_Options,<i>,value, PrinterName );
+
+			if ( !IsNull(~<PrinterName>~) )
+			{
+				ChangeQueueToRP(~<PrinterName>~);
+
+				ChangePrinterToRP(~<PrinterName>~);
+
+				fHtmlView( Execute,~DeleteByValue(VariableElement('<List>'),'<$str.$PrinterName.cpath>')~ );
+
+				--i;
+			}
+		}
+	}
+
+	ReleaseConnection();
+
+	return TRUE;
+}
+						
+
+
+NUMERIC Prn::RefreshGammaChoices( List )			// Update the list of files in the Scripts folder
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Execute,~ResetList( VariableElement('<List>') )~ );
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~<$App.ShareDirectory>\Tables\*.*~ );
+
+	fHtmlView( Execute,~AddListOption( VariableElement('<List>'),'    ','')~ ); //add blank to list so they can select no gamma 
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+
+		if ( aDirectoryEntry( Dots ) )
+				continue;
+
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )      
+			continue;
+
+		if ( SimilarStr( ~<$str.$aPath.ext>~,~Gamma~,~Txt~ ) )
+		{
+			fHtmlView( Execute,~AddListOption( VariableElement('<List>'),'<$str.$aPath.cPath>','<$str.$aPath.filename>')~ );
+		}
+	}
+
+	return fHtmlView( Wait );
+}
+	
+NUMERIC Prn::RefreshFileChoices( List,AuditFieldName )			// Update the list of files in the Scripts folder
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Execute,~ResetList( VariableElement('<List>') )~ );
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~<$App.ShareDirectory>\Scripts\*.*~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+
+		if ( aDirectoryEntry( Dots ) )
+				continue;
+
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )      
+			continue;
+
+		if ( SimilarStr( ~<$str.$aPath.ext>~,~Gamma~,~Txt~ ) )
+		{
+			LegalFile = ApplyFieldMask(~<$str.$aPath.filename>~,~<AuditFieldName>~);
+			
+			if ( SimilarStr(~<LegalFile>~,~<$str.$aPath.filename>~) )
+			{
+				fHtmlView( Execute,~AddListOption( VariableElement('<List>'),'<$str.$aPath.filename>','<$str.$aPath.filename>')~ );
+			}
+		}
+	}
+
+	return fHtmlView( Wait );
+}
+
+
+NUMERIC Prn::RefreshQueueChoices( Section,List )		// Update the list of Printer Queues
+{	
+	
+	ReturnOnFailure( GetViewByName(View) );
+
+	fHtmlView( Execute,~ResetList( <Section>('<List>') )~ );
+
+	fHtmlView( Get,PrinterModel,0,value,Model );
+
+	ReturnOnFailure( Connect() );
+
+	PGenConList( QueueNameList,Connection,fConnection,Query,~Select QueueName From QueueDefinition Where PrinterModel = '<Model>' Order By QueueName~ );
+
+	count = 0;
+	
+	while ( QueueNameList( GetNext,Item ) )
+	{
+		fHtmlView( Execute,~AddListOption( <Section>('<List>'),'<$pcon.Item[QueueName]>','<$pcon.Item[QueueName]>')~ );
+		++count;
+	}
+	
+	fHtmlView( Execute,~SelectNone( <Section>('<List>') )~ ); // Make sure nothing is initially selected
+
+	//fHtmlView( Set,DesiredPaperWidth,0,value,~~ );
+	
+	QueueMsg = ~~; PaperWidth = ~~; Configuration = ~~; OutputProfile = ~~;
+	
+	//fHtmlView( Set,DesiredPaperWidth,0,value,~~ );
+	//fHtmlView( Set,DesiredPaperWidth,0,disabled,~~ );
+	
+	if ( IsNull( ~<$Element.Value[fHtmlView,QueueName]>~ ) )
+	{
+		if ( fConnection( GetValuesFor,~Select QueueName from Printers Where PrinterName = '<fWizardPrinterName>'~,QueueName ) )
+		{
+			QueueMsg = ~<$TR.PrintWizardTrans(CurrentQueueForPrinter,`<QueueName>`,`<fWizardPrinterName>`)><br><br>~;
+			
+			fConnection( GetValuesFor,~Select PaperWidth,Configuration,ICCProfile from QueueDefinition Where QueueName = '<QueueName>'~,PaperWidth,Configuration,ICCProfile );		
+		
+			fHtmlView( Set,OutputProfile,0,value,~<ICCProfile>~ );
+			fHtmlView( Set,DesiredPaperWidth,0,value,~<PaperWidth>~ );
+			if ( !IsNull(~<PaperWidth>~) )
+			{
+				if ( <fIsKEX> )
+				{
+					fHTMLView( Set,QueueName,0,disabled,~disabled~ );
+				}
+				else
+				{
+					fHtmlView( Set,DesiredPaperWidth,0,disabled,~disabled~ );
+				}
+			}
+			else
+			{
+				WizardEnableNextButton(false);
+			}
+		}
+	}
+	else
+	{
+		QueueName = ~<$Element.Value[fHtmlView,QueueName]>~;
+		if ( fConnection( GetValuesFor,~Select PaperWidth,Configuration,ICCProfile from QueueDefinition Where QueueName = '<QueueName>'~,PaperWidth,Configuration,ICCProfile ) )
+		{		
+			fHtmlView( Set,OutputProfile,0,value,~<ICCProfile>~ );
+			fHtmlView( Set,DesiredPaperWidth,0,value,~<PaperWidth>~ );
+			if ( !IsNull(~<PaperWidth>~) )
+			{
+				if ( <fIsKEX> )
+				{
+					fHTMLView( Set,QueueName,0,disabled,~disabled~ );
+				}
+				else
+				{
+					fHtmlView( Set,DesiredPaperWidth,0,disabled,~disabled~ );
+				}
+			}
+			else
+			{
+				WizardEnableNextButton(false);
+			}
+		}
+		else
+		{
+			if ( <fIsKEX> )
+			{
+				WizardEnableNextButton(false);			
+			}
+		}
+	}
+	
+	fHtmlView( SetInnerHtml,CurrentQueueForPrinter,0,~<QueueMsg>~ );
+	//fHtmlView( SetInnerHtml,CurrentConfigurationForPrinter,0,TR(PrintWizardTrans,CurrentConfigurationForPrinter,~<QueueName>~,~<Configuration>~) );
+	//fHtmlView( Set,ConfigurationFile,0,value,~<Configuration>~ );
+
+	
+	ReleaseConnection();
+	
+	fHTMLView( SetStyle,SelectQueueNameControls,0,display,<count> ? ~block~ : ~none~ );	
+	
+	return fHtmlView( Wait );
+}
+
+NUMERIC Prn::RefreshPrinterChoices( Section,List )		// Update the list of Printers
+{	
+	//ReturnOnFailure( GetActiveView() );
+
+	ReturnOnFailure( GetViewByName(View) );
+
+	fHtmlView( Execute,~ResetList( <Section>('<List>') )~ );
+
+	fHtmlView( Get,PrinterModel,0,value,Model );
+	fHtmlView( Get,WizardTypeOfPrinter,0,value,ModelType );
+
+	if ( SimilarStr(~<Model>~,~Disk~) && !IsNull(~<ModelType>~) )
+	{
+		Query = ~Select PrinterName From Printers Where PrinterModel = '<Model>' And ModelType='<ModelType>' Order By PrinterName~;
+	}
+	else
+	{
+		Query = ~Select PrinterName From Printers Where PrinterModel = '<Model>' Order By PrinterName~;
+	}
+
+	ReturnOnFailure( Connect() );
+
+	PGenConList( PrinterNameList,Connection,fConnection,Query,~<Query>~ );
+
+	count = 0;
+	while ( PrinterNameList( GetNext,Item ) )
+	{
+		fHtmlView( Execute,~AddListOption( <Section>('<List>'),'<$pcon.Item[PrinterName]>','<$pcon.Item[PrinterName]>')~ );
+		++count;
+	}
+
+	ReleaseConnection();
+
+	fHtmlView( Execute,~SelectNone( <Section>('<List>') )~ ); // Make sure nothing is initially selected
+
+	fHTMLView( SetStyle,SelectPrinterNameControls,0,display,<count> ? ~block~ : ~none~ );
+
+	if ( <fIsKEX> )
+	{
+		if ( SimilarStr(~<fWizardTypeOfPrinter>~, ~KODAK605WindowsPrinter~ ))
+		{
+			fHTMLView( SetInnerHTML, KEXPrintersMsg, 0, TR( PrintWizardTrans,KEX605WindowsPrinterMsg) );
+			fHTMLView( SetInnerHTML, KEXPrintersMsg1, 0, ~~ );
+		}
+		else if ( SimilarStr(~<fWizardTypeOfPrinter>~, ~KODAK6850WindowsPrinter~ ))
+		{
+			fHTMLView( SetInnerHTML, KEXPrintersMsg, 0, TR( PrintWizardTrans,KEX6850WindowsPrinterMsg) );
+			fHTMLView( SetInnerHTML, KEXPrintersMsg1, 0, ~~ );
+		}
+		else if ( SimilarStr(~<fWizardTypeOfPrinter>~, ~DL2100WindowsPrinter~ ))
+		{
+			fHTMLView( SetInnerHTML, KEXPrintersMsg, 0, TR( PrintWizardTrans,KEXDL2100WindowsPrinterMsg) );
+			fHTMLView( SetInnerHTML, KEXPrintersMsg1, 0, TR( PrintWizardTrans,KEXDL2100PostScriptMsg) );
+		}
+		else if ( SimilarStr(~<fWizardTypeOfPrinter>~, ~WindowsPrinter~ ))
+		{
+			fHTMLView( SetInnerHTML, KEXPrintersMsg, 0, TR( PrintWizardTrans,KEXWindowsPrinterMsg) );
+			fHTMLView( SetInnerHTML, KEXPrintersMsg1, 0, ~~ );
+		}
+		else
+		{
+			fHTMLView( SetInnerHTML, KEXPrintersMsg, 0, TR( PrintWizardTrans,KEXPrinterMsg) );		
+			fHTMLView( SetInnerHTML, KEXPrintersMsg1, 0, ~~ );
+		}
+	}
+	return fHtmlView( Wait );
+}
+
+
+NUMERIC Prn::RefreshResolutions( PrintersElement,ResolutionsElement )	// Update Resolutions Helper
+{
+	ReturnOnFailure( GetActiveView() );
+
+	ShowPrintersForResolutions( ~<PrintersElement>~ );
+
+	return ShowResolutions( ~<PrintersElement>~,~<ResolutionsElement>~ );
+}
+
+NUMERIC Prn::ShowPrintersForResolutions( element )		// Update the list of Printer Resolutions
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Get,PrinterModel,0,value,Model );
+
+	fHtmlView( Execute,~ResetList( VariableElement('<element>') )~ );
+
+	ReturnOnFailure( Connect() );
+
+	Query = ~Select Distinct PrinterName From PrinterRes Where PrinterModel = '<Model>' Order By PrinterName~;
+
+	PGenConList( List,Connection,fConnection,Query,~<Query>~ );
+
+	Count=0;
+
+	while ( List( GetNext,Item ) )
+	{
+		fHtmlView( Execute,~AddListOption(VariableElement('<element>'),'<$pcon.Item[PrinterName].cpath>','<$pcon.Item[PrinterName].cpath>')~ );
+		++Count;
+	}
+
+	if ( <Count> == 0 )
+	{
+		fHtmlView( Execute,~AddListOption(VariableElement('<element>'),'None','')~ );
+	}
+
+	fHtmlView( Execute,~SelectByIndex(VariableElement('<element>'),0)~ );
+
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::ShowResolutions( PrintersElement,ResolutionsElement )		// Update the list of Resolutions
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Get,~<PrintersElement>~,0,value,PrinterName );
+
+	fHtmlView( Execute,~ResetList( VariableElement('<ResolutionsElement>') )~ );
+
+	ReturnOnFailure( Connect() );
+
+	ResolutionsCount = 0;
+
+	if ( !IsNull(~<PrinterName>~) )		// Is there a printer we can try to look up in the PrinterRes table?
+	{
+		Query = ~Select Resolution From PrinterRes Where PrinterName = '<PrinterName>' Order By Sequence,Resolution~;
+
+		PGenConList( ResolutionList,Connection,fConnection,Query,~<Query>~ );
+
+		while ( ResolutionList( GetNext,Item ) )
+		{
+			TheResolution = ~<$pcon.Item[Resolution]>~;
+
+			fHtmlView( Execute,~AddListOption(VariableElement('<ResolutionsElement>'),'<TheResolution>','<TheResolution>')~ );
+
+			++ResolutionsCount;
+		}
+	}
+
+	if ( !<ResolutionsCount> )			// If there are no resolutions from PrinterRes table, use the defaults
+	{
+		fHtmlView( Get,PrinterModel,0,value,Model );
+
+		Model = ~<$str.$Model.NoSpaces>~;	// Remove the spaces
+
+		if ( Defined( <Model>Resolutions ) )
+		{
+			Index = -1;
+
+			while ( <Model>Resolutions( GetStringAt,<++Index>,aResolution ) )
+			{
+				fHtmlView( Execute,~AddListOption(VariableElement('<ResolutionsElement>'),'<aResolution>','<aResolution>')~ );
+			}
+		}
+	}
+
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::RefreshWindowsPrinters( Element )		// Update the list of windows printers
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Execute,~ResetList( VariableElement('<Element>') )~ );
+
+	WinPrinter( Printers,New );
+
+	Printers( GetPrinterNameList,PrinterNames );
+
+	while ( PrinterNames( GetNext,PrinterName ) )
+	{
+		fHtmlView( Execute,~AddListOption( VariableElement('<Element>'),'<$str.$PrinterName.cpath>','<$str.$PrinterName.cpath>')~ );
+	}
+
+	return TRUE;
+}
+
+
+
+VOID	Prn::RefreshProfiles()			
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Get,PrinterModel,0,value,Model );
+
+	RefreshProfileList( ICCProfileList,~Select Name From Profiles Where Device = '<Model>'~ );
+	RefreshProfileList( ICCProfileList2,~Select Name From Profiles Where Type = 'WorkingSpace' Or Type = 'Output' Order By Type,Device~ );
+
+	fHtmlView( Wait );
+}
+
+
+NUMERIC Prn::RefreshProfileList( List,Query )			// Update the list of files from the Scripts folder
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Execute,~ResetList( VariableElement('<List>') )~ );
+
+	fHtmlView( Execute,~AddListOption( VariableElement('<List>'),'None','')~ );
+
+	ReturnOnFailure( Connect() );
+
+	PGenConList( ProfilesList,Connection,fConnection,Query,~<Query>~ );
+
+	while ( ProfilesList( GetNext,Item ) )
+	{
+		fHtmlView( Execute,~AddListOption( VariableElement('<List>'),'<$pcon.Item[Name]>','<$pcon.Item[Name]>')~ );
+	}	
+	
+	ReleaseConnection();	
+	
+	fHtmlView( Execute,~SelectNone( VariableElement('<List>') )~ ); // Make sure nothing is initially selected
+
+	return TRUE;
+}
+
+
+VOID	Prn::FindLocalFile( FieldName )						// Use a File Dialog to find a local file
+{
+	ReturnOnFailure( GetActiveView() );
+
+	while ( TRUE )
+	{
+		if ( FileDialog( NoNetWorkButton,DefaultDirectory,~<$App.Volume>~,
+							Title,TR( PrintWizardTrans,FindLocalFile_<FieldName> ),
+							Filter,~<$TR.PrintWizardTrans(Files_<FieldName>)>||~,FILEMUSTEXIST,
+							Path,Path,Open ) )
+		{
+			UniversalPath = MakePath( Type,UNC,~<Path>~);
+
+			IsLocalFile = SimilarStr(~<$str.$UniversalPath.substr|1|1>~,~:~ );
+
+			if (  <IsLocalFile> )
+			{
+				fHtmlView( Set,~<FieldName>~,0,value,~<Path>~ );
+				fHtmlView( Execute,~EnableSave(this)~ );
+				return;
+			}
+
+			Warning( TR( PrintWizardTrans,NoLocalFile ) );
+			continue;
+		}
+
+		break;
+	}
+}
+
+NUMERIC Prn::WizardFindLocalFile( FieldName )
+{
+	ReturnOnFailure( GetActiveView() );
+	FindLocalFile( ~<FieldName>~ );
+	return fHtmlView( Execute,~VariableFunction().EnableWizardNextButtonNonNullField('<FieldName>')~ );
+}
+
+
+
+
+VOID	Prn::FindApplication( FieldName )					// Use a File Dialog to find an application
+{
+	ReturnOnFailure( GetActiveView() );
+
+	if ( FileDialog( DefaultDirectory,~<$App.Volume>~,Title,TR(PrintWizardTrans,FindApp_<FieldName> ),
+						Filter,~exe Files|*.exe||~,FILEMUSTEXIST,Path,Path,Open ) )
+	{
+		fHtmlView( Set,~<FieldName>~,0,value,~<Path>~ );
+		fHtmlView( Execute,~ToggleInfoIcon(VariableElement('<FieldName>Box'))~ );
+		fHtmlView( Execute,~EnableSave(this)~ );
+	}
+}
+
+VOID Prn::FindOutputDirectory( Model,FieldName )				// Use a File Dialog to find the output directory
+{
+	ReturnOnFailure( GetActiveView() );
+
+	Title = TR( PrintWizardTrans,FindDir_OutputPath );
+	SubTitle = TR( PrintWizardTrans,FindDirSub_OutputPath );
+
+	if ( GetFolder( ~<Title>~,~<SubTitle>~,Path,TRUE,~\\~ ) )
+	{
+		fHtmlView( Set,~OutputPath~,0,value,~<Path>\[-].[X]~ );
+		fHtmlView( Execute,~EnableSave(this)~ );
+	}
+}
+
+
+VOID Prn::FindDirectory( FieldName )						// Use a File Dialog to find a directory
+{
+	ReturnOnFailure( GetActiveView() );
+
+	Title = TR( PrintWizardTrans,FindDir_<FieldName> );
+	SubTitle = TR( PrintWizardTrans,FindDirSub_<FieldName> );
+
+	if ( GetFolder( ~<Title>~,~<SubTitle>~,Path,TRUE,~\\~ ) )
+	{
+		fHtmlView( Set,~<FieldName>~,0,value,~<Path>~ );
+		fHtmlView( Execute,~EnableSave(this)~ );
+	}
+}
+
+VOID Prn::ViewDefinition()		
+{
+	Fields:	HTMLCloseBox	<fStatic>;
+}
+
+
+VOID Prn::DisplayWindow()									// Open a new window to show the UI
+{
+	DefineWindow();
+
+	Init();
+
+	if ( <fIsKEX> )
+	{
+		fShowPrinterWizard = TRUE;
+		fCloseWindowOnWizardExit = TRUE;
+	}
+
+	Open( ~<$App.HTTPServer>/Printing/Frame.kpl?BaseHtmlObjectName=<BaseHtmlObjectName>&ShowPrinterWizard=<fShowPrinterWizard>&CloseWindowOnWizardExit=<fCloseWindowOnWizardExit>~ );		// The initial HTML View
+
+	SetWindowTitle(TR( PrintWizardTrans,WindowTitle));	// The window title
+}
+
+NUMERIC Prn::FixupRP50Model()				// Database cleanup
+{
+	ReturnOnFailure( Connect() );
+
+	fConnection( IgnoreErrors,Cmd,~Update QueueDefinition Set PrinterModel='Kodak LED' Where PrinterModel = 'Kodak RP50'~ );	
+	fConnection( IgnoreErrors,Cmd,~Update Printers Set PrinterModel='Kodak LED' Where PrinterModel = 'Kodak RP50'~ );	
+
+	fConnection( ReportErrors );			// In case another routine uses the same connection
+
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+VOID Prn::RemoveBadModels()								
+{
+	RemoveModel(~Kodak SRP30~);
+	FixupRP50Model();
+	RemoveModel(~Kodak RP50~);
+	RemoveModel(~RP30~);
+	RemoveModel(~RR30~);
+	RemoveModel(~Kodak RR30~);
+	RemoveModel(~Kodak XLS~);
+	RemoveModel(~Windows~);
+}
+
+
+VOID Prn::AddDefaultInfo()								
+{
+	AddPrinterModelsToDatabase();
+	DefineDefaultResolutions();
+}
+
+VOID	Prn::StartupTasks()
+{
+	RemoveBadModels();
+	AddDefaultInfo();
+}
+
+VOID	Prn::QueueTriggers()
+{
+	Action = ~Printer.LoadQueueFromExternal()~;
+	QueueContentsAfter(Action,100);
+	
+	Action = ~Printer.NewQueueFromExternal()~;
+	QueueContentsAfter(Action,100);
+}
+
+STR		Prn::FixupValue(FieldName)
+{
+	ReturnOnFailure( GetViewByName(~View~,aView ) );
+
+	aView( Get,~<FieldName>~,0,value,theValue );
+	theValue = String( TrimLeftRight,~<theValue>~ );
+	aView( Set,~<FieldName>~,0,value,~<theValue>~ );
+	
+	return ~<theValue>~;
+}
+
+
+VOID	Prn::WizardAddPrinterType(TypeName,theTranslation)
+{
+	fHtmlView( Execute,~AddListOption(VariableElement('WizardTypeOfPrinter'),'<TypeName>','<theTranslation>')~ );
+}
+
+VOID	Prn::WizardOEMPopulatePrinterTypes()	{ } //Override
+
+NUMERIC	Prn::WizardPopulatePrinterTypes(showAdvancedPrinters)
+{
+	ReturnOnFailure( GetViewByName(~View~ ) );
+
+	//WizardAddPrinterType( KODAKCRT,TR(PrintWizardTrans,KodakCrt) );
+	//WizardAddPrinterType( KPDM,TR(PrintWizardTrans,Kpdm) );
+	//WizardAddPrinterType( KPDMII,TR(PrintWizardTrans,Kpdm2) );
+	//WizardAddPrinterType( KODAKLFCRT,TR(PrintWizardTrans,KodakLfcrt) );
+	WizardAddPrinterType( KODAKLED,TR(PrintWizardTrans,KodakLed) );
+	WizardAddPrinterType( KODAKRP30,TR(PrintWizardTrans,KodakRp30) );
+	//WizardAddPrinterType( KODAKXLS,TR(PrintWizardTrans,KodakXLS) );
+	WizardAddPrinterType( WindowsPrinter,TR(PrintWizardTrans,WindowsPrinter) );
+	WizardAddPrinterType( DL2100WindowsPrinter,TR(PrintWizardTrans,DL2100WindowsPrinter) );
+	WizardAddPrinterType( KODAK605WindowsPrinter,TR(PrintWizardTrans,Kodak605WindowsPrinter) );
+	WizardAddPrinterType( KODAK6850WindowsPrinter,TR(PrintWizardTrans,Kodak6850WindowsPrinter) );
+
+	LoadOEMPrinterMethods(<showAdvancedPrinters>);
+	return TRUE;
+}
+
+
+VOID	Prn::WizardSetPagesForDevice(DeviceName,Pages)
+{
+	fHtmlView( Execute,~top.frames['Variable'].<DeviceName>_Pages = new Array(<Pages>);~ );
+}
+
+VOID	Prn::WizardRefreshProfiles()			
+{
+	ReturnOnFailure( GetActiveView() );
+
+	fHtmlView( Get,PrinterModel,0,value,Model );
+
+	RefreshProfileList( <fWizardTypeOfPrinter>ICCProfileList,~Select Name From Profiles Where Device = '<Model>'~ );
+	RefreshProfileList( <fWizardTypeOfPrinter>ICCProfileList2,~Select Name From Profiles Where Type = 'WorkingSpace' Or Type = 'Output' Order By Type,Device~ );
+
+	fHtmlView( Wait );
+}
+
+VOID	Prn::WizardOEMPopulatePages()	{ } //Override
+
+NUMERIC	Prn::WizardPopulatePages()
+{
+	ReturnOnFailure( GetViewByName(~View~ ) );
+	
+	WizardSetPagesForDevice( KODAKCRT,~'Initial','PrinterName','QueueName','OutputProfile','PaperPack','CalibrationLut','Create'~ );
+	WizardSetPagesForDevice( KPDM,~'Initial','PrinterName','QueueName','OutputProfile','PaperPack','CalibrationLut','Create'~ );
+	WizardSetPagesForDevice( KPDMII,~'Initial','PrinterName','QueueName','OutputProfile','PaperPack','CalibrationLut','Create'~ );
+	WizardSetPagesForDevice( KODAKLFCRT,~'Initial','PrinterName','QueueName','OutputProfile','PaperPack','CalibrationLut','Create'~ );
+	WizardSetPagesForDevice( KODAKLED,~'Initial','PrinterName','QueueName','OutputProfile','Create'~ );
+	WizardSetPagesForDevice( KODAKRP30,~'Initial','PrinterName','QueueName','OutputProfile','Create'~ );
+	//WizardSetPagesForDevice( KODAKXLS,~'Initial','PrinterName','QueueName','Create'~ );
+	
+	WizardSetPagesForDevice( WindowsPrinter,~'Initial','PrinterName','Configuration','QueueName','OutputProfile','Create'~ );
+	WizardSetPagesForDevice( DL2100WindowsPrinter,~'Initial','PrinterName','Configuration','QueueName','OutputProfile','Create'~ );
+	WizardSetPagesForDevice( KODAK605WindowsPrinter,~'Initial','PrinterName','Configuration','QueueName','OutputProfile','Create'~ );
+	WizardSetPagesForDevice( KODAK6850WindowsPrinter,~'Initial','PrinterName','Configuration','QueueName','OutputProfile','Create'~ );
+
+	return TRUE;
+}	
+
+NUMERIC	Prn::WizardShowPanel(value)
+{	
+	if ( <value> )
+	{
+		ReturnOnFailure( GetViewByName(~View~,aView ) );
+		return fHtmlView( Execute,~VariableFunction().ShowTheNewPrinterWizard()~ );
+	}
+	return TRUE;
+}
+
+NUMERIC	Prn::ReOpen()
+{
+	BaseHTML::ReOpen();
+
+	return TRUE;
+}
+
+NUMERIC	Prn::WizardStdOperations(&Operation)
+{
+	ReturnOnFailure( GetViewByName(~View~ ) );
+	
+	if ( SimilarStr(~<Operation>~,Previous ) )
+	{
+		return fHTMLView( Execute,~VariableFunction().WizardPrevious()~ );
+	}
+	
+	return FALSE;
+}
+
+NUMERIC	Prn::WizardNext()
+{
+	return fHtmlView( Execute,~VariableFunction().WizardNext()~ );
+}
+
+NUMERIC	Prn::WizardError(msg)
+{
+	fHtmlView( Execute,~WizardError('<$str.$msg.cpath>')~ );
+	return FALSE;
+}
+
+NUMERIC Prn::WizardEnableNextButton(value)
+{	
+	return fHTMLView( Execute,~VariableFunction().EnableWizardNextButton(<value>)~ );
+}
+
+NUMERIC	Prn::WizardCheckPrinterName(Operation,ID)
+{
+	ReturnOnSuccess( WizardStdOperations(Operation) );
+	
+	ReturnOnFailure( GetViewByName(~View~ ) );
+	
+	fWizardPrinterName = FixupValue(PrinterName);
+	
+	fHtmlView( Get,WizardTypeOfPrinter,0,value,ModelType );
+	fHtmlView( Get,PrinterModel,0,value,Model );
+		
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select PrinterModel,ModelType From Printers Where PrinterName = '<fWizardPrinterName>'~;
+	
+	fWizardModifyingExistingPrinter = FALSE;
+	
+	if ( fConnection( GetValuesFor,~<Query>~,thePrinterModel,theModelType ) )
+	{
+		if ( SimilarStr( ~<Model>~,~Disk~ ) )
+		{
+			if ( !SimilarStr(~<ModelType>~,~<theModelType>~) )
+			{
+				ReleaseConnection();
+				return WizardError( TR(PrintWizardTrans,PrinterAlreadyExists,~<fWizardPrinterName>~) );
+			}
+		}
+		else if ( !SimilarStr( ~<$str.$Model.NoSpaces>~,~<$str.$thePrinterModel.NoSpaces>~ ) )
+		{
+			ReleaseConnection();
+			return WizardError( TR(PrintWizardTrans,PrinterAlreadyExists,~<fWizardPrinterName>~) );
+		}
+		
+		fWizardModifyingExistingPrinter = TRUE;
+	}
+	
+	ReleaseConnection();
+	
+	ReturnOnFailure( WizardLoadExisting() );
+
+	WizardNext();
+
+	return TRUE;
+}
+
+NUMERIC	Prn::WizardCheckQueueName(Operation,ID)
+{
+
+	ReturnOnSuccess( WizardStdOperations(Operation) );
+	
+	ReturnOnFailure( GetViewByName(~View~ ) );
+
+	fHtmlView( Get,QueueName,0,value,QueueName );
+	
+	fWizardQueueName = FixupValue(QueueName);
+	
+	ReturnOnFailure( Connect() );
+	
+	fHtmlView( Get,PrinterModel,0,value,Model );
+
+	Query = ~Select * From QueueDefinition Where QueueName = '<fWizardQueueName>' AND PrinterModel = '<Model>'~;
+	
+	fWizardModifyingExistingQueue = FALSE;
+	
+	if ( fConnection( GetValuesFor,~<Query>~,thePrinterModel ) )
+	{	
+		fWizardModifyingExistingQueue = TRUE;
+	}
+	
+	ReleaseConnection();
+	ReturnOnFailure( WizardLoadExistingQueue() );
+
+	WizardNext();
+
+	return TRUE;
+}
+
+NUMERIC Prn::WizardLoadExisting()
+{
+	if ( !<fIsKEX> )
+	{
+		ReturnOnSuccess( !<fWizardModifyingExistingPrinter> );
+	}
+
+	if ( !MethodDefined(~WizardLoad<fWizardTypeOfPrinter>~) )
+	{
+		return Warning( ~WizardLoad<fWizardTypeOfPrinter>() does not exist~ );
+	}
+	
+	ReturnOnFailure( Connect() );
+		
+	Query = ~Select * from Printers Where PrinterName = '<fWizardPrinterName>'~;
+	
+	if ( !PGenConList( List,Connection,fConnection,GetExistingRecordFor,~<Query>~,theRecord) )
+	{
+		if ( <fIsKEX> )
+		{ //a new printer, force queue and config name to match
+			ReturnOnFailure( GetViewByName(View) );
+			fHTMLView( Set,QueueName,0,value,~<fWizardPrinterName>~ );
+			fHTMLView( Set,ConfigurationFile,0,value,~<fWizardPrinterName>~ );
+			fHTMLView( Set, ConfigurationFile, 0, disabled, ~disabled~ );
+			fHTMLView( Set, QueueName, 0, disabled, ~disabled~ );
+			fWizardQueueName = ~<fWizardPrinterName>~;
+			ReleaseConnection();
+			WizardQueueSelected();	
+			return TRUE;
+		}
+		else
+		{
+			ReleaseConnection();
+			return FALSE;
+		}
+	}
+	
+	ReturnOnFailure( GetViewByName(View) );
+	
+	fHTMLView( Set,QueueName,0,value,~<$pcon.theRecord[QueueName]>~ );
+	
+	if ( <fIsKEX> )
+	{
+		fHTMLView( Set, QueueName, 0, disabled, ~disabled~ );
+		WizardQueueSelected();		
+	}	
+	retval = WizardLoad<fWizardTypeOfPrinter>(theRecord);	
+		
+	ReleaseConnection();
+	
+	return <retval>;
+}
+
+NUMERIC Prn::WizardGetExistingConfiguration()
+{
+		if ( SimilarStr(~<fWizardTypeOfPrinter>~, ~KODAK605WindowsPrinter~ ))
+		{
+			fHTMLView( SetInnerHTML, ConfigMsg, 0, TR( PrintWizardTrans,KEX605ConfigurationMsg) );
+		}
+		else if ( SimilarStr(~<fWizardTypeOfPrinter>~, ~KODAK6850WindowsPrinter~ ))
+		{
+			fHTMLView( SetInnerHTML, ConfigMsg, 0, TR( PrintWizardTrans,KEX6850ConfigurationMsg) );
+		}
+		else if ( SimilarStr(~<fWizardTypeOfPrinter>~, ~DL2100WindowsPrinter~ ))
+		{
+			fHTMLView( SetInnerHTML, ConfigMsg, 0, TR( PrintWizardTrans,KEXdl2100ConfigurationMsg) );
+		}
+		else
+		{
+			fHTMLView( SetInnerHTML, ConfigMsg, 0, TR( PrintWizardTrans,KEXConfigurationMsg) );
+		}
+	ReturnOnFailure( Connect() );
+	fHTMLView( Get,QueueName,0,value,theQueue );
+	if ( IsNull(~<theQueue>~) )
+	{
+		fHTMLView( Set,QueueName,0,value,~<fWizardPrinterName>~ );
+		fHTMLView( Set,ConfigurationFile,0,value,~<fWizardPrinterName>~ );
+		fHTMLView( Set, ConfigurationFile, 0, disabled, ~disabled~ );
+		fHTMLView( Set, QueueName, 0, disabled, ~disabled~ );
+		fWizardQueueName = ~<fWizardPrinterName>~;
+	}
+	fConnection( GetValuesFor,~Select Configuration From QueueDefinition Where QueueName = '<theQueue>'~,configuration );
+	
+	if ( DefinedAndNotNull(configuration) )
+	{
+		fHTMLView( Set,ConfigurationFile,0,value,~<configuration>~ );
+		fHTMLView( Set, ConfigurationFile, 0, disabled, ~disabled~ );
+	}
+	ReleaseConnection();
+	
+	fHtmlView( Execute,~VariableFunction().ValidWindowsConfiguration()~ );	
+
+	return TRUE;
+}
+
+NUMERIC Prn::WizardLoadExistingQueue()
+{
+	ReturnOnSuccess( !<fWizardModifyingExistingQueue> );
+	
+	if ( !MethodDefined(~WizardLoadQueue<fWizardTypeOfPrinter>~) )
+	{
+		return Warning( ~WizardLoadQueue<fWizardTypeOfPrinter>() does not exist~ );
+	}
+	
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select * from QueueDefinition Where QueueName = '<fWizardQueueName>'~;
+	
+	if ( !PGenConList( List,Connection,fConnection,GetExistingRecordFor,~<Query>~,theRecord) )
+	{
+		ReleaseConnection();
+		return FALSE;
+	}
+	
+	ReturnOnFailure( GetViewByName(View) );
+		
+	retval = WizardLoadQueue<fWizardTypeOfPrinter>(theRecord);	
+	
+	ReleaseConnection();
+	
+	return <retval>;
+}
+
+NUMERIC Prn::WizardLoadKODAKCRT(&rec)			{ return TRUE; }
+NUMERIC Prn::WizardLoadKPDM(&rec)				{ return TRUE; }
+NUMERIC Prn::WizardLoadKPDMII(&rec)				{ return TRUE; }
+NUMERIC Prn::WizardLoadKodakLFCRT(&rec)			{ return TRUE; }
+NUMERIC Prn::WizardLoadKODAKLED(&rec)			{ return TRUE; }
+NUMERIC Prn::WizardLoadWindowsPrinter(&rec)		{ return TRUE; }
+NUMERIC Prn::WizardLoadKodak605WindowsPrinter(&rec)		{ return TRUE; }
+NUMERIC Prn::WizardLoadKodak6850WindowsPrinter(&rec)		{ return TRUE; }
+NUMERIC Prn::WizardLoadDL2100WindowsPrinter(&rec)		{ return TRUE; }
+NUMERIC Prn::WizardLoadKodakXLS(&rec)			{ return TRUE; }
+NUMERIC Prn::WizardLoadKodakRP30(&rec)			{ return TRUE; }
+
+NUMERIC Prn::WizardLoadQueueKODAKCRT(&rec)			{ return TRUE; }
+NUMERIC Prn::WizardLoadQueueKPDM(&rec)				{ return TRUE; }
+NUMERIC Prn::WizardLoadQueueKPDMII(&rec)				{ return TRUE; }
+NUMERIC Prn::WizardLoadQueueKodakLFCRT(&rec)			{ return TRUE; }
+NUMERIC Prn::WizardLoadQueueKODAKLED(&rec)			{ return TRUE; }
+NUMERIC Prn::WizardLoadQueueWindowsPrinter(&rec)		{ return TRUE; }
+NUMERIC Prn::WizardLoadQueueKodak605WindowsPrinter(&rec)		{ return TRUE; }
+NUMERIC Prn::WizardLoadQueueKodak6850WindowsPrinter(&rec)		{ return TRUE; }
+NUMERIC Prn::WizardLoadQueueDL2100WindowsPrinter(&rec)		{ return TRUE; }
+NUMERIC Prn::WizardLoadQueueKodakXLS(&rec)			{ return TRUE; }
+NUMERIC Prn::WizardLoadQueueKodakRP30(&rec)			{ return TRUE; }
+
+NUMERIC Prn::WizardKODAKCRT()
+{ 
+	ReturnOnFailure( GetViewByName(~View~,aView ) );
+	ReturnOnFailure( WizardStdKodakPrinter() );
+	ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~,
+											PaperPack,~<$Element.Value[aView,PaperPack]>~,
+											CalibrationLut,~<$Element.Value[aView,CalibrationLut]>~) );
+
+
+	ReturnOnFailure( WizardSetQueueValues( ~<fWizardQueueName>~ ) );
+
+	return WizardCompleteMsg();
+}
+
+NUMERIC Prn::WizardKPDM()
+{ 
+	ReturnOnFailure( GetViewByName(~View~,aView ) );
+	ReturnOnFailure( WizardStdKodakPrinter() );
+	ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~,
+											PaperPack,~<$Element.Value[aView,PaperPack]>~,
+											CalibrationLut,~<$Element.Value[aView,CalibrationLut]>~) );
+	return WizardCompleteMsg();
+}
+
+NUMERIC Prn::WizardKPDMII()
+{ 
+	ReturnOnFailure( GetViewByName(~View~,aView ) );
+	ReturnOnFailure( WizardStdKodakPrinter() );
+	ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~,
+											PaperPack,~<$Element.Value[aView,PaperPack]>~,
+											CalibrationLut,~<$Element.Value[aView,CalibrationLut]>~) );
+	return WizardCompleteMsg();
+}
+
+NUMERIC Prn::WizardKodakLFCRT()
+{ 
+	ReturnOnFailure( GetViewByName(~View~,aView ) );
+	ReturnOnFailure( WizardStdKodakPrinter() );
+	ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~,
+											PaperPack,~<$Element.Value[aView,PaperPack]>~,
+											CalibrationLut,~<$Element.Value[aView,CalibrationLut]>~) );
+	return WizardCompleteMsg();
+}
+
+NUMERIC Prn::WizardKODAKLED()
+{ 
+	ReturnOnFailure( WizardStdKodakPrinter() );
+	ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~) );
+	return WizardCompleteMsg();
+}
+
+NUMERIC Prn::WizardKodakXLS()
+{ 
+	ReturnOnFailure( WizardStdKodakPrinter() );
+	ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~) );
+	return WizardCompleteMsg();
+}
+
+
+NUMERIC Prn::WizardKodakRP30()
+{ 
+	ReturnOnFailure( WizardStdKodakPrinter() );
+	ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~) );
+	return WizardCompleteMsg();
+}
+
+NUMERIC Prn::WizardWindowsPrinter()
+{ 
+
+	ReturnOnFailure( GetViewByName(~View~,aView ) );
+	
+	ConfigurationFile = ~<$Element.Value[aView,ConfigurationFile]>~;
+	
+	QueueExists = QueueExists(~<$Element.Value[aView,QueueName]>~);
+		
+	ReturnOnFailure( WizardStdKodakPrinter() );
+		
+	if ( !<QueueExists> )	// Don't alter the configuration if the Queue already existed.
+	{
+		ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~,
+											Configuration,~<ConfigurationFile>~) );
+	}
+	
+	ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~) );
+	
+	return WizardCompleteMsg();
+}
+
+NUMERIC Prn::WizardKodak605WindowsPrinter()
+{ 
+
+	ReturnOnFailure( GetViewByName(~View~,aView ) );
+	
+	ConfigurationFile = ~<$Element.Value[aView,ConfigurationFile]>~;
+	
+	QueueExists = QueueExists(~<$Element.Value[aView,QueueName]>~);
+		
+	ReturnOnFailure( WizardStdKodakPrinter() );
+		
+	if ( !<QueueExists> )	// Don't alter the configuration if the Queue already existed.
+	{
+		ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~,
+											Configuration,~<ConfigurationFile>~) );
+	}
+	
+	ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~) );
+	
+	return WizardCompleteMsg();
+}
+
+NUMERIC Prn::WizardKodak6850WindowsPrinter()
+{ 
+
+	ReturnOnFailure( GetViewByName(~View~,aView ) );
+	
+	ConfigurationFile = ~<$Element.Value[aView,ConfigurationFile]>~;
+	
+	QueueExists = QueueExists(~<$Element.Value[aView,QueueName]>~);
+		
+	ReturnOnFailure( WizardStdKodakPrinter() );
+		
+	if ( !<QueueExists> )	// Don't alter the configuration if the Queue already existed.
+	{
+		ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~,
+											Configuration,~<ConfigurationFile>~) );
+	}
+	
+	ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~) );
+	
+	return WizardCompleteMsg();
+}
+
+NUMERIC Prn::WizardDL2100WindowsPrinter()
+{ 
+	ReturnOnFailure( GetViewByName(~View~,aView ) );
+	
+	ConfigurationFile = ~<$Element.Value[aView,ConfigurationFile]>~;
+	
+	QueueExists = QueueExists(~<$Element.Value[aView,QueueName]>~);
+		
+	ReturnOnFailure( WizardStdKodakPrinter() );
+		
+	if ( !<QueueExists> )	// Don't alter the configuration if the Queue already existed.
+	{
+		ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~,
+											Configuration,~<ConfigurationFile>~) );
+	}
+	
+	ReturnOnFailure( WizardSetQueueValues(~<$Element.Value[aView,QueueName]>~) );
+	
+	return WizardCompleteMsg();
+}
+
+
+NUMERIC Prn::WizardStdKodakPrinter()
+{	
+	ReturnOnFailure( GetViewByName(~View~,aView ) );
+	
+	aView( Get,PrinterName,0,value,PrinterName);
+	aView( Get,QueueName,0,value,QueueName);
+	aView( Get,PrinterModel,0,value,PrinterModel);
+	aView( Get,DesiredPaperWidth,0,value,DesiredPaperWidth);
+	aView( Get,OutputProfile,0,value,OutputProfile);
+
+	return AddDefault(~<PrinterModel>~,~<DesiredPaperWidth>~,~<PrinterName>~,~<QueueName>~, ~<OutputProfile>~ );
+
+	if ( AddDefault(~<PrinterModel>~,~<DesiredPaperWidth>~,~<PrinterName>~,~<QueueName>~, ~<OutputProfile>~ ) )
+	{
+		return fHtmlView( Execute,~WizardStatus('<$TR.PrintWizardTrans(CreationComplete,`<PrinterName>`)>')~ );
+	}
+	
+	return WizardCompleteErrorMsg();
+}
+
+NUMERIC Prn::WizardCompleteMsg()
+{
+	if ( <fCalledFromStartup> )
+	{
+		fHtmlView( Execute,~WizardStatus('<$TR.PrintWizardTrans(CreationCompleteStartup,`<fWizardPrinterName>`)>')~ );
+	}
+	else
+	{
+		fHtmlView( Execute,~WizardStatus('<$TR.PrintWizardTrans(CreationComplete,`<fWizardPrinterName>`)>')~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC Prn::WizardCompleteErrorMsg(msg)
+{
+	fHtmlView( Execute,~WizardStatus('<$TR.PrintWizardTrans(CreationFailed,`<fWizardPrinterName>`,`<msg>`)>')~ );
+	return FALSE;
+}
+
+NUMERIC Prn::WizardSetPrinterValues(PrinterName)	// Called with optional number of pairs  FieldName,Value, etc.
+{
+	ReturnOnSuccess( <NumVariableParameters> == 0 );
+	
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select * From Printers Where PrinterName = '<PrinterName>'~;
+	
+	if ( !PGenconList( List,Connection,fConnection,GetExistingRecordFor,~<Query>~,Record ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return WizardCompleteErrorMsg( TR( DBMessages,QueryFailed,~<Query>~,~<theErr>~ ) );
+	}
+
+	num = 1;
+
+	while ( DefinedAndNotNull( p<++num> ) )		// ANOTHER OPTIONAL ARG?
+	{
+		FieldName = ~<P<num>>~;
+		Value = ~<P<++num>>~;
+		
+		if ( !Record( Set,~<FieldName>~,~<Value>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			ReleaseConnection();
+			return WizardCompleteErrorMsg( TR( DBMessages,SetFieldError,~<FieldName>~,~<Value>~,~<theErr>~ ) );
+		}
+	}
+
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return WizardCompleteErrorMsg( TR( DBMessages,UpdateFailed,~<Query>~,~<theErr>~ ) );
+	}
+	
+	ReleaseConnection();
+		
+	return TRUE;
+}
+
+
+NUMERIC Prn::WizardSetQueueValues(QueueName)	// Called with optional number of pairs  FieldName,Value, etc.
+{
+	ReturnOnSuccess( <NumVariableParameters> == 0 );
+	
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select * From QueueDefinition Where QueueName = '<QueueName>'~;
+	
+	if ( !PGenconList( List,Connection,fConnection,GetExistingRecordFor,~<Query>~,Record ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return WizardCompleteErrorMsg( TR( DBMessages,QueryFailed,~<Query>~,~<theErr>~ ) );
+	}
+
+	num = 1;
+
+	while ( DefinedAndNotNull( p<++num> ) )		// ANOTHER OPTIONAL ARG?
+	{
+		FieldName = ~<P<num>>~;
+		Value = ~<P<++num>>~;
+		
+		if ( !Record( Set,~<FieldName>~,~<Value>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			ReleaseConnection();
+			return WizardCompleteErrorMsg( TR( DBMessages,SetFieldError,~<FieldName>~,~<Value>~,~<theErr>~ ) );
+		}
+	}
+
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return WizardCompleteErrorMsg( TR( DBMessages,UpdateFailed,~<Query>~,~<theErr>~ ) );
+	}
+	
+	ReleaseConnection();
+		
+	return TRUE;
+}
+
+
+
+NUMERIC Prn::WizardQueueSelected()
+{
+	ReturnOnFailure( GetViewByName(View,aView) );
+
+	aView( Get,QueueName,0,Value,QueueName );
+	aView( Get,DesiredPaperWidth,0,Value,DesiredPaperWidth );
+	
+	fWizardQueueName = ~<QueueName>~;
+	
+	//fWizardQueueName = String( TrimLeft,~<QueueName>~ );
+	
+	//fWizardQueueName =  FixupValue(QueueName);
+	
+	//aView( Set,QueueName,0,Value,~<fWizardQueueName>~ );
+
+	Query = ~Select PaperWidth,Configuration,PaperPack,CalibrationLut,ICCProfile From QueueDefinition Where QueueName = '<fWizardQueueName>'~;
+	
+	ReturnOnFailure( Connect() );
+	
+	if ( fConnection( GetValuesFor,~<Query>~,PaperWidth,Configuration,PaperPack,CalibrationLut,ICCProfile ) )
+	{
+		aView( Set,DesiredPaperWidth,0,Value,~<PaperWidth>~ );
+		
+		aView( Set,OutputProfile,0,Value,~<ICCProfile>~ );
+		
+		aView( Set,PaperPack,0,Value,~<PaperPack>~ );
+		aView( Set,CalibrationLut,0,Value,~<CalibrationLut>~ );
+			
+		if ( !IsNull(~<PaperWidth>~) )
+		{
+			WizardEnableNextButton(true);
+			if ( !<fIsKEX> )
+			{
+				aView( Set,DesiredPaperWidth,0,disabled,~disabled~ );
+			}
+		}
+		else
+		{
+			WizardEnableNextButton(false);
+			aView( Set,DesiredPaperWidth,0,disabled,~~ );
+		}
+	}
+	else
+	{
+		aView( Set,DesiredPaperWidth,0,Value,~~ );
+		aView( Set,DesiredPaperWidth,0,disabled,~~ );
+		aView( Set,PaperPack,0,Value,~~ );
+		aView( Set,CalibrationLut,0,Value,~~ );
+		WizardEnableNextButton(false);
+	}
+	
+	ReleaseConnection();
+	
+	return TRUE;
+}
+
+	
+NUMERIC Prn::WizardSummaryAddRow(&theRows,Left,Right)
+{	
+	theRows = ~<theRows><tr style="font-size: 12"><td><Left></td><td><Right></td></tr>~;
+	return TRUE;
+}
+
+
+NUMERIC Prn::WizardPopulateSummary()
+{
+
+	ReturnOnFailure( GetViewByName(View,aView) );
+	aView( Get,PrinterName,0,Value,PrinterName );
+	aView( Get,QueueName,0,Value,QueueName );
+	aView( Get,DesiredPaperWidth,0,Value,DesiredPaperWidth );
+	aView( Get,OutputProfile,0,Value,OutputProfile );
+	theRows = ~~;
+	WizardSummaryAddRow(theRows,TR(PrintWizardTrans,PrinterNameLabel),~<PrinterName>~);
+	WizardSummaryAddRow(theRows,TR(PrintWizardTrans,QueueNameLabel),~<QueueName>~);
+	WizardSummaryAddRow(theRows,TR(PrintWizardTrans,PaperWidthLabel),~<DesiredPaperWidth>~);
+
+	if ( MethodDefined(~WizardSummaryRows<fWizardTypeOfPrinter>~) )		// Chance for "Weird" printers to add rows
+	{
+		WizardSummaryRows<fWizardTypeOfPrinter>(theRows);	
+	}
+	else
+	{
+		WizardSummaryAddRow(theRows,TR(PrintWizardTrans,OutputProfileLabel),~<OutputProfile>~);
+	}
+	
+	theTable = ~<table id="CreationWizardSummaryTable"   cellpadding=2 border=1><theRows></table>~;
+	
+	return aView( SetOuterHTML,CreationWizardSummaryTable,0,~<theTable>~ );
+}
+
+
+VOID	Prn::WizardSummaryRowsWindowsPrinter(&theRows)			// Add info to the summary list before creation/update
+{
+
+	ReturnOnFailure( GetViewByName(View) );
+
+	WizardSummaryAddRow(theRows,TR(PrintWizardTrans,OutputProfileLabel),~<$Element.Value[fHtmlView,OutputProfile]>~);
+
+	fHTMLView( Get,ConfigurationFile,0,value,theFile );
+
+	//WizardSummaryAddRow( theRows,TR(PrintWizardTrans,ConfigurationFileLabel),~<theFile>~ );
+}
+
+VOID	Prn::WizardSummaryRowsKodak605WindowsPrinter(&theRows)			// Add info to the summary list before creation/update
+{
+
+	ReturnOnFailure( GetViewByName(View) );
+
+	WizardSummaryAddRow(theRows,TR(PrintWizardTrans,OutputProfileLabel),~<$Element.Value[fHtmlView,OutputProfile]>~);
+
+	fHTMLView( Get,ConfigurationFile,0,value,theFile );
+
+	//WizardSummaryAddRow( theRows,TR(PrintWizardTrans,ConfigurationFileLabel),~<theFile>~ );
+}
+
+VOID	Prn::WizardSummaryRowsKodak6850WindowsPrinter(&theRows)			// Add info to the summary list before creation/update
+{
+
+	ReturnOnFailure( GetViewByName(View) );
+
+	WizardSummaryAddRow(theRows,TR(PrintWizardTrans,OutputProfileLabel),~<$Element.Value[fHtmlView,OutputProfile]>~);
+
+	fHTMLView( Get,ConfigurationFile,0,value,theFile );
+
+	//WizardSummaryAddRow( theRows,TR(PrintWizardTrans,ConfigurationFileLabel),~<theFile>~ );
+}
+
+VOID	Prn::WizardSummaryRowsDL2100WindowsPrinter(&theRows)			// Add info to the summary list before creation/update
+{
+
+	ReturnOnFailure( GetViewByName(View) );
+
+	WizardSummaryAddRow(theRows,TR(PrintWizardTrans,OutputProfileLabel),~<$Element.Value[fHtmlView,OutputProfile]>~);
+
+	fHTMLView( Get,ConfigurationFile,0,value,theFile );
+
+	//WizardSummaryAddRow( theRows,TR(PrintWizardTrans,ConfigurationFileLabel),~<theFile>~ );
+}
+
+VOID	Prn::WizardSummaryRowsKodakCRT(&theRows)			// Add info to the summary list before creation/update
+{
+	ReturnOnFailure( GetViewByName(View) );
+
+	WizardSummaryAddRow(theRows,TR(PrintWizardTrans,OutputProfileLabel),~<$Element.Value[fHtmlView,OutputProfile]>~);
+	WizardSummaryAddRow( theRows,TR(PrintWizardTrans,PaperPackLabel),~<$Element.Value[fHtmlView,PaperPack]>~ );
+	WizardSummaryAddRow( theRows,TR(PrintWizardTrans,CalibrationLutLabel),~<$Element.Value[fHtmlView,CalibrationLut]>~ );
+}
+
+VOID	Prn::WizardSummaryRowsKPDM(&theRows)		{ WizardSummaryRowsKodakCRT(theRows); }
+VOID	Prn::WizardSummaryRowsKPDMII(&theRows)		{ WizardSummaryRowsKodakCRT(theRows); }
+VOID	Prn::WizardSummaryRowsKODAKLFCRT(&theRows)	{ WizardSummaryRowsKodakCRT(theRows); }
+
+
+NUMERIC Prn::WizardAddPrinter()	// Could be adding a printer/queue or modifying an existing one
+{	
+	ReturnOnFailure( GetViewByName(~View~,aView ) );
+	
+	aView( Get,WizardTypeOfPrinter,0,value,TypeOfPrinter);
+	
+	if ( MethodDefined( ~Wizard<TypeOfPrinter>~ ) )
+	{
+		if ( <fIsKEX> && <fCalledFromStartup> )
+		{
+			aView( SetStyle,SetupAnotherPrinterButton, 0, ~visibility~,~visible~ );
+		}
+
+		aView( Set,CancelButton,0,value,TR(Standard,Close));
+		aView( Set,CancelButton,0,title,TR(PrintWizardTrans,CloseTheWizard));
+
+		return Wizard<TypeOfPrinter>();
+	}
+	
+	return fHtmlView( Execute,~WizardError('<$TR.PrintWizardTrans(UnsupportedPrinterType,`<TypeOfPrinter>`)>')~ );
+
+	return TRUE;
+}
+
+
+STR		Prn::WizardGetBaseModel( TypeOfPrinter )
+{
+	theModel = MatchingSimilarStrI(~<TypeOfPrinter>~,KODAKCRT,~Kodak CRT~,KODAKLED,~KODAK Led~,
+									KPDM,~KPDM~,KPDMII,~KPDM II~,
+									KODAKLFCRT,~Kodak LFCRT~,WINDOWSPRINTER,~Windows Printer~,
+									KODAK605WindowsPrinter,~Windows Printer~,KODAK6850WindowsPrinter,~Windows Printer~,
+									DL2100WindowsPrinter,~Windows Printer~,
+									KODAKRP30,~KODAK RP30~,Disk,~Disk~,NEXPRESS,~NexPress~,KodakThermal,~Kodak7000Thermal~,Kodak8810Thermal,~Kodak8810Thermal~,KodakD4000Thermal,~KodakD4000Thermal~);
+									
+	if ( IsNULL(~<theModel>~) )
+	{
+		theModel = ~Disk~;
+	}
+	
+	fWizardTypeOfPrinter = ~<TypeOfPrinter>~;
+	
+	return ~<theModel>~;
+}
+
+
+NUMERIC Prn::WizardSelectModel()
+{
+
+	ReturnOnFailure( GetViewByName(~View~,aView ) );
+	
+	aView( Get,WizardTypeOfPrinter,0,value,TypeOfPrinter);
+	
+	if ( Authorized(KEXDSS) )
+	{
+		if ( SimilarStr( ~<TypeOfPrinter>~,~Disk~ ) )
+		{
+			if ( <fLicenseLevel> < 2 || <fLicenseLevel> == 3 || <fLicenseLevel> == 4 || <fLicenseLevel> == 5 )
+			{
+				WizardError( TR(PrintWizardTrans,NoLicenseForPrinterModel,~<TypeOfPrinter>~) );		
+				return FALSE;
+			}
+		}
+	}
+	
+	theModel = WizardGetBaseModel(~<TypeOfPrinter>~);
+
+	aView( Execute,~top.frames['Selectors'].SelectModel('<theModel>')~ );
+	aView( Execute,~top.frames['Selectors'].OnModelChange()~ );
+	
+	aView( Set,PrinterModel,0,value,~<theModel>~);
+	
+	aView( Execute,~VariableFunction().WizardNext()~ );
+
+	return TRUE;
+}
+
+
+NUMERIC Prn::FolderMustBeUNC( theDir )
+{
+	if ( !Files( IsUNC,~<theDir>~ ) )
+	{	
+		WizardError( TR(Standard,MustChooseNetworkFolder) );		
+		WizardEnableNextButton(FALSE);		
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+	
+NUMERIC Prn::FolderMustExist( theDir )
+{
+	if ( !Files( DirectoryExists,~<theDir>~ ) )
+	{
+		WizardError( TR(PrintWizardTrans,DirectoryDoesNotExist,~<theDir>~) );		
+		WizardEnableNextButton(FALSE);		
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+
+VOID Prn::OnSetupAnotherPrinter()		
+{
+	Open( ~<$App.HTTPServer>/Printing/Frame.kpl?BaseHtmlObjectName=<BaseHtmlObjectName>&ShowPrinterWizard=<fShowPrinterWizard>&CloseWindowOnWizardExit=<fCloseWindowOnWizardExit>~ );		// The initial HTML View
+
+	SetWindowTitle(TR( PrintWizardTrans,WindowTitle));	// The window title
+}
+
+VOID Prn::OnCloseDataWindow( Name )		
+{
+	okToClose = TRUE;
+	if ( <fIsKEX> )
+	{
+		if ( PrinterSetupOK() )
+		{
+			if ( <fCalledFromStartup> )
+			{
+				action = ACTION DOC ( KEXSetupPrintsInfoWin OpenOnce KEXSetupPrintsInfoWin "InitStatic( ~TRUE~ )" );
+				PerformActions( action );
+			}
+
+			BaseHtml::OnCloseDataWindow(~~);
+		}
+		else
+		{
+			if ( IsAppShuttingDown() )
+			{
+				BaseHtml::OnCloseDataWindow(~~);
+			}
+			else
+			{
+				Warning( TR(PrintWizardTrans,PrinterSetupNotComplete) );
+
+				if ( !<fCalledFromStartup> )
+				{
+					BaseHtml::OnCloseDataWindow(~~);
+				}
+			}
+		}
+	}
+	else
+	{
+		BaseHtml::OnCloseDataWindow(~~);
+	}
+}
+
+NUMERIC Prn::PrinterSetupOK()
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~Database connection failed: <theErr>~ );
+		return FALSE;
+	}
+
+	Query = ~Select count(*) From Printers~;
+	if ( dBase( RecordCountFor,~<Query>~ ) == 0 )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select count(*) From QueueDefinition~;
+	if ( dBase( RecordCountFor,~<Query>~ ) == 0 )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC Prn::CloseCheck()
+{
+	return TRUE; // Warning(~Can't close until you save~ );
+}
+
+// Pull in any OEM Wizard scripts
+//OptionalIncludeFromDirectory(~<$App.ShareDirectory>\Scripts\OEMPrinterWizards\*.txt~);
+
+MoreFiles = findfile( aDirectoryEntry,Find,~<$App.ShareDirectory>\Scripts\OEMPrinterWizards\*.txt~ );
+
+while ( $Morefiles )
+{
+	Morefiles = aDirectoryEntry( Next );
+
+	aDirectoryEntry( Get,Path,aPath );
+		
+	if ( aDirectoryEntry( Dots ) )
+		continue;
+		
+	if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		continue;
+
+	Include: ~<aPath>~ ;;
+}
+
+
+VOID DefinePrintWizard(NoBorders,IsKEX,CalledFromStartup)		// Entry point to utilize this object from an existing window
+{
+	if ( !ObjectAlreadyExists( Printer ) )
+	{
+		Prn( New,Printer,~<NoBorders>~,~<IsKEX>~,~<CalledFromStartup>~ );
+
+		Global( Printer );
+
+		Printer.StartupTasks();
+	}
+}
+
+
+VOID InitPrintWizard(NoBorders)			// Entry point to open in a new window
+{
+	if ( !ObjectAlreadyExists( Printer ) )
+	{
+		DefinePrintWizard(~<NoBorders>~,FALSE,FALSE);
+
+		Printer.DisplayWindow();
+	}
+	else // Might be showing a new queue after we are loaded
+	{
+		Printer.QueueTriggers();
+	}
+	
+}
+
+VOID InitPrintWizardKEX(NoBorders,CalledFromStartup)			// Entry point to open in a new window
+{
+	if ( !ObjectAlreadyExists( Printer ) )
+	{
+		DefinePrintWizard(~<NoBorders>~,TRUE,<CalledFromStartup>);
+
+		Printer.DisplayWindow();
+	}
+	else // Might be showing a new queue after we are loaded
+	{
+		Printer.QueueTriggers();
+	}	
+}
+
+VOID DeletePrintersKEX(NoBorders,CalledFromStartup)			// Entry point to open in a new window
+{
+	if ( !ObjectAlreadyExists( Printer ) )
+	{
+		DefinePrintWizard(~<NoBorders>~,TRUE,<CalledFromStartup>);
+
+		Printer.DisplayWindow();
+	}
+	else // Might be showing a new queue after we are loaded
+	{
+		Printer.QueueTriggers();
+	}	
+}
+
+VOID InitStatic()		{ InitPrintWizard(TRUE); }
+
+VOID Init()				{ InitPrintWizard(FALSE); }
+

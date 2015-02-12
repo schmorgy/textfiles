@@ -1,0 +1,965 @@
+//	CRenderOutputNode.txt
+
+//	THIS FILE CONTAINS THE CODE TO HANDLE THE OUTPUT NODES
+
+
+ExecC() ;
+
+char	*gOutputXFormList ;
+
+
+//	DISPATCH THE OUTPUT NODE HANDLING
+HandleOutputNode( char *theNode, long XRef )
+{
+	long	ID = GetLongValue( theNode, "INTID:" ) ;
+	
+	gOutputXFormList = GetLongValue( theNode,	"OutputXFormList" ) ;
+
+	printf( _T("HandleOutputNode: gOutputXFormList = %0lX\r\n"), gOutputXFormList ) ;
+
+	if( gOutputXFormList != NULL )
+	{
+		gOutputXFormList = DeleteTransformList( gOutputXFormList ) ;
+	}
+
+	gOutputXFormList = NewList() ;
+
+	Debug(0);
+
+	switch( ID )
+	{
+		case	-9002	:	//	SAVE IMAGE
+			XRef = HandleSave( theNode, gBackgroundImage ) ;
+			break ;
+		case	-9003	:	//	OUTPUT TO CRT
+			XRef = HandleCRT( theNode, gBackgroundImage ) ;
+			break ;
+		case	-9004	:	//	OUTPUT TO LED
+			XRef = HandleLED( theNode, gBackgroundImage ) ;
+			break ;
+		case	-9005	:	//	OUTPUT TO XLS
+			XRef = HandleXLS( theNode, gBackgroundImage ) ;
+			break ;
+		case	-9026	:	//	OUTPUT TO XLS
+			XRef = HandleXLS( theNode, gBackgroundImage ) ;
+			break ;
+		case	-9024	:	//	OUTPUT TO MEMORY BUFFER
+			HandleOutputToMemory( theNode, gBackgroundImage ) ;
+			break ;
+		case	-9025	:	//	OUTPUT TO CBITMAP
+			HandleOutputToCBitmap( theNode, gBackgroundImage ) ;
+			break ;
+		case	-9030	:	//	OUTPUT TO NT PRINTER
+			XRef = HandleNTPrinter( theNode, gBackgroundImage ) ;
+			break ;
+	}
+
+	printf( _T("HandleOutputNode: gOutputXFormList = %0lX\r\n"), gOutputXFormList ) ;
+	ShowList( gOutputXFormList ) ;
+
+	SetLongValue( theNode,	"OutputXFormList", gOutputXFormList ) ;
+	return( XRef ) ;
+}
+
+ShowList( char *gOutputXFormList )
+{
+	char	*iterator = CreateIterator( gOutputXFormList ) ;
+	char	*anObj = GetFirst( iterator ) ;
+	while( anObj )
+	{
+		ShowGenCon( anObj ) ;
+		anObj = GetNext(iterator) ;
+	}
+	iterator = Delete( iterator ) ;
+}
+
+
+//	HANDLE SAVE THE IMAGE IMA SINK.
+HandleSave( char *theNode, long ImaXform )
+{
+	char	*RenderList ;
+	TCHAR	*Rotation ;
+	TCHAR	 FileType[32] ;
+	TCHAR	 Path[260] ;
+	TCHAR	 Msg[1024] ;
+	TCHAR	*PathPos = NULL ;
+	double	 theRect[4] ;
+	double	 XRes, YRes ;
+	double	 Rotated ;
+	int		 Quality = 90 ;
+	long	 ImaSinkRef ;
+	long	 XRef ;
+
+	XRes = 72.0 ; YRes = 72.0 ;
+
+	GetAttrValue( theNode, "SaveName:", Path ) ;
+	long len = strlen( Path ) ;
+	if( Path[len-1] == 42 || Path[len-1] == 45 ) //	42 = '*' //	45 = '-'
+	{
+		PathPos = &Path[len-1] ;
+	}
+
+/*	PathPos = strrchr( Path, 42 ) ;				//	42 = '*'
+
+	if( PathPos == NULL )
+		{ PathPos = strrchr( Path, 45 ) ; }		//	45 = '-'
+*/
+	//Debug(1) ;
+
+	if( PathPos != NULL )
+	{
+		*PathPos = '\0' ;
+		RenderList = GetParent( theNode ) ;
+		if( RenderList )
+			{ strcat( PathPos, GetName( RenderList ) ) ; }
+		else
+			{ strcat( PathPos, "NoFileSpecified" ) ; }
+	}
+
+	GetAttrValue( theNode, "SaveFileType:", FileType ) ;
+
+	if( gPreviewOptions == NULL )	//	DON'T DO THIS IF PRE-VIEWING !
+	{
+		if( AttrChanged( theNode, "Rotated:" ))
+		{
+			Rotated = GetDoubleValue( theNode, "Rotated:" ) ;
+			if( Rotated != 0.0 )
+			{
+				XRef = ImaXform ;
+				Rotation = GetRotationText(Rotated, theRect ) ;
+				ImaXform = ImaReorient( gIma, XRef, Rotation ) ;
+				AddTransformData(ImaXform, 0L, 0L, XRef, "ImaReorient", theRect, 0.0);
+				AddTransformToList( gOutputXFormList, "ImaReorient", ImaXform, FALSE ) ;
+			}
+		}
+	}
+
+	if( AttrChanged(theNode, "XRes:"))
+	{
+		XRes = GetDoubleValue( theNode, "XRes:" ) ;
+	}
+
+	if( AttrChanged( theNode, "YRes:" ))
+	{
+		YRes = GetDoubleValue( theNode, "YRes:" ) ;
+	}
+
+	if( XRes != 72.0 && YRes == 72.0 )
+	{
+		YRes = XRes ;
+	}
+
+	ImaSetResolution( gIma, XRes, YRes ) ;
+
+	sprintf( Msg, "Rendering To Disk File: %s", Path ) ;
+	LogWithTime( gLogger, Msg ) ;
+	SessionLogDirect( "Rendering To Disk File: %s", Path ) ;
+
+//Debug(1) ;
+
+//printf( "CRenderOutputNode.HandleSave: FileType = '%s'\r\n", FileType ) ;
+
+	if( stricmp( FileType, "JPEG Min" ) == 0 )
+		{ Quality = 10 ; }
+	if( stricmp( FileType, "JPEG Low" ) == 0 )
+		{ Quality = 25 ; }
+	if( stricmp( FileType, "JPEG Normal" ) == 0 )
+		{ Quality = 50 ; }
+	if( stricmp( FileType, "JPEG High" ) == 0 )
+		{ Quality = 75 ; }
+	if( stricmp( FileType, "JPEG Max" ) == 0 )
+		{ Quality = 90 ; }
+	if( stricmp( FileType, "JPEG Lossless" ) == 0 )
+		{ Quality = 100 ; }
+
+//printf( "CRenderOutputNode.HandleSave: Quality = '%d'\r\n", Quality ) ;
+
+//	======================================================================================
+	ImaSinkRef = ImaNewImageSink( gIma, ImaXform, FileType, Path, Quality ) ;
+//	======================================================================================
+
+	AddSubSample( theNode, ImaSinkRef ) ;
+
+	AddTransformData( ImaXform, 0L, 0L, ImaSinkRef, "ImaSink", theRect, 0.0 ) ;
+	AddTransformToList( gOutputXFormList, "ImaFileSink", ImaSinkRef, FALSE ) ;
+
+	return( ImaSinkRef ) ;
+}
+
+
+//	CHECK IF WE NEED TO ADD A SUBSAMPLE TO THE SAVED IMAGE
+AddSubSample( char *theNode, long SinkRef )
+{
+	TCHAR	value[64] ;
+	double	ResizeFactor ;
+	int		result ;
+	long	SSSize ;
+	long	X, Y ;
+
+	GetAttrValue( theNode, "PreviewFileType:", value ) ;
+	if( stricmp( value, "None" ) == 0 )
+		{ return ; }
+
+
+	GetMaxResolution( gIma, SinkRef, &X, &Y ) ;
+
+	SSSize = GetLongValue( theNode, "PreviewSize:" ) ;
+	if( SSSize > 0L )
+	{	
+		ResizeFactor = ( Y > X ) ? ((double)SSSize / (double) y) : ((double) SSSize / (double) x) ;
+
+		X *= ResizeFactor ;
+		Y *= ResizeFactor ;
+
+		result = SetThumbnailResolution( gIma, SinkRef, X, Y ) ;
+	}
+}
+
+
+//	THIS ROUTINE WILL HANDLE A CRT PRINTER
+HandleCRT( char *theOutputNode, long XRef )
+{
+	TCHAR	 Gamma[260] ;
+	TCHAR	 ColorMatrix[260] ;
+	TCHAR	 Lookup[260] ;
+	TCHAR	 Msg[1024] ;
+	TCHAR	*Rotation ;
+	char	*theLutObj ;
+	char	*aLut ;
+	double	 aMatrix[9] ;
+	long	 Copies ;
+	double	 Rotated ;
+	double	 theRect[4] ;
+	long	 PaperWidth ;
+	long	 PaperAdvance ;
+	long	 Resolution ;
+	long	 ImaXForm ;
+
+	Debug(0) ;
+
+	if( GetLongValue(theOutputNode, "Enabled:") == 0L )
+	{
+		return(XRef) ;
+	}
+
+	//	THE PRINTER IS ENABLED
+	if( AttrChanged( theOutputNode, "Gamma:" ))
+	{
+		GetAttrValue( theOutputNode, "Gamma:", Gamma ) ;
+		if( Gamma[0] )
+		{
+			aLut = LoadLut( Gamma ) ;
+			if( aLut )
+			{
+				ImaXForm = DoLUT( aLut, XRef, "CHAR", "Gamma" ) ;
+				theRect[0] = aLut[128] ; theRect[1] = aLut[384] ; theRect[2] = aLut[640] ;
+				AddTransformData( XRef, 0L, 0L, ImaXForm, "Gamma", theRect, 0.0 ) ;
+				AddTransformToList( gOutputXFormList, "Gamma", ImaXForm, FALSE ) ;
+				aLut = free( aLut ) ;
+				XRef = ImaXForm ;
+			}
+			else
+			{
+				TCHAR *ErrStr = GetTreeString( "GammaFileNotFound", "[Strings IMAStrings]" ) ;
+				if( ErrStr )
+				{
+					sprintf( Msg, ErrStr, Gamma ) ;
+					gIma->ImaSetLastErrorMsg( Msg ) ;
+				}
+				gIma->ImaSetLastErrorCode(130) ;
+				return( 0L ) ;
+			}
+		}
+	}
+	
+	if( AttrChanged( theOutputNode, "ColorMat:"))
+	{
+		GetAttrValue( theOutputNode, "ColorMat:", ColorMatrix ) ;
+		if( ColorMatrix[0] )
+		{
+			LoadMatrix( ColorMatrix, aMatrix ) ;
+			if( aMatrix[4] )
+			{
+				ImaXForm = ImaCMatrix( gIma, XRef, aMatrix ) ;
+				AddTransformData( XRef, 0L, 0L, ImaXForm, "ColorMatrix", aMatrix, 0.0 ) ;
+				AddTransformToList( gOutputXFormList, "ColorMat", ImaXForm, FALSE ) ;
+				XRef = ImaXForm ;
+			}
+			else
+			{
+				TCHAR *ErrStr = GetTreeString( "CMatrixFileNotFound", "[Strings IMAStrings]" ) ;
+				if( ErrStr )
+				{
+					sprintf( Msg, ErrStr, ColorMatrix ) ;
+					gIma->ImaSetLastErrorMsg( Msg ) ;
+				}
+				gIma->SetLastErrorCode(130) ;
+				return( 0L ) ;
+			}
+		}
+	}
+
+	if( gPreviewOptions == NULL )	//	DON'T DO THIS IF PRE-VIEWING !
+	{
+		if( AttrChanged( theOutputNode, "Rotated:" ))
+		{
+			Rotated = GetDoubleValue( theOutputNode, "Rotated:" ) ;
+			if( Rotated != 0.0 )
+			{
+				Rotation = GetRotationText(Rotated, theRect ) ;
+				ImaXForm = ImaReorient( gIma, XRef, Rotation ) ;
+				AddTransformData(ImaXForm, 0L, 0L, XRef, "ImaReorient", theRect, 0.0);
+				AddTransformToList( gOutputXFormList, "ImaReorient", ImaXForm, FALSE ) ;
+				XRef = ImaXForm ;
+			}
+		}
+	}
+
+/*	//	WE MUST INVERT THE IMAGE SO THE CRT WILL PRINT A POSITIVE IMAGE
+	theLutObj = NewLut() ;
+	//						 D	 R   G   B   Con  G		 Sat  Invert Threshold
+	SetLutValues( theLutObj, 0L, 0L, 0L, 0L, 0,   100,    0,   1,     -1 ) ;
+	aLut = GetLutPtr( theLutObj ) ;
+	ImaXForm = DoLUT( aLut, XRef, "CHAR", "Invert" ) ;
+	XRef = ImaXForm ;
+	Delete( theLutObj ) ;
+*/
+	//	WE MUST TELL IMA WE ARE NOW IN THE CMY COLOR SPACE !
+	XRef = ImaSetColorSpace( gIma, XRef, "CMY" ) ;
+	AddTransformToList( gOutputXFormList, "SetColorSpace", XRef, FALSE ) ;
+
+	XRef = ImaNewImageSink( gIma, XRef, "COM", NULL, 0 ) ;
+	AddTransformToList( gOutputXFormList, "ImageSink", XRef, FALSE ) ;
+
+	return( XRef ) ;
+}
+
+
+//	THIS ROUTINE WILL HANDLE A NT PRINTER
+HandleNTPrinter( char *theOutputNode, long XRef )
+{
+	TCHAR	 Gamma[260] ;
+	TCHAR	 ColorMatrix[260] ;
+	TCHAR	 Lookup[260] ;
+	TCHAR	*Rotation ;
+	char	*theLutObj ;
+	char	*aLut ;
+	double	 aMatrix[9] ;
+	double	 Rotated ;
+	double	 theRect[4] ;
+	long	 XGamma ;
+	long	 Copies ;
+//	long	 Rotated ;
+	long	 PaperWidth ;
+	long	 PaperAdvance ;
+	long	 Resolution ;
+	long	 ImaXForm ;
+
+Debug(0) ;
+
+	if( GetLongValue(theOutputNode, "Enabled:") == 0L )
+	{
+		return( XRef ) ;
+	}
+
+	//	THE PRINTER IS ENABLED
+
+	if( AttrChanged( theOutputNode, "XGamma:" ))
+	{
+		XGamma = GetDoubleValue( theOutputNode, "XGamma:" ) * 100.0 ;
+
+		if( XGamma != 1L )
+		{
+			theLutObj = NewLut() ;
+			//						Den	Red Grn Blu Con  Gamma  Sat Invert Threshold
+			SetLutValues( theLutObj, 0L, 0L, 0L, 0L, 0L, XGamma, 0L,   0,     -1 ) ;
+			aLut = GetLutPtr( theLutObj ) ;
+			XRef = DoLUT( aLut, XRef, "CHAR", "XGamma" ) ;
+//			aLut = free( aLut ) ;
+			theLutObj = Delete( theLutObj ) ;
+		}
+	}
+
+	if( AttrChanged( theOutputNode, "GammaLut:" ))
+	{
+		GetAttrValue( theOutputNode, "GammaLut:", Gamma ) ;
+		if( Gamma[0] != 0 )
+		{
+			if( aLut )
+			{
+				ImaXForm = DoLUT( aLut, XRef, "CHAR", "Gamma" ) ;
+				AddTransformData( XRef, 0L, 0L, ImaXForm, "Gamma", aLut, 0.0 ) ;
+				AddTransformToList( gOutputXFormList, "Gamma", ImaXForm, FALSE ) ;
+				aLut = free( aLut ) ;
+				XRef = ImaXForm ;
+			}
+			else
+			{
+				TCHAR *ErrStr = GetTreeString( "GammaFileNotFound", "[Strings IMAStrings]" ) ;
+				if( ErrStr )
+				{
+					sprintf( Msg, ErrStr, Gamma ) ;
+					gIma->ImaSetLastErrorMsg( Msg ) ;
+				}
+				gIma->SetLastErrorCode(130) ;
+				return(0) ;
+			}
+		}
+	}
+	
+	if( AttrChanged( theOutputNode, "ColorMat:"))
+	{
+		GetAttrValue( theOutputNode, "ColorMat:", ColorMatrix ) ;
+		if( ColorMatrix[0] != 0 )
+		{
+			LoadMatrix( ColorMatrix, aMatrix ) ;
+			if( aMatrix[4] )
+			{
+				ImaXForm = ImaCMatrix( gIma, XRef, aMatrix ) ;
+				AddTransformData( XRef, 0L, 0L, ImaXForm, "ColorMatrix", aMatrix, 0.0 ) ;
+				AddTransformToList( gOutputXFormList, "ColorMat", ImaXForm, FALSE ) ;
+				XRef = ImaXForm ;
+			}
+		}
+		else
+		{
+			TCHAR *ErrStr = GetTreeString( "CMatrixFileNotFound", "[Strings IMAStrings]" ) ;
+			if( ErrStr )
+			{
+				sprintf( Msg, ErrStr, ColorMatrix ) ;
+				gIma->ImaSetLastErrorMsg( Msg ) ;
+			}
+			gIma->SetLastErrorCode(130) ;
+			return(0) ;
+		}
+	}
+
+	if( AttrChanged( theOutputNode, "Lookup:" ))
+	{
+		GetAttrValue( theOutputNode, "Lookup:", Lookup ) ;
+		if( Lookup[0] != 0 )
+		{
+			aLut = LoadLut( Lookup ) ;
+			ImaXForm = DoLUT( aLut, XRef, "CHAR", "Lookup" ) ;
+			AddTransformData( XRef, 0L, 0L, ImaXForm, "LookupTable", aLut, 0.0 ) ;
+			AddTransformToList( gOutputXFormList, "LookupTable", ImaXForm, FALSE ) ;
+			XRef = ImaXForm ;
+			aLut = free( aLut ) ;
+		}
+		else
+		{
+			TCHAR *ErrStr = GetTreeString( "LUTFileNotFound", "[Strings IMAStrings]" ) ;
+			if( ErrStr )
+			{
+				sprintf( Msg, ErrStr, Lookup ) ;
+				gIma->ImaSetLastErrorMsg( Msg ) ;
+			}
+			gIma->SetLastErrorCode(130) ;
+			return(0) ;
+		}
+	}
+
+	if( gPreviewOptions == NULL )	//	DON'T DO THIS IF PRE-VIEWING !
+	{
+		if( AttrChanged( theOutputNode, "Rotated:" ))
+		{
+			Rotated = GetDoubleValue( theOutputNode, "Rotated:" ) ;
+			if( Rotated != 0.0 )
+			{
+				Rotation = GetRotationText(Rotated, theRect ) ;
+				ImaXForm = ImaReorient( gIma, XRef, Rotation ) ;
+				AddTransformData(ImaXForm, 0L, 0L, XRef, "ImaReorient", theRect, 0.0);
+				AddTransformToList( gOutputXFormList, "ImaReorient", ImaXForm, FALSE ) ;
+				XRef = ImaXForm ;
+			}
+		}
+	}
+
+	//	WE MUST TELL IMA WE ARE NOW IN THE CMY COLOR SPACE !
+//		XRef = ImaSetColorSpace( gIma, XRef, "CMY" ) ;
+//		AddTransformToList( gOutputXFormList, "SetColorSpace", XRef, FALSE ) ;
+
+	XRef = ImaNewImageSink( gIma, XRef, "COM", NULL, 0 ) ;
+	AddTransformToList( gOutputXFormList, "ImageSink", XRef, FALSE ) ;
+
+	return( XRef ) ;
+}
+
+
+
+
+//	THIS ROUTINE WILL HANDLE A LED PRINTER
+HandleLED( char *theOutputNode, long XRef )
+{
+	TCHAR	 Gamma[260] ;
+	TCHAR	 ColorMatrix[260] ;
+	TCHAR	 Lookup[260] ;
+	TCHAR	*Rotation ;
+	char	*theLutObj ;
+	char	*aLut ;
+	double	 aMatrix[9] ;
+	double	 Rotated ;
+	double	 theRect[4] ;
+	long	 Copies ;
+//	long	 Rotated ;
+	long	 PaperWidth ;
+	long	 PaperAdvance ;
+	long	 Resolution ;
+	long	 ImaXForm ;
+
+	if( GetLongValue(theOutputNode, "Enabled:") == 0L)
+	{
+		return( XRef ) ;
+	}
+
+	//	THE PRINTER IS ENABLED
+
+	if( AttrChanged( theOutputNode, "Gamma:" ))
+	{
+		GetAttrValue( theOutputNode, "Gamma:", Gamma ) ;
+		if( Gamma[0] )
+		{
+			aLut = LoadLut( Gamma ) ;
+			if( aLut )
+			{
+				ImaXForm = DoLUT( aLut, XRef, "CHAR", "Gamma" ) ;
+				theRect[0] = aLut[128] ; theRect[1] = aLut[384] ; theRect[2] = aLut[640] ;
+				AddTransformData( XRef, 0L, 0L, ImaXForm, "Gamma", theRect, 0.0 ) ;
+				AddTransformToList( gOutputXFormList, "Gamma", ImaXForm, FALSE ) ;
+				aLut = free( aLut ) ;
+				XRef = ImaXForm ;
+			}
+			else
+			{
+				TCHAR *ErrStr = GetTreeString( "GammaFileNotFound", "[Strings IMAStrings]" ) ;
+				if( ErrStr )
+				{
+					sprintf( Msg, ErrStr, Gamma ) ;
+					gIma->ImaSetLastErrorMsg( Msg ) ;
+				}
+				gIma->SetLastErrorCode(130) ;
+				return( 0L ) ;
+			}
+		}
+	}
+	
+	if( AttrChanged( theOutputNode, "ColorMat:"))
+	{
+		GetAttrValue( theOutputNode, "ColorMat:", ColorMatrix ) ;
+		if( ColorMatrix[0] )
+		{
+			LoadMatrix( ColorMatrix, aMatrix ) ;
+			if( aMatrix[4] )
+			{
+				ImaXForm = ImaCMatrix( gIma, XRef, aMatrix ) ;
+				AddTransformData( XRef, 0L, 0L, ImaXForm, "ColorMatrix", aMatrix, 0.0 ) ;
+				AddTransformToList( gOutputXFormList, "ColorMat", ImaXForm, FALSE ) ;
+				XRef = ImaXForm ;
+			}
+			else
+			{
+				TCHAR *ErrStr = GetTreeString( "CMatrixFileNotFound", "[Strings IMAStrings]" ) ;
+				if( ErrStr )
+				{
+					sprintf( Msg, ErrStr, ColorMatrix ) ;
+					gIma->ImaSetLastErrorMsg( Msg ) ;
+				}
+				gIma->SetLastErrorCode(130) ;
+				return(0) ;
+			}
+		}
+	}
+
+	if( AttrChanged( theOutputNode, "Lookup:" ))
+	{
+		GetAttrValue( theOutputNode, "Lookup:", Lookup ) ;
+		aLut = LoadLut( Lookup ) ;
+		if( aLut )
+		{
+			ImaXForm = DoLUT( aLut, XRef, "CHAR", "Lookup" ) ;
+			theRect[0] = aLut[128] ; theRect[1] = aLut[384] ; theRect[2] = aLut[640] ;
+			AddTransformData( XRef, 0L, 0L, ImaXForm, "LookupTable", aLut, 0.0 ) ;
+			AddTransformToList( gOutputXFormList, "LookupTable", ImaXForm, FALSE ) ;
+			XRef = ImaXForm ;
+			aLut = free( aLut ) ;
+		}
+		else
+		{
+			TCHAR *ErrStr = GetTreeString( "LUTFileNotFound", "[Strings IMAStrings]" ) ;
+			if( ErrStr )
+			{
+				sprintf( Msg, ErrStr, Lookup ) ;
+				gIma->ImaSetLastErrorMsg( Msg ) ;
+			}
+			gIma->SetLastErrorCode(130) ;
+			return(0) ;
+		}
+	}
+
+	if( gPreviewOptions == NULL )	//	DON'T DO THIS IF PRE-VIEWING !
+	{
+		if( AttrChanged( theOutputNode, "Rotated:" ))
+		{
+			Rotated = GetDoubleValue( theOutputNode, "Rotated:" ) ;
+			if( Rotated != 0.0 )
+			{
+				Rotation = GetRotationText(Rotated, theRect ) ;
+				ImaXForm = ImaReorient( gIma, XRef, Rotation ) ;
+				AddTransformData(ImaXForm, 0L, 0L, XRef, "ImaReorient", theRect, 0.0);
+				AddTransformToList( gOutputXFormList, "ImaReorient", ImaXForm, FALSE ) ;
+				XRef = ImaXForm ;
+			}
+		}
+	}
+
+	//	THE IMAGE MUST BE INVERTED FOR THE LED.
+	theLutObj = NewLut() ;
+	//						 D	  R	   G	B	 Con	   G     Sat Invert  Threshold
+	SetLutValues( theLutObj, 0,   0,   0,   0,    0,      100,    0 ,   1,       -1 ) ;
+	aLut = GetLutPtr( theLutObj ) ;
+	ImaXForm = DoLUT( aLut, XRef, "CHAR", "InvertLut" ) ;
+	theRect[0] = aLut[128] ; theRect[1] = aLut[384] ; theRect[2] = aLut[640] ;
+	AddTransformData(XRef, 0L, 0L, ImaXForm, "InvertLut", theRect, 0.0);
+	AddTransformToList( gOutputXFormList, "InvertLut", ImaXForm, FALSE ) ;
+	theLutObj = Delete( theLutObj ) ;
+	XRef = ImaXForm ;
+
+	//	WE MUST TELL IMA WE ARE NOW IN THE CMY COLOR SPACE !
+//		XRef = ImaSetColorSpace( gIma, XRef, "CMY" ) ;
+//		AddTransformToList( gOutputXFormList, "SetColorSpace", XRef, FALSE ) ;
+
+	XRef = ImaNewImageSink( gIma, XRef, "COM", NULL, 0 ) ;
+	AddTransformToList( gOutputXFormList, "ImageSink", XRef, FALSE ) ;
+
+	return( XRef ) ;
+}
+
+
+
+//	THIS ROUTINE WILL HANDLE A XLS PRINTER
+HandleXLS( char *theOutputNode, long XRef )
+{
+	TCHAR	 Gamma[260] ;
+	TCHAR	 ColorMatrix[260] ;
+	TCHAR	 Lookup[260] ;
+	char	*theLutObj ;
+	char	*aLut ;
+	double	 aMatrix[9] ;
+	long	 Copies ;
+	long	 Rotated ;
+	long	 PaperWidth ;
+	long	 PaperAdvance ;
+	long	 Resolution ;
+	long	 ImaXForm ;
+
+	if( GetLongValue(theOutputNode, "Enabled:") == 0L )
+	{
+		return( XRef ) ;
+	}
+
+	//	THE PRINTER IS ENABLED
+
+	if( AttrChanged( theOutputNode, "Gamma:" ))
+	{
+		GetAttrValue( theOutputNode, "Gamma:", Gamma ) ;
+		if( Gamma[0] )
+		{
+			aLut = LoadLut( Gamma ) ;
+			if( aLut )
+			{
+				ImaXForm = DoLUT( aLut, XRef, "CHAR", "Gamma" ) ;
+				AddTransformData( XRef, 0L, 0L, ImaXForm, "Gamma", aLut, 0.0 ) ;
+				AddTransformToList( gOutputXFormList, "Gamma", ImaXForm, FALSE ) ;
+				aLut = free( aLut ) ;
+				XRef = ImaXForm ;
+			}
+			else
+			{
+				TCHAR *ErrStr = GetTreeString( "GammaFileNotFound", "[Strings IMAStrings]" ) ;
+				if( ErrStr )
+				{
+					sprintf( Msg, ErrStr, Gamma ) ;
+					gIma->ImaSetLastErrorMsg( Msg ) ;
+				}
+				gIma->SetLastErrorCode(130) ;
+				return(0) ;
+			}
+		}
+	}
+		
+	if( AttrChanged( theOutputNode, "ColorMat:"))
+	{
+		GetAttrValue( theOutputNode, "ColorMat:", ColorMatrix ) ;
+		if( ColorMatrix[0] )
+		{
+			LoadMatrix( ColorMatrix, aMatrix ) ;
+			if( aMatrix[4] )
+			{
+				ImaXForm = ImaCMatrix( gIma, XRef, aMatrix ) ;
+				AddTransformData( XRef, 0L, 0L, ImaXForm, "ColorMatrix", aMatrix, 0.0 ) ;
+				AddTransformToList( gOutputXFormList, "ColorMat", ImaXForm, FALSE ) ;
+				XRef = ImaXForm ;
+			}
+			else
+			{
+				TCHAR *ErrStr = GetTreeString( "CMatrixFileNotFound", "[Strings IMAStrings]" ) ;
+				if( ErrStr )
+				{
+					sprintf( Msg, ErrStr, ColorMatrix ) ;
+					gIma->ImaSetLastErrorMsg( Msg ) ;
+				}
+				gIma->SetLastErrorCode(130) ;
+				return(0) ;
+			}
+		}
+	}
+
+	if( AttrChanged( theOutputNode, "Lookup:" ))
+	{
+		GetAttrValue( theOutputNode, "Lookup:", Lookup ) ;
+		aLut = LoadLut( Lookup ) ;
+		if( aLut )
+		{
+			ImaXForm = DoLUT( aLut, XRef, "CHAR", "Lookup" ) ;
+			AddTransformData( XRef, 0L, 0L, ImaXForm, "LookupTable", aLut, 0.0 ) ;
+			AddTransformToList( gOutputXFormList, "LookupTable", ImaXForm, FALSE ) ;
+			XRef = ImaXForm ;
+			aLut = free( aLut ) ;
+		}
+		else
+		{
+			TCHAR *ErrStr = GetTreeString( "LUTFileNotFound", "[Strings IMAStrings]" ) ;
+			if( ErrStr )
+			{
+				sprintf( Msg, ErrStr, Lookup ) ;
+				gIma->ImaSetLastErrorMsg( Msg ) ;
+			}
+			gIma->SetLastErrorCode(130) ;
+			return(0) ;
+		}
+	}
+
+	//	WE MUST TELL IMA WE ARE NOW IN THE CMY COLOR SPACE !
+//		XRef = ImaSetColorSpace( gIma, XRef, "CMY" ) ;
+//		AddTransformToList( gOutputXFormList, "SetColorSpace", XRef, FALSE ) ;
+
+	XRef = ImaNewImageSink( gIma, XRef, "COM", NULL, 0 ) ;
+	AddTransformToList( gOutputXFormList, "ImageSink", XRef, FALSE ) ;
+
+	return( XRef ) ;
+}
+
+//	THIS ROUTINE WILL READ IN A LUT FROM A DISK FILE.
+LoadLut( TCHAR *LutName )
+{
+	char *theLutObj ;
+	char *theLut ;
+
+	theLutObj = NewLut() ;
+	theLut = Load8BitLut( theLutObj, LutName ) ;
+	theLutObj = Delete( theLutObj ) ;
+	return( theLut ) ;
+}
+
+
+//	HANDLE OUTPUT TO MEMORY BUFFER.
+HandleOutputToMemory( char *theNode, long ImaXform )
+{
+	char	*theBGNode ;
+	char	*RenderList ;
+	TCHAR	*Rotation ;
+	TCHAR	 Msg[1024] ;
+	double	 theRect[4] ;
+	double	 XRes, YRes ;
+	double	 Rotated ;
+	long	 Width, Height ;
+	long	 Size, Depth = 3 ;
+	long	 ImaSinkRef ;
+	long	 XRef = ImaXform ;
+	unsigned char *MemBufPtr = NULL ;
+	XRes = 72.0 ; YRes = 72.0 ;
+
+	//	GET THE MAIN NODE
+	RenderList	= GetParent( theNode ) ;
+	theBGNode	= GetMainNode( RenderList ) ;
+
+	if( GetLongValue( theNode, "Width") == 0L )
+	{
+		theRect[2] = GetDoubleValue( theBGNode, "IWidth:" ) ;
+		theRect[3] = GetDoubleValue( theBGNode, "IHeight:" ) ;
+	}
+	else
+	{
+		theRect[2] = GetDoubleValue( theNode, "Width" ) ;
+		theRect[3] = GetDoubleValue( theNode, "Height" ) ;
+		XRes = 1.0 ;
+		YRes = 1.0 ;
+	}
+
+	if( gPreviewOptions == NULL )	//	DON'T DO THIS IF PRE-VIEWING !
+	{
+		if( AttrChanged( theNode, "Rotated:" ))
+		{
+			Rotated = GetDoubleValue( theNode, "Rotated:" ) ;
+			if( Rotated != 0.0 )
+			{
+				XRef = ImaXform ;
+				Rotation = GetRotationText(Rotated, theRect ) ;
+				ImaXform = ImaReorient( gIma, XRef, Rotation ) ;
+				AddTransformData(ImaXform, 0L, 0L, XRef, "ImaReorient", theRect, 0.0);
+				AddTransformToList( gOutputXFormList, "ImaReorient", ImaXform, FALSE ) ;
+				XRef = ImaXform ;
+			}
+		}
+	}
+
+	if( AttrChanged(theNode, "XRes:"))
+	{
+		XRes = GetDoubleValue( theNode, "XRes:" ) ;
+	}
+
+	if( AttrChanged( theNode, "YRes:" ))
+	{
+		YRes = GetDoubleValue( theNode, "YRes:" ) ;
+	}
+
+	if( XRes != 72.0 && YRes == 72.0 )
+	{
+		YRes = XRes ;
+	}
+
+	ImaSetResolution( gIma, XRes, YRes ) ;
+
+	Width	= XRes * theRect[2] ;
+	Height	= YRes * theRect[3] ;
+
+	MemBufPtr = GetLongValue( theNode, "MemoryBuffer" ) ;
+
+	if( MemBufPtr == NULL							||
+		Width != GetLongValue( theNode, "Width" )	||
+		Height != GetLongValue( theNode, "Height" )	||
+		Depth != GetLongValue( theNode, "Depth" ))
+	{
+		if( MemBufPtr )	{ MemBufPtr = free( MemBufPtr ) ; }
+		Size = Width * Height * Depth ;
+		MemBufPtr = PMalloc( Size ) ;
+	}
+
+	if( MemBufPtr == NULL )
+	{
+		return( 0L ) ;
+	}
+
+	//	SAVE THE MEMORY BUFFER POINTER
+	SetLongValue( theNode, "MemoryBuffer", MemBufPtr ) ;
+	SetLongValue( theNode, "Width", Width ) ;
+	SetLongValue( theNode, "Height", Height ) ;
+	SetLongValue( theNode, "Depth", Depth ) ;
+
+	strcpy( Msg, "Rendering To Memory Buffer" ) ;
+	LogWithTime( gLogger, Msg ) ;
+	SessionLogDirect( "%s", Msg ) ;
+
+//	======================================================================================
+	ImaSinkRef = ImaMemorySink( gIma, XRef, MemBufPtr, "PIXEL_INTERLEAVED", NULL,
+						"U8", Width, Height, Depth, FALSE ) ;
+
+//	======================================================================================
+
+	AddTransformData( XRef, 0L, 0L, ImaSinkRef, "ImaMemSink", theRect, 0.0 ) ;
+	AddTransformToList( gOutputXFormList, "ImaMemSink", ImaSinkRef, FALSE ) ;
+
+	return( ImaSinkRef ) ;
+}
+
+
+
+
+HandleOutputToCBitmap( char *theNode, long ImaXform )
+{
+	return( 0L ) ;
+}
+
+/*	char	*theBGNode ;
+	char	*RenderList ;
+	TCHAR	*Rotation ;
+	TCHAR	 Msg[1024] ;
+	double	 theRect[4] ;
+	double	 XRes, YRes ;
+	double	 Rotated ;
+	long	 Width, Height ;
+	long	 Size, Depth = 3 ;
+	long	 ImaSinkRef ;
+	long	 XRef ;
+	unsigned char *MemBufPtr = NULL ;
+
+	XRes = 72.0 ; YRes = 72.0 ;
+
+	//	GET THE MAIN NODE
+	RenderList	= GetParent( theNode ) ;
+	theBGNode	= GetMainNode( RenderList ) ;
+
+	theRect[2] = GetDoubleValue( theBGNode, "IWidth:" ) ;
+	theRect[3] = GetDoubleValue( theGBNode, "IHeight:" ) ;
+
+	if( gPreviewOptions == NULL )	//	DON'T DO THIS IF PRE-VIEWING !
+	{
+		if( AttrChanged( theNode, "Rotated:" ))
+		{
+			Rotated = GetDoubleValue( theNode, "Rotated:" ) ;
+			if( Rotated != 0.0 )
+			{
+				XRef = ImaXform ;
+				Rotation = GetRotationText(Rotated, theRect ) ;
+				ImaXform = ImaReorient( gIma, XRef, Rotation ) ;
+				AddTransformData(ImaXform, 0L, 0L, XRef, "ImaReorient", theRect, 0.0);
+				AddTransformToList( gOutputXFormList, "ImaReorient", ImaXform, FALSE ) ;
+				XRef = ImaXform ;
+			}
+		}
+	}
+
+	if( AttrChanged(theNode, "XRes:"))
+	{
+		XRes = GetDoubleValue( theNode, "XRes:" ) ;
+	}
+
+	if( AttrChanged( theNode, "YRes:" ))
+	{
+		YRes = GetDoubleValue( theNode, "YRes:" ) ;
+	}
+
+	if( XRes != 72.0 && YRes == 72.0 )
+	{
+		YRes = XRes ;
+	}
+
+	ImaSetResolution( gIma, XRes, YRes ) ;
+
+	Width	= XRes * theRect[2] ;
+	Height	= YRes * theRect[3] ;
+
+	Size = Width * Height * Depth ;
+	MemBufPtr = malloc( Size ) ;
+
+	strcpy( Msg, "Rendering To Memory Buffer" ) ;
+	LogWithTime( gLogger, Msg ) ;
+	SessionLogDirect( "%s", Msg ) ;
+
+//	======================================================================================
+	ImaSinkRef = ImaMemorySink( gIma, XRef, MemBufPtr, "PIXEL_INTERLEAVED", NULL,
+								"U8", Width, Height, Depth, FALSE ) ;
+//	======================================================================================
+
+	AddTransformData( ImaXform, 0L, 0L, ImaSinkRef, "ImaMemSink", theRect, 0.0 ) ;
+	AddTransformToList( gOutputXFormList, "ImaMemSink", ImaSinkRef, FALSE ) ;
+
+	return( ImaSinkRef ) ;
+
+}
+*/
+
+
+
+
+

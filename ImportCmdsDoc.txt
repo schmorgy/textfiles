@@ -1,0 +1,1282 @@
+//
+// Import Cmds Dialog
+//
+// This panel has been updated to provide XML import from the stock Import
+// cmds dialog.
+//
+// $Id: ImportCmdsDoc.txt,v 1.2 2008/11/27 20:06:32 davef Exp $
+
+// Version 14th Oct 08  Initial version.
+// Version 6th  Nov 08  Phase 2 Album import added.
+// Version 10th Nov 08  Phase 2 Updates Onsite
+// Version 11th Nov 08  Added import of the render path.
+// Version 12th Nov 08  Corrected Phase2 check
+// Version 18th Nov 08  Added reset of processing workstation when setting phase 2.
+// Version 13th Apr 09  Corrected read of "proof" tab. Added auto render of Phase 2 proofs.
+ImportVersion = ~Version 13th April 2009~;
+
+MaxFileName = 31; // Dont know why but the frame is limited to 31 elsewhere in DP2
+ConversionPending    = 1; // Used for marking new orders as queued. See conversionStation.txt for the other side.
+ConversionCompleted  = 10;
+
+// Define Carriage Return and Line Feed character macros...
+CR = chr(13);
+LF = chr(10);
+
+// Some defines for LDP orders;                            
+PAGE  = ~page~;
+FRONT = ~fc~;
+BACK  = ~bc~;
+WRAP  = ~c~;
+
+
+VOID ReOpen()
+{
+}
+NUMERIC AddOrder( OrderID,CustomerID,ImagesOrderID,BatchID,BatchSeq,Status,Type,OrderDate,ShipDate,Priority,Description,Owner )
+{
+	Query = ~Select * From Orders Where ID = '<OrderID>'~;
+
+	if ( !PGenConList( List,Connection,database,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+                Log( Session, ~<theErr>~);
+		return FALSE;
+	}
+
+	if ( !List( GetFirst,Record ) )
+	{
+		List( AddNew,Record );
+
+		Record( Set,ID,~<OrderID>~ );
+		Record( Set,OrderDate,~<$Date.date>~ );
+		Record( Set,ShipDate,~<$Date.Date>~ );
+	}
+
+	if ( ~<CustomerID>~ != ~~ )				{ Record( Set,CustomerID,~<CustomerID>~ ); }
+	if ( ~<ImagesOrderID>~ != ~~ )			{ Record( Set,ImagesOrderID,~<ImagesOrderID>~ ); }
+	if ( ~<BatchID>~ != ~~ )				{ Record( Set,BatchID,~<BatchID>~ ); }
+	if ( ~<BatchSeq>~ != ~~ )				{ Record( Set,BatchSeq,~<BatchSeq>~ ); }
+	if ( ~<Status>~ != ~~ )					{ Record( Set,Status,~<Status>~ ); }
+	if ( ~<Type>~ != ~~ )					{ Record( Set,Type,~<Type>~ ); }
+	if ( ~<OrderDate>~ != ~~ )				{ Record( Set,OrderDate,~<OrderDate>~ ); }
+	if ( ~<ShipDate>~ != ~~ )				{ Record( Set,ShipDate,~<ShipDate>~ ); }
+	if ( ~<Priority>~ != ~~ )				{ Record( Set,Priority,~<Priority>~ ); }
+	if ( ~<Description>~ != ~~ )			{ Record( Set,Description,~<Description>~ ); }
+	if ( ~<Owner>~ != ~~ )					{ Record( Set,Owner,~<Owner>~ ); }
+
+	if ( IsNull(~<ImagesOrderID>~) )
+	{
+
+	}
+	else
+	{
+		Cmd = ~Select ShootDescID,ShootDescType From Orders Where ID = '<ImagesOrderID>'~;
+		if ( database(GetValuesFor,~<Cmd>~,ShootDescID,ShootType) )
+		{
+			if ( !IsNull(~<ShootDescID>~) )
+			{
+				Record( Set,ShootDescID,~<ShootDescID>~ );
+				Record( Set,ShootDescType,~<ShootType>~ );
+			}
+		}
+	}
+
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+                Log( Session, ~<theErr>~);
+		return FALSE;
+	}
+        Log( Session, ~AddOrder <OrderID>~);
+	return TRUE;
+}
+
+VOID DefineDialog()
+{
+    if ( !DictionaryExists(DDDataLoaderDialogData) )
+    {
+        Dictionary: DDDataLoaderDialogData
+            Fields: Name    ~Directory~        type text
+            Fields: Name    FileName        type text
+            Fields: Name    Status            type text
+            Fields: Name    ExecutableData    type text
+            Fields: Name    AutoStart        type long
+    }
+
+    Left = 5; Top = 5;        hGap = 5; vGap = 5;
+    TextHeight = 20;        TextWidth = 110;  
+    ButtonHeight = 20;        ButtonWidth = 90;
+    StaticTextWidth = 60;    StaticTextHeight = 20;
+    EditTextWidth = 200;    EditTextHeight = 20;
+    ComboBoxWidth = 200;    ComboBoxHeight = 120;
+    x = $Left;                y = $Top;
+    PathWidth = 400;        DialogWidth = (($ButtonWidth + $hGap) * 5) + $hGap * 2;
+
+    Define: DlgData Using DDDataLoaderDialogData
+        Fields: ExecutableData TRUE;
+
+    Define: DataLoaderDlgDefinition Using DDWinDef
+            Fields: Position        180 50 $DialogWidth 600
+                    Title            ~Process Commands / Import XML Album Orders~
+                    TypeName        ~Dialog~
+                    WantsMinimizeBox TRUE
+                    HACTIONSTEXT    ACTION SHOWHELPPAGE ( KPISHelpFile "SubmitJobFiles.htm" )
+                    OACTIONSTEXT    ACTION EXEC ( CloseDialog() )
+                    DropActionsText    ACTION EXEC ( HandleDrop() )
+
+    Contains: InListOrder
+    {
+        Define: DirectoryPrompt Using DDWinCtrlDef AsSymbol DirectoryPrompt 
+            Fields: TypeName        StaticText
+                    RightJustified    TRUE
+                    Text            Translate( ~Directory~ )
+                    Position        $x,$y,<StaticTextWidth>,<StaticTextHeight> ;
+
+       Define: DirectoryField Using DDWinCtrlDef AsSymbol DirectoryField         
+            Fields: TypeName        EditText
+                    Position        DirectoryPrompt(GetRight,Position) + $hGap
+                                    DirectoryPrompt(GetTop,Position) -2 
+                                    $PathWidth $EditTextHeight         
+                    GenConName        THIS
+                    GenConField        ~Directory~
+                    IActionsText    ACTIONS ( Get )
+                    DActionsText    ACTION Exec ( EnableButtons() )
+                    OActionsText    ACTIONS ( Save )
+                    Tooltip            Translate( ~Enter the path to watch for data files~ ) ;
+
+        Define: InBrowseButton Using DDWinCtrlDef AsSymbol InBrowseButton 
+            Fields: TypeName        Button
+                    Text            Translate( ~?~ )
+                    Position        DirectoryField(GetRight,Position) + $hGap,DirectoryPrompt(GetTop,Position),20,20
+                    DActionsText    ACTION EXEC  ( OnBrowseDirectoryButton() ) 
+                    IsTabStop        1
+                    Tooltip            Translate( ~Find the directory~ );
+
+        DialogWidth = InBrowseButton( GetRight,Position) + $hGap * 4;
+
+        Define: ProgressBox Using DDWinCtrlDef AsSymbol ProgressBox
+            Fields:    TYPENAME        Progress
+                    POSITION        <hgap> DirectoryPrompt(GetBottom,Position) + <vGap> $DialogWidth-15 6
+                    ISSMOOTH        1;
+
+
+        Define: GoButton Using DDWinCtrlDef AsSymbol GoButton 
+            Fields: TypeName        DefaultButton
+                    Text            Translate( ~Start~ )
+                    Position        $DialogWidth/2-$ButtonWidth-$hGap,ProgressBox(GetBottom,Position) + $vGap*2,$ButtonWidth, $ButtonHeight 
+                    DActionsText    ACTION EXEC  ( OnGoButton() ) 
+                    IsTabStop        1
+                    IsEnabled        F
+                    Tooltip            Translate( ~Import from the Input File~ )  ;
+        Define: StopButton Using DDWinCtrlDef AsSymbol StopButton 
+            Fields: TypeName        Button
+                    Text            Translate( ~Stop~ )
+                    Position        GoButton(GetRight,Position)+$hGap,GoButton(GetTop,Position),$ButtonWidth, $ButtonHeight 
+                    DActionsText    ACTION EXEC  ( OnStopButton() ) 
+                    IsTabStop        1
+                    IsEnabled        F
+                    Tooltip            Translate( ~Stop Watching~ )  ;
+
+        Define: AutoStartButton Using DDWinCtrlDef AsSymbol AutoStartButton 
+            Fields: TypeName        CheckBox
+                    GenConName        THIS
+                    GenConField        ~AutoStart~
+                    Text            Translate( ~Auto Start~ )
+                    Position        StopButton(GetRight,Position)+$hGap*3,GoButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+                    DActionsText    ACTION EXEC  ( OnAutoStartBox() ) 
+                    Tooltip            Translate( ~Specify whether to automatically start importing commands when the application starts up~ )  ;
+
+        Define: FileName Using DDWinCtrlDef AsSymbol FileName 
+            Fields: TypeName        StaticText
+                    Position        $x,GoButton(GetBottom,Position) + $vGap,$DialogWidth - ($hGap * 2),<StaticTextHeight>*2 
+                    GenConName        THIS
+                    GenConField        ~FileName~
+
+        Define: Status Using DDWinCtrlDef AsSymbol Status 
+            Fields: TypeName        StaticText
+                    Position        $x,FileName(GetBottom,Position) + 1,$DialogWidth - ($hGap * 2),<StaticTextHeight>*3 
+                    GenConName        THIS
+                    GenConField        ~Status~
+
+
+    };
+
+    DialogHeight = Status(GetBottom,Position) + $vGap + 20;
+
+    LeftPosition = App( thisApp,MainWindow,GetClientWidth ) - $DialogWidth - 7;
+    TopPosition = App( thisApp,MainWindow,GetClientHeight ) - $DialogHeight - 52;
+
+
+    DataLoaderDlgDefinition( Set,Position,~<LeftPosition> <TopPosition> <DialogWidth> <DialogHeight>~ );
+
+    GenDlg( dlg,Definition,DataLoaderDlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    Global( dlg,DataLoaderDlgDefinition,DlgData );
+}
+
+
+
+NUMERIC OnAutoStartBox()
+{
+    dlg( GetInput );
+
+    SetWorkStationSettings( ~<$Job.Name>~,AutoStart,~<$con.dlgData[AutoStart]>~,TRUE );
+
+    return TRUE;
+}
+
+
+// HANDLE MESSAGES POSTED FROM THE CMDS SCRIPT
+
+NUMERIC UserWarning( msg )                    { return Warning( ~<msg>~ ); }
+NUMERIC UserMessage( msg )                    { return dlg( SetStrings,Status,~<$Date.Time>  <msg>~ ); }
+VOID    SetupProgressBar( Min,Max,Step )    { dlg( ProgressBar,ProgressBox,SetRange,<Min>,<Max>,SetStep,<Step> ); }
+VOID    StepProgressBar()                    { dlg( ProgressBar,ProgressBox,Stepit); }
+VOID    ProgressBarPosition(pos)            { dlg( ProgressBar,ProgressBox,SetPos,<pos> ); }
+
+NUMERIC ExecutingFile( msg )
+{
+    return dlg( SetString,~<$Date.Time>  <msg>~ ,FileName,0 );
+}
+
+
+VOID OnBrowseDirectoryButton()
+{
+    Title = Translate( ~Select the directory to watch~ );
+
+    if ( GetFolder( ~<Title>~,~~,Path ) )
+    {
+        dlg( SetString,~<Path>~,Directory,0 );
+    }
+    
+    EnableButtons();                    
+}
+
+
+NUMERIC EnableButtons()
+{
+    dlg( GetInput );
+
+    CanGo = !IsNull(~<$con.dlgdata[Directory]>~) && !<Running> ;
+
+    dlg( EnableControls,<Running>,StopButton );
+    dlg( EnableControls,<CanGo>,GoButton );
+
+    return TRUE;
+}
+
+
+Running = FALSE;
+Quitting = FALSE;
+
+
+VOID CloseDialog()
+{
+    dlg( GetInput );
+
+    SetWorkStationSettings( ~<$Job.Name>~,SearchDirectory,~<$con.dlgData[Directory]>~,TRUE );
+
+    Quitting = TRUE;
+
+    if ( <Running> )
+    {
+        OnStopButton();
+    }
+    else
+    {
+        dlg( END );
+        Exit();
+    }
+}
+
+
+NUMERIC OnGoButton()
+{
+    dlg( GetInput );
+
+    if ( IsNULL(~<$con.dlgdata[Directory]>~) )
+    {
+        Invoke( UserWarning,Translate( ~Select a directory to import from~ ) );
+        return FALSE;
+    }
+
+    if ( !Directory( Create,~<$con.dlgdata[Directory]>~ ) )
+    {
+        Invoke( UserWarning,Translate( ~Could not create <$con.dlgdata[Directory]>~ ) );
+        return FALSE;
+    }
+
+    aThread( New,ProcessThread,~<$con.dlgdata[Directory]>~ );
+
+    ForgetGlobal( DirChange );
+
+    ChangeNotification( DirChange,Add,~<$con.dlgdata[Directory]>~,FALSE,ChangeFileName );
+
+    DirChange( OnChangeRoutine,~OnDirectoryChange~,Watch );
+
+    Global( DirChange );
+
+    return TRUE;
+}
+
+
+NUMERIC OnStopButton()
+{
+    ForgetGlobal( DirChange );
+
+    Running = FALSE;
+
+    if ( aThread( IsActive ) )
+    {
+        aThread( TerminateSleep );
+    }
+
+    return UserMessage( Translate( ~Stopping~ ) );
+}
+
+
+NUMERIC ProcessThread( Path )
+{
+    Running = TRUE;
+
+    Invoke( UserMessage,Translate( ~Started~ ) );
+
+    Invoke( EnableButtons );
+
+    while ( <Running> )
+    {
+        Invoke( SetupProgressBar,0,1,1 );
+
+        Invoke( ProgressBarPosition,0 );
+
+        if ( !ProcessFiles( ~<Path>~,~*.*~ ) )
+            break;
+
+        if ( IsMainThread() )    // JUST FOR TESTING WITHOUT THREADS
+        {
+            Running = FALSE;
+        }
+        else
+        {
+            Sleep( 10000 );        // May break out of here on a directory change
+            Sleep( 20 );        // Wait a little longer to let things settle down
+        }
+    }
+
+    Invoke( OnStopButton );
+
+    Invoke( EnableButtons );
+
+    Invoke( UserMessage,Translate( ~Stopped~ ) );
+
+    if ( <Quitting> )
+    {
+        Invoke( CloseDialog );
+    }
+
+    return TRUE;
+}
+
+VOID OnDirectoryChange( Which )
+{
+    if ( aThread( IsActive ) )
+    {
+        aThread( TerminateSleep );
+    }
+}
+
+NUMERIC FindNextFile( path,search,&count,&FilePath )
+{
+    MoreFiles = findfile( aDirectoryEntry,Find,~<path>\<search>~ );
+
+    while ( $Morefiles )
+    {
+        Morefiles = aDirectoryEntry( Next );
+
+        aDirectoryEntry( Get,Path,FilePath );
+            
+        if ( aDirectoryEntry( Dots ) || aDirectoryEntry( IsDirectory ) )
+            continue;
+            
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+
+NUMERIC ProcessFiles( SearchDir,SearchCriteria )
+{
+    while ( TRUE )
+    {
+        count = 0;
+        FilePath = ~~;
+
+        Invoke( ExecutingFile,Translate( ~Searching <SearchDir> For <SearchCriteria>~ ) );
+
+        if ( !FindEarliestFile( ~<SearchDir>\<SearchCriteria>~,FilePath,CreationTime )  )
+            break;        
+
+        if ( !Files( ChMod,~<FilePath>~,ReadWrite ) )
+        {
+            Invoke( OnStopButton );
+            return Invoke( UserWarning, Translate( ~<FilePath> can't be deleted so it can't be executed.~ ) );
+        }
+
+        Log( Session,~ImportCmds: <CreationTime>   <FilePath>~ );
+
+        Invoke( ExecutingFile,Translate( ~Processing <$str.$FilePath.FileName>~ ) );
+
+        //Directory( Create,~<SearchDir>\Backup~ );
+        //Files( Copy,~<FilePath>~,~<SearchDir>\Backup\<$Date.SortableDateTime>_<$str.$FilePath.FileName>~ );
+
+        // If this is an XML file then use our custom path
+        NameLength = strlen(~<FilePath>~);
+
+        substr(~<FilePath>~, $NameLength -3, <NameLength>, Extension);
+    
+        if (~<Extension>~ == ~xml~)
+        {
+            if ( ProcessXMLFile( ~<FilePath>~ ) )
+            {
+                if ( !Files( Delete,~<FilePath>~ ) )
+                {
+                    Invoke( OnStopButton );
+                    return Invoke( UserWarning, Translate( ~<FilePath> can't be deleted~ ) );
+                }
+
+                Invoke( ExecutingFile,Translate( ~Completed <FilePath>~ ) );
+            }
+            else
+            {
+                Directory( Create,~<SearchDir>\Errors~ );
+        
+                if ( !Files( RenameUnique,~<FilePath>~,~<SearchDir>\Errors\<$str.$FilePath.FileName>~ ) )
+                {
+                    Invoke( OnStopButton );
+                    return Invoke( UserWarning, Translate( ~Couldn't move <FilePath> to <SearchDir>\Errors\<$str.$FilePath.FileName>~ ) );
+                }
+  
+                Invoke( ExecutingFile,Translate( ~Completed <FilePath> With Error~ ) );
+
+                return FALSE;
+            }
+        }
+        else
+        {
+        if ( ProcessFile( ~<FilePath>~ ) )
+        {
+            if ( !Files( Delete,~<FilePath>~ ) )
+            {
+                Invoke( OnStopButton );
+                return Invoke( UserWarning, Translate( ~<FilePath> can't be deleted~ ) );
+            }
+
+            Invoke( ExecutingFile,Translate( ~Completed <FilePath>~ ) );
+        }
+        else
+        {
+            Directory( Create,~<SearchDir>\Errors~ );
+        
+            if ( !Files( RenameUnique,~<FilePath>~,~<SearchDir>\Errors\<$str.$FilePath.FileName>~ ) )
+            {
+                Invoke( OnStopButton );
+                return Invoke( UserWarning, Translate( ~Couldn't move <FilePath> to <SearchDir>\Errors\<$str.$FilePath.FileName>~ ) );
+            }
+
+            Invoke( ExecutingFile,Translate( ~Completed <FilePath> With Error~ ) );
+
+            return FALSE;
+        }
+    }
+    }
+
+    return TRUE;
+}
+
+
+NUMERIC ProcessFile( Path )
+{
+    if ( !ExecuteFile( ~<Path>~ ) )
+    {
+        ADO( db,Connect,LogActivity,Type,Error,Msg,~Import Commands: Error in <Path>~ );
+        return FALSE;
+    }
+
+    ADO( db,Connect,LogActivity,Type,Info,Msg,~Import Commands: Completed <Path>~ );
+
+    return TRUE;
+}
+// FUNCTION: CreateImportImage()
+//
+// This function adds the supplied image to the temp image queue. It also stored the original 
+// Filename incase we attempt to change it again.
+//
+NUMERIC CreateImportImage( OrderID, Roll, Frame, Path, OriginalPath, colourmode )
+{
+    OriginalPath = String( RemoveCharFromString,~'~,~<OriginalPath>~ );
+    Path = String( RemoveCharFromString,~'~,~<Path>~ );
+    Roll = String( RemoveCharFromString,~'~,~<Roll>~ );
+    Roll = String( RemoveCharFromString,~:~,~<Roll>~ );
+
+    Log( Session,~"%%%%%% Calling Import to '<OrderID>' of Roll '<Roll>', Frame '<Frame>'~); 
+    Log( Session,~"%%%%%%                    Path '<Path>'~); 
+    Log( Session,~"%%%%%%                    OriginalPath '<OriginalPath>'~); 
+
+    // Truncate the Roll if its > MaxFileName to avoid failing to store it.
+    RollLength         = strlen(~<Roll>~);
+    if ( $RollLength > <MaxFileName> )
+    {
+         substr(~<Roll>~, 0, <MaxFileName>, Roll);
+    }
+
+    // Since we didnt copy these in we need to do the same for the frame.
+    FrameLength         = strlen(~<Frame>~);
+    if ( $FrameLength > <MaxFileName> )
+    {
+         substr(~<Frame>~, 0, <MaxFileName>, Frame);
+    }
+
+
+    cmd = ~INSERT INTO ImportImagesTemp (OrderID, Roll, Frame, Path, OriginalPath, colourmode) VALUES ('<OrderID>', '<Roll>', '<Frame>', '<Path>', '<OriginalPath>', '<colourmode>')~;
+
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Log( Session,~"%%%%%% FAILED to add new image to ImportImagesTemp for OrderID <OrderID> See Session Log for more details.~); 
+        return FALSE;
+    }
+    return TRUE;
+}
+
+NUMERIC ImportImages( &TheNodeList, OrderID )
+{
+    i = -1;
+
+    NumNodes = TheNodeList( GetLength );
+
+    while ( <++i> < <NumNodes> )
+    {
+        TheNodeList( GetNodeByIndex,ANode,<i> );
+
+        ANode( GetNodeName,TheNodeName );
+
+        ANode( GetNodeText,TheText );
+
+        // Extract the useful bits
+        if (~<TheNodeName>~ == ~filepath~)
+        { 
+            Log( Session,~%%%% Add Image <TheText> to OrderID <OrderID>~ );
+
+            // Now add the image to the order. This initiates adding a thumbnail.
+            SubDir             = ~<$Str.$TheText.Folder>~;
+            Frame              = ~<$Str.$TheText.FileName>~;
+            FileNameNoExt      = ~<$Str.$FileName.WithOutExt>~;
+
+            // Look Ahead for the colour mode
+            TheNodeList( GetNodeByIndex,ANode,$i+1 );
+            ANode( GetNodeName,TheNextNodeName );
+            ANode( GetNodeText,TheNextText );
+            if (~<TheNextNodeName>~ == ~colourmode~)
+            { 
+                Log( Session,~%%%% Colourmode = <TheNextText>~ );
+                colourmode = ~<TheNextText>~;
+            }
+            else
+            {
+                // There will be no colour mode for the second phase.
+                colourmode = ~~;
+            }
+
+            // Add the image to our list 
+            if (!CreateImportImage( <OrderID>, ~<SubDir>~, ~<Frame>~, ~<TheText>~, ~<TheText>~, ~<colourmode>~))
+            {
+                Log( Session,~Failed to CreateImportImage().~);
+            }
+
+            StepProgressBar();
+        }
+        ANode( GetNodeType,TheType );
+
+        Log( Session,~%%%% Node <$str.$i.%03ld> of <$str.$NumNodes.%03ld>)-- <TheType>    <TheNodeName>: <TheText>~ );
+
+        if ( ANode( HasChildNodes) )
+        {
+            ANode( GetChildNodes,ChildNodeList );
+
+            ImportImages( ChildNodeList, ~<OrderID>~ );
+        }
+    }
+
+    return TRUE;
+}
+
+// FUNCTION: getAlbumDetails()
+//
+// This function reads the layouts required by the given ProductCode.
+//
+NUMERIC getAlbumDetails( ProductCode, &pageLayout, &frontLayout, &backLayout, &wrapLayout )
+{
+    albumQuery = ~select PageLayout, frontCover, BackCover, wrapCover from LDPProducts where ProductCode='<ProductCode>'~;
+
+    if ( !ADO( database,Connect,GetValuesFor,~<albumQuery>~, pageLayout, frontLayout, backLayout, wrapLayout ))
+    {
+        Log( Session, ~getAlbumDetails:********* FAILED to locate details for <ProductCode> !!!!!~ );
+        return FALSE;
+    }
+
+    Log( Session, ~getAlbumDetails:********* <ProductCode> requires pages of '<pageLayout>', front cover '<frontLayout>' ~ );
+    Log( Session, ~getAlbumDetails:********* <ProductCode> requires back cover of '<backLayout>' and wrap '<wrapLayout>' ~ );
+
+    return TRUE;
+}
+
+// FUNCTION: CreateImportOrderItem()
+//
+// This function adds the supplied item to the temp import order items queue.
+//
+NUMERIC CreateImportOrderItem( OrderID, Roll, ItemID, ProductID, Quantity, Path )
+{
+    Path = String( RemoveCharFromString,~'~,~<Path>~ );
+    Roll = String( RemoveCharFromString,~'~,~<Roll>~ ); 
+    Roll = String( RemoveCharFromString,~:~,~<Roll>~ );
+
+    // Truncate the Roll if its > MaxFileName to avoid failing to store it.
+    RollLength         = strlen(~<Roll>~);
+    if ( $RollLength > <MaxFileName> )
+    {
+         substr(~<Roll>~, 0, <MaxFileName>, Roll);
+    }
+
+    cmd = ~INSERT INTO ImportOrderItemsTemp (OrderID, Roll, ItemID, ProductID, Quantity, Path ) VALUES ('<OrderID>', '<Roll>', '<ItemID>', '<ProductID>','<Quantity>', '<Path>')~;
+
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Log( Session, ~FAILED to add new item to ImportOrderItemsTemp for OrderID <OrderID>~ );
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+NUMERIC ImportPages( &TheNodeList, OrderID, ProductCode, papercode )
+{
+    i = -1;
+    pageLayout=~~;
+    frontLayout=~~;
+    backLayout=~~;
+    wrapLayout=~~;
+    FramePath = ~~;
+
+    // From the product code deduce the albums covers  and page type
+    if (!getAlbumDetails( ~<ProductCode>~, pageLayout, frontLayout, backLayout, wrapLayout ))
+    {
+        return FALSE;
+    }
+
+    NumNodes = TheNodeList( GetLength );
+    // This gets the last Sequence ID for this order.
+    // ItemID = GetOrderSequence(<OrderID>);
+
+    while ( <++i> < <NumNodes> )
+    {
+        TheNodeList( GetNodeByIndex,ANode,<i> );
+
+        ANode( GetNodeName,TheNodeName );
+
+        ANode( GetNodeText,TheText );
+
+        // Extract the useful bits
+        if (~<TheNodeName>~ == ~filepath~)
+        { 
+            Log( Session,~%%%% Add Image <TheText> to OrderID <OrderID>~ );
+
+            // Now add the image to the order. This initiates adding a thumbnail.
+            SubDir             = ~<$Str.$TheText.Folder>~;
+            Frame              = ~<$Str.$TheText.FileName>~;
+            FileNameNoExt      = ~<$Str.$FileName.WithOutExt>~;
+            FramePath = ~<TheText>~;
+
+            // Add the image to our list 
+            if (!CreateImportImage( <OrderID>, ~<SubDir>~, ~<Frame>~, ~<TheText>~, ~<TheText>~, ~Original~))
+            {
+                Log( Session,~Failed to CreateImportImage().~);
+            }
+            <++i>;
+        }
+
+        // Look Ahead for the type
+        TheNodeList( GetNodeByIndex,ANode,$i );
+        ANode( GetNodeName,TheNextNodeName );
+        ANode( GetNodeText,TheNextText );
+
+        if (~<TheNextNodeName>~ == ~type~)
+        { 
+            Log( Session,~%%%% Add <TheNextText> to OrderID <OrderID>~ );
+
+            if (~<TheNextText>~ == ~<PAGE>~)
+            {
+                BaseProductID = ~<pageLayout>~;
+            }
+
+            if (~<TheNextText>~ == ~<FRONT>~)
+            {
+                BaseProductID = ~<frontLayout>~;
+            }
+
+            if (~<TheNextText>~ == ~<BACK>~)
+            {
+                BaseProductID = ~<backLayout>~;
+            }
+
+            if (~<TheNextText>~ == ~<WRAP>~)
+            {
+                BaseProductID = ~<wrapLayout>~;
+            }
+            surface = ~L~;
+            // Work out the productID from the paper type.
+            
+            if (~<papercode>~ == ~KODG~)
+            {
+                surface = ~G~;
+            }
+            if (~<papercode>~ == ~Metallic~)
+            {
+                surface = ~Y~;
+            }
+
+            ProductID = ~<BaseProductID><surface>~;
+            <++i>;
+            // Look Ahead for the page number
+            TheNodeList( GetNodeByIndex,ANode,$i);
+            ANode( GetNodeName,TheNextNodeName );
+            ANode( GetNodeText,TheNextText );
+            ItemID = ~<TheNextText>~;
+
+            Log( Session,~%%%% Add item <ProductID> Page <ItemID> to OrderID <OrderID>~ );
+
+            // Add the order item to our list 
+            if (!CreateImportOrderItem(~<OrderID>~, ~<SubDir>~, ~<ItemID>~, ~<ProductID>~, ~1~, ~<FramePath>~ ))
+            {
+                Log( Session, ~ImportPages: Failed to create order item (<OrderID>, <Product>,<Quantity>,<SubDir>).~ );
+                return FALSE;
+            }
+            StepProgressBar();
+            <++i>;
+        }
+        ANode( GetNodeType,TheType );
+
+        Log( Session,~%%%% Node <$str.$i.%03ld> of <$str.$NumNodes.%03ld>)-- <TheType>    <TheNodeName>: <TheText>~ );
+
+        if ( ANode( HasChildNodes) )
+        {
+            ANode( GetChildNodes,ChildNodeList );
+
+            ImportPages( ChildNodeList, ~<OrderID>~, ~<ProductCode>~, ~<papercode>~ );
+        }
+    }
+
+    return TRUE;
+}
+
+// FUNCTION: ConnectToDatabase()
+//
+// This function connects to DP2 own database
+NUMERIC ConnectToDatabase()
+{
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Log( Session, ~ImportCmdsDoc: Could not connect to database~ );
+        return FALSE;
+    }
+    Global( database );
+    return TRUE;
+}
+VOID logToSpecialInstructions( OrderID, msg )
+{
+    Query = ~Select NotifyText from OrderNotifications where OrderID='<OrderID>'~;
+    Instructions = ~~;
+
+    if ( !ADO( database,Connect,GetValuesFor,~<Query>~,Instructions ))
+    {
+        // Add a time stamp 
+        Instructions = ~Added at <$Date.hour>:<$Date.minute>:<$Date.second> on <$Date.Day>/<$Date.Month>/<$Date.Year>
+<msg>
+~; 
+
+        cmd = ~insert into OrderNotifications (OrderID, NotifyText) values ('<OrderID>','<Instructions>')~;
+    }
+    else
+    {
+        // Add a time stamp 
+        Instructions = ~Added at <$Date.hour>:<$Date.minute>:<$Date.second> on <$Date.Day>/<$Date.Month>/<$Date.Year>
+<msg>
+<Instructions> ~;
+        cmd = ~update OrderNotifications set NotifyText='<Instructions>' where OrderID='<OrderID>' ~;
+    }
+
+    database( BeginTransaction );
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Log( Session, ~%%% UpdateInstructions:********* FAILED to Change notify text to <Instructions> for OrderID <OrderID> !!!!!~ );
+        database( RollBackTransaction );
+        return;
+    }
+    database( CommitTransaction );
+}
+
+// FUNCTION: QueueOrderToConvert()
+//
+// This function adds a entry to the Conversion table. This is monitored 
+// by workstations that are configured to perform sRGB conversion. It is 
+// then upto them to add the images and order items once the conversion has
+// completed successfully.
+NUMERIC QueueOrderToConvert(OrderID, WorkOrderDirectory, Correct, renderpath, proof )
+{
+    //Debug(1);
+    phase2 = FALSE;
+    if (!GetWorkStationSettings( ~jobimport~ ,StorageRoot,StorageRoot,Enabled ))
+    {
+        Log( Session, ~StorageRoot Setting Unconfigured!!!!!!~);
+        Invoke( ShowWarning, ~Failed to read the StorageRoot from Settings. Try again.
+Or report to your administrator.~ );
+        return FALSE;
+    }
+
+    // Check if this work order is queued already from phase 1
+    Query = ~Select ConversionStatus from Conversion where OrderID='<OrderID>'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Log( Session,~%%%% Failed to Query Conversion list ~);
+        return FALSE;
+    }
+
+    ConversionCount = List( NumEntries );
+
+    if (<ConversionCount> > 0)
+    {
+        if (!ADO(database,Connect,GetValuesFor,~<Query>~, Status))
+        {
+            Log( Session,~%%%% Failed to Query Conversion list ~);
+        }
+
+        if (<Status> == <ConversionCompleted>)
+        {
+            Log( Session,~%%%% This Work Order is already Converted ~);
+        }
+        else
+        {
+            if (<Status> == <ConversionPending>)
+            {
+                Log( Session,~%%%% This Work Order is already awaiting Conversion~);
+            }
+            else
+            {
+                Log( Session,~%%%% This Work Order is already getting processed~);
+            }
+        }
+
+        Log( Session, ~ImportCmdsDoc:********* Order <OrderID> is in "<Status>" State~ );
+ 
+        phase2 = TRUE;
+    }
+
+    ImageCount     = database( RecordCountFor,~Select Frame from ImportImagesTemp where OrderID = '<OrderID>'~ );
+
+    // Add the order to the queue or change the status.
+    if (!<phase2>)
+    {
+        cmd = ~INSERT INTO Conversion (OrderID, ConversionStatus, ImagesToProcess, Priority, ImportWorkStation, ImportUser, ColourCorrect, IndexCards, BravoCDProfile, ROESProxies, Path, renderpath ) VALUES ('<OrderID>', '<ConversionPending>', '<ImageCount>','71', '<$App.ComputerName>','<$App.UserName>','<Correct>','0','','', '<WorkOrderDirectory>', '<renderpath>')~;
+    }
+    else
+    {
+        cmd = ~update Conversion set ConversionStatus='<ConversionPending>', ImagesToProcess='<ImageCount>', ProcessingWorkStation = '', ImportWorkStation='<$App.ComputerName>', ImportUser='<$App.UserName>', ColourCorrect='<Correct>', Path='<WorkOrderDirectory>' where (OrderID='<OrderID>') ~;
+    }
+
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        return FALSE;
+    }
+
+    if (!<phase2>)
+    {
+       database( LogActivity, Msg, ~XML Order <OrderID> Phase 1 Queued for conversion~, Type, Info );
+    }
+    else
+    {
+       database( LogActivity, Msg, ~XML Order <OrderID> Phase 2 Queued for conversion~, Type, Info );
+    }
+
+    // If this order is tagged as proof then create a proof.txt file to mark it.
+    if (~<proof>~ == ~true~)
+    {
+        SetProof(~<WorkOrderDirectory>~, ~<OrderID>~);
+    }
+
+    return TRUE; 
+}
+
+//------------------------------------------------------------------------------
+// SetProof
+//
+// This command is included to set the order to Proof by creating a txt file.
+// This mimics the ROES method rather than using a different mechanism.
+//
+//------------------------------------------------------------------------------
+NUMERIC SetProof( Path, OrderID )
+{
+    Log( Session, ~LDP: ****** Marking Proof for OrderID <OrderID>~ );
+
+    theFile = ~<Path>\Proof.txt~;
+
+    if ( !File( TextFile, AsciiOutput, OPEN, ~<theFile>~, WRITE, CREATE ) )
+    {
+        return FALSE;
+    }
+
+    TextFile( close );
+
+    return TRUE;
+}
+
+NUMERIC ProcessXMLFile( Path )
+{
+    Instructions = ~~;
+    WorkOrderDirectory = ~~;
+    ProductCode = ~~;
+
+    ConnectToDatabase();
+
+    Invoke( ProgressBarPosition,0 );
+
+    xml( parser );
+
+    if (!parser( load,~<Path>~ ))
+    {
+        Log( Session,~"%%%%%% ProcessXMLFile failed to load <Path>!!~); 
+        return FALSE;
+    }
+
+    // Extract the useful bits
+    if (Parser( SelectSingleNode,TheNode,~//data//order//number~ ))
+    {
+        TheNode( GetNodeText,OrderID );
+    }
+
+    if (Parser( SelectSingleNode,TheNode,~//data/order/account~ ))
+    {
+        TheNode( GetNodeText, AcctID );
+    }
+
+    if (Parser( SelectSingleNode,TheNode,~//data/order/colourcorrection~ ))
+    {
+        TheNode( GetNodeText, Correction );
+    }
+
+    if (Parser( SelectSingleNode,TheNode,~//data/order/proof~ ))
+    {
+        TheNode( GetNodeText, proof );
+    }
+
+    if (Parser( SelectSingleNode,TheNode,~//data/order/productcode~ ))
+    {
+        TheNode( GetNodeText, ProductCode );
+    }
+
+    if (Parser( SelectSingleNode,TheNode,~//data/order/papercode~ ))
+    {
+        TheNode( GetNodeText, papercode );
+    }
+
+    renderpath = ~~;
+    if (Parser( SelectSingleNode,TheNode,~//data/render/renderinputpath~ ))
+    {
+        TheNode( GetNodeText,  renderpath );
+    }
+
+    if (Parser( SelectSingleNode,TheNode,~//data/order/specialinstructions~ ))
+    {
+        TheNode( GetNodeText, Instructions );
+
+        Instructions = String( RemoveCharFromString,~<CR>~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~<LF>~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~+~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~\~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~%~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~$~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~!~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~#~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~;~,~<Instructions>~ );
+
+        Instructions = String( RemoveCharFromString,~`~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~'~,~<Instructions>~ );
+
+        Instructions = String( RemoveCharFromString,~{~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~}~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~[~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~]~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~<~,~<Instructions>~ );
+        Instructions = String( RemoveCharFromString,~>~,~<Instructions>~ );
+    }
+
+    if (Parser( SelectSingleNode,TheNode,~//data/file001/filepath~ ))
+    {
+        TheNode( GetNodeText, WorkOrderDirectory );
+        WorkOrderDirectory = ~<$Str.$WorkOrderDirectory.Path>~;
+    }
+    if (Parser( SelectSingleNode,TheNode,~//data/pages/file001/filepath~ ))
+    {
+        TheNode( GetNodeText, WorkOrderDirectory );
+        WorkOrderDirectory = ~<$Str.$WorkOrderDirectory.Path>~;
+    }
+
+    Log( Session,~"%%%%%% XML OrderID <OrderID> AcctID <AcctID> Correction = <Correction> Proof = <proof>~); 
+    Log( Session,~"%%%%%% SpecialInstructions = '<Instructions>'~); 
+    Log( Session,~"%%%%%% WorkOrderDirectory  = '<WorkOrderDirectory>'~);
+
+    // Check there are value details
+    if ((~<OrderID>~ == ~~) || (~<AcctID>~ == ~~) ||
+        (~<Correction>~ == ~~) || (~<WorkOrderDirectory>~ == ~~))
+    {
+        Log( Session,~"%%%%%% Missing XML import details.~); 
+        ADO( db,Connect,LogActivity,Type,Info,Msg,~XML Import Commands: failed <Path>~ );
+        Invoke( UserMessage,Translate( ~Completed <$str.$Path.FileName> With Error~ ) );
+        return FALSE;
+    }
+
+    if (~<Instructions>~ != ~~)
+    {
+        logToSpecialInstructions( <OrderID>, ~<Instructions>~ );
+    }
+
+    // Create the order
+    if (~<Correction>~ == ~1~)
+    {
+         AddOrder( ~<OrderID>~,~<AcctID>~, ~~, ~~, ~~, ~Import~ );
+    }
+    else
+    {
+         AddOrder( ~<OrderID>~,~<AcctID>~, ~~, ~~, ~~, ~Proof~ );
+    }
+
+
+    //Import the pages if this is a phase 2 import
+    if (~<ProductCode>~ != ~~)
+    {
+        // Import the images
+        Parser( SelectNodes,TheNodeList,~//data/pages/*~ );
+
+        // If theres a product code then its Phase 2
+        // This will import flattened images and add order items 
+        ImportPages( TheNodeList, ~<OrderID>~, ~<ProductCode>~, ~<papercode>~ );
+    }
+    else
+    {
+        // Import the images
+        Parser( SelectNodes,TheNodeList,~//data/*~ );
+
+        // Its images only Phase 1
+        // These get corrected and exported 
+        ImportImages( TheNodeList, ~<OrderID>~ );
+    }
+
+
+    // Set the entry in the conversion table
+    if (QueueOrderToConvert(~<OrderID>~, ~<WorkOrderDirectory>~, ~<Correction>~, ~<renderpath>~, ~<proof>~))
+    {
+        Log( Session,~"%%%%%% OrderID <OrderID> Queued for conversion.~); 
+    }
+    else
+    {
+        Log( Session,~"%%%%%% OrderID <OrderID> Failed to Queue for conversion~);
+        ADO( db,Connect,LogActivity,Type,Info,Msg,~XML Import Commands: Failed to Queue <Path>~ );
+        Invoke( UserMessage,Translate( ~Completed XML <$str.$Path.FileName> With Error~ ) );
+        return FALSE;
+    }
+
+    ADO( db,Connect,LogActivity,Type,Info,Msg,~XML Import Commands: Completed <Path>~ );
+    Invoke( UserMessage,Translate( ~Completed XML <$str.$Path.FileName>~ ) );
+    return TRUE;
+}
+
+NUMERIC ExecuteFile( Path )
+{
+    Invoke( ProgressBarPosition,0 );
+
+    Document( doc );
+
+    if ( !doc( Script,ParseFile,~<Path>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Completed <$str.$Path.FileName> With Error~ ) );
+
+        return FALSE;
+    }
+
+    Invoke( UserMessage,Translate( ~Completed <$str.$Path.FileName>~ ) );
+
+
+    return TRUE;
+}
+
+
+NUMERIC OpenAFile( Path )
+{
+    if ( !Open( Any,~<Path>~ ) )
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+VOID ChildMessage( Msg )
+{
+    UserMessage( ~<Msg>~ );
+}
+
+
+NUMERIC HandleDrop()
+{
+    if ( !GenCon( DragDropInfo,GetDropInfo ) )
+    { 
+        return FALSE;
+    }
+    
+    Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );    // REMOVE THE DRAG INFO FROM THE TREE
+
+    return ExternalDrop(DragDropInfo);        
+}
+
+
+NUMERIC ExternalDrop( &DragDropInfo )
+{
+    dlg( GetInput );
+
+    if ( ~<$con.dlgdata[Directory]>~ == ~~ )
+    {
+        return Warning( Translate( ~You must select a directory to poll first~ ) );
+    }
+
+    if ( !DragDropInfo( GetDraggedFiles,DraggedFileList ) )
+    { 
+        return Warning( Translate( ~There were no files in the object you dragged~ ) );
+    }
+
+    count = DraggedFileList( ChildCount );
+        
+    if ( $count <= 0 )
+    { 
+        return Warning( ~There were no files in the object you dragged~; )
+    }
+
+    if ( <count> > 1 )
+    {
+        SortOrder = CustomMessageBox( Title,~Import Commands~,Message,~Sort files by ...~,
+                                        Button1,~File Name~,
+                                        Button2,~Creation Date~,
+                                        Button3,~Cancel~ );
+        if ( <SortOrder> == 1 )
+        {
+            DraggedFileList( SortListBy,~Text~,~CreationTime~ );
+        }
+        else if ( <SortOrder> == 2 )
+        {
+            DraggedFileList( SortListBy,~CreationTime~,~Text~ );
+        }
+        else 
+        {
+            return FALSE;
+        }
+    }
+
+    more = DraggedFileList( GetFirst,Path );
+
+    while ( <more> )
+    {
+        QueueAFile( ~<$Con.Path[Text]>~,~<$con.dlgdata[Directory]>~ );
+
+        more = DraggedFileList( GetNext,Path );
+    }
+
+    return TRUE;
+}
+
+
+NUMERIC QueueAFile( FromPath,ToDirectory )
+{
+    FileName = ~<$Str.$FromPath.FileName>~;
+
+    ToPath = ~<ToDirectory>\<FileName>~;
+
+    count = 0;
+
+    while ( TRUE )
+    {
+        if ( !Files( FileExists,~<ToPath>~ ) )
+        {
+            if ( !Files( Copy,~<FromPath>~,~<ToPath>~ ) )
+            {
+                return UserWarning( Translate( ~Could not copy <FromPath> to <ToPath>~ ) );
+            }
+
+            if ( !Files( ChMod,~<ToPath>~,ReadWrite ) )
+            {
+                // Not sure what to do here
+            }
+
+            if ( !Files( SetFileTimes,~<ToPath>~,Now,Now,Now ) )
+            {
+                theErr = GetLastErrorMsg();
+
+                return UserWarning( Translate( ~Failed to set the filetime on <ToPath>.\n\n<theErr>~ ) );
+            }
+
+            Invoke( ExecutingFile,Translate( ~Queued <ToDirectory>\<FileName>~ ) );
+
+            if ( aThread( IsActive ) )
+            {
+                aThread( TerminateSleep );
+            }
+
+            return TRUE;
+        }
+
+        ToPath = ~<ToDirectory>\<FileName>.<++count>~;
+    }
+}
+
+VOID MinimizeDialog()
+{
+    DataLoaderDlgDefinition(Show,MINIMIZE);
+    LeftPosition = App( thisApp,MainWindow,GetClientWidth ) - 160;
+    TopPosition = App( thisApp,MainWindow,GetClientHeight ) - 5;
+
+    dlg( SetWindowPosition,<LeftPosition>,<TopPosition> );
+}
+
+Log(Session, ~***********************************************************************~);
+Log(Session, ~     Import Cmds / XML Dialog Opened (<ImportVersion>)~);
+Log(Session, ~***********************************************************************~);
+
+Thread( aThread );
+
+DefineDialog();
+
+if ( GetWorkStationSettings( ~<$Job.Name>~,SearchDirectory,SearchDirectory,Enabled ) )
+{
+    dlg( SetString,~<SearchDirectory>~ ,Directory,0 ); 
+}
+
+if ( GetWorkStationSettings( ~<$Job.Name>~,AutoStart,AutoStart,Enabled ) )
+{
+    dlg( SetString,~<AutoStart>~ ,AutoStart,0 ); 
+
+    if ( <AutoStart> && <Enabled> )
+    {
+        OnGoButton();
+    }
+}
+
+Debug( SetDontDebugThis,TRUE );

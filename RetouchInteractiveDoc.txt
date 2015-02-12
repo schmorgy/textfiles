@@ -1,0 +1,285 @@
+
+IncludeClass( KarsDialog );
+
+VOID LiveDlg::LiveDlg()					// CONSTRUCTOR
+{
+	KarsType = ~Interactive~;
+	NextProcess = ~Merge~;
+	BeginState = ~QueuedFor<KarsType>~;
+	InProcessState = ~In<KarsType>~;
+	CompleteState = ~In<KarsType>~; // temporary until review.cpp is fixed
+	Key = ~RetouchState = '<BeginState>'~;
+	//HelpPage = ~Kars<KartType>.htm~;
+	Left = 515;
+	GoButtonToolTip = Translate( ~Run the background Retouch <KarsType> process.~ );
+	Title = Translate( ~Retouching <KarsType> operation~ );
+	Fields1 = ~*~;
+	Query = ~SELECT <Fields1> FROM <MasterTable> ORDER BY <Sort>~;
+}
+
+
+NUMERIC LiveDlg::SetupOperation()
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( ~Could not connect to the database. <theErr>~ );
+		return ExitOnError();
+	}
+	if ( !PGenConList( List,Connection,dBase,Cursor,Static,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		WaitCursor( END );
+		Warning( Translate( ~Query Failed: <Query>. <theErr>~ ) );
+		return ExitOnError();
+	}
+
+	Count = List( NumEntries );
+
+	if ( <Count> == 0 )
+	{
+		return ExitOnError();
+	}
+
+	retouchImage = List( GetFirst,record );
+
+	OrderRollFrame = ~OrderID = '<$pcon.record[OrderID]>' AND Roll = '<$pcon.record[Roll]>' AND Frame = '<$pcon.record[Frame]>'~;
+	Values = ~RetouchState = '<InProcessState>'~;
+
+	Cmd = ~Update <MasterTable> Set <Values> Where <OrderRollFrame>~;
+	if (!dBase( Cmd,~<Cmd>~ ))
+	{
+		dBase( GetErrorDescription, theErr );
+		Log( Session,Translate(~Cmd Failed <Cmd>. <theErr>~) );
+		Warning( Translate( ~Failed to update the Retouch Images Table for <OrderRollFrame>~ ) );
+		return ExitOnError();
+	}
+	
+	<KarsType>PreprocessData( SetValues,OrderID,~<$pcon.record[OrderID]>~,
+									 Roll,~<$pcon.record[Roll]>~,
+									 Frame,~<$pcon.record[Frame]>~,
+									 JPEGQuality,~<$pcon.record[JPEGQuality]>~,
+									 DataPath,~<$pcon.record[IntermediateDataPath]>~,
+									 CompleteState,~<CompleteState>~,
+									 OverWriteOriginal,~<$pcon.record[OverWriteOriginal]>~,
+									 OriginalPrefix,~<$pcon.record[OriginalPrefix]>~,
+									 OriginalSuffix,~<$pcon.record[OriginalSuffix]>~,
+									 OriginalPath,~<$pcon.record[OriginalPath]>~ );
+	<KarsType>PreprocessData( SetValues,SourceImagePath,~~,
+									 ModImagepath,~~,
+									 FileType,~~,
+									 Length,0,
+									 Width,0,
+									 Depth,3,
+									 FileResolution,250,
+									 RotateFromDisk,0,
+									 ArbitraryRotation,0.0,
+									 Flattened,0 );
+	<KarsType>PreprocessData( SetValues,Brt,0,
+									 Red,0,
+									 Grn,0,
+									 Blu,0,
+									 Con,0,
+									 Saturation,0,
+									 Gamma,0,
+									 GammaRed,0,
+									 GammaGreen,0,
+									 GammaBlue,0,
+									 ICCProfile,~~,
+									 DefaultProfileUsed,0 );
+
+	<KarsType>PreprocessData( SetValues,ApplyShasta,0,
+									 PostKPTPBrt,0,
+									 PostKPTPRed,0,
+									 PostKPTPGrn,0,
+									 PostKPTPBlu,0,
+									 PostKPTPCon,0,
+									 PostKPTPGam,0.0,
+									 ShastaHighlight,0,
+									 ShastaMidTone,0,
+									 ShastaShadow,0 );
+
+	<KarsType>PreprocessData( SetValues,ImageSource,~~,
+									 CompleteNotification,~<THIS>.OnComplete~,
+									 ErrorNotification,~<THIS>.OnRetouchError~,
+									 OutputProfile,~~
+							);
+	
+	if ( !RunOperation( ~<$pcon.record[OrderID]>~,~<$pcon.record[Roll]>~,~<$pcon.record[Frame]>~ ) )
+	{
+		return ExitOnError();
+	}
+	return TRUE;
+}
+
+NUMERIC LiveDlg::RunOperation( Order,Roll,Frame )
+{
+	if ( !Defined( Kpars ) )
+	{
+		KparsConnect( ~Review~ );
+	}
+	
+	if ( !Kpars( Initialize,<KarsType>PreprocessData ) )
+	{
+		ErrMsg = Translate( ~Unable to initialize the retouching software interface.~ );
+		return Warning( Translate( ~<ErrMsg>~ ) );
+	}
+
+	instrCount = Instructions( ~<Order>~,~<Roll>~,~<Frame>~ );
+	if ( <instrCount> > 0 )
+	{
+		Actions = ACTION Doc ( RetouchInstrDialog OpenOnce RetouchInstDoc "Init();" );
+		PerformActions( Actions );
+
+		Actions = ACTION Doc ( RetouchInstrDialog "NewImage( ~<Order>~,~<Roll>~,~<Frame>~);" );
+		PerformActions( Actions );
+
+		bInstructionsOn = TRUE;
+	}
+	else if ( <bInstructionsOn> )
+	{
+		Actions = ACTION Doc ( RetouchInstrDialog OpenOnce RetouchInstDoc "DoCancelButton();" );
+		PerformActions( Actions );
+		bInstructionsOn = FALSE;
+	}
+
+	fReviewActive = TRUE;
+	GenCon( Control,IsCopyOf,<KarsType>PreprocessData,PERMANENT );
+	if ( !Kpars( ~Run<KarsType>~,Control ) )
+	{
+		ErrMsg = Translate( ~Unable to initialize the retouching software interface.~ );
+		return Warning( Translate( ~<ErrMsg>~ ) );
+	}
+	return TRUE;	
+}
+
+NUMERIC LiveDlg::OnRetouchError( Order,Roll,Frame )
+{
+	OnComplete( <KARS_ERROR>,~<Order>~,~<Roll>~,~<Frame>~ );
+	return TRUE;
+}
+
+NUMERIC LiveDlg::OnComplete( Status,Order,Roll,Frame )
+{
+	dongleError = 0;
+	credits     = 0;
+	credits     = CheckKparsDongle(dongleError);
+
+	if ( !IsNULL( ~<sysLowCreditSetting>~ ) )
+	{
+		if ( <credits> < atof( ~<sysLowCreditSetting>~ )  && !<fWarnedLowCredits> && (<dongleError> == 0 || <dongleError> == <DONGLE_NO_CREDITS> || <dongleError> == <DONGLE_INIT_ERROR> ) )
+		{
+			Warning( Translate( ~<credits> Retouch Credits Remaining. Please order addtional retouch credits.~ ) );
+			fWarnedLowCredits = TRUE;
+		}	
+	}
+
+	if ( <Status> == <KARS_ACCEPTED> && <credits> > 0)
+	{
+		txtMsg = ~Completed <KarsType> processing for <Order>,<Roll>,<Frame>.~;
+		txtMsg = ~<txtMsg> Merging original with retouched image for <Order>,<Roll>,<Frame>.~;
+
+		if ( <sysAutoMerge> )
+		{
+			Actions = ACTION Doc ( RetouchMergeDoc OpenOnce RetouchMergeDoc "Init(TRUE);" );
+			PerformActions( Actions );
+		}
+	}
+	else if ( <Status> == <KARS_ACCEPTED> )
+	{
+		txtMsg = ~Completed <KarsType> processing for <Order>,<Roll>,<Frame>.~;
+		txtMsg = ~<txtMsg> Unable to merge retouched image due to lack of retouch credits.~;
+		QueueForMerge( ~<Order>~,~<Roll>~,~<Frame>~ );
+	}
+	else if ( <Status> == <KARS_REJECTED> )
+	{
+		txtMsg = ~Kodak Auto Retouch result rejected for <Order>,<Roll>,<Frame>.~;
+	}
+	else
+	{
+		txtMsg = ~<KarsType> Retouch processing failed for <Order>,<Roll>,<Frame>.~;
+		Warning( Translate( ~<txtMsg>~ ) );
+	}
+	Log( Session, ~<txtMsg>~ );
+
+	Actions = ACTION Doc ( RetouchMergeDoc OpenOnce RetouchMergeDoc "CancelAutoDialog();" );
+	PerformActions( Actions );
+
+	if ( <bInstructionsOn> )
+	{
+		Actions = ACTION Doc ( RetouchInstrDialog OpenOnce RetouchInstDoc "DoCancelButton();" );
+		PerformActions( Actions );
+		bInstructionsOn = FALSE;
+	}
+
+	fReviewActive   = FALSE;
+	ExitOnError();
+
+	return TRUE;
+}
+
+NUMERIC LiveDlg::QueueForMerge(Order,Roll,Frame)
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	Values = ~RetouchState = 'QueuedForMerge'~;
+
+	Cmd = ~Update <MasterTable> Set <Values> Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+	if (!dBase( Cmd,~<Cmd>~ ))
+	{
+		dBase( GetErrorDescription, theErr );
+		Log( Session,Translate(~Cmd Failed <Cmd>. <theErr>~) );
+		return Warning( Translate( ~Failed to update the Retouch Images Table for <Order>,<Roll>,<Frame>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC LiveDlg::DefineDialog()
+{
+	BaseDialog::DefineDialog();
+	dlg( EnableControls,FALSE,GoButton );
+	dlg( EnableControls,TRUE,StopButton );
+	fStopped = FALSE;
+	fStopPending = FALSE;
+	txtMsg = ~Processing <Order>,<Roll>,<Frame> in <KarsType> Mode.~;
+	dlg( SetControlValue,CurrentImageText,Translate( ~<txtMsg>~ ) );
+	
+	return TRUE;
+}
+
+
+VOID Init(Order,Roll,Frame)
+{
+	if ( !Defined( KarsInteract ) )
+	{
+		Class( LiveDlg,Extends,KarsDialog,
+						Member,Order,Str,~<Order>~,
+						Member,Roll,Str,~<Roll>~,
+						Member,Frame,Str,~<Frame>~ );
+
+		LiveDlg( New,KarsInteract );
+
+		KarsInteract.DefineDictionary();
+		KarsInteract.DefineDialog();
+		KarsInteract.InitDictionaryData();
+		Key = ~OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		Query = ~SELECT <Fields1> FROM <MasterTable> WHERE <Key> ORDER BY <Sort>~;
+		KarsInteract.Set( Key,~<Key>~ );
+		KarsInteract.Set( Query,~<Query>~ );
+
+		Global( KarsInteract );
+		KarsInteract.SetupOperation();
+		return;
+	}
+	else
+	{
+		Warning( Translate( ~An image is already open in KPARS Interactive Mode. Please finish with that image and try again.~ ) );
+		return;
+	}
+}

@@ -1,0 +1,738 @@
+// The following functions are DWS Utilities
+
+STR GetCurrentOrder( )
+{
+	OrderID = ~~;
+	Enabled = 0;
+	GetWorkstationSettings( ~DWS_<$App.Instance>~,~CurrentOrder~,OrderID,Enabled );
+	if ( !<Enabled> )
+	{
+		OrderID = ~~;
+	}
+	
+	return ~<OrderID>~;
+}
+
+NUMERIC SetCurrentOrder( OrderID )
+{
+	if ( !SetWorkstationSettings( ~DWS_<$App.Instance>~,~CurrentOrder~,~<OrderID>~,TRUE ) )
+	{
+		return FALSE;
+	}
+
+	// Tell the navigator to update the display.
+	Action = STR ( NavDoc "CurrentOrderUpdate( ~<OrderID>~ );" );
+	PerformDocActions( Action );
+
+	return TRUE;
+}
+
+VOID SetCurrentIDAndUpdate( OrderID )
+{
+
+	SetCurrentOrder( ~<OrderID>~ );
+	
+	// Notify open windows that the current order has changed and give them the option to update.
+	NotifyWindowHandler( ~CurrentOrderUpdate( `<OrderID>` )~ );
+	
+}
+
+// Open an image in a separate window
+NUMERIC OpenAnImage( Path,OrderID,Roll,Frame )
+{
+	if ( !Files( FileExists,~<Path>~ ) )
+		{ return Warning( ~Could not open <Path>~ ); }
+
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( ~Could not create document info for <Path>~ ); }
+
+//	if (!GenCon( ImageInfo,New,DDScannerImageData ) )
+//		{ return Warning( ~Could not create image info for <Path>~ ); }
+
+	Info( SetValues,OrderID,~<OrderID>~,Roll,~<Roll>~,Frame,~<Frame>~ );
+
+//	ImageInfo( SetValue, Path, ~<Path>~);
+
+	StatusBarText( ~Order <OrderID>  Roll <Roll>   Frame <Frame>.   <Path>~ );
+
+	Document( Doc );
+
+	TopMostWindow = ~~;
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )	// TRY TO BRING EXISTING WINDOW TO FRONT
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == ImageView || ~<ViewType>~ == ImageEditView || ~<ViewType>~ == PIEEditView)
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<Path>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+
+			if ( IsNULL( ~<TopMostWindow>~ ) )
+			{
+				TopMostWindow = ~<DocumentPath>~;
+			}
+		}
+	}
+
+	if ( KeyState( LSHIFT ) || KeyState( RSHIFT ) )		// OPEN A NEW WINDOW NO MATTER WHAT?
+	{
+		if ( !Doc( Open,~<Path>~,Image,~~,Info ) )
+		{ 
+			return Warning( Translate( ~Could not open <Path>~ ) );
+		}
+
+		return TRUE;
+	}
+
+	if ( ~<TopMostWindow>~ != ~~ )
+	{
+		if ( Doc( FindByPath,~<TopMostWindow>~ ) )			// REPLACE THE TOP MOST WINDOWS CONTENTS
+		{
+			ImageCorrections( Free,~<LastImagePath>~ );
+			ImageCorrections( GetAndFreeWhenLastView,~<Path>~ );				// NEED THIS TO RECEIVE CROP UPDATES
+			LastImagePath = ~<Path>~;
+			Window( SetWindowOrder,Top );
+//			return Doc( ReplaceImage,~<Path>~,Info, ImageInfo );
+			return Doc( ReplaceImage,~<Path>~,Info );
+		}
+	}
+
+	// IF ALL ELSE FAILS, JUST OPEN THE DARN THING.
+
+	ImageCorrections( Free,~<LastImagePath>~ );
+
+	if ( !Doc( Open,~<Path>~,Image,~~,Info ) )
+	{ 
+		return Warning( ~Could not open <Path>~ );
+	}
+
+	ImageCorrections( GetAndFreeWhenLastView,~<Path>~ );	// NEED THIS TO RECEIVE CROP UPDATES
+
+	LastImagePath = ~<Path>~;
+
+	return TRUE;
+}
+
+NUMERIC ViewImageData( ImageClicked, ViewIsImages )
+{
+	maxQueryLength = 1400;
+
+	if ( !GenCon( View,GetActiveView ) )
+		{ return Warning( ~There was no active view~ ); }
+	
+	Order = ~~;
+	if ( !Defined( View ) )
+		{ return FALSE; }
+
+	Query = ~~;
+	Sort = ~Order By OrderID, Roll, Frame~;
+
+	if ( <ViewIsImages> )
+	{
+		View( Get,Text,Order );
+		if ( !<ImageClicked> )
+		{
+			Query = STR ( Select * From Images Where OrderID = '<Order>' <Sort> );
+			Actions = ACTION Doc ( ImagesDataDoc Open ImagesDataDoc "Init( ~<Order>~,FALSE,~<Query>~,0 );" );
+			return PerformActions( Actions );
+		}
+
+		Count = View( GetSelectedIconCount );
+		if ( <Count> >= 1 )
+		{
+			if ( !View( GetSelected,SelectedImages ) )
+			{
+				return FALSE;
+			}
+		} else
+		{
+			Query = STR ( Select * From Images Where OrderID = '<Order>' <Sort> );
+			Actions = ACTION Doc ( ImagesDataDoc Open ImagesDataDoc "Init( ~<Order>~,FALSE,~<Query>~,0 );" );
+			return PerformActions( Actions );
+		}
+
+		imageCount = 0;
+		queryLength = 0;
+		maxQueryString = <maxQueryLength> - 75;
+
+		if ( <Count> > 1 )
+		{
+			criteriaList = ~(~;
+			while ( SelectedImages( GetNext,Image ) && <queryLength> < <maxQueryString> )
+			{
+				if ( ~<criteriaList>~ != ~(~ )
+				{
+					criteriaList = ~<criteriaList> OR~;
+				}
+				criteriaList = ~<criteriaList> (Images.Roll = '<$con.Image[Roll]>' AND Images.Frame = '<$con.Image[Frame]>')~;
+
+				imageCount = <imageCount> + 1;
+				queryLength = strlen( ~<criteriaList>~ );
+			}
+			criteriaList = ~<criteriaList>)~;
+
+			if ( <queryLength> > <maxQueryString> && <imageCount> < <Count> )
+			{
+				Log( Session,~query for <imageCount> images is:<criteriaList>~ );
+
+				Msg = ~You can select up to <imageCount> individual images or the entire order.\nPlease indicate your selection.~;
+
+				GenCon( MbInfo,New,DDCustomMessageBox );
+				MbInfo( SetValues,Title,Translate(~SBA Data~),Message,~<Msg>~,
+							Button1,Translate(~&Order~),Button2,Translate(~&<imageCount> Images~),Button3,Translate(~&Cancel~),
+							SetWindowPos,1,X,-1,Y,-1,Width,325,Height,215 ) ;
+				result = CustomMessageBox(MbInfo);
+				button = MbInfo(GetNumeric, ButtonPressed);
+				if ( <result> == 2 || <button> == 3 )	// result = 2 when X in dialog is pressed
+				{
+					return FALSE;	
+				}
+				else if ( <button> == 1 )
+				{
+					Query = STR ( Select * From Images Where OrderID = '<Order>'  <Sort> );
+					Actions = ACTION Doc ( ImagesDataDoc Open ImagesDataDoc "Init( ~<Order>~,FALSE,~<Query>~,0 );" );
+					return PerformActions( Actions );
+				}
+			}
+			Query = STR ( Select * From Images Where OrderID = '<$con.Image[OrderID]>' And <criteriaList> <Sort> );
+			Actions = ACTION Doc ( ImagesDataDoc Open ImagesDataDoc "Init( ~<Order>~,FALSE,~<Query>~,0 );" );
+			return PerformActions( Actions );
+		}
+		else if ( <Count> == 1 && Defined(SelectedImages) )	
+		{
+			if ( SelectedImages( GetFirst,Image ) )
+			{
+				Query = STR ( Select * From Images Where OrderID = '<$con.Image[OrderID]>' And Roll =  '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>' <Sort> );
+				Actions = ACTION Doc ( ImagesDataDoc Open ImagesDataDoc "Init( ~<Order>~,FALSE,~<Query>~,0 );" );
+				return PerformActions( Actions );
+			}
+			else
+			{
+				return Warning( ~Unabled to retrieve image data for selected image.~ );
+			}
+		}
+	}
+	else	// is a grid view
+	{
+		Query = STR ( Select * From Images Where OrderID = '<Order>'  <Sort> );
+		Actions = ACTION Doc ( ImagesDataDoc Open ImagesDataDoc "Init( ~<Order>~,FALSE,~<Query>~,0 );" );
+		return PerformActions( Actions );
+	}
+	return FALSE;
+}
+
+NUMERIC	CreateStringListFromCol( Category, &OrderFields )
+{
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~Unable to connect to the database, <theErr>~ );
+		return FALSE;
+	}
+
+	Query = ~Select ColumnNames From ModuleSettings Where Category = '<Category>' AND UserName = '<$App.UserName>'~;
+	if ( !dBase( GetValuesFor, ~<Query>~, ColumnNames ) )
+	{
+		return FALSE;
+	}
+	
+	numTokens = GetTokens( ~<ColumnNames>~, ~,~ );
+	count = 0;
+
+	while ( <count++> < <numTokens> )
+	{
+		if ( OrderFields( AddString, ~<Token<count>>~ ) )
+		{
+			//Log( Session, ~<Token<count>>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC	CreateStringListFromColForAllFields( Category, &OrderFields )
+{
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~Unable to connect to the database, <theErr>~ );
+		return FALSE;
+	}
+
+	Query = ~Select ColumnNames From ModuleSettings Where Category = '<Category>' AND UserName = ''~;
+	if ( !dBase( GetValuesFor, ~<Query>~, ColumnNames ) )
+	{
+		return FALSE;
+	}
+	
+	numTokens = GetTokens( ~<ColumnNames>~, ~,~ );
+	count = 0;
+
+	while ( <count++> < <numTokens> )
+	{
+		OrderFields( AddString, ~<Token<count>>~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC RemoveAndAddThumbnail( &ViewImages, Order, Roll, Frame )
+{
+
+	if ( ViewImages( FindI,Key,~OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~,Where,Image ) )
+	{ 
+		ViewImages( RemoveThumbNailFor,Image );
+		ForgetPrivate( Image );
+	}
+
+	if ( !Ado( dBase, Connect ) )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select * From Images Where OrderID = '<Order>' AND Roll = '<Roll>' and Frame = '<Frame>'~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		Log( Session, ~Query Failed: <Query>. <theErr>~ );
+		Warning( TR( BaseImportTrans, DBQueryFailed ) );
+		return FALSE;
+	}
+
+	if ( !List( GetFirst,Record ) )	
+	{
+		List( GetErrorDescription,0,theErr );
+		Log( Session, ~Failed to find any records for: <Query>. <theErr>~ );
+		return FALSE;
+	}
+
+	// Add the thumbnail
+	GenCon( ImageThumbNailImage,New,DDICImageDef,SetValues,
+		Info1,		~<$pcon.Record[Roll]>~,
+		Info2,		~<$pcon.Record[OrderID]>-<$pcon.Record[Roll]>-<$pcon.Record[Frame]>  <$pcon.Record[SubjectID]>~,
+		Info3,		~<$pcon.Record[OrderID]>-<$pcon.Record[Roll]>-<$pcon.Record[Frame]>  <$pcon.Record[SubjectID]>    <$pcon.Record[Path]>~,
+		OrderID,	~<$pcon.Record[OrderID]>~,
+		Roll,		~<$pcon.Record[Roll]>~,
+		Frame,		~<$pcon.Record[Frame]>~,
+		Path,		~<$pcon.Record[Path]>~,
+		IsSelected,	FALSE, 
+		AutoRetouchComplete, ~<$pcon.Record[AutoRetouchComplete]>~,
+		DropTypes,	~Image~,
+		DataType,	Image, 
+		Table,		Image,
+		Key,		~OrderID = '<$pcon.Record[OrderID]>' AND Roll = '<$pcon.Record[Roll]>' AND Frame = '<$pcon.Record[Frame]>'~
+		) ;
+
+	ViewImages( AddThumbNailToThisView,ImageThumbNailImage,NULL,NULL,Record );
+
+	return TRUE;
+}
+
+STR GetDefaultPrintQueue( &dBase, Width, Height, Type, NumPages )
+{
+	if ( <NumVariableParameters> == 1 )
+	{
+		subType = <P6>;
+	}
+
+	printerQueue = ~~;
+
+	// We check against NumPages <= so that in the case of books if the exact number of pages isn't found, we will get the
+	// next largest number.
+	if ( DefinedAndNotNull( subType ) )
+	{
+		if ( SimilarStr( ~<Type>~, ~Print~ ) )
+		{
+			Query = ~Select QueueName From PrintsInfo Where ( (PrintWidth = <Width> AND PrintHeight = <Height>) OR ( PrintWidth = <Height> AND PrintHeight = <Width> ) ) and Item = '<Type>' AND ProductSubType = <subType> AND NumPages <= <NumPages> AND Hidden = 0 Order By NumPages DESC~;
+		}
+		else
+		{
+			Query = ~Select QueueName From PrintsInfo Where (PrintWidth = <Width> AND PrintHeight = <Height>) and Item = '<Type>' AND ProductSubType = <subType> AND NumPages <= <NumPages> AND Hidden = 0 Order By NumPages DESC~;		
+		}
+	}
+	else
+	{
+		if ( SimilarStr( ~<Type>~, ~Print~ ) )
+		{
+			Query = ~Select QueueName From PrintsInfo Where ( (PrintWidth = <Width> AND PrintHeight = <Height>) OR ( PrintWidth = <Height> AND PrintHeight = <Width> ) ) and Item = '<Type>' AND NumPages <= <NumPages> AND Hidden = 0 Order By NumPages DESC~;
+		}
+		else
+		{
+			Query = ~Select QueueName From PrintsInfo Where ( PrintWidth = <Width> AND PrintHeight = <Height>) and Item = '<Type>' AND NumPages <= <NumPages> AND Hidden = 0 Order By NumPages DESC~;	
+		}
+	}
+
+	if ( !PGenConList( PrintQueuesList,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		dBase( GetErrorDescription,0,theErr );
+		Log( Session, ~Unable to get QueueNames, <theErr>~ );
+	}
+	else
+	{
+		if ( PrintQueuesList( GetFirst, PrinterQueue ))
+		{
+			printerQueue = ~<$pcon.PrinterQueue[QueueName]>~;
+		}
+	}
+
+if ( 0 )
+{
+	printerQueue = ~~;
+	Enabled = FALSE;
+	GetSystemSettings( KEXDSS, DefaultPrintQueue, printerQueue, Enabled );
+
+	if ( IsNULL( ~<printerQueue>~ ) || !<Enabled> )
+	{
+		if ( !Ado( dBase,Connect ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Log( Session, ~ShowOrderItem(): Unable to connect to the database. <theErr>~ );
+		}
+		else
+		{
+			Query = ~Select QueueName From QueueDefinition Order By QueueName~;
+
+			if ( !PGenConList( PrintQueuesList,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+			{
+				dBase( GetErrorDescription,0,theErr );
+				Log( Session, ~Unable to get QueueNames, <theErr>~ );
+			}
+			else
+			{
+				if ( PrintQueuesList( GetFirst, PrinterQueue ))
+				{
+					printerQueue = ~<$pcon.PrinterQueue[QueueName]>~;
+				}
+			}
+		}
+
+	}
+}
+
+	return ~<printerQueue>~;
+}
+
+NUMERIC AssignOutputSpec( &dBase, &theRenderList, QueueName, PaperSurface, Width, Height, PrintType, doublesided, rotate )
+{
+
+	// Check the PrintType.  For the special case that is comes in as x-C that means a specific cover for a book
+	bookCover = FALSE;
+	numTokens = GetTokens( ~<PrintType>~, ~-~);
+	if ( <numTokens> == 2 )
+	{
+		bookCover = TRUE;
+	}
+
+	printerModel = ~~;
+	Query = ~Select PrinterModel From QueueDefinition Where QueueName = '<QueueName>'~;
+	dBase( GetValuesFor, ~<Query>~, printerModel );
+
+	Model = ~~; IntID= ~~;
+	if ( SimilarStr( ~<printerModel>~, ~Disk~ ) )
+	{
+		if ( !theRenderList( GetNodeByName,~Saveimage:~,0,SaveImageNode ) )	
+		{
+			Warning( ~Unable to get the Saveimage: output spec~ );
+			return FALSE;	
+		}
+
+		
+		// This is a basic disk printer, it writes files to a file.
+		Model = ~Disk~; IntID = ~-9002~;
+		if ( theRenderList( GetNodeByName,~Saveimage:~,0,SaveImageNode ) )	
+		{
+			SaveImageNode( Set,~Queuename:~,~<QueueName>~ );
+			SaveImageNode( Set,~Xres:~,0 );
+			SaveImageNode( ResetStatus,~Xres:~,255);
+			SaveImageNode( Set, ~Oemprintersurface:~, <paperSurface> );
+
+			// This is a Noritsu printer and we need to modify the output spec to include
+			// both the paper channel and surface.
+			if ( <bookCover> )
+			{
+				Query = ~Select Channel,PaperWidth From PrintChannels Where PrintsInfoID = '<PrintType>' AND IsDefault = 1~;
+			}
+			else
+			{
+				Query = ~Select Channel,PaperWidth From PrintChannels,PrintsInfo Where (( PrintWidth = <Width> AND PrintHeight = <Height> ) OR ( PrintWidth = <Height> AND PrintHeight = <Width> ) ) AND PrintChannels.PrintsInfoID = PrintsInfo.ID AND Surface = <PaperSurface> AND PrintsInfo.Item = '<PrintType>'~;
+			}
+			dBase( GetValuesFor, ~<Query>~, printerChannel,paperWidth );
+
+			if ( Defined( printerChannel ) && Defined( paperWidth ) )
+			{
+				SaveImageNode( Set, ~Oemprinterchannel:~, <printerChannel> );
+				SaveImageNode( Set, ~Paperwidth:~, <PaperWidth> );
+			}
+		}
+		else
+		{
+			Log( Session, ~Unable to GetNodeByName, Saveimage:~ );
+			return FALSE;
+		}
+
+	}
+	else if ( SimilarStr( ~<printerModel>~, ~Kodak LED~ ) )
+	{
+		Model = ~LED~; IntID = ~-9004~;
+		if ( theRenderList( GetNodeByName,~Outputtoled:~,0,SaveLEDNode ) )	
+		{
+			SaveLEDNode( Set,~Queuename:~,~<QueueName>~ );
+		}
+	}
+	else if ( SimilarStr( ~<printerModel>~, ~Windows Printer~ ) )
+	{
+		Model = ~Windows~; IntID = ~-9030~;
+		if ( theRenderList( GetNodeByName,~Outputtolaserprinter:~,0,SaveLaserNode ) )	
+		{
+			SaveLaserNode( Set,~Queuename:~,~<QueueName>~ );
+
+			// The user should always define the configuration file to 
+			// portrait.
+			if ( <Width> > <Height> )
+			{
+				SaveLaserNode( Set,~Rotated:~,90 );
+			}
+			else
+			{
+				SaveLaserNode( Set,~Rotated:~,0 );
+			}
+		}
+	}
+	else if ( SimilarStr( ~<printerModel>~, ~Kodak7000Thermal~ ) )
+	{
+		Model = ~Kodak7000Thermal~; IntID = ~-9049~;
+		if ( theRenderList( GetNodeByName,~Outputtokodak7000thermal:~,0,Save7000Node ) )	
+		{
+			Save7000Node( Set,~Queuename:~,~<QueueName>~ );
+			Save7000Node( Set, ~Oemprintersurface:~, <paperSurface> ); //matte(satin)=2, glossy=3
+		}
+	}
+	else if ( SimilarStr( ~<printerModel>~, ~Kodak8810Thermal~ ) )
+	{
+		Model = ~Kodak8810Thermal~; IntID = ~-9050~;
+		if ( theRenderList( GetNodeByName,~Outputtokodak8810thermal:~,0,Save8810Node ) )	
+		{
+			Save8810Node( Set,~Queuename:~,~<QueueName>~ );
+			Save8810Node( Set, ~Oemprintersurface:~, <paperSurface> ); //matte(satin)=2, glossy=4
+		}
+	}
+	else if ( SimilarStr( ~<printerModel>~, ~KodakD4000Thermal~ ) )
+	{
+		Model = ~KodakD4000Thermal~; IntID = ~-9051~;
+		if ( theRenderList( GetNodeByName,~OutputtokodakD4000thermal:~,0,SaveD4000Node ) )	
+		{
+			SaveD4000Node( Set,~Queuename:~,~<QueueName>~ );
+			SaveD4000Node( Set, ~Oemprintersurface:~, <paperSurface> ); //matte(satin)=2, glossy=4 
+			SaveD4000Node( Set, ~Doublesided:~, <doublesided> );
+			if ( SimilarStr( ~<PrintType>~, ~Print~ ) && <Height> <= 8 && <Width> <= 8 && <Height> > <Width> )
+			{
+				SaveD4000Node( Set, ~Rotated:~, 270 );
+			}
+			else
+			{
+				SaveD4000Node( Set, ~Rotated:~, <rotate> );
+			}
+		}
+	}
+	else if ( SimilarStr( ~<printerModel>~, ~Kodak RP30~ ) )
+	{
+		Model = ~Disk~; IntID = ~-9002~;
+		if ( theRenderList( GetNodeByName,~Saveimage:~,0,SaveImageNode ) )	
+		{
+			SaveImageNode( Set,~Rp30:~,1 );
+			SaveImageNode( Set,~Queuename:~,~<QueueName>~ );
+			SaveImageNode( Set, ~Oemprintersurface:~, <paperSurface> );
+
+			if ( <bookCover> )
+			{
+				Query = ~Select Channel,PaperWidth From PrintChannels Where PrintsInfoID = '<PrintType>' AND IsDefault = 1~;
+			}
+			else
+			{
+				Query = ~Select Channel,PaperWidth From PrintChannels,PrintsInfo Where (( PrintWidth = <Width> AND PrintHeight = <Height> ) OR ( PrintWidth = <Height> AND PrintHeight = <Width> ) ) AND PrintChannels.PrintsInfoID = PrintsInfo.ID AND Surface = <PaperSurface> AND PrintsInfo.Item = '<PrintType>'~;
+			}
+			dBase( GetValuesFor, ~<Query>~, printerChannel,paperWidth );
+	              
+			if ( Defined( printerChannel ) && Defined( paperWidth ) )
+			{
+				SaveImageNode( Set, ~Oemprinterchannel:~, <printerChannel> );
+				SaveImageNode( Set, ~Paperwidth:~, <PaperWidth> );
+			}
+		}
+	}
+	else
+	{
+		Model = ~Disk~; IntID = ~-9002~;
+
+		if ( SimilarStr( ~<QueueName>~, ~CLOFulfill~ ) )
+		{
+			if ( theRenderList( GetNodeByName,~Saveimage:~,0,SaveImageNode ) )	
+			{
+				SaveImageNode( Set,~Queuename:~,~BookPrinterQueue~ );
+				SaveImageNode( Set, ~Oemprintersurface:~, <paperSurface> );
+			}
+		}
+	}
+	
+	theRenderList(LogOperation,1,~EnableDevice~,~<Enable<Model>>~,0);
+
+	theRenderList( EnableOutputDevice,~<IntID>~ );
+
+	theRenderList(LogOperation,0,~EnableDevice~,~<Enable<Model>>~,0);
+
+	return TRUE;
+}
+
+NUMERIC AssignOutputSpecKPK( &dBase, &theRenderList, QueueName, Channel, Width, Height )
+{
+
+	Query = ~Select PrinterModel From QueueDefinition Where QueueName = '<QueueName>'~;
+	dBase( GetValuesFor, ~<Query>~, printerModel );
+
+	if ( IsNull(~<printerModel>~ ) )
+	{
+		Log( Session, ~Unable to obtain Printer Model from Printers table. <Query>~ );
+		return FALSE;
+	}
+	
+	Model = ~~; IntID= ~~;
+	if ( SimilarStr( ~<printerModel>~, ~Disk~ ) )
+	{
+		if ( !theRenderList( GetNodeByName,~Saveimage:~,0,SaveImageNode ) )	
+		{
+			Warning( ~Unable to get the Saveimage: output spec~ );
+			return FALSE;	
+		}
+
+		// This is a basic disk printer, it writes files to a file.
+		Model = ~Disk~; IntID = ~-9002~;
+		if ( theRenderList( GetNodeByName,~Saveimage:~,0,SaveImageNode ) )	
+		{
+			SaveImageNode( Set,~Queuename:~,~<QueueName>~ );
+			SaveImageNode( Set,~Xres:~,0 );
+			SaveImageNode( ResetStatus,~Xres:~,255);
+			SaveImageNode( Set, ~Oemprinterchannel:~, <Channel> );
+
+			Query = ~Select Surface,PaperWidth From PrintChannels Where Channel = <Channel> AND PrintsInfoID = (Select ID From PrintsInfo Where Item = 'Print' AND (PrintWidth = <Width> AND PrintHeight = <Height> OR PrintWidth = <Height> AND PrintHeight = <Width>) AND Hidden = 0 )~;
+			dBase( GetValuesFor, ~<Query>~, paperSurface, paperWidth );
+
+			if ( Defined( paperSurface ) && Defined( paperWidth ) )
+			{
+				SaveImageNode( Set, ~Oemprintersurface:~, <paperSurface> );
+				SaveImageNode( Set, ~Paperwidth:~, <PaperWidth> );
+			}
+		}
+		else
+		{
+			Log( Session, ~Unable to GetNodeByName, Saveimage:~ );
+			return FALSE;
+		}
+	}
+	else if ( SimilarStr( ~<printerModel>~, ~Kodak LED~ ) )
+	{
+		Model = ~LED~; IntID = ~-9004~;
+		if ( theRenderList( GetNodeByName,~Outputtoled:~,0,SaveLEDNode ) )	
+		{
+			SaveLEDNode( Set,~Queuename:~,~<QueueName>~ );
+		}
+	}
+	else if ( SimilarStr( ~<printerModel>~, ~Windows Printer~ ) )
+	{
+		Model = ~Windows~; IntID = ~-9030~;
+		if ( theRenderList( GetNodeByName,~Outputtolaserprinter:~,0,SaveLaserNode ) )	
+		{
+			SaveLaserNode( Set,~Queuename:~,~<QueueName>~ );
+
+			// The user should always define the configuration file to 
+			// portrait.
+			if ( <Width> > <Height> )
+			{
+				SaveLaserNode( Set,~Rotated:~,90 );
+			}
+			else
+			{
+				SaveLaserNode( Set,~Rotated:~,0 );
+			}
+		}
+	}
+	else if ( SimilarStr( ~<printerModel>~, ~Kodak RP30~ ) )
+	{
+		Model = ~Disk~; IntID = ~-9002~;
+		if ( theRenderList( GetNodeByName,~Saveimage:~,0,SaveImageNode ) )	
+		{
+			SaveImageNode( Set,~Rp30:~,1 );
+			SaveImageNode( Set,~Queuename:~,~<QueueName>~ );
+			SaveImageNode( Set, ~Oemprinterchannel:~, <Channel> );
+
+			Query = ~Select Surface,PaperWidth From PrintChannels Where Channel = <Channel> AND PrintsInfoID = (Select ID From PrintsInfo Where Item = 'Print' AND (PrintWidth = <Width> AND PrintHeight = <Height> OR PrintWidth = <Height> AND PrintHeight = <Width>) AND Hidden = 0 )~;
+			dBase( GetValuesFor, ~<Query>~, paperSurface, paperWidth );
+
+			if ( Defined( paperSurface ) && Defined( paperWidth ) )
+			{
+				SaveImageNode( Set, ~Oemprintersurface:~, <paperSurface> );
+				SaveImageNode( Set, ~Paperwidth:~, <PaperWidth> );
+			}
+		}
+	}
+	else
+	{
+		Model = ~Disk~; IntID = ~-9002~;
+
+		if ( SimilarStr( ~<QueueName>~, ~CLOFulfill~ ) )
+		{
+			if ( theRenderList( GetNodeByName,~Saveimage:~,0,SaveImageNode ) )	
+			{
+				SaveImageNode( Set,~Queuename:~,~<QueueName>~ );
+			}
+		}	}
+	
+	theRenderList(LogOperation,1,~EnableDevice~,~<Enable<Model>>~,0);
+
+	theRenderList( EnableOutputDevice,~<IntID>~ );
+
+	theRenderList(LogOperation,0,~EnableDevice~,~<Enable<Model>>~,0);
+
+	return TRUE;
+}
+
+NUMERIC AddZipLogic( &theRenderList )
+{
+	if ( !theRenderList( GetNodeByID, ~-8999~, 0, jobDataNode ) )
+	{
+		return FALSE;
+	}
+
+	if ( !theRenderList( GetOutputNode, outputNode ) )
+	{
+		Log( Session, ~AddZipLogic: Unable to get OutputNode~ );
+		return FALSE;
+	}
+	
+	outputNode( Set, ~ProcessAfter:~, ~ZipRenderedImage();~ );
+
+	jobData = STR ( BeginInclude(); 
+						Include: ~FTPZipLogic~;
+					EndInclude(); );
+
+	jobDataNode( SetValuesFrom, ~JobData~, jobData );
+
+	return TRUE;
+}
+
+
+NUMERIC OpenContainingFolderAndSelect( path )
+{
+	return ShellExecute( Open,~<$Sys.WindowsDirectory>\Explorer.exe~,~/n,/e,/select,"<path>"~ );
+}

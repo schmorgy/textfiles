@@ -1,0 +1,241 @@
+NUMERIC Search()
+{
+	WindowLocation = ~<$User.WindowLocation[OrdersSearchDialog]>~;
+
+	//if ( ~<WindowLocation>~ != ~~ )
+		//{ SearchCriteraDialog( Set,Position,~<WindowLocation>~ ); }
+
+	GenDlg( SearchDialog,Definition,SearchCriteraDialog,Data,SearchCriteraData,Document,$Doc.This,New,Temporary );
+	Global( SearchDialog );
+
+	return TRUE;
+}
+
+
+
+NUMERIC WantToSeeAll()
+{
+	Query = ~Select Count(Orders.ID) FROM Orders~;
+
+	if ( !PGenConList( OrdersCount,Connect,Cursor,keyset,QUERY,~<Query>~ ) )
+	{ 
+		db( GetErrorDescription,err );
+		Warning( ~Failed to query the Orders table. <err>  <Query>~ ); 
+		return FALSE;
+	} 
+
+	OrdersCount( GetFirst,NumOrders );
+
+	NumOrders( Get,Count );
+
+	if ( MessageBox( ~Are you sure you want to see all <$pcon.NumOrders[#0]> of the orders~,YESNO) != YES )
+		{ return FALSE; }
+
+	return TRUE;
+}
+
+
+NUMERIC DoASearchByOrder()
+{
+	SearchDialog( GetInput,GetString,OrderBeginsWith,OrderBeginsWith );
+
+	if ( ~<OrderBeginsWith>~ == ~~ )
+	{ 
+		if ( !WantToSeeAll() )
+			{ return FALSE; }
+	}
+
+	Title = ~<OrderBeginsWith>~ == ~~ ? ~~ : ~OrderID Begins with <OrderBeginsWith>~;
+
+	Query = ~SELECT Customers.Name, Orders.* FROM Orders,Customers WHERE Orders.ID LIKE '<OrderBeginsWith>%' And Orders.CustomerID = Customers.ID~;
+
+	Actions = ACTIONS ( Doc( ~Orders~ Open OrdersDoc "Init( ~<Title>~,~<Query>~);" ) );
+
+	PerformActions( Actions );
+
+	return DoCancelButton();
+}
+
+
+NUMERIC DoASearchByCustomerID()
+{
+	SearchDialog( GetInput,GetString,CustomerBeginsWith,CustomerBeginsWith );
+
+	if ( ~<CustomerBeginsWith>~ == ~~ )
+		{ return Warning( ~You didn't specify a Customer ID~ ); }
+
+	Query = ~SELECT Customers.Name, Orders.* FROM Orders,Customers WHERE Orders.CustomerID LIKE '<CustomerBeginsWith>%' And Orders.CustomerID = Customers.ID Order By CustomerID~;
+
+	Actions = ACTIONS ( Doc( ~Orders~ Open OrdersDoc "Init( ~CustomerID Starting With <CustomerBeginsWith>~,~<Query>~);" ) );
+
+	PerformActions( Actions );
+
+	return DoCancelButton();
+}
+
+
+NUMERIC DoASearchByCustomerName()
+{
+	SearchDialog( GetInput,GetString,CustomerNameBeginsWith,CustomerNameBeginsWith );
+
+	if ( ~<CustomerNameBeginsWith>~ == ~~ )
+		{ return Warning( ~You didn't specify a Customer Name~ ); }
+
+	Query = ~SELECT Customers.Name, Orders.* FROM Orders,Customers WHERE Orders.CustomerID = Customers.ID AND Customers.Name LIKE '<CustomerNameBeginsWith>%' And Orders.CustomerID = Customers.ID Order By Customers.Name~;
+
+	Actions = ACTIONS ( Doc( ~Orders~ Open OrdersDoc "Init( ~Customer Name Begins With <CustomerNameBeginsWith>~,~<Query>~);" ) );
+
+	PerformActions( Actions );
+
+	return DoCancelButton();
+}
+
+
+VOID CloseOrderWindowsButton()
+{
+	Index = 0;
+
+	while ( GenCon( aWindow,GetWindowByIndex,<Index++> ) )
+	{
+		aWindow( Get,Purpose,Purpose );
+
+		if ( ~<Purpose>~ == ~Orders~ )
+		{
+			aWindow( CloseWindow );
+		}	
+		else if ( aWindow( GetNext,aView ) )
+		{
+			aView( Get,ViewType,ViewType );
+
+			if ( ~<ViewType>~ == JobView || ~<ViewType>~ == LayoutView || ~<ViewType>~ == ImageView )
+			{
+				aWindow( CloseWindow );
+			}
+		}
+
+		ForgetLocal( aWindow );
+	}
+}
+
+
+NUMERIC DoCancelButton()
+{
+	SearchCriteraDialog( SaveWindowLocation,WindowLocation,OrdersSearchDialog );
+	SearchDialog( End );
+	return TRUE;
+}
+
+Define:	SearchCriteraData Using OrderSearchCriteraDictionary
+	Fields:	OrderBeginsWith				~~ 
+			CustomerBeginsWith			~~;
+
+DialogWidth = 400;
+PromptX		= 10;	PromptY		= 10;	PromptWidth	= 80;	PromptHeight = 20;
+ValueWidth	= 80;
+
+hGap		= 10;	vGap = 10;
+
+ButtonWidth	= 80;	ButtonHeight	= 20;
+
+Define: SearchCriteraDialog Using DDWinDef
+	Fields:	POSITION				0, 0, $DialogWidth, 300
+			TITLE					~Orders Search Criteria~
+			TYPENAME				~Dialog~
+			OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+			HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "T_Orders Search.htm" ) 
+
+	Contains: INLISTORDER
+	{
+		Define: OrderBeginsWithPrompt Using DDWinCtrlDef AsSymbol OrderBeginsWithPrompt
+			Fields:	POSITION		$PromptX $PromptY $PromptWidth $PromptHeight
+					TEXT			~Order ID~
+					DACTIONSTEXT	ACTION EXEC ( DoASearchByOrder() )
+					TYPENAME		Button
+
+		Define: OrderBeginsWithField Using DDWinCtrlDef AsSymbol OrderBeginsWithField
+			Fields:	DACTIONSTEXT	ACTIONS ( Save )
+					GENCONFIELD		OrderBeginsWith
+					GENCONNAME		THIS
+					IACTIONSTEXT	ACTIONS ( Get )
+					OACTIONSTEXT	ACTIONS ( Save )
+					POSITION		(OrderBeginsWithPrompt(GetRight,Position) + $hGap) $PromptY $ValueWidth $PromptHeight
+					TEXT			~~
+					TOOLTIP			~Order ID Begins With~
+					TYPENAME		EditText
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "SearchCriteriaBeginsWith.html" )
+
+		Define: CustomerBeginsWithPrompt Using DDWinCtrlDef AsSymbol CustomerBeginsWithPrompt
+			Fields:	POSITION		$PromptX (OrderBeginsWithField(GetBottom,Position) +$vGap) $PromptWidth $PromptHeight
+					TEXT			~Customer ID~
+					DACTIONSTEXT	ACTION EXEC ( DoASearchByCustomerID() )
+					TYPENAME		Button
+
+		Define: CustomerBeginsWithField Using DDWinCtrlDef AsSymbol CustomerBeginsWithField
+			Fields:	DACTIONSTEXT	ACTIONS ( Save )
+					GENCONFIELD		CustomerBeginsWith
+					GENCONNAME		THIS
+					IACTIONSTEXT	ACTIONS ( Get )
+					OACTIONSTEXT	ACTIONS ( Save )
+					POSITION		(CustomerBeginsWithPrompt(GetRight,Position) + $hGap) 
+									CustomerBeginsWithPrompt(GetY,Position) $ValueWidth $PromptHeight
+					TEXT			~~
+					TOOLTIP			~Customer ID Begins With~
+					TYPENAME		EditText
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "SearchCriteriaBeginsWith.html" )
+	
+
+		Define: CustomerNameBeginsWithPrompt Using DDWinCtrlDef AsSymbol CustomerNameBeginsWithPrompt
+			Fields:	POSITION		$PromptX (CustomerBeginsWithField(GetBottom,Position) +$vGap) $PromptWidth $PromptHeight
+					TEXT			~Customer Name~
+					DACTIONSTEXT	ACTION EXEC ( DoASearchByCustomerName() )
+					TYPENAME		Button
+
+		Define: CustomerNameBeginsWithField Using DDWinCtrlDef AsSymbol CustomerNameBeginsWithField
+			Fields:	DACTIONSTEXT	ACTIONS ( Save )
+					GENCONFIELD		CustomerNameBeginsWith
+					GENCONNAME		THIS
+					IACTIONSTEXT	ACTIONS ( Get )
+					OACTIONSTEXT	ACTIONS ( Save )
+					POSITION		(CustomerNameBeginsWithPrompt(GetRight,Position) + $hGap) 
+									CustomerNameBeginsWithPrompt(GetY,Position) $ValueWidth $PromptHeight
+					TEXT			~~
+					TOOLTIP			~Customer Name Begins With~
+					TYPENAME		EditText
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "SearchCriteriaBeginsWith.html" ) ;
+
+		DialogWidth = CustomerNameBeginsWithField(GetRight,Position) + $hGap;
+
+		Define: CloseOrdersButton Using DDWinCtrlDef AsSymbol CloseOrdersButton
+			Fields:	GENCONNAME		This
+					DACTIONSTEXT	ACTION EXEC ( CloseOrderWindowsButton() )
+					POSITION		$PromptX ,CustomerNameBeginsWithField(GetBottom,Position)+$vGap, $ButtonWidth, $ButtonHeight
+					TEXT			~Close Windows~
+					TOOLTIP			~Close Windows~
+					TYPENAME		BUTTON
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "CloseOrderWindows.htm" ) 
+
+		Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+			Fields:	GENCONNAME		This
+					DACTIONSTEXT	ACTION EXEC ( DoCancelButton() )
+					POSITION		$DialogWidth - $ButtonWidth - $hGap ,CloseOrdersButton(GetY,Position), $ButtonWidth, $ButtonHeight
+					TEXT			~Cancel~
+					TOOLTIP			~Exit without searching~
+					TYPENAME		BUTTON
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "GoButton.htm" ) 
+	}
+
+
+// TRY TO POSITION THIS WINDOW NEXT TO THE WINDOW ACTIVE WINDOW
+
+x = 100; y = 100;
+
+if ( GenCon( CallersWindow,GetWindow,~~ ) )
+{
+	CallersWindow( GetWindowPosition,Left,Top,Right,Bottom );
+	x = <Left> - <DialogWidth> - 5;
+	y = <Top>;
+}
+
+DialogHeight = CancelButton(GetBottom,Position) + $vGap + 20;
+
+SearchCriteraDialog( Set,Position,~<x> <y>  <DialogWidth>  <DialogHeight>~ );

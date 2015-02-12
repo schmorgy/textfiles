@@ -1,0 +1,413 @@
+// BREMSON FILM DRIVES COMMANDS (GENERAL - HIGH LEVEL)
+	
+NUMERIC Bremson_Tension( Tension )
+{
+	LogMessage( ~Tension~ );
+	// Halt the drive to clear DLL
+	FilmDrive( Stop );
+	if ( <Tension> && !FilmDrive( Initialize ) )
+	{
+		return Warning( Translate( ~Failed to initialize the film drive for tensioning~ ) );
+	}
+	return FilmDrive( Tension,<Tension> );
+}
+
+
+NUMERIC Bremson_NextFrame( XOffset, YOffset, ScanMode, FrameToPunch )
+{
+	LogMessage( ~Next Frame with Adjust X Offset~ );
+	// Halt the drive to clear DLL
+	FilmDrive( Stop );
+	if ( !FilmDrive( NextFrame ) )
+	{
+		retval = FilmDrive( GetError,Description );
+		Invoke( UserFrameErrorMessage,~Frame Movement Failed...  <retval> [<Description>]~, FALSE, FALSE );
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationError, ~move to next frame~ ); }
+		return FALSE;
+	}
+	if ( <ContinueRunning> && ( <XOffset> != 0 ) )
+	{
+		if ( !Bremson_AdjustXOffset( <XOffset> ) )
+		{
+			retval = FilmDrive( GetError,Description );
+			Invoke( UserFrameErrorMessage,~Adjust X Offset Failed... <retval> [<Description>]~, FALSE, FALSE );
+			if ( <ScanMode> ) { Invoke( FilmDriveOperationError, ~adjust X offset~ ); }
+			return FALSE;
+		}
+	}
+	if ( <ContinueRunning> )
+	{
+		CurrentPunchNumber = FilmDrive( GetCurrentPunchNumber );
+		CurrentPunchNumber = Bremson_FormatPunchNumber( <CurrentPunchNumber> );
+		Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~,~<FrameToPunch>~ );
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Complete~ );
+		if ( !<ScanMode> )
+		{
+			Invoke( EnableScanningControls, TRUE );
+			Invoke( SetTransportControlsStopped );
+		}
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationComplete, ~<CurrentPunchNumber>~ ); }
+		return TRUE;
+	}
+	retval = FilmDrive( GetError,Description );
+	Invoke( UserFrameErrorMessage,~Frame Movement Aborted~, FALSE, FALSE );
+	if ( <ScanMode> ) { Invoke( FilmDriveOperationStopped ); }
+	return FALSE;
+}
+
+
+NUMERIC Bremson_PrevFrame( XOffset, YOffset, ScanMode, FrameToPunch )
+{
+	LogMessage( ~Previous Frame with Adjust X Offset~ );
+	// Halt the drive to clear DLL
+	FilmDrive( Stop );
+	if ( !FilmDrive( PrevFrame ) )
+	{
+		retval = FilmDrive( GetError,Description );
+		Invoke( UserFrameErrorMessage,~Frame Movement Failed...  <retval> [<Description>]~, FALSE, FALSE );
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationError, ~move to previous frame~ ); }
+		return FALSE;
+	}
+	if ( <ContinueRunning> && ( <XOffset> != 0 ) )
+	{
+		if ( !Bremson_AdjustXOffset( <XOffset> ) )
+		{
+			retval = FilmDrive( GetError,Description );
+			Invoke( UserFrameErrorMessage,~Adjust X Offset Failed... <retval> [<Description>]~, FALSE, FALSE );
+			if ( <ScanMode> ) { Invoke( FilmDriveOperationError, ~adjust X offset~ ); }
+			return FALSE;
+		}
+	}
+	if ( <ContinueRunning> )
+	{
+		CurrentPunchNumber = FilmDrive( GetCurrentPunchNumber );
+		CurrentPunchNumber = Bremson_FormatPunchNumber( <CurrentPunchNumber> );
+		Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~,<FrameToPunch> );
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Complete~ );
+		if ( !<ScanMode> )
+		{
+			Invoke( EnableScanningControls, TRUE );
+			Invoke( SetTransportControlsStopped );
+		}
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationComplete, ~<CurrentPunchNumber>~ ); }
+		return TRUE;
+	}
+	retval = FilmDrive( GetError,Description );
+	Invoke( UserFrameErrorMessage,~Frame Movement Aborted~, FALSE, FALSE );
+	if ( <ScanMode> ) { Invoke( FilmDriveOperationStopped ); }
+	return FALSE;
+}
+
+
+NUMERIC Bremson_FastForward()
+{
+	LogMessage( ~Fast Forward~ );
+	// Halt the drive to clear DLL
+	FilmDrive( Stop );
+	if ( FilmDrive( FastForward ) )
+	{
+		ForwardRewindFlag = TRUE;
+		return TRUE;
+	}
+	Invoke( UserFrameErrorMessage,~Fast Forward Failed~, FALSE, FALSE );
+	return FALSE;
+}
+
+
+NUMERIC Bremson_Rewind()
+{
+	LogMessage( ~Rewind~ );
+	// Halt the drive to clear DLL
+	FilmDrive( Stop );
+	if ( FilmDrive( Rewind ) )
+	{
+		ForwardRewindFlag = TRUE;
+		return TRUE;
+	}
+	Invoke( UserFrameErrorMessage,~Rewind Failed~, FALSE, FALSE );
+	return FALSE;
+}
+
+
+NUMERIC Bremson_SeekPunch( CurrentPunch, SeekPunch, XOffset, YOffset, FirstPunch, LastPunch, ScanMode, FrameToPunch )
+{
+	LogMessage( ~Seek Punch <SeekPunch>~ );
+	// If non scanning mode then default to max ranges - to allow manual
+	// frame movement
+	if ( !<ScanMode> )
+	{
+		FirstPunch = Bremson_FormatPunchNumber( 1 );
+		LastPunch  = Bremson_FormatPunchNumber( 32767 );
+	}
+	// Halt the drive to clear DLL
+	FilmDrive( Stop );
+	if ( !Bremson_FindPunchNumber( ~<CurrentPunch>~,~<SeekPunch>~,~<FirstPunch>~,~<LastPunch>~ ) )
+	{
+		Invoke( FilmDriveOperationError, ~seek punch [<SeekPunch>]~ );
+		return FALSE;
+	}
+	if ( <ContinueRunning> && ( <XOffset> != 0 ) )
+	{
+		if ( !Bremson_AdjustXOffset( <XOffset> ) )
+		{
+			retval = FilmDrive( GetError,Description );
+			Invoke( UserFrameErrorMessage,~Adjust X Offset Failed... <retval> [<Description>]~, FALSE, FALSE );
+			if ( <ScanMode> ) { Invoke( FilmDriveOperationError, ~adjust X offset~ ); }
+			return FALSE;
+		}
+	}
+	if ( <ContinueRunning> )
+	{
+		CurrentPunchNumber = FilmDrive( GetCurrentPunchNumber );
+		CurrentPunchNumber = Bremson_FormatPunchNumber( <CurrentPunchNumber> );
+		Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~,<FrameToPunch> );
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Complete~ );
+		if ( !<ScanMode> )
+		{
+			Invoke( EnableScanningControls, TRUE );
+			Invoke( SetTransportControlsStopped );
+		}
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationComplete, ~<CurrentPunchNumber>~ ); }
+		return TRUE;
+	}
+	Invoke( UserFrameErrorMessage,~Frame Movement Aborted~, FALSE, FALSE );
+	if ( <ScanMode> ) { Invoke( FilmDriveOperationStopped ); }
+	return TRUE;
+}
+
+
+NUMERIC Bremson_MoveDeltaX( Delta, IgnoreAdjustment )
+{
+	LogMessage( ~Move Delta X~ );
+	if ( <Delta> == 0 )
+	{
+		return TRUE;
+	}
+
+	DlgData( GetValues,TXOffsetPositionInUnits,CurrentXOffset,TXOffsetIncrementUnit,TXOffsetIncrementUnit );
+
+	if ( <IgnoreAdjustment> )
+	{
+		AllowedDelta = <Delta>;
+	}
+	else
+	{
+		if ( <CurrentXOffset> >= 0 )
+		{
+			sign = ~+~;
+			DeltaAvailable =  <MaxXIncrements> - <CurrentXOffset>;
+			AllowedDelta = pin( <Delta>,-<MaxXIncrements>,<DeltaAvailable> );
+		}
+		else
+		{
+			sign = ~-~;
+			DeltaAvailable =  (-<MaxXIncrements>) - <CurrentXOffset>;
+			AllowedDelta = pin( <Delta>,<DeltaAvailable>,<MaxXIncrements> );
+		}
+
+		if ( <AllowedDelta> == 0 )
+		{
+			Warning( Translate( ~Film Offset at end of limit of <sign><MaxXIncrementsInDisplayUnits> <DisplayUnits>.~ ) );
+			return TRUE;
+		}
+	}
+
+	LogMessage( ~Move Delta X Offset by <AllowedDelta>~ );
+
+	// Halt the drive to clear DLL
+	FilmDrive( Stop );
+
+	SetTransportControlsRunning();
+	if ( !FilmDrive( MoveDeltaX,<AllowedDelta> ) )
+	{
+		return FALSE;
+	}
+	SetTransportControlsStopped();
+	if ( !<IgnoreAdjustment> )
+	{
+		SetDialogVendorXOffsetInfo( <CurrentXOffset> + Numeric( <AllowedDelta> ),  <TXOffsetIncrementUnit> );
+	}
+	return TRUE;
+
+}
+
+
+NUMERIC Bremson_Stop( )
+{
+	LogMessage( ~Stop~ );
+	ContinueRunning = FALSE;
+	if ( FilmDrive( Stop ) )
+	{
+		if ( <ForwardRewindFlag> == TRUE )
+		{
+			FilmDrive( Initialize );
+			ForwardRewindFlag = FALSE;
+		}
+		SetTransportControlsStopped();
+		EnableScanningControls( TRUE );
+		return TRUE;
+	}
+	return FALSE;
+}
+
+
+NUMERIC Bremson_AdjustXOffset( XOffset )
+{
+	AdjustXOffsetValue = ~~;
+	AdjustXOffsetValue = Format( Pin( <XOffset>, -32768, 32767 ), ~%+ld~ );
+
+	LogMessage( ~Adjust X Offset by <AdjustXOffsetValue>~ );
+
+	return FilmDrive( MoveDeltaX,<AdjustXOffsetValue> );
+}
+
+
+// BREMSON FILM DRIVES COMMANDS (THREADED UTILITIES - LOW LEVEL - CALLED BY HIGH LEVEL)
+
+NUMERIC Bremson_FindPunchNumber( CurrentPunchNumber, SeekPunchNumber, FilmFirstPunchNumber, FilmLastPunchNumber )
+{
+	InvalidParameter = ~BLANK~;
+	if ( !Bremson_ValidPunchNumber( ~<SeekPunchNumber>~ ) )
+	{
+		InvalidParameter = ~Seek~;
+	}
+	if ( ~<InvalidParameter>~ != ~BLANK~ && !Bremson_ValidPunchNumber( ~<FilmFirstPunchNumber>~ ) )
+	{
+		InvalidParameter = ~Film Start~;
+	}
+	if ( ~<InvalidParameter>~ != ~BLANK~ && !Bremson_ValidPunchNumber( ~<FilmLastPunchNumber>~ ) )
+	{
+		InvalidParameter = ~Film End~;
+	}
+	if ( ~<InvalidParameter>~ != ~BLANK~ )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Aborted... Invalid <InvalidParameter> Frame Number Specified~, TRUE, FALSE );
+		return FALSE;
+	}
+	if ( <FilmFirstPunchNumber> > <FilmLastPunchNumber> )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Aborted... Invalid Frame Numbers Specified~, TRUE, FALSE );
+		return FALSE;
+	}
+	if ( <SeekPunchNumber> < <FilmFirstPunchNumber> || <SeekPunchNumber> > <FilmLastPunchNumber> )
+	{
+		Invoke( UserFrameErrorMessage,~Frame Movement Aborted... Seek Frame Number Out of Range~, TRUE, FALSE );
+		return FALSE;
+	}
+
+	Retries = 0;
+	FoundPunchNumber = ~<CurrentPunchNumber>~;
+
+	while ( <ContinueRunning> && ( <FoundPunchNumber> != <SeekPunchNumber> ) )
+	{
+		if ( !FilmDrive( SeekPunch, <SeekPunchNumber> ) )
+		{
+			if ( <ContinueRunning> )
+			{
+				retval = FilmDrive( GetError,Description );
+				Invoke( UserFrameErrorMessage,~Frame Movement Failed...  <retval> [<Description>]~, FALSE, FALSE );
+				return FALSE;
+			}
+			return TRUE;
+		}
+		FoundPunchNumber = FilmDrive( GetCurrentPunchNumber );
+		FoundPunchNumber = Bremson_FormatPunchNumber( <FoundPunchNumber> );
+		Invoke( SetCurrentPunchNumber,~<FoundPunchNumber>~ );
+		if ( ~<SeekPunchNumber>~ != ~<FoundPunchNumber>~ )
+		{
+			Invoke( SetCurrentPunchNumber,~<FoundPunchNumber>~ );
+			Retries = <Retries> + 1;
+			if ( <ContinueRunning> && ( <Retries> > 2 ) )
+			{
+				Invoke( UserFrameErrorMessage,~Frame Movement Failed... Exceeded Retries~, FALSE, FALSE );
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !<ContinueRunning> )
+	{
+		return TRUE;
+	}
+
+	if ( <FoundPunchNumber> != <SeekPunchNumber> )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+
+}
+
+// TBD - This method is not used
+NUMERIC Bremson_VerifyPunchNumber( ExpectedPunchNumber, FilmFirstPunchNumber, FilmLastPunchNumber )
+{
+	// Verify Punch Number by Jogging Film
+
+	JogDirection = ( <ExpectedPunchNumber> > <FilmFirstPunchNumber> ) ? ~PrevFrame~ : ~NextFrame~;
+
+	if ( !FilmDrive( ~<JogDirection>~ ) )
+	{
+		return FALSE;
+	}
+
+	CurrentPunchNumber = FilmDrive( GetCurrentPunchNumber );
+	CurrentPunchNumber = Bremson_FormatPunchNumber( <CurrentPunchNumber> );
+	Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~ );
+
+	// Jog Back to the Frame
+	JogDirection = ( ~<JogDirection>~ == ~PrevFrame~ ) ? ~NextFrame~ : ~PrevFrame~;
+	if ( !FilmDrive( ~<JogDirection>~ ) )
+	{
+		return FALSE;
+	}
+
+	CurrentPunchNumber = FilmDrive( GetCurrentPunchNumber );
+	CurrentPunchNumber = Bremson_FormatPunchNumber( <CurrentPunchNumber> );
+	Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~ );
+
+	if ( <ExpectedPunchNumber> != <CurrentPunchNumber> )
+	{
+		return FALSE;
+	}
+	return TRUE;
+}
+
+
+// BREMSON FILM DRIVES COMMANDS (CONFIGURATION - HIGH LEVEL)
+
+// NONE
+
+// BREMSON FILM DRIVES COMMANDS (MISCELLANEOUS - HIGH LEVEL)
+
+NUMERIC Bremson_ValidPunchNumber( PunchNumber )
+{
+	if ( strlen( ~<PunchNumber>~ ) == 0 || ( strlen( ~<PunchNumber>~ ) > 5 ) ||
+	   !IsNumeric( ~<PunchNumber>~ ) ||
+	   ( Numeric( ~<PunchNumber>~ ) <= 0 ) || ( Numeric( ~<PunchNumber>~ ) > 32767 ) )
+	{
+		return FALSE;
+	}
+	return TRUE;
+}
+
+STR Bremson_FormatPunchNumber( PunchNumber )
+{
+	return Format( Numeric( ~<PunchNumber>~ ), ~%05d~ );
+}
+
+NUMERIC Bremson_ValidPunchRange( PunchNumber )
+{
+	if ( !IsNumeric( ~<PunchNumber>~ ) ||
+	   ( Numeric( ~<PunchNumber>~ ) <= 0 ) || ( Numeric( ~<PunchNumber>~ ) > 32767 ) )
+	{
+		return FALSE;
+	}
+	return TRUE;
+}
+
+NUMERIC Bremson_ForgetGlobals( UpdateStatus,ClosingDialog )
+{
+	return CloseFilmDriveComplete( <UpdateStatus>,<ClosingDialog> );
+}
+

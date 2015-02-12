@@ -1,0 +1,510 @@
+IncludeClass( BaseGrid );
+
+Class( CGrid,Extends,BaseGrid,
+		Member,fWhereClause,Str,~~ );
+
+VOID CGrid::CGrid( WhereClause )					// CONSTRUCTOR
+{
+	TableName = ~CustomerBackgrounds~;
+	fWhereClause = ~<WhereClause>~;
+	DocumentQuery = ~Select * from <TableName> <fWhereClause> Order By CustomerID,ProgramID,BackgroundType,InfoType,CustBackgroundID~;
+	
+	if ( !IsNull(~<WhereClause>~) )
+	{
+		ParsedTitle = ParseTitle(~<WhereClause>~);
+	}
+	
+	Title = IsNull(~<WhereClause>~) ? ~BG XREF - All~ : ~BG XREF - <ParsedTitle>~;
+	
+	WindowLeft = 5;
+	WindowTop = 0;
+	WindowWidth = 85;
+	WindowHeight = 50;
+	
+	SplitterRows = ~2 8 92~;
+}
+
+
+STR	CGrid::ParseTitle(s)
+{
+	replaceMany( ~<s>~,~Where~,~~,s );
+	replaceMany( ~<s>~,~=~,~~,s );
+	replaceMany( ~<s>~,~AND~,~,~,s );
+	replaceMany( ~<s>~,~CustomerID~,~~,s );
+	replaceMany( ~<s>~,~ProgramID~,~~,s );
+	replaceMany( ~<s>~,~BackgroundType~,~~,s );
+	replaceMany( ~<s>~,~InfoType~,~~,s );
+	replaceMany( ~<s>~,~CustBackgroundID~,~~,s );
+	replaceMany( ~<s>~,~'~,~~,s );
+	return ~<s>~;
+}
+
+
+STR CGrid::GetKey( &Item )			// PRIMARY KEY FOR THE TABLE
+{
+	return ~CustomerID = '<$con.Item[CustomerID]>' AND ProgramID = '<$con.Item[ProgramID]>' AND 
+			InfoType = '<$con.Item[InfoType]>' AND BackgroundType = '<$con.Item[BackgroundType]>' AND 
+			CustBackgroundID = '<$con.Item[CustBackgroundID]>'~;
+}
+
+
+NUMERIC CGrid::ChangeRecordAudits( &Changed )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[CustomerID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  CustomerID cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[ProgramID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  ProgramID cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[InfoType]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  InfoType cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[BackgroundType]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  BackgroundType cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[CustBackgroundID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  CustBackgroundID cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[BackgroundID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  BackgroundID cannot be blank.~ ) ); }
+
+	if ( SimilarStr(~<$Con.Changed[CustomerID]>~,~*~) && !SimilarStr(~<$Con.Changed[ProgramID]>~,~*~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  You can't select a Program ID for an unknown CustomerID~ ) ); }
+
+	return TRUE;
+}
+
+
+NUMERIC CGrid::OnAddRecord( &NewRow )
+{
+	NewRow( Set,CustomerID,~*~ );
+	NewRow( Set,ProgramID,~*~ );
+	NewRow( Set,BackgroundType,~*~ );
+	NewRow( Set,InfoType,~*~ );
+	NewRow( Set,CustBackgroundID,~*~ );
+	
+	return TRUE;
+}
+
+
+NUMERIC CGrid::DuplicateRecord()
+{
+	if ( !DataView( GetSelectedRows,RowToImitate ) )		
+	{
+		return Warning( Translate(UIMessages,NoRecordToDup ) );	
+	}
+
+	While (RowToImitate( GetNext,DupRecord ))
+	{
+		GenCon( NewRow,IsCopyOf,DupRecord );
+
+		RowBeingAdded = DataView( AddRow, NewRow );
+
+		if ( <RowBeingAdded> <= 0 )
+			{ return Warning( Translate(UIMessages, AddRowFailed) ); }
+
+	}
+
+	DataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	return TRUE;
+}
+
+NUMERIC CGrid::UpdateBackgroundTypeCombo( &ColumnDefinition,&aStringList,Col )
+{
+	Query = ~Select BackgroundType From BackgroundTypes Order By BackgroundType~;
+	
+	if ( !PGenConList( List,Connect,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the BackgroundTypes table: <Query>. <theErr>~ );
+	}
+	
+	List( MakeStringList,BackgroundTypesList,BackgroundType );
+	
+	BackgroundTypesList( InsertString,~*~,0 );
+		
+	if ( !UpdateComboBox( ColumnDefinition,BackgroundTypesList,<Col> ) )
+	{
+		return Warning(Translate(~UpdateCharacterSetCombo: Unable to update BackgroundType combo box.~ ) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC CGrid::UpdateInfoTypeCombo( &ColumnDefinition,&aStringList,Col )
+{
+	if ( !PGenConList( SchemaList,Connect,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		return Warning( Translate( DBMessages, SchemaQueryFailed, ~Tables~, ~<theErr>~ ) );
+	}
+
+	SchemaList( Filter,~Table_Name Like 'SubjectInfo%' AND Table_Name <> 'SubjectInfoColumns'~ );
+	
+	SchemaList( MakeStringList,InfoTypeList,Table_Name );
+	
+	InfoTypeList( InsertString,~*~,0 );
+
+	if ( !UpdateComboBox( ColumnDefinition,InfoTypeList,<Col> ) )
+	{
+		return Warning(Translate(~Unable to update InfoType combo box.~ ) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC CGrid::UpdateProgramIDCombo( &ColumnDefinition,&aStringList,Col )
+{
+	ReturnOnFailure( <ViewName>View( GetActiveCell,row,col ) );
+
+	ReturnOnFailure( <ViewName>View( GetCellValue,CustomerID,~<Row>~,~CustomerID~ ) );
+	
+	WhereClause = ~~;
+	
+	if ( IsNull(~<CustomerID>~) )
+	{
+		return Warning( ~You must enter the CustomerID first.~ );
+	}
+	else if ( !SimilarStr(~<CustomerID>~,~*~) )
+	{
+		WhereClause = ~where CustomerID = '<CustomerID>'~;
+	}
+	
+	Query = ~Select Distinct ProgramID from CustomerProducts <WhereClause> Order By ProgramID~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the CustomerProducts table: <Query>. <theErr>~ );
+	}
+	
+	List( MakeStringList,ProgramIDList,ProgramID );
+	
+	ProgramIDList( InsertString,~*~,0 );
+	
+	if ( !UpdateComboBox( ColumnDefinition,ProgramIDList,<Col> ) )
+	{
+		return Warning(Translate(~Unable to update ProgramID combo box.~ ) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC CGrid::UpdateCustBackgroundIDCombo( &ColumnDefinition,&aStringList,Col )
+{
+	ReturnOnFailure( <ViewName>View( GetActiveCell,row,col ) );
+
+	ReturnOnFailure( <ViewName>View( GetCellValue,CustomerID,~<Row>~,~CustomerID~ ) );
+	
+	WhereClause = ~~;
+	
+	if ( IsNull(~<CustomerID>~) )
+	{
+		return Warning( ~You must enter the CustomerID first.~ );
+	}
+	else if ( !SimilarStr(~<CustomerID>~,~*~) )
+	{
+		WhereClause = ~Where CustomerID = '<CustomerID>'~;
+	}
+	
+	Query = ~Select Distinct CustBackgroundID from CustomerBackgrounds <WhereClause> Order By CustBackgroundID~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the CustomerBackgrounds table: <Query>. <theErr>~ );
+	}
+	
+	List( MakeStringList,CustomerBackgroundsList,CustBackgroundID );
+	
+	CustomerBackgroundsList( InsertString,~*~,0 );
+	
+	if ( !UpdateComboBox( ColumnDefinition,CustomerBackgroundsList,<Col> ) )
+	{
+		return Warning(Translate(~Unable to update CustomerBackgrounds combo box.~ ) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC CGrid::UpdateBackgroundIDCombo( &ColumnDefinition,&aStringList,Col )
+{
+	Query = GetBackgroundCriteriaClause();  // ~Select Distinct ID from Backgrounds Order By ID~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Backgrounds table: <Query>. <theErr>~ );
+	}
+	
+	List( MakeStringList,BackgroundsList,ID );
+	
+	if ( !UpdateComboBox( ColumnDefinition,BackgroundsList,<Col> ) )
+	{
+		return Warning(Translate(~Unable to update BackgroundID combo box.~ ) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC CGrid::ShowBackground(Orientation)
+{
+	if ( !<ViewName>View( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( TR( BaseGridTrans, NoRowsSelected ) ); }
+
+	ReturnOnFailure( SelectedRows( GetFirst,Item ) );
+	
+	Path = BackgroundFileByID( ~<$con.Item[BackgroundID]>~,~<Orientation>~ );
+	
+	OrientationStr = (<Orientation> == 0) ? ~Portrait~ : ~Landscape~;
+
+	if ( IsNull(~<Path>~) )
+	{
+		StatusBarText( ~No file exists for <$con.Item[BackgroundID]> with <OrientationStr> Orientation~ );
+		return PopupMsg(~No file exists for <$con.Item[BackgroundID]> with <OrientationStr> Orientation~);
+	}
+		
+	return OpenAnImage( ~<Path>~,~<$con.Item[BackgroundID]> with orientation of <OrientationStr>~ );
+}
+
+
+
+STR CGrid::BackgroundFileByID( BGID,Orientation )
+{			
+	Query = ~Select Path From Backgrounds Where ID = '<BGID>' and Orientation=<Orientation>~;
+		
+	if ( ADO( dBase,Connect,GetValuesFor,~<Query>~,BGPath ) )
+	{
+		return ~<BGPath>~;
+	}
+	
+	return ~~;
+}
+
+
+NUMERIC CGrid::OpenAnImage( Path,Msg )
+{
+	if ( !Files( FileExists,~<Path>~ ) )
+		{ return Warning( ~Could not open <Path>~ ); }
+
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( ~Could not create document info for <Path>~ ); }
+
+	StatusBarText( ~<Msg>   <Path>~ );
+
+	Document( Doc );
+
+	TopMostWindow = ~~;
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )	// TRY TO BRING EXISTING WINDOW TO FRONT
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == ImageView || ~<ViewType>~ == ImageEditView || ~<ViewType>~ == PIEEditView)
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<Path>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+
+			if ( IsNULL( ~<TopMostWindow>~ ) )
+			{
+				TopMostWindow = ~<DocumentPath>~;
+			}
+		}
+	}
+
+	if ( KeyState( LSHIFT ) || KeyState( RSHIFT ) )		// OPEN A NEW WINDOW NO MATTER WHAT?
+	{
+		if ( !Doc( Open,~<Path>~,Image,~~,Info ) )
+		{ 
+			return Warning( Translate( ~Could not open <Path>~ ) );
+		}
+
+		return TRUE;
+	}
+
+	if ( ~<TopMostWindow>~ != ~~ )
+	{
+		if ( Doc( FindByPath,~<TopMostWindow>~ ) )			// REPLACE THE TOP MOST WINDOWS CONTENTS
+		{
+			ImageCorrections( Free,~<LastImagePath>~ );
+			ImageCorrections( GetAndFreeWhenLastView,~<Path>~ );				// NEED THIS TO RECEIVE CROP UPDATES
+			LastImagePath = ~<Path>~;
+			return Doc( ReplaceImage,~<Path>~,Info );
+		}
+	}
+
+	// IF ALL ELSE FAILS, JUST OPEN THE DARN THING.
+
+	ImageCorrections( Free,~<LastImagePath>~ );
+
+	if ( !Doc( Open,~<Path>~,Image,~~,Info ) )
+	{ 
+		return Warning( ~Could not open <Path>~ );
+	}
+
+	ImageCorrections( GetAndFreeWhenLastView,~<Path>~ );	// NEED THIS TO RECEIVE CROP UPDATES
+
+	LastImagePath = ~<Path>~;
+
+	return TRUE;
+}
+
+
+VOID	CGrid::AddMenuItems()
+{
+	AddMenuSeparator();
+	AddMenuItem( TRUE,FALSE,Translate(~Open Portrait~),ACTION EXEC ( <THIS>.ShowBackground(0) ) );
+	AddMenuItem( TRUE,FALSE,Translate(~Open Landscape~),ACTION EXEC ( <THIS>.ShowBackground(90) ) );
+}
+
+NUMERIC CGrid::AddControls( position )
+{
+	Define: PortraitButton Using DDWinCtrlDef AsSymbol PortraitButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.ShowBackground(0) )
+				POSITION		$position + $hGap, $vGap 70 $ButtonHeight
+				TEXT			Translate( ~Portrait~ )
+				TOOLTIP			Translate( ~Open the background for portrait orientation~ );
+
+	Define: LandscapeButton Using DDWinCtrlDef AsSymbol LandscapeButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Text				~Landscape~
+				ToolTip				~Open the background for portrait orientation~
+				Position			PortraitButton(GetRight,Position)+$hGap*4 PortraitButton(GetTop,Position),PortraitButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.ShowBackground(90) )
+
+	Define: CategoryPrompt Using DDWinCtrlDef AsSymbol CategoryPrompt         
+		Fields: TypeName		StaticText
+				Text			Translate(~Category~)
+				RightJustified	TRUE
+				Position        LandscapeButton(GetRight,Position) + $hGap,LandscapeButton(GetTop,Position)+3 50 $ButtonHeight  
+
+	Define: CategoryComboBox Using DDWinCtrlDef AsSymbol CategoryComboBox 
+		Fields: TypeName		SComboBox  
+				Position		CategoryPrompt(GetRight,Position) + $hGap,CategoryPrompt(GetTop,Position)-3,120,300
+				IActionsText	ACTIONS  ( Save )
+				DActionsText	ACTIONS  ( Save )
+				DropDownActionsText		ACTION Call ( <THIS>.PopulateBackgroundCriteria(Category) )
+				Tooltip         ~Limit Background ID choices to the selected category.  * means for any category~ ;
+				
+	Define: CustomerIDPrompt Using DDWinCtrlDef AsSymbol CustomerIDPrompt         
+		Fields: TypeName		StaticText
+				Text			Translate(~Customer~)
+				RightJustified	TRUE
+				Position        CategoryComboBox(GetRight,Position) + $hGap,CategoryPrompt(GetTop,Position) 50 $ButtonHeight  
+
+	Define: CustomerIDComboBox Using DDWinCtrlDef AsSymbol CustomerIDComboBox 
+		Fields: TypeName		SComboBox  
+				Position		CustomerIDPrompt(GetRight,Position) + $hGap,CategoryComboBox(GetTop,Position),120,300
+				IActionsText	ACTIONS  ( Save )
+				DActionsText	ACTIONS  ( Save )
+				DropDownActionsText		ACTION Call ( <THIS>.PopulateBackgroundCriteria(CustomerID) )
+				Tooltip         ~Limit Background ID choices to the selected customer.  * means for any Customer ID~ ;
+				
+	Define: OrderPrompt Using DDWinCtrlDef AsSymbol OrderPrompt         
+		Fields: TypeName		StaticText
+				Text			Translate(~Order~)
+				RightJustified	TRUE
+				Position        CustomerIDComboBox(GetRight,Position) + $hGap,CategoryPrompt(GetTop,Position) 35 $ButtonHeight  
+
+	Define: OrderIDComboBox Using DDWinCtrlDef AsSymbol OrderIDComboBox 
+		Fields: TypeName		SComboBox  
+				Position		OrderPrompt(GetRight,Position) + $hGap,CategoryComboBox(GetTop,Position),120,300
+				IActionsText	ACTIONS  ( Save )
+				DActionsText	ACTIONS  ( Save )
+				DropDownActionsText		ACTION Call ( <THIS>.PopulateBackgroundCriteria(OrderID) )
+				Tooltip         ~Limit Background ID choices to the selected order.  * means for any Order ID~ ;
+		
+	return OrderIDComboBox( GetRight,Position );
+}
+
+
+VOID	CGrid::RefreshBackgroundCritiera()
+{
+	PopulateBackgroundCriteria(Category);
+	PopulateBackgroundCriteria(CustomerID);
+	PopulateBackgroundCriteria(OrderID);
+}
+
+NUMERIC CGrid::PopulateBackgroundCriteria(FieldName)
+{
+	Query = ~Select Distinct <FieldName> From Backgrounds Where <FieldName> IS NOT NULL Order by <FieldName>~;
+	
+	if ( !PGenConList( List,Connect,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return WarningMsg( ~Failed to read the Backgrounds table from the database.  <theErr>.  <Query>~ );
+	}
+	
+	List( MakeStringList,Choices,<FieldName> );
+	
+	Choices( InsertString,~*~,0 );
+
+	return ControlView( SetControlFromStringList,<FieldName>ComboBox,Choices );
+}
+
+
+STR		CGrid::GetBackgroundCriteriaClause()
+{
+	ControlView( GetControlValue,CategoryComboBox,Category );
+	ControlView( GetControlValue,CustomerIDComboBox,CustomerID );
+	ControlView( GetControlValue,OrderIDComboBox,OrderID );
+	
+	WhereClause = ~~;	Where = ~Where~;  And = ~~;
+	
+	if ( ~<Category>~ != ~*~ )
+	{
+		WhereClause = ~ <Where> Category='<Category>' ~;
+		Where = ~~;
+		And = ~And~;
+	}
+	
+	if ( ~<CustomerID>~ != ~*~ )
+	{
+		WhereClause = ~ <WhereClause> <Where> <And> CustomerID='<CustomerID>' ~;
+		Where = ~~;
+		And = ~And~;
+	}
+	
+	if ( ~<OrderID>~ != ~*~ )
+	{
+		WhereClause = ~ <WhereClause> <Where> <And> OrderID='<OrderID>' ~;
+		Where = ~~;
+		And = ~And~;
+	}
+		
+	return ~Select ID From Backgrounds <WhereClause> Order By ID~;
+}
+
+
+NUMERIC Init( WhereClause )
+{
+	CGrid( New,Obj,~<WhereClause>~ );
+	
+	Obj.DefineWindow();
+	Obj.Init();
+	
+	Obj.RefreshBackgroundCritiera();
+
+	return Global( Obj );
+}
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\<$Job.Name>~ );
+
+
+

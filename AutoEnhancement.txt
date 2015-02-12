@@ -1,0 +1,338 @@
+// AutoEnhance Routines
+//=============================================================================
+C:
+{
+	char	*NULL ;
+	int		 FALSE = 0 ;
+	int		 TRUE  = !FALSE ;
+	
+	int main() { }
+	
+	int	AutoEnhancement( TCHAR *SrcPath )
+	{
+		SessionLogDirect( _T("DSbaBatchDlg.AutoEnhancement: Source File: \"%s\""), SrcPath ) ;
+		
+		if( SrcPath == NULL )
+		{
+			SessionLogDirect( _T("DSbaBatchDlg.AutoEnhancement: Error: Source File Path = NULL") ) ;
+			return( FALSE ) ;
+		}
+		if( *SrcPath == 0x00 )
+		{
+			SessionLogDirect( _T("DSbaBatchDlg.AutoEnhancement: Error: No Source File Path") ) ;
+			return( FALSE ) ;
+		}
+		
+		
+//		return( TRUE ) ;	//	DEBUG DEBUG DEBUG DEBUG
+		
+		
+		//	SPLIT THE SOURCE FILE PATH INTO COMPONENTS
+		TCHAR	FilePath[2048] ;
+		TCHAR	FileName[ 260] ;
+		TCHAR	FileExtn[  32] ;
+		GetFilePathNameAndExt( SrcPath, FilePath, FileName, FileExtn ) ;
+		
+		//	GET THE CURRENT COLOR PROFILES
+		TCHAR	MonitorProfilePath[1024] ;
+		TCHAR	EditSpaceProfilePath[1024] ;
+		TCHAR	ViewingProfilePath[1024] ;
+		TCHAR	DefaultInputProfilePath[1024] ;
+
+		UImageCorrections	*ImageCorrections = (UImageCorrections *) GetImageCorrections(NULL,NULL) ;
+		if( ImageCorrections )
+		{
+			ImageCorrections->GetMonitorProfilePath( MonitorProfilePath ) ;
+			ImageCorrections->GetViewingProfilePath( ViewingProfilePath ) ;
+			ImageCorrections->GetEditSpaceProfilePath( EditSpaceProfilePath ) ;
+			ImageCorrections->GetDefaultInputProfilePath( DefaultInputProfilePath ) ;
+		}
+		else
+		{
+			SessionLogDirect( _T("DSbaBatchDlg.AutoEnhancement: Error: Could not get ImageCorrections Object.") ) ;
+			return( FALSE ) ;
+		}
+		
+		//	BECAUSE WE ARE USING THE PIERenderCorrections CODE, WE MUST SET UP A
+		//	ViewCorrections GENCON.
+		UGenCon *theViewCorrections = new UGenCon( GetDataDictionary( _T("DDViewCorrectionsDef"))) ;
+		if( theViewCorrections )
+		{
+			theViewCorrections->SetAttrValue( _T("Path"), SrcPath ) ;
+			
+			//	GET THE IMAGE CORRECTIONS OF THE SOURCE FILE FROM THE DATABASE.
+			UGenCon *LatestDBCorrections = (UGenCon *) GetImageCorrections( SrcPath, NULL ) ;
+			if( LatestDBCorrections )
+			{
+				//	CREATE THE LATEST CORRECTIONS GENCON
+				//	AND SETUP ITS DEFAULT VALUES
+				UGenCon *AppliedCorrections = new UGenCon( GetDataDictionary( _T("DDImgCorrectionsDef"))) ;
+				AppliedCorrections->SetDoubleValue( _T("Gamma"), 1.0 ) ;
+				AppliedCorrections->SetDoubleValue( _T("GammaRed"), 1.0 ) ;
+				AppliedCorrections->SetDoubleValue( _T("GammaGreen"), 1.0 ) ;
+				AppliedCorrections->SetDoubleValue( _T("GammaBlue"), 1.0 ) ;
+				unsigned long *IdentityLut = ImageCorrections->GetIdentityLut() ;
+				AppliedCorrections->SetAttrValue( _T("LUT"), IdentityLut ) ;
+				
+				theViewCorrections->SetLongValue( _T("AppliedCorrections"), AppliedCorrections ) ;
+				theViewCorrections->SetLongValue( _T("LatestCorrections"),  LatestDBCorrections ) ;
+				
+				//	READ THE IMAGE
+				ImageMem	*SrcImg = ReadImage(SrcPath) ;
+				if( SrcImg )
+				{
+					int	ApplyCrop = FALSE ;
+					int	ApplyResample = FALSE ;
+					int	MakeBitmap = FALSE ;
+					int	WantDiagnostics = FALSE ;
+		//			int	ApplyShasta = LatestDBCorrections->GetLongValue( _T("ApplyShasta")) ;
+					int ApplyShasta = TRUE ;	//	IF WE ARE HERE, WE NEED TO APPLY SHASTA.
+
+					LatestDBCorrections->SetLongValue(_T("ApplyShasta"), ApplyShasta ) ;
+					AppliedCorrections->SetLongValue( _T("ApplyShasta"), ApplyShasta ) ;
+					
+					PIERenderCorrections	*RenderCorrections = new PIERenderCorrections ;
+
+					RenderCorrections->SetSourceImage( SrcImg ) ;
+
+					int ApplyRotations = 0 ;
+					RenderCorrections->ApplyCorrections(	theViewCorrections, FALSE, 
+															MonitorProfilePath, ViewingProfilePath,
+															EditSpaceProfilePath, DefaultInputProfilePath,
+															ApplyCrop, ApplyResample, MakeBitmap,
+															WantDiagnostics, ApplyShasta, ApplyRotations ) ;
+
+					ImageMem	*DstImg = RenderCorrections->GetCurrentImage() ;
+
+					if( DstImg )
+					{
+						TCHAR	DstFileName[2048] ;
+						int		IsDirectory ;
+						sprintf( DstFileName, _T("%s\\AE"), FilePath ) ;	//	Auto Enhancement
+						if( ! FileOrDirectoryExists( DstFileName, &IsDirectory ) )
+						{
+							CreateFullDirectoryPath( DstFileName ) ;
+						}
+						
+						//	MOVE THE ORIGINAL IMAGE TO THE "AE" DIRECTORY.
+						sprintf( DstFileName, _T("%s\\AE\\%s.%s"), FilePath, FileName, FileExtn ) ;
+						RenameFile( SrcPath, DstFileName ) ;
+	//					rename( SrcPath, DstFileName ) ;
+	//					SessionLogDirect( _T("DSbaBatchDlg.AutoEnhancement: Renaming \"%s\" to \"%s\"."), SrcPath, DstFileName ) ;
+
+						TCHAR	Value[1024] ;
+						int		Enabled = FALSE ;
+						GetSystemSettings( _T("Thumbnail"), _T("Size"), Value, &Enabled ) ;
+						long	SubSampleSize = 500L ;
+						if( Enabled )
+						{
+							if( *Value )
+							{
+								SubSampleSize = atoi( Value ) ;
+							}
+						}
+						
+						//	UPDATE THE DATABASE SAYING WE ARE APPLYING SHASTA
+						LatestDBCorrections->SetLongValue(_T("ApplyShasta"), 1L ) ;
+						LatestDBCorrections->SetLongValue(_T("ShastaHighlight"), 0L ) ;
+						LatestDBCorrections->SetLongValue(_T("ShastaMidTone"), 0L ) ;
+						LatestDBCorrections->SetLongValue(_T("ShastaShadow"), 0L ) ;
+						ImageCorrections->Save(SrcPath) ;
+						
+						if( FileExtn[0] == 'J' || FileExtn[0] == 'j' )
+						{
+							sprintf( DstFileName, _T("%s\\%s.%s"), FilePath, FileName, FileExtn ) ;
+							WriteJpegImage( DstImg, DstFileName, SubSampleSize ) ;
+							SessionLogDirect( _T("DSbaBatchDlg.AutoEnhancement: Destination File: \"%s\""), DstFileName ) ;
+						}
+						else
+						{
+							sprintf( DstFileName, _T("%s\\%s.%s"), FilePath, FileName, FileExtn ) ;
+							WriteTiffImage( DstImg, DstFileName, SubSampleSize ) ;
+							SessionLogDirect( _T("DSbaBatchDlg.AutoEnhancement: Destination File: \"%s\""), DstFileName ) ;
+						}
+					}
+					else
+					{
+						SessionLogDirect( _T("DSbaBatchDlg.AutoEnhancement: Error: Could not read image: \"%s\"."), SrcPath ) ;
+						return( FALSE ) ;
+					}
+					
+					delete RenderCorrections ;
+					delete SrcImg ;
+					delete AppliedCorrections ;
+					ImageCorrections->Free( SrcPath ) ;
+					delete theViewCorrections ;
+				}
+				else
+				{
+					SessionLogDirect( _T("DSbaBatchDlg.AutoEnhancement: Error: Could not read image: \"%s\"."), SrcPath ) ;
+					return( FALSE ) ;
+				}
+			}
+			else
+			{
+				SessionLogDirect( _T("DSbaBatchDlg.AutoEnhancement: Error: Could not get LatestDBCorrections.")) ;
+				return( FALSE ) ;
+			}
+		}
+		else
+		{
+			SessionLogDirect( _T("DSbaBatchDlg.AutoEnhancement: Error: Could not get theViewCorrections.") ) ;
+			return( FALSE ) ;
+		}
+		return( TRUE ) ;
+	}
+	
+	ImageMem *ReadImage( TCHAR *FilePath )
+	{
+		PIEReadImage *anImageRdr = new PIEReadImage ;
+		anImageRdr->Init(FilePath, 1L) ;
+		anImageRdr->DoOp( NULL, NULL, NULL ) ;
+		ImageMem *theImage = anImageRdr->GetImage() ;
+		delete anImageRdr ;
+		return( theImage ) ;
+	}
+
+	void WriteJpegImage( ImageMem *theImage, TCHAR *SrcImageName, long SubSampleSize )
+	{
+		PIEJpeg *PJpeg = new PIEJpeg ;
+//		if( gProfileLength )
+//		{
+//			PJpeg->SetProfile( gProfile, gProfileLength ) ;
+//		}
+
+		int err = PJpeg->CompressToFile(SrcImageName,theImage,SubSampleSize);
+		delete PJpeg ;
+	}
+
+	void WriteTiffImage( ImageMem *theImage, TCHAR *SrcImageName, long SubSampleSize )
+	{
+		long	SSWidth, SSHeight ;
+		long	Depth = theImage->GetDepth() ;
+		double	Resolution = 100.0 ;
+
+		double	Ratio = GetSourceAspectRatio( theImage, SubSampleSize, &SSWidth, &SSHeight ) ;
+		
+		PIETiff *PTiff = new PIETiff ;
+//		if( gProfileLength )
+//		{
+//			PTiff->SetEmbeddedProfile(gProfile, gProfileLength ) ;
+//		}
+		PTiff->WriteTiffFile( SrcImageName, theImage, Resolution, Resolution, SSWidth, SSHeight, Depth);
+		delete PTiff ;
+	}
+
+	double GetSourceAspectRatio( ImageMem *theImage, long SubSampleSize, long *SSWidth, long *SSHeight )
+	{
+		double	Width = theImage->GetWidth() ;
+		double	Lines = theImage->GetHeight() ;
+
+
+		if( Width < Lines )
+		{
+			double	Ratio = Width / Lines ;
+			*SSWidth = SubSampleSize * Ratio ;
+			*SSHeight = SubSampleSize ;
+		}
+		else
+		{
+			double	Ratio = Lines / Width ;
+			*SSWidth = SubSampleSize ;
+			*SSHeight = SubSampleSize * Ratio ;
+		}
+
+		return( Ratio ) ;
+	}
+
+
+	void GetFilePathNameAndExt( TCHAR *Source, TCHAR *FilePath, TCHAR *FileName, TCHAR *FileExtn )
+	{
+		TCHAR	Src[2048] ;
+		strcpy( Src, Source ) ;
+
+		FileExtn[0] = 0 ;
+		FileName[0] = 0 ;
+		FilePath[0] = 0 ;
+
+		if( strchr( Src, 0x2E ) )
+		{
+			GetLastToken( Src, FileExtn, 0x2E ) ;	//	"." GET THE EXTENSION
+		}
+
+		if( strchr( Src, 0x5C ) )
+		{
+			GetLastToken( Src, FileName, 0x5C ) ;	//	"\" GET THE BASE FILE NAME
+			strcpy( FilePath, Src ) ;				//		GET THE PATH
+		}
+		else
+		{
+			strcpy( FileName, Src ) ;
+		}
+
+	}
+
+	void GetLastToken( TCHAR *Source, TCHAR *Dst, int SrchChar )
+	{
+		long	SrcPos = strlen( Source ) - 1L ;
+		long	DstPos = 0L ;
+
+		Dst[DstPos] = 0x00 ;
+
+		while( SrcPos >= 0L && Source[SrcPos] != SrchChar )
+		{
+			SrcPos-- ;
+		}
+
+		if( SrcPos >= 0L )
+		{
+			Source[SrcPos] = 0x00 ;
+			SrcPos++ ;
+
+			while( Source[SrcPos] )
+			{
+				Dst[DstPos] = Source[SrcPos] ;
+				SrcPos++ ;
+				DstPos++ ;
+			}
+			Dst[DstPos] = 0x00 ;
+		}
+	}
+
+	int RenameFile( TCHAR *OrigName, TCHAR *NewName )
+	{
+		long	message = 0x800E ;	//	(DWORD) M_RELEASE_IMAGE ;
+		long	parameter = (long) OrigName ;
+		long	wParam = 0L ;
+		
+		int	Count = 0 ;
+		int Result = rename( OrigName, NewName ) ;
+		while( Result && Count < 30 )
+		{
+			SessionLogDirect( _T("DSBaBatchDlg.RenameFile: Result: %d"), Result ) ;
+			
+			message = 0x800E ;	//	(DWORD) M_RELEASE_IMAGE ;
+			parameter = (long) OrigName ;
+			wParam = 0L ;
+			Result = BroadcastMessageToAllViews( message, parameter, wParam ) ;
+			Sleep( 100 ) ;
+			Result = rename( OrigName, NewName ) ;
+			Count++ ;
+		}
+		
+		if( Result )
+		{
+			TCHAR	msg[1024] ;
+			int theError = errno(msg) ;
+			SessionLogDirect( _T("DSbaBatchDlg.AutoEnhancement: ERROR(%d) \"%s\": Renaming \"%s\" to \"%s\"."), 
+								theError, msg, OrigName, NewName ) ;
+		}
+		
+		return( Result == 0 ) ;
+	}
+	
+}	//	END OF 'C' CODE
+//=============================================================================
+
+CEntry NUMERIC AutoEnhancement;
+

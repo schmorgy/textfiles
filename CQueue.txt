@@ -1,0 +1,462 @@
+
+
+//	THIS FILE CONTAINS THE CODE TO ADD AND REMOVE ENTRIES
+//	FROM QUEUES
+
+//	THIS FILE CONTAINS THE FOLLOWING ROUTINES
+//	AddJobToQueue( char *QueueName, char *Job, char *OrderID ) ;	*	ADDS A JOB TO A QUEUE
+//	ConnectToADO() ;												*	MAKES THE CONNECTION TO THE DB
+//	JobToRun(char *QueueName, long *ID) ;							*	CHECKS QUEUE FOR A JOB TO RUN
+//	RemoveJobFromQueue(char *QueueName, long ID ) ;					*	REMOVES THE JOB FROM THE QUEUE
+
+
+
+AddJobToQueue( TCHAR *QueueName, TCHAR *JobName, TCHAR *theJob,
+			   TCHAR *OrderID, TCHAR *OrderItem, long OrderItemQty )
+{
+	char	*PGCList ;
+	char	*theNewPGC ;
+	char	*theDate ;
+	TCHAR	 temp[64] ;
+	char	*anADO ;
+	char	*jobIDGC ;
+	int		 result ;
+	long	 jobID ;
+
+	anADO = ConnectToADO() ;
+	if( anADO == NULL )	{ return( FALSE ) ; }
+
+	PGCList = NewPGenConList(anADO);
+	if( PGCList == NULL )
+	{
+		anADO = Delete( anADO ) ;
+		return( FALSE ) ;
+	}
+
+	result = GetTable( PGCList, "JobQueue", "Optimistic", "Dynamic" ) ;
+	if( result == 0 )
+	{
+		PGCList = Delete( PGCList ) ;
+		anADO = Delete( anADO ) ;
+		return( FALSE ) ;
+	}
+
+	theNewPGC = AddRecord( PGCList ) ;
+	if( theNewPGC == NULL )
+	{
+		PGCList = Delete( PGCList ) ;
+		anADO = Delete( anADO ) ;
+		return(FALSE) ;
+	}
+
+	// LATER WE NEED A TECHNIQUE FOR GENERATING A UNIQUE #
+	UniqueID( "", 8, temp ) ;
+	jobID = atoi( temp ) ;
+
+/*	jobIDGC = GetSystemTime();	//	NOTE: IN GMT!
+	jobID =			 GetLongValue( jobIDGC, "Hour")		* 10000000 ;
+	jobID = jobID + (GetLongValue( jobIDGC, "Minute"))	* 100000 ;
+	jobID = jobID + (GetLongValue( jobIDGC, "Second"))	* 1000 ;
+	jobID = jobID +  GetLongValue( jobIDGC, "Milliseconds") ;
+	jobIDGC = Delete( jobIDGC ) ;
+*/
+
+	if( OrderID[0] == 0 )
+		{ sprintf( OrderID, "Order.%ld", jobID ) ; }
+
+	if( OrderItem[0] == 0 )
+		{ sprintf( OrderItem, "%ld", jobID ) ; }
+
+	if( OrderItemQty == 0 )
+		{ OrderItemQty = 1L ; }
+
+//	char *theStr = ConvSysTimeToString( char *GCDateTime, char *ascii, long flag ) ;
+//	0x01 = Date Only mm/dd/yyyy, 0x02 = Date Only dd/mm/yyyy, 0x04 = Date Only yyyy mm dd
+//	0x10 = Time Only hh:mm,		 0x20 = Time Only hh:mm:ss,	  0x40 = Time Only hh:mm:ss:xxx
+	theDate = GetSystemTime() ;
+	ConvSysTimeToString( theDate, temp, 0x14 ) ;
+
+	SetAttrValue( theNewPGC, "QueueName",	QueueName ) ;
+	SetLongValue( theNewPGC, "Priority",	50L ) ;
+	SetAttrValue( theNewPGC, "OrderID",		OrderID ) ;
+	SetAttrValue( theNewPGC, "OrderItemID",	OrderItem ) ;
+	SetLongValue( theNewPGC, "OrderItemQty",OrderItemQty ) ;
+	SetLongValue( theNewPGC, "JobID",		jobID ) ;
+	SetAttrValue( theNewPGC, "JobName",		JobName ) ;
+//	SetAttrValue( theNewPGC, "JobText",		theJob ) ;
+	SetLongValue( theNewPGC, "Hold",		0L ) ;
+	SetLongValue( theNewPGC, "PrintStatus",	1L ) ;
+	SetAttrValue( theNewPGC, "RunDate",		temp ) ;
+	SetAttrValue( theNewPGC, "SubmitDate",	temp ) ;
+
+	result = DBUpdate( PGCList ) ;
+
+	theDate = Delete( theDate ) ;
+	PGCList = Delete( PGCList ) ;
+	anADO = Delete( anADO ) ;
+}
+
+
+ConnectToADO()
+{
+	char	*ADO ;
+	TCHAR	 msg[256] ;
+	int		 result ;
+
+	ADO = NewADO() ;
+
+	if( ADO == NULL )
+	{
+		MessageBox( "Could not get ADO.", "MB_OK" ) ;
+		return(ADO) ;
+	}
+
+	result = ConnectKPIS( ADO ) ;
+	if( result )
+	{
+		sprintf( msg, "Could not get Connection. Error = %d", result ) ;
+		MessageBox( msg, "MB_OK" ) ;
+		ADO = Delete( ADO ) ;
+		return(ADO) ;
+	}
+
+	return( ADO ) ;
+}
+
+
+JobToRun(TCHAR *QueueName, long *ID, TCHAR *JobName, char *PrinterSetupGC)
+{
+	TCHAR	*theJob = NULL ;
+
+	theJob = GetActiveOrderJob( QueueName, JobName, ID ) ;
+	if( theJob == NULL )
+	{
+		//	FIND THE NEXT ORDER TO RUN
+		FindNextOrder( QueueName ) ;
+
+		theJob = GetActiveOrderJob( QueueName, JobName, ID ) ;
+	}
+
+	return( theJob ) ;
+}
+
+FindNextOrder( TCHAR *QueueName )
+{
+	char	*ActiveOrderGC ;
+	TCHAR	 OrderID[32] ;
+	TCHAR	 theQuery[1024] ;
+	TCHAR	 Status[32] ;
+	char	*anADO ;
+	char	*PGCList ;
+	char	*aPGC ;
+	int		 result ;
+
+	PGCList = InitDBTransaction( &anADO ) ;
+	if( PGCList == NULL )
+	{
+		return ;
+	}
+
+	sprintf( theQuery,
+		"SELECT * FROM JobQueue WHERE QueueName = '%s' ORDER BY RunDate, Priority",
+			QueueName ) ;
+	
+	result = Query(PGCList, theQuery, "Optimistic", "Dynamic" ) ;
+	if( result != 1 )
+	{
+		ReportError( "FindNextOrder query failed.", 0, 0 ) ;
+		RollBackTransaction( anADO ) ;
+		PGCList = Delete( PGCList ) ;
+		return ;
+	}
+
+	//	WE NOW HAVE A LIST OF JOBS SORTED BY RUNDATE AND PRIORITY
+	aPGC = GetFirst( PGCList ) ;
+	while( aPGC )
+	{
+		GetAttrValue( aPGC, "Status", Status ) ;
+		if( Status[0] == 'S' && (GetLongValue( aPGC, "Hold") == 0L))	//	SUBMITTED & NOT ON HOLD
+		{
+			//	IF THE JOB STATUS IS SUBMITTED IT MEANS 
+			//	IT HAS NOT BEEN WORKED ON YET.  SO...
+			//	ASSIGN IT TO THIS RENDER ENGINE.
+			GetAttrValue( aPGC, "OrderID", OrderID ) ;
+			if( AssignOrder( OrderID, QueueName ))
+			{
+				ActiveOrderGC = GetTreeObject( "ActiveOrder", "[GENCONS]" ) ;
+				if( ActiveOrderGC == NULL )
+				{
+					ActiveOrderGC = CreateGenCon( GetDataDictionary( "DDText" )) ;
+					SetName( ActiveOrderGC, "ActiveOrder" ) ;
+					HangTreeObject( ActiveOrderGC, "[GENCONS]" ) ;
+				}
+				SetAttrValue( ActiveOrderGC, "Text", OrderID ) ;
+				CommitTransaction( anADO ) ;
+				PGCList = Delete( PGCList ) ;
+				return ;
+			}
+		}
+		aPGC = GetNext( PGCList ) ;
+	}
+
+	RollBackTransaction( anADO ) ;
+	PGCList = Delete( PGCList ) ;
+	return ;
+}
+
+
+AssignOrder( TCHAR *OrderID, TCHAR *QueueName )
+{
+	char	*anADO ;
+	char	*PGCList ;
+	char	*aPGC ;
+	TCHAR	 theQuery[1024] ;
+	int		 result ;
+
+	PGCList = InitDBTransaction( &anADO ) ;
+
+	if( PGCList == NULL )
+	{
+		return( FALSE ) ;
+	}
+
+	sprintf( theQuery, "SELECT * FROM JobQueue WHERE OrderID = '%s' AND QueueName = '", OrderID ) ;
+	strcat( theQuery, QueueName ) ;
+	strcat( theQuery, "'" ) ;
+
+	result = Query( PGCList, theQuery, "Optimistic", "Dynamic" ) ;
+	if( result == FALSE )
+	{
+		RollBackTransaction( anADO ) ;
+		return( FALSE ) ;
+	}
+
+	aPGC = GetFirst( PGCList ) ;
+	while( aPGC )
+	{
+		SetAttrValue( aPGC, "Status", "Assigned" ) ;
+		result = DBUpdate( PGCList ) ;
+		if( result != 0 )
+		{
+			RollBackTransaction( anADO ) ;
+			PGCList = Delete( PGCList ) ;
+			return( FALSE ) ;
+		}
+
+		if( OrderID[0] == 0 )	//	IF THERE IS NO ORDER
+		{						//	JUST ASSIGN THE FIRST JOB
+			CommitTransaction( PGCList ) ;
+			PGCList = Delete( PGCList ) ;
+			return( TRUE ) ;
+		}
+
+		aPGC = GetNext( PGCList ) ;
+	}
+
+	CommitTransaction( PGCList ) ;
+	PGCList = Delete( PGCList ) ;
+	return( TRUE ) ;
+}
+
+GetActiveOrderJob(TCHAR *QueueName, TCHAR *JobName, long *ID)
+{
+	char	*ActiveOrderGC ;
+	TCHAR	 OrderID[32] ;
+	TCHAR	 theQuery[1024] ;
+	TCHAR	 JobStatus[32] ;
+	char	*anADO ;
+	char	*PGCList ;
+	char	*aPGC ;
+	TCHAR	*theJob ;
+	int		 result ;
+
+	ActiveOrderGC = GetTreeObject( "ActiveOrder", "[GENCONS]" ) ;
+
+	if( ActiveOrderGC )
+	{
+		GetAttrValue( ActiveOrderGC, "Text", OrderID ) ;
+		if( OrderID[0] != 0 )
+		{
+			//	WE HAVE AN ACTIVE ORDER
+			sprintf( theQuery, "SELECT * FROM JobQueue WHERE QueueName = '%s' AND OrderID = '", QueueName);
+			strcat( theQuery, OrderID ) ;
+			strcat( theQuery, "'" ) ;
+
+			PGCList = InitDBTransaction( &anADO ) ;
+			if( PGCList == NULL )
+			{
+				return( NULL ) ;
+			}
+			
+			result = Query(PGCList, theQuery, "Optimistic", "Dynamic" ) ;
+			if( result == FALSE )
+			{
+				RollBackTransaction( anADO ) ;
+				ReportError( "GetActiveOrderJob: Query failed.", 0, 0 ) ;
+				return( NULL ) ;
+			}
+
+			//	AT THIS POINT WE HAVE A LIST OF JOBS FOR THIS QUEUE AND THIS ORDERID
+			//	WALK THROUGH THE JOBS TO FIND THE FIRST JOB THAT HAS NOT BEEN RUN.
+			aPGC = GetFirst( PGCList ) ;
+			while( aPGC )
+			{
+				GetAttrValue( aPGC, "Status", JobStatus ) ;
+				if( JobStatus[0] == 'A' )
+				{
+					//	IF WE ARE HERE THEN THE JOB IS ASSIGNED TO US AND
+					//	HAS NOT YET BEEN STARTED RENDERING.
+					SetAttrValue( aPGC, "Status", "Rendering" ) ;
+					result = DBUpdate( PGCList ) ;
+					if( result == 0 )
+					{
+						theJob = GetTheJob( aPGC, JobName, ID ) ;
+						CommitTransaction( anADO ) ;
+						PGCList = Delete( PGCList ) ;
+						return( theJob ) ;
+					}
+				}
+				aPGC = GetNext( PGCList ) ;
+			}
+			//	IF WE ARE HERE THEN ALL THE JOBS
+			//	FOR THIS ORDER HAVE BEEN RENDERED
+			//	OR WE WERE NOT ABLE TO UPDATE THE PGCLIST
+			RollBackTransaction( anADO ) ;
+			PGCList = Delete( PGCList ) ;
+		}
+	}
+
+
+	return( NULL ) ;
+}
+
+GetTheJob( char *aPGC, TCHAR *JobName, long *ID )
+{
+	TCHAR	*tmpJob ;
+	TCHAR	*theJob ;
+	long	 jobLengthInChars ;
+
+	tmpJob = GetStringValue( aPGC, "Job" ) ;
+	if( tmpJob == NULL || tmpJob[0] == 0 )
+	{
+		*ID = 0L ;
+		JobName[0] = '\0' ;
+		return( NULL ) ;
+	}
+
+	jobLengthInChars = strlen( tmpJob ) ;
+
+			//	DON'T FORGET UNICODE !
+	theJob = malloc( (jobLengthInChars + 2 ) * 2 ) ;
+	if( theJob == NULL )
+	{
+		*ID = 0L ;
+		JobName[0] = '\0' ;
+		return( NULL ) ;
+	}
+
+	strcpy( theJob, tmpJob ) ;
+	GetAttrValue( aPGC, "JobName", JobName ) ;
+	*ID = GetLongValue( aPGC, "ID" ) ;
+	return( theJob ) ;
+}
+
+InitDBTransaction( long *anADO )
+{
+	char	*PGCList ;
+	char	*ADO ;
+	int		 result ;
+	long	 TransactionLevel ;
+
+	ADO = ConnectToADO() ;
+	if( ADO == NULL )
+	{
+		ReportError( "Cannot get Database connection.", 0, 0 ) ;
+		*anADO = NULL ;
+		return( NULL ) ;
+	}
+
+	result = BeginTransaction( ADO, &TransactionLevel ) ;
+	if( result != 0 )
+	{
+		ReportError( "Cannot begin transaction.", 0, 0 ) ;
+		*anADO = NULL ;
+		return( NULL ) ;
+	}
+
+	PGCList = NewPGenConList(ADO);
+	if( PGCList == NULL )
+	{
+		RollBackTransaction( ADO ) ;
+		*anADO = NULL ;
+		ReportError( "Cannot get Database recordset.", 0, 0 ) ;
+		return( NULL ) ;
+	}
+
+	return( PGCList ) ;
+}
+
+
+
+
+//	int CommitTransaction( char *anADO ) ;
+//	int RollBackTransaction( char *anADO ) ;
+
+
+
+RemoveJobFromQueue( TCHAR *QueueName, long ID )
+{
+	char	*ADO ;
+	char	*PGCList ;
+	char	*RecordSet ;
+	char	*aPGC ;
+	int		 result ;
+
+	ADO = ConnectToADO() ;
+	if( ADO == NULL )
+	{
+		MessageBox( "Could not get ADO or Connection.", "MB_OK" ) ;
+		return(FALSE) ;
+	}
+
+
+	PGCList = NewPGenConList( ADO ) ;
+	if( PGCList == NULL )
+	{
+		ReleaseConnection( ADO ) ;
+		Delete( ADO ) ;
+		MessageBox( "Could not create PGenConList.", "MB_OK" ) ;
+		return(FALSE) ; ;
+	}
+
+	result = GetTable( PGCList, QueueName, "Optimistic", "Dynamic" ) ;
+	if( result == 0 )
+	{
+		Delete( PGCList ) ;
+		ReleaseConnection( ADO ) ;
+		Delete( ADO ) ;
+		return(FALSE) ;
+	}
+
+	aPGC = GetFirst( PGCList ) ;
+	while( aPGC )
+	{
+		if( GetLongValue( aPGC, "ID" ) == ID )
+		{
+			RemoveItem( PGCList, aPGC ) ;
+			Delete( PGCList ) ;
+			ReleaseConnection( ADO ) ;
+			Delete( ADO ) ;
+			return(TRUE) ;
+		}
+		GetNext( PGCList ) ;
+	}
+
+	Delete( PGCList ) ;
+	ReleaseConnection( ADO ) ;
+	Delete( ADO ) ;
+
+	return(FALSE) ;
+}
+
+

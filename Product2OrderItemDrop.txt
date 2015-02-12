@@ -1,0 +1,121 @@
+// Receive a Product Dropped on to the OrderItems Window
+
+// Dont' think this code is used.
+// If used, should include and used "CreateOrderItems.txt" common code to create
+// the Order Items.
+
+NUMERIC AddOrderItemToDataBase(ID,OrderID,ProductID,Quantity,Priority,JobPath)
+{
+	theSQL = ~Insert Into OrderItems	(ID,OrderID,ProductID,Quantity,Priority,JobPath)
+							VALUES		('<ID>','<OrderID>','<ProductID>',1,50,'<JobPath>')~;
+
+	if ( !db( CMD,~<theSQL>~ ) )
+	{
+		db( GetErrorDescription,theErr );
+		Warning( ~Error: <theErr>~,~From: [<theSQL>]~ );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+STR CreateEmptyJobForThisProduct( OrderID,Item,LayoutPath )
+{
+	JobPath = ~<$App.Directory>\OrderJobs\<OrderID>~;
+	JobName = ~Job_<OrderID>_<Item>~;
+
+	Directory( Create,~<JobPath>~ );
+
+	if ( !File( Job,Open,~<JobPath>\<JobName>~,Create,Write ) )	// CREATE AND OPEN THE JOB
+	{
+		Error( ~Could not open the job file <theFile>~ );
+		return ~~;
+	}
+
+	Job( ~FileType: Job~ );
+	Job( ~Use: |<$App.Vol><LayoutPath>|~ );
+	Job( Close );
+
+	return ~<JobPath>\<JobName>~;
+}
+
+
+NUMERIC AddOrderItemToTheView( ID,OrderID,ProductID,JobPath,ProductPreviewPath,DropIndex )
+{
+	Define: OrderItem<ID> USING DDICImageDef ASSYMBOL OrderItem<ID> PERMANENT	
+		Fields:	Info1		~<ProductID>~
+				Info2		~Quantity: 1~
+				Info3		~<JobPath>~
+				Path		~<ProductPreviewPath>~
+				IsDeleted	F
+				IsSelected	F 
+				DropTypes	Products
+				DataType	OrderItems 
+				Table		OrderItems
+				Key			~OrderID = '<OrderID>' AND ID = '<ID>'~;
+
+	DstView( InsertBack,OrderItem<ID>,DstView );
+	return TRUE;
+}
+
+if ( !GenCon( DragDropInfo,GetGenCon,DragDropInfo,Temporary ) )
+{
+	Error( ~There was no DragDropInfo for the item dragged into the OrderItems window~ );
+}
+
+if ( !GenCon( SrcView,Is,~<$CON.DragDropInfo[SrcView]>~ ) ) 
+{
+	Error( ~The SrcView is invalid~ );
+}
+
+if ( !GenCon( DstView,Is,~<$CON.DragDropInfo[DstView]>~ ) ) 
+{
+	Error( ~The DstView is invalid~ );
+}
+
+if ( ~<$con.DstView[ViewDataType]>~ != OrderItems )
+{
+	Error( ~The DstView contains <$con.DstView[ViewDataType]> instead of orders~ );
+}
+
+OrderID = ~<$con.DstView[ViewDataFor]>~ ;
+
+if ( !ado( db,CONNECT ) )
+{
+	Error( ~Could not open KPIS Database~ );
+}
+
+while ( SrcView( GetNext,Item ) )						// LOOP FOR EACH ITEM IN THE VIEW
+{
+	if ( ~<$con.Item[IsSelected]>~ != ~T~ )					// WAS THIS ITEM SELECTED?
+		continue;
+
+	if ( ~<$con.Item[DataType]>~ != ~Products~ )		// IS THE ITEM REALLY A PRODUCT?
+		{ Error( ~Products are the only items that can be dragged into the OrderItems window~ ); }
+	
+	if ( !PGenConList( ProductList,Connect,Query,~Select * From <$CON.Item[Table]> Where <$CON.Item[Key]>~ ) )
+	{ Error( ~The Product Table does not exist~ ); }
+	
+	if ( !ProductList( GetFirst,Product ) )				// GET THE RECORD FROM THE DATABASE THAT DESCRIBES THIS PRODUCT
+	{ Error( ~The Product Where (<$CON.Item[Key]>) no longer exists~ ); }	
+
+	NextOrderItem = DstView(ChildCount) + 1;
+
+	if ( ~<$pcon.Product[ProductType]>~ == ~Digital~ )	// IS THIS A DIGITAL PRODUCT
+	{
+		JobPath = CreateEmptyJobForThisProduct( ~<OrderID>~,<NextOrderItem>,~<$pcon.Product[LayoutPath]>~ );		
+	}
+
+	if ( !AddOrderItemToDataBase(<NextOrderItem>,~<OrderID>~,~<$pcon.Product[ID]>~,1,50,~<JobPath>~ ) )	// ADD THE ORDER ITEM TO THE DATABASE
+	{
+		//RemoveJob( );									// ON FAILURE, REMOVE THE JOB
+		Exit;
+	}
+
+	AddOrderItemToTheView(<NextOrderItem>,~<OrderID>~,~<$pcon.Product[ID]>~,
+							~<JobPath>~,~<$con.Item[Path]>~,1);				// MAKE THE NEW ITEM SHOW UP IN THE ORDERITEM VIEW
+
+	Sleep( 500 );
+	HandleActions( ~Refresh(OrderItemListView)~ );
+}

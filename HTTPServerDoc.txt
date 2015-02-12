@@ -1,0 +1,521 @@
+IncludeClass(BaseDialog);
+IncludeClass(BaseThread);
+
+Class( ServerDialog,Extends,BaseDialog,
+		Member,fForceQuit,Numeric,FALSE,
+		Member,fActualPort,Numeric,0 );
+
+Class( ServerThread,Extends,BaseThread,
+		Member,fDirectory,Str,~~,
+		Member,fPort,Numeric,0 );
+
+
+
+VOID ServerThread::ServerThread(Directory,Port)			// THREADED OPERATION
+{
+	fDirectory = ~<Directory>~;
+	fPort = ~<Port>~;
+}
+
+
+VOID ServerThread::SetLogLevel(level)					// THREADED OPERATION
+{
+	fServer( Log,~<Level>~ );
+}
+
+
+NUMERIC ServerThread::HandleStart()						// THREADED OPERATION
+{
+	SetSymbolValue( HTTPServerActive,0 );
+	
+	HttpServer( fServer,Private );
+
+	fServer( Directory,~<fDirectory>~ );
+
+	fServer( Port,~<fPort>~ );
+
+	Log( Session,~<$Job.title> Starting Http Server on port <fPort>.  <fDirectory>~ );
+
+	if ( fServer( Create ) )
+	{
+		fPort = fServer( GetPort );
+
+		SetWorkStationSettings( ~<$Job.Title>_<$App.Instance>~,Port,Numeric(~<fPort>~),TRUE );
+
+		Invoke( ~ThisDialog.Refresh~,~<fPort>~ );
+		
+		SetSymbolValue( HTTPServerActive,<fPort> );
+		
+		//Invoke( ~ThisDialog.PreloadWebBrowserControl~ );
+
+		return TRUE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC ServerThread::HandleMsg( Msg,lparam,wparam )	// THREADED OPERATION
+{
+  return TRUE;
+}
+
+
+NUMERIC ServerThread::HandleQuit()						// THREADED OPERATION
+{
+	ForgetPrivate( fServer );
+	return Log( Session,~<$Job.title> Ending Http Server thread on port <fPort>.  <fDirectory>~ );
+}
+
+
+VOID ServerDialog::ServerDialog()
+{
+	Title = ~<$App.Title> HTTP Server~;
+	Left = 200;
+	HelpPage = ~ReportsServer.htm~;
+	Dictionary = ~DDHttpServerDialog~;
+}
+
+VOID ServerDialog::ReOpen()				
+{ 
+	dlg( ShowDialog,TRUE );
+	dlg( SetFocus );
+}
+
+
+VOID ServerDialog::Refresh(ActualPort)
+{
+	dlg( SetStrings,Port,~<ActualPort>~ );
+	
+	fActualPort= ~<ActualPort>~;
+
+	dlg( SetStatus,0,~http://<$App.ComputerName>:<ActualPort>~ );
+
+	dlg( EnableControls, FALSE, GoButton );
+}
+
+
+
+NUMERIC ServerDialog::SetupForASPNet()
+{
+	if ( !ADO( dBase,Connect ) )
+	{
+		return Warning( ~Failed to connect to the shared database~ );
+	}
+
+	dBase( GetConnectionString,ConnectionString );		// GET THE CURRENT CONNECTION STRING
+
+	SearchString = ~""~;
+	ReplaceString = ~~;
+
+	OnContentsOf( ConnectionString,Replace,SearchString,ReplaceString );	// REMOVE ANY "" PAIRS
+
+	Path = ~<$App.Directory>\Scripts\HtmlPages\Web.Config.Master~;
+
+	if ( !File( DataFile, OPEN,~<Path>~,READ ) )
+	{ 
+		return Warning( ~Failed to open <Path>~ );
+	}
+
+	if ( !DataFile( ReadTextFile,ASPConfigData ) )
+	{ 
+		return Warning( ~Failed to read <Path>~ );
+	}
+
+	// REPLACE THE MAGIC STRING WITH THE REAL CONNECTION STRING
+
+	ReplaceString = ~$$$$$ConnectionString$$$$$~;
+
+	OnContentsOf( ASPConfigData,Replace,ReplaceString,ConnectionString );
+
+	Path = ~<$App.Directory>\Scripts\HtmlPages\Web.Config~;
+
+	if ( !File( OutDataFile, OPEN,~<Path>~,Write,Create) )
+	{ 
+		return Warning( ~Failed to open <Path>~ );
+	}
+
+	OutDataFile( WriteContentsOf,ASPConfigData );
+
+	return TRUE;
+}
+
+
+
+NUMERIC ServerDialog::OnGoButton()
+{
+	dlg( GetInput );
+
+	if ( IsNULL( ~<$con.DlgData[Port]>~ ) )
+	{
+		return Warning( ~You must enter an port first~ );
+	}
+
+	if ( IsNULL( ~<$con.DlgData[Directory]>~ ) )
+	{
+		return Warning( ~You must enter a directory first~ );
+	}
+
+	//SetupForASPNet();
+
+	ServerThread( New,HttpThread,~<$con.DlgData[Directory]>~,~<$con.DlgData[Port]>~ );
+	Private( HttpThread );
+	return HttpThread.NewUI();
+}
+
+
+
+NUMERIC ServerProc(Directory,Port)
+{
+	return TRUE;
+}
+
+
+VOID ServerDialog::WindowDefinition()
+{
+	Fields:		IsHidden	TRUE;
+}
+
+
+VOID ServerDialog::DefineControls()
+{
+	Define: PortPrompt Using DDWinCtrlDef AsSymbol PortPrompt Private
+		Fields:	TYPENAME			STATICTEXT
+				GENCONNAME			THIS
+				RightJustified		TRUE
+				Position			<hgap> <vGap>+2 50 <ButtonHeight>
+				Text				~Port~;
+
+	Define: PortField Using DDWinCtrlDef AsSymbol PortField Private
+		Fields:	TYPENAME			MaskedEditText
+				Mask				~#####~
+				GENCONNAME			THIS
+				GENCONFIELD			Port
+				IACTIONSTEXT		ACTIONS ( Get )
+				DACTIONSTEXT		ACTIONS ( Save )
+				OACTIONSTEXT		ACTIONS ( Save )
+				Position			PortPrompt(GetRight,Position)+$hGap PortPrompt(GetTop,Position)-2 40 <ButtonHeight>
+				Text				~90~;
+
+	Define: LoggingPrompt Using DDWinCtrlDef AsSymbol LoggingPrompt Private
+		Fields:	TYPENAME			STATICTEXT
+				GENCONNAME			THIS
+				RightJustified		TRUE
+				Position			PortField(GetRight,Position)+$hGap PortField(GetTop,Position)+2 70 <ButtonHeight>
+				Text				~Log Level~;
+
+	Define: LoggingField Using DDWinCtrlDef AsSymbol LoggingField Private
+		Fields:	TYPENAME			MaskedEditText
+				Mask				~#~
+				GENCONNAME			THIS
+				GENCONFIELD			LoggingLevel
+				IACTIONSTEXT		ACTIONS ( Get )
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnLoggingLevelChange() )
+				OACTIONSTEXT		ACTIONS ( Save )
+				Position			LoggingPrompt(GetRight,Position)+$hGap LoggingPrompt(GetTop,Position)-2 15 <ButtonHeight>
+				Text				~0~;
+
+	Define: AutoStartBox Using DDWinCtrlDef AsSymbol AutoStartBox Private
+		Fields:	TYPENAME			CheckBox
+				GENCONNAME			THIS
+				GENCONFIELD			AutoStart
+				Position			LoggingField(GetRight,Position)+30 LoggingField(GetTop,Position),70 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnAutoStartBox() )
+				ToolTip				~Automatically startup when <$App.Name> starts~
+				Text				~Auto Start~;
+
+
+	Define: DirectoryPrompt Using DDWinCtrlDef AsSymbol DirectoryPrompt Private
+		Fields:	TYPENAME			STATICTEXT
+				GENCONNAME			THIS
+				RightJustified		TRUE
+				Position			PortPrompt(GetLeft,Position) PortPrompt(GetBottom,Position) + <vGap> PortPrompt(GetWidth,Position) <ButtonHeight>
+				Text				~Directory~;
+
+	Define: DirectoryField Using DDWinCtrlDef AsSymbol DirectoryField Private
+		Fields:	TYPENAME			EDITTEXT
+				GENCONNAME			THIS
+				GENCONFIELD			Directory
+				IACTIONSTEXT		ACTIONS ( Get )
+				DACTIONSTEXT		ACTIONS ( Save )
+				OACTIONSTEXT		ACTIONS ( Save )
+				Position			DirectoryPrompt(GetRight,Position)+$hGap DirectoryPrompt(GetTop,Position) 300 <ButtonHeight>
+				Text				~90~;
+
+	Define: BrowseButton Using DDWinCtrlDef AsSymbol BrowseButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Position			DirectoryField(GetRight,Position)+$hGap DirectoryField(GetTop,Position),20 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.BrowseOpen() )
+				Text				~?~;
+
+	Define: GoButton Using DDWinCtrlDef AsSymbol GoButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Position			$hGap DirectoryField(GetBottom,Position)+$vGap*2,100 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnGoButton() )
+				Text				~Start~;
+
+	Define: StopButton Using DDWinCtrlDef AsSymbol StopButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Position			GoButton(GetRight,Position)+$hGap GoButton(GetTop,Position),GoButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.DoCancelButton() )
+				Text				~Stop~;
+
+	Define: HideButton Using DDWinCtrlDef AsSymbol HideButton Private
+		Fields:	TYPENAME			DefaultButton
+				Position			StopButton(GetRight,Position)+$hGap StopButton(GetTop,Position),GoButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.HideDialog() )
+				ToolTip				~Hide this dialog~
+				Text				~Hide~;
+
+	Define: CopyButton Using DDWinCtrlDef AsSymbol CopyButton Private
+		Fields:	TYPENAME			Button
+				Position			HideButton(GetRight,Position)+$hGap HideButton(GetTop,Position),GoButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.CopyURL() )
+				ToolTip				~Copy the URL of this Http server to the paste buffer. Hold down CTRL to copy just the server:port.~
+				Text				~Copy URL~;
+}
+
+NUMERIC ServerDialog::CopyURL()
+{
+	dlg( GetInput );
+
+	if ( !KeyState( CONTROL ) )
+	{
+		CopyToClipBoard( ~http://<$App.ComputerName>:<$con.DlgData[Port]>/index.html~ );
+	}
+	else
+	{
+		CopyToClipBoard( ~http://<$App.ComputerName>:<$con.DlgData[Port]>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ServerDialog::OnLoggingLevelChange()
+{
+	dlg( GetInput );
+
+	Level = dlgData( GetNumeric,LoggingLevel ); 
+
+	HttpThread.SetLogLevel(~<Level>~);
+
+	return TRUE;
+}
+
+
+NUMERIC ServerDialog::OnAutoStartBox()
+{
+	dlg( GetInput );
+
+	SetWorkStationSettings( ~<$Job.Title>_<$App.Instance>~,AutoStart,Numeric(~<$con.dlgData[AutoStart]>~),TRUE );
+
+	return TRUE;
+}
+
+
+NUMERIC ServerDialog::StopTheServer()
+{
+	if ( MemberDefined( HttpThread ) )
+	{
+		Log( Session,~Stopping <$Job.Title>~ );
+		HttpThread.WaitForThreadDeath();
+	}
+	
+	SetSymbolValue( HTTPServerActive,0 );
+
+	return TRUE;
+}
+
+
+NUMERIC ServerDialog::OkayToCancel()
+{
+	if ( IsAppShuttingDown() )
+	{
+		StopTheServer();
+
+		Sleep( 20 );
+
+		return TRUE;
+	}
+
+	if ( <fForceQuit> )
+	{
+		StopTheServer();
+
+		Sleep( 20 );
+
+		return TRUE;
+	}
+	else
+	{
+		if ( MessageBox( Translate(~Are you sure you want to stop the Http Server?~),YESNO ) == YES )
+		{
+			StopTheServer();
+
+			Sleep( 20 );
+
+			return TRUE;
+		}
+	}
+
+	return FALSE; 
+}
+
+
+VOID ServerDialog::OnDialogEnd()
+{
+	dlg( GetInput );
+	
+	if ( Numeric(~<fActualPort>~) != Numeric(~<$con.dlgData[Port]>~ ) )
+	{
+		Log( Session,~User changed HTTP Server port from <fActualPort> to <$con.dlgData[Port]>~ );
+	}
+
+	SetWorkStationSettings( ~<$Job.Title>_<$App.Instance>~,Port,Numeric(~<$con.dlgData[Port]>~),TRUE );
+	SetWorkStationSettings( ~<$Job.Title>_<$App.Instance>~,Directory,~<$con.dlgData[Directory]>~,TRUE );
+	SetWorkStationSettings( ~<$Job.Title>_<$App.Instance>~,AutoStart,Numeric(~<$con.dlgData[AutoStart]>~),TRUE );
+}
+
+
+NUMERIC ServerDialog::BrowseOpen()
+{
+	if ( GetFolder( ~Find Directory~,~Containing HMTL pages~,Path,TRUE,~<$App.ShareDirectory>\Scripts\HTMLPages~ ) )
+	{
+		dlg( SetStrings,Directory,~<Path>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ServerDialog::PreloadWebBrowserControl()
+{
+	Actions = ACTION DOC ( PreloadWebBrowserControl OpenOnce PreloadWebBrowserControl );
+	return PerformActions( Actions );
+}
+
+
+VOID ServerDialog::DefineDictionary()
+{
+	Dictionary: ~<Dictionary>~ 
+		Fields: Name Port			type text
+		Fields: Name Directory		type text
+		Fields: Name AutoStart		type long
+		Fields: Name LoggingLevel	type long
+}
+
+VOID ServerDialog::Initialize( forceStart )
+{
+	// DEFAULT TO SOMETHING MEANINGFUL
+
+	dlg( SetStrings,Port,90,Directory,~<$App.ShareDirectory>\Scripts\HtmlPages~ );
+
+	if ( <forceStart> )
+	{
+		AutoStart = 1;
+		dlg( SetStrings,AutoStart,<AutoStart> ); 
+		OnGoButton();
+	}
+	else
+	{
+		if ( GetWorkStationSettings( ~<$Job.Title>_<$App.Instance>~,Directory,Directory,Enabled ) )
+		{
+			if ( <Enabled> )
+			{
+				// dlg( SetStrings,Directory,~<Directory>~ );	Temporary until next beta goes out
+			}
+		}
+
+		if ( GetWorkStationSettings( ~<$Job.Title>_<$App.Instance>~,Port,Port,Enabled ) )
+		{
+			if ( <Enabled> )
+			{
+				dlg( SetStrings,Port,Numeric(~<Port>~) );
+			}
+		}
+
+		if ( GetWorkStationSettings( ~<$Job.Title>_<$App.Instance>~,AutoStart,AutoStart,Enabled ) )
+		{
+			if ( <Enabled> )
+			{
+				AutoStart = Numeric(~<AutoStart>~);
+
+				dlg( SetStrings,AutoStart,<AutoStart> ); 
+
+				if ( <AutoStart> )
+				{
+					OnGoButton();
+				}
+			}
+		}
+	}
+}
+
+VOID ServerDialog::HideDialog()
+{
+	dlg( ShowDialog,FALSE );
+}
+
+VOID ServerDialog::SetForceQuit( value )
+{
+	fForceQuit = <value>;
+}
+
+VOID Init(Hide)
+{
+	if ( Defined( ThisDialog ) )
+	{
+		if ( !<Hide> )
+		{
+			ThisDialog.ShowDialog(TRUE );
+		}
+	}
+	else
+	{
+		ServerDialog( New,ThisDialog );	// Instantiate an object of class ServerDialog
+		Global( ThisDialog );
+
+		ThisDialog.DefineDialog();
+		ThisDialog.Initialize(FALSE);
+		ThisDialog.SetBackGroundServer(TRUE);
+
+		if ( !<Hide> )
+		{
+			ThisDialog.ShowDialog(TRUE );
+		}
+	}
+}
+
+VOID InitAutoStart(Hide)
+{
+	if ( Defined( ThisDialog ) )
+	{
+		ThisDialog.ShowDialog(TRUE );
+	}
+	else
+	{
+		ServerDialog( New,ThisDialog );	// Instantiate an object of class ServerDialog
+		Global( ThisDialog );
+
+		ThisDialog.DefineDialog();
+		ThisDialog.Initialize(TRUE);
+		ThisDialog.SetBackGroundServer(TRUE);
+
+		if ( !<Hide> )
+		{
+			ThisDialog.ShowDialog(TRUE );
+		}
+	}
+}
+
+VOID ForceQuit()
+{
+	if ( Defined( ThisDialog ) )
+	{
+		ThisDialog.SetForceQuit( TRUE );
+		ThisDialog.DoCancelButton();
+	}
+}

@@ -1,0 +1,723 @@
+// CreatePackages.txt
+//
+// Entry Point:
+//		CreateItemsForSubjectList(dBase,~<OrderID>~,SelectedRecords,~<TableName>~,RecordCount,Stop)
+//	NOTE:  OrderID is the OrderID that the OrderItems are written to.
+//		   Stop is optional Boolean arguement which when set to TRUE will stop creating
+//					order items. 
+//
+// Globals:
+//
+// Most of these functions can be called from a Thread.  All are Thread safe.
+// It is assumed the thread has a function ShowWarning(msg) to display Warning msgs,
+//	and a function ShowProgress(msg) to display progress on the status bar,
+// and that nonThreads do not have these function.
+//
+// It is assumed the file that includes this one, also Included "Utilities2.txt"
+//  as it is needed for GetImagesOrderID()
+
+// USER DEFINED TABLES CAN HAVE PRODUCT INFO USED TO MAKE ORDER ITEMS FROM
+// WE NEED TO KNOW WHAT TYPE OF INFO IT IS TO DO THE RIGHT THING WITH IT
+
+UpdateItemsAfterCreating = ~OrderItemsDoc~;  // defining this indicates to udate OrderItems display after items created.
+Include: ~CreateOrderItems.txt~;
+
+
+// 0 - Program ID
+NUMERIC HandleColumnType0( &dBase,&SubjectInfo,&Image,ID,ProgramID,&ColumnInfo,OrderID,&ColumnsList )		// 'PROGRAMID'
+{
+	return TRUE;
+}
+
+
+// 1 - ~DP2 Product~
+NUMERIC HandleColumnType1( &dBase,&SubjectInfo,&Image,ID,ProgramID,&ColumnInfo,OrderID,&ColumnsList,JobPopulationScript )		// 'DP2 PRODUCT'	(Defined in FieldTypes.txt)
+{
+	Path = ~<$@Image.PathOfOrderRollFrame['<$pcon.Image[OrderID]>','<$pcon.Image[Roll]>','<$pcon.Image[Frame]>']>~;
+
+	ItemType = ~Subject Packages~;
+		
+	GetBgIDForColumn( ~<$pcon.ColumnInfo[ColumnName]>~,BGID,ColumnsList,SubjectInfo );
+
+	return CreateOrderItemsFromImage( dBase,~<Path>~,~<ID>~,~<OrderID>~,~1~,~<ItemType>~,~<BGID>~,~<JobPopulationScript>~ );
+}
+
+
+// 2 - ~Product of DP2 Product/Qty~
+NUMERIC HandleColumnType2( &dBase,&SubjectInfo,&Image,ID,ProgramID,&ColumnInfo,OrderID,&ColumnsList  )		// 'DP2 PRODUCT FOLLOWED BY A QTY'
+{
+	return TRUE;
+}
+
+
+// 3 - ~Quantity of DP2 Product/Qty~
+NUMERIC HandleColumnType3( &dBase,&SubjectInfo,&Image,Qty,ProgramID,&ColumnInfo,OrderID,&ColumnsList,JobPopulationScript )		// 'DP2 PRODUCT QTY' FOR A MATCHING DP2 PRODUCT
+{
+	TheProductColumn = ~<$pcon.ColumnInfo[ForColumn]>~;
+
+	if ( IsNull( ~<TheProductColumn>~ ) )
+	{
+		return DoWarning( Translate( ~There is no matching product for this quantity~ ) );
+	}
+
+	SubjectInfo(GetValue,<TheProductColumn>,TheProductID);
+//	TheProductID = ~<$con.SubjectInfo[<TheProductColumn>]>~;
+
+	if ( IsNull( ~<TheProductID>~ ) )
+	{
+		Log( Session,~No DP2 Product supplied in column <TheProductColumn> from Subject record <$con.SubjectInfo[OrderID]>/<$con.SubjectInfo[SubjectID]>~ );
+		return TRUE;	// IF THEY GIVE US A QTY WITHOUT A PRODUCT, DON'T DO ANYTHING
+	}
+
+	Path = ~<$@Image.PathOfOrderRollFrame['<$pcon.Image[OrderID]>','<$pcon.Image[Roll]>','<$pcon.Image[Frame]>']>~;
+
+	ItemType = ~Subject Packages~;
+	
+	GetBgIDForColumn( ~<$pcon.ColumnInfo[ForColumn]>~,BGID,ColumnsList,SubjectInfo );
+
+	retval = CreateOrderItemsFromImage( dBase,~<Path>~,~<TheProductID>~,~<OrderID>~,~<Qty>~,~<ItemType>~,~<BGID>~,~<JobPopulationScript>~ );
+
+	return TRUE;
+}
+
+
+// 4 - ~Customer Product~
+NUMERIC HandleColumnType4( &dBase,&SubjectInfo,&Image,ID,ProgramID,&ColumnInfo,OrderID,&ColumnsList,JobPopulationScript )		// 'CUSTOMER PRODUCT'
+{
+	if ( !dBase( GetValuesFor,~Select CustomerID From Orders Where ID = '<OrderID>'~,CustomerID ) )
+	{
+		return DoWarning( ~Order <OrderID> has no customer assigned~ );
+	}
+
+	if ( IsNull(~<CustomerID>~) ) 
+	{
+		return DoWarning( ~Order <OrderID> has no customer assigned.\nSubjectInfo table defined for Customer Products.~ );
+	}
+
+	Key = ~CustomerID = '<CustomerID>' And ProgramID = '<ProgramID>' And ID = '<ID>' And PrintingRequest = 0~;
+
+	Query = ~Select * From CustomerProducts Where <Key> Order By Sequence~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return DoWarning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	if ( !List( NumEntries ) )
+	{
+		Log( Session,~No printable customer products for CustomerID = '<CustomerID>' And ProgramID = '<ProgramID>' And ID = '<ID>' from Subject record <$con.SubjectInfo[OrderID]>/<$con.SubjectInfo[SubjectID]>~ );
+		return TRUE;
+	}
+	
+	Path = ~<$@Image.PathOfOrderRollFrame['<$pcon.Image[OrderID]>','<$pcon.Image[Roll]>','<$pcon.Image[Frame]>']>~;
+
+	while ( List( GetNext,Entry ) )
+	{
+		ItemType = ~Subject Packages~;	
+		GetBgIDForColumn( ~<$pcon.ColumnInfo[ColumnName]>~,BGID,ColumnsList,SubjectInfo );
+		CreateOrderItemsFromImage( dBase,~<Path>~,~<$pcon.Entry[ProductID]>~,~<OrderID>~,~<$pcon.Entry[Quantity]>~,~<ItemType>~,~<BGID>~,~<JobPopulationScript>~ );
+	}
+
+	return TRUE;
+}
+
+
+// 5 - ~Product of Customer Product/Qty~
+NUMERIC HandleColumnType5( &dBase,&SubjectInfo,&Image,ID,ProgramID,&ColumnInfo,OrderID,&ColumnsList  )		// 'CUSTOMER PRODUCT FOLLOWED BY A QTY'
+{
+	return TRUE;
+}
+
+
+// 6 - ~Quantity of Customer Product/Qty~
+NUMERIC HandleColumnType6( &dBase,&SubjectInfo,&Image,Qty,ProgramID,&ColumnInfo,OrderID,&ColumnsList,JobPopulationScript )		// 'QTY OF A CUSTOMER PRODUCT/QTY PAIR'
+{
+	TheProductColumn = ~<$pcon.ColumnInfo[ForColumn]>~;
+
+	if ( IsNull( ~<TheProductColumn>~ ) )
+	{
+		return DoWarning( Translate( ~There is no matching product for this quantity~ ) );
+	}
+
+	SubjectInfo(GetValue,~<TheProductColumn>~,TheProductID);
+//	TheProductID = ~<$con.SubjectInfo[<TheProductColumn>]>~;
+
+	if ( IsNull( ~<TheProductID>~ ) )
+	{
+		Log( Session,~No product was specified in <TheProductColumn> for Subject Record <$con.SubjectInfo[OrderID]>/<$con.SubjectInfo[SubjectID]>~ );
+		return TRUE;	// IF THEY GIVE US A QTY WITHOUT A PRODUCT, DON'T DO ANYTHING
+	}
+
+	if ( !dBase( GetValuesFor,~Select CustomerID From Orders Where ID = '<OrderID>'~,CustomerID ) )
+	{
+		return DoWarning( ~Order <OrderID> has no customer assigned~ );
+	}
+
+	if ( IsNull(~<CustomerID>~) ) 
+	{
+		return DoWarning( ~Order <OrderID> has no customer assigned.\nSubjectInfo table defined for Customer Products.~ );
+	}
+
+	Key = ~CustomerID = '<CustomerID>' And ProgramID = '<ProgramID>' And ID = '<TheProductID>' And PrintingRequest = 0~;
+
+	Query = ~Select * From CustomerProducts Where <Key> Order By Sequence~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return DoWarning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	if ( !List( NumEntries ) )
+	{
+		Log( Session,~No printable customer products for CustomerID = '<CustomerID>' And ProgramID = '<ProgramID>' And ID = '<ID>' from Subject record <$con.SubjectInfo[OrderID]>/<$con.SubjectInfo[SubjectID]>~ );
+		return TRUE;
+	}
+
+	Path = ~<$@Image.PathOfOrderRollFrame['<$pcon.Image[OrderID]>','<$pcon.Image[Roll]>','<$pcon.Image[Frame]>']>~;
+
+	while ( List( GetNext,Entry ) )
+	{
+		ItemType = ~Subject Packages~;
+		TotalQuantity = <Qty> * MakeNumber( ~<$pcon.Entry[Quantity]>~ );		
+		GetBgIDForColumn( ~<$pcon.ColumnInfo[ForColumn]>~,BGID,ColumnsList,SubjectInfo );
+		CreateOrderItemsFromImage( dBase,~<Path>~,~<$pcon.Entry[ProductID]>~,~<OrderID>~,~<TotalQuantity>~,~<ItemType>~,~<BGID>~,~<JobPopulationScript>~ );
+	}
+
+	return TRUE;
+}
+
+
+// 7 - ~Multiple 1 character Customer Products In One Field~
+NUMERIC HandleColumnType7( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList,JobPopulationScript )		// 'CUSTOMER PRODUCT'
+{
+	len = strlen( ~<MultipleIDs>~ );
+
+	Index = 0;
+
+	while ( <Index> < <Len> )
+	{
+		substr( ~<MultipleIDs>~,<Index++>,1,ID );
+
+		if ( !dBase( GetValuesFor,~Select CustomerID From Orders Where ID = '<OrderID>'~,CustomerID ) )
+		{
+			return DoWarning( ~Order <OrderID> has no customer assigned~ );
+		}
+
+		if ( IsNull(~<CustomerID>~) ) 
+		{
+			return DoWarning( ~Order <OrderID> has no customer assigned.\nSubjectInfo table defined for Customer Products.~ );
+		}
+
+		Key = ~CustomerID = '<CustomerID>' And ProgramID = '<ProgramID>' And ID = '<ID>' And PrintingRequest = 0~;
+
+		Query = ~Select * From CustomerProducts Where <Key> Order By Sequence~;
+
+		if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return DoWarning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+		}
+
+		if ( !List( NumEntries ) )
+		{
+			Log( Session,~No printable customer product for CustomerID = '<CustomerID>' And ProgramID = '<ProgramID>' And ID = '<ID>' from Subject record <$con.SubjectInfo[OrderID]>/<$con.SubjectInfo[SubjectID]>~ );
+			continue;
+		}
+		
+		Path = ~<$@Image.PathOfOrderRollFrame['<$pcon.Image[OrderID]>','<$pcon.Image[Roll]>','<$pcon.Image[Frame]>']>~;
+
+		ItemType = ~Subject Packages~;	
+		GetBgIDForColumn( ~<$pcon.ColumnInfo[ColumnName]>~,BGID,ColumnsList,SubjectInfo );
+
+		while ( List( GetNext,Entry ) )
+		{
+			CreateOrderItemsFromImage( dBase,~<Path>~,~<$pcon.Entry[ProductID]>~,~<OrderID>~,~<$pcon.Entry[Quantity]>~,~<ItemType>~,~<BGID>~,~<JobPopulationScript>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+// 8 - ~DP2 BGID for another product field~
+NUMERIC HandleColumnType8( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList )		// 'CUSTOMER PRODUCT'
+{	
+	return TRUE;
+}
+
+
+// 9 - ~Cust BGID for another product field~
+NUMERIC HandleColumnType9( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList )		// 'CUSTOMER PRODUCT'
+{
+	return TRUE;
+}
+
+
+if ( !DictionaryExists( DDProductQuantityList ) )
+{
+    Dictionary: DDProductQuantityList 
+        Fields: Name	Product		type text
+        Fields: Name	Quantity	type long
+}
+
+NUMERIC ParseProductQuantity( MultipleIDs, &ProductList)
+{
+
+	len = strlen( ~<MultipleIDs>~ );
+
+	Index = 0;
+
+	while ( <Index> < <Len> )
+	{
+		substr( ~<MultipleIDs>~,<Index++>,1,Qty );
+		if (!IsNumeric(~<Qty>~))
+		{
+			continue;
+		}
+		
+		Qty = Numeric(~<Qty>~);
+
+		while ( <Index> < <Len> )
+		{
+			substr( ~<MultipleIDs>~,<Index++>,1,ID );
+			if (SimilarStr(~<ID>~,~ ~))
+			{
+				continue;
+			}
+			if (SimilarStr(~<ID>~,~-~))
+			{
+				continue;
+			}
+			if (SimilarStr(~<ID>~,~,~))
+			{
+				break;
+			}
+			GenCon(Product,New,DDProductQuantityList);
+			Product(SetName,~ProductQuantityList~);
+			Product(SetValue,Product,~<ID>~);			
+			Product(SetValue,Quantity,~<Qty>~);	
+			ProductList(InsertBack,Product);		
+		}
+	}
+
+	return TRUE;
+}
+// MultipleIDs field contains the Qty - Letter Code  for example 3-A,1-B,2-C
+NUMERIC HandleColumnType10( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList,JobPopulationScript )		// 'Custom'
+{
+	GenCon(ProductList,New,DDProductQuantityList);
+	ProductList(SetName,~ProductsList~);
+	
+	if (!ParseProductQuantity( ~<MultipleIDs>~,ProductList))
+	{
+		return DoWarning( ~Subject info field containing <MultipleIDs> is not in the correct format~ );
+
+	}
+		
+	while ( ProductList(GetNext,Product))
+	{
+
+		Product(GetValue,Product,ID);
+		Product(GetValue,Quantity,Qty);
+			
+		if ( !dBase( GetValuesFor,~Select CustomerID From Orders Where ID = '<OrderID>'~,CustomerID ) )
+		{
+		}
+
+		IsCustomerProd = 1;
+		// Check for customer products
+		if ( !IsNull(~<CustomerID>~) ) 
+		{
+			Key = ~CustomerID = '<CustomerID>' And ProgramID = '<ProgramID>' And ID = '<ID>' And PrintingRequest = 0~;
+
+			Query = ~Select * From CustomerProducts Where <Key> Order By Sequence~;
+
+			if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+			{
+				List( GetErrorDescription,0,theErr );
+				return DoWarning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+			}
+		}
+
+		// if no customer products, check for products
+		if ( !List( NumEntries ) )
+		{
+			IsCustomerProd = 0;
+			Key = ~ID = '<ID>'~;
+			Query = ~Select * From Products Where <Key> Order By Sequence~;
+			if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+			{
+				List( GetErrorDescription,0,theErr );
+				return DoWarning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+			}
+		}
+			
+		if ( !List( NumEntries ) )
+		{
+			Log(Session,~There are no Customer Products or Products having ID = 'ID'~);
+			continue;
+		}
+		i = 0;
+		while (<i> < <Qty>)
+		{
+			more = List(GetFirst,Entry);
+			while (<more>)
+			{
+				Path = ~<$@Image.PathOfOrderRollFrame['<$pcon.Image[OrderID]>','<$pcon.Image[Roll]>','<$pcon.Image[Frame]>']>~;
+
+				ItemType = ~Subject Packages~;	
+				GetBgIDForColumn( ~<$pcon.ColumnInfo[ColumnName]>~,BGID,ColumnsList,SubjectInfo );
+				thisQuantity = 1;
+				thisProductID = ~<$pcon.Entry[ProductID]>~;
+
+				if (<IsCustomerProd>)
+				{
+					CreateOrderItemsFromImage( dBase,~<Path>~,~<thisProductID>~,~<OrderID>~,~<thisQuantity>~,~<ItemType>~,~<BGID>~,~<JobPopulationScript>~ );
+				}
+				else
+				{
+					CreateOrderItemsFromImage( dBase,~<Path>~,~<$pcon.Entry[ID]>~,~<OrderID>~,~<thisQuantity>~,~<ItemType>~,~<BGID>~,~<JobPopulationScript>~ );
+				}
+				more = List(GetNext,Entry);
+			}
+			++i;
+		}
+	}
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC GetBgIDForColumn( ColumnName,&BGID,&Columns,&SubjectInfo )
+{		
+	BGColumn = ~~;	BGID = ~~;
+	
+	Columns( Filter,~Type=8 AND ForColumn='<ColumnName>'~ );	// DP2 Background ID for a particular column
+	
+	if ( Columns( GetFirst,Rec ) )
+	{
+		BGColumn = ~<$pcon.Rec[ColumnName]>~;
+		
+		if ( !IsNull(~<BGColumn>~) )
+		{
+			SubjectInfo(GetValue,~<BGColumn>~,BGID);	
+			ReturnOnSuccess( !IsNull(~<BGID>~) );
+		}
+	}
+	
+	Columns( Filter,~Type=8 AND ForColumn=null~ );				// DP2 Background ID for all unmarked columns
+	
+	if ( Columns( GetFirst,Rec ) )
+	{
+		BGColumn = ~<$pcon.Rec[ColumnName]>~;
+		
+		if ( !IsNull(~<BGColumn>~) )
+		{
+			SubjectInfo(GetValue,~<BGColumn>~,BGID);	
+			ReturnOnSuccess( !IsNull(~<BGID>~) );
+		}
+	}
+	
+	Columns( Filter,~Type=9 AND ForColumn='<ColumnName>'~ );	// CUST Background ID for a particular column
+	
+	if ( Columns( GetFirst,Rec ) )
+	{
+		BGColumn = ~<$pcon.Rec[ColumnName]>~;
+		
+		if ( !IsNull(~<BGColumn>~) )
+		{
+			SubjectInfo(GetValue,~<BGColumn>~,theBGID);	
+			
+			if ( !IsNull(~<theBGID>~) )
+			{
+				BGID = ~<$@func.BGIDFromCustBGID(`<theBGID>`)>~;
+				return TRUE;
+			}
+		}
+	}
+	
+	Columns( Filter,~Type=9 AND ForColumn=null~ );				// CUST Background ID for all unmarked columns
+	
+	if ( Columns( GetFirst,Rec ) )
+	{
+		BGColumn = ~<$pcon.Rec[ColumnName]>~;
+		
+		if ( !IsNull(~<BGColumn>~) )
+		{
+			SubjectInfo(GetValue,~<BGColumn>~,theBGID);	
+			
+			if ( !IsNull(~<theBGID>~) )
+			{
+				BGID = ~<$@func.BGIDFromCustBGID(`<theBGID>`)>~;
+				return TRUE;
+			}
+		}
+	}
+	
+	return FALSE;
+}
+
+
+NUMERIC HandleColumnType11( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList )	{ return TRUE; }	// 'User Defined'
+NUMERIC HandleColumnType12( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList )	{ return TRUE; }	// 'User Defined'
+NUMERIC HandleColumnType13( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList )	{ return TRUE; }	// 'User Defined'
+NUMERIC HandleColumnType14( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList )	{ return TRUE; }	// 'User Defined'
+NUMERIC HandleColumnType15( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList )	{ return TRUE; }	// 'User Defined'
+NUMERIC HandleColumnType16( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList )	{ return TRUE; }	// 'User Defined'
+NUMERIC HandleColumnType17( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList )	{ return TRUE; }	// 'User Defined'
+NUMERIC HandleColumnType18( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList )	{ return TRUE; }	// 'User Defined'
+NUMERIC HandleColumnType19( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList )	{ return TRUE; }	// 'User Defined'
+NUMERIC HandleColumnType20( &dBase,&SubjectInfo,&Image,MultipleIDs,ProgramID,&ColumnInfo,OrderID,&ColumnsList )	{ return TRUE; }	// 'User Defined'
+
+
+
+NUMERIC HandleColumnType( &dBase,ProgramID,&ColumnsList,&SubjectInfo,&Image,OrderID,JobPopulationScript )
+{	
+	ColumnsList( Duplicate,Columns );
+	
+	Operation = GetFirst;
+
+	while ( ColumnsList( <Operation>,ColumnInfo ) )
+	{
+		Operation = GetNext;
+
+		WhichColumn = ~<$pcon.ColumnInfo[ColumnName]>~;
+
+		SubjectInfo(GetValue,~<WhichColumn>~,ID);
+		
+		Global(WhichColumn);
+
+		if ( ~<ID>~ == ~~ )
+			continue;
+			
+		ColumnType = ~<$pcon.ColumnInfo[Type]>~;
+
+		if ( FunctionDefined( ~HandleColumnType<ColumnType>~ ) )
+		{
+			if ( !HandleColumnType<ColumnType>( dBase,SubjectInfo,Image,~<ID>~,~<ProgramID>~,ColumnInfo,~<OrderID>~,Columns,~<JobPopulationScript>~ ) )
+			{
+			  
+			}
+			
+			ForgetGlobal(WhichColumn);
+		}
+		else
+		{
+			ForgetGlobal(WhichColumn);
+			return DoWarning( Translate( ~<ColumnType> is not a valid Column Type~ ) );
+		}
+	}
+
+	return TRUE;
+}
+
+
+STR FindProgramID( &dBase,&ColumnsList,&SubjectInfo,OrderProgramID )			
+{
+	Operation = GetFirst;
+
+	while ( ColumnsList( <Operation>,ColumnInfo ) )
+	{
+		Operation = GetNext;
+
+		if ( MakeNumber( ~<$pcon.ColumnInfo[Type]>~ ) == 0 )	// ProgramID
+		{	
+			ColumnName = ~<$pcon.ColumnInfo[ColumnName]>~;
+
+			SubjectInfo(GetValue,<ColumnName>,ProgramID);
+//			ProgramID = ~<$con.SubjectInfo[<ColumnName>]>~;
+			if (~<ProgramID>~ == ~~)
+			{
+				ProgramID = ~*~;
+			}
+//** if ProgramID field is blank, would we want to return Order's ProgramID?
+			return ~<ProgramID>~;
+		}
+	}
+
+
+	// PROGRAMID IS NOT IN THE SUBJECTINFO DATA, USE IT FROM THE ORDERS TABLE
+
+	return ~<OrderProgramID>~;
+}
+
+
+// OrderID = Orders(&Images) OrderID.  This is the order id the items created under.
+// This is one of the orders in sqllist
+// OrderIDSQLList = orders the images are under
+NUMERIC CreateItemsForSubjectList(&dBase,OrderID,&SelectedRows,TableName,&RecordCount,&Stop,WhichImage,OrderIDSQLList,JobPopulationScript)
+{
+	if (!DefinedAndNotNull( Stop ) )
+	{
+		Stop = FALSE;
+	}
+
+	GetImagesOrderID( ~<OrderID>~, ImagesOrderID );
+
+	count = 0;
+	count = SelectedRows( ChildCount );
+	if (<count> < 1)
+	{	count = SelectedRows( NumEntries );	}
+
+	moreRows = SelectedRows( GetFirst,SubjectInfo );
+
+	Query = ~Select * From SubjectInfoColumns Where TableName = '<TableName>'~;
+	HaveColumnInfo = PGenConList( ColumnsList,Connection,dBase,Cursor,Forward,Query,~<Query>~ );
+	if ( <HaveColumnInfo> )
+	{
+		HaveColumnInfo = ColumnsList( NumEntries );
+	}
+	
+	ColumnsList( SetConnection,~~ );  // Detach from the database
+
+	Query = ~Select ProgramID From Orders Where ID = '<ImagesOrderID>'~;
+	if ( dBase( GetValuesFor,~<Query>~,OrderProgramID ) ) 
+	{
+		if ( ~<OrderProgramID>~ == ~~ )
+		{
+			OrderProgramID = ~*~;
+		}
+	}
+
+	index = RecordCount = 0;
+
+
+	WhichImage = GetSystemMultipleImageChoice();
+	while ( <moreRows> && !<Stop> )
+	{
+		if (!SubjectInfo(GetValue,SubjectID,theSubjectID))
+		{
+			SubjectInfo(GetValue,~Images.SubjectID~,theSubjectID);// in case of Jet
+		}
+
+		// make the query take a list of orders
+		
+		if (IsNull(~<OrderIDSQLList>~))
+		{
+			Key =  ~(Rejected = 0) AND (OrderID = '<ImagesOrderID>') AND (SubjectID = '<theSubjectID>')~;
+		}
+		else
+		{
+			Key =  ~(Rejected = 0) AND (OrderID In (<OrderIDSQLList>)) AND (SubjectID = '<theSubjectID>')~;		
+		}
+		
+		// Example of how to use Row_Number and temporary fields
+		//Query = ~Select (Row_Number() Over(Order By Frame) - 1) % 2 As 'Remainder',(Row_Number() Over(Order By Frame) - 1) / 2  AS 'Dividend',OrderID,Roll,Frame,Path from Images Where <Key> Order By Dividend,Remainder~;
+		Query = ~Select OrderID,Roll,Frame,Path From Images Where <Key> Order By Frame~;
+
+		if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+		{		
+			List( GetErrorDescription,0,theErr );
+			return DoWarning( Translate(~Query Failed <Query>. <theErr>~) );
+		}
+
+		if ( <WhichImage> == 2)
+		{
+			if ( !List( GetLast,Image ) )
+			{
+				moreRows = SelectedRows( GetNext,SubjectInfo );
+				++index;
+				continue;
+			}
+		}
+		else
+		{
+			if ( !List( GetFirst,Image ) )
+			{
+				moreRows = SelectedRows( GetNext,SubjectInfo );
+				++index;
+				continue;
+			}
+		}
+
+		DoStatusBarText( Translate( ~Processing <++index> of <count>~ ) );
+
+		moreImages = TRUE;
+		while ( <moreImages> && !<Stop>)
+		{
+			if ( <HaveColumnInfo> )
+			{
+				ProgramID = FindProgramID( dBase,ColumnsList,SubjectInfo,~<OrderProgramID>~ );
+
+				if ( !HandleColumnType( dBase,~<ProgramID>~,ColumnsList,SubjectInfo,Image,~<OrderID>~,~<JobPopulationScript>~ ) )
+				{
+				}
+			}
+			else	// ASSUME THE DEFAULT WHICH IS FIELDS LIKE P1,Q1,P2,Q2,... OR P1,P2,P3,ETC.
+			{
+				num = 1;
+				ProductID = ~~;
+
+				SubjectInfo(GetValues,P<num>,ProductID);
+				while ( TRUE )
+				{
+					if ( ~<ProductID>~ != ~~ )  
+					{
+						WhichColumn = Q<num>;
+						Global(WhichColumn);
+						Path = ~<$@Image.PathOfOrderRollFrame['<$pcon.Image[OrderID]>','<$pcon.Image[Roll]>','<$pcon.Image[Frame]>']>~;
+						SubjectInfo(GetValue,Q<num>,Quantity);
+						SubjectInfo(GetValues,B<num>,CustBGID);
+						BGID = IsNull(~<CustBGID>~) ? ~~ : ~<$@func.BGIDFromCustBGID(`<theBGID>`)>~;
+						ItemType = ~Subject Packages~;
+						CreateOrderItemsFromImage( dBase,~<Path>~,~<ProductID>~,~<OrderID>~,~<Quantity>~ ,~<ItemType>~,~<BGID>~,~<JobPopulationScript>~ );
+						ForgetGlobal(WhichColumn);
+
+					}
+
+					if ( !SubjectInfo(Attribute,P<++num>,AttrNumber) )	// Does the next P(n) field exist?
+						 break;
+
+					ProductID = ~~; CustBGID = ~~;  
+
+					if ( !SubjectInfo(GetValues,P<num>,ProductID) )
+						break;
+				}
+			}
+
+			if ( (<WhichImage> == 1) || (!List( GetNext,Image ) ) )
+			{
+				moreImages = FALSE;
+			}
+
+		}  // while moreImages
+
+		++RecordCount;
+		moreRows = SelectedRows( GetNext,SubjectInfo );
+	}
+
+	DoStatusBarText( Translate( ~Processed <RecordCount> of <count> SubjectInfo Records~ ) );
+
+	return TRUE;
+
+}  // CreateItemsForSubjectList()
+
+
+NUMERIC DoWarning( Msg )
+{
+	if ( FunctionDefined(ShowWarning) ) // Thread's function
+	{	Invoke( ShowWarning,~<Msg>~ );	}
+
+	else
+	{	Warning( ~<Msg>~ );	}
+
+	return FALSE;
+
+}
+
+VOID DoStatusBarText( Msg )
+{
+	if ( FunctionDefined(ShowWarning) ) // Thread's function
+	{	Invoke( ShowProgress,~<Msg>~ );	}
+
+	else
+	{	StatusBarText( ~<Msg>~ );	}
+}
+
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\CreatePackages.txt~ );
+

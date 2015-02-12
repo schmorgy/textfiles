@@ -1,0 +1,722 @@
+//	C_NexPress_Response.cpp
+
+//	THIS FILE WILL PARSE THE RESPONSE FILE FROM THE PRINTER
+
+//	Response Code = Error Code (0 = OK)
+//	Response Type	1: Info, 2: Warning, 3: Fatal
+//	Response Text	Error Message
+//	Response Flag	1: Error, 0: Fixed
+/*
+Dictionary: DDFSResponse
+	Fields:	Name		~ResponseFolder~			Type	Text
+	Fields:	Name		~ResponseFilePath~			Type	Text
+	Fields:	Name		~ResponseType~				Type	Text
+	Fields:	Name		~ResponsePage~				Type	Long
+	Fields:	Name		~OrderID~					Type	Text
+	Fields:	Name		~BatchID~					Type	Text
+	Fields:	Name		~Date~						Type	Long
+	Fields:	Name		~Time~						Type	Long
+	Fields:	Name		~ResponseCode~				Type	Long
+	Fields:	Name		~ErrorType~					Type	Long
+	Fields:	Name		~ErrorText~					Type	Text
+	Fields:	Name		~ResponseFlag~				Type	Long
+	Fields:	Name		~FoundResponse~				Type	Long
+	Fields:	Name		~Action~					Type	Text
+	Fields:	Name		~PrinterSetupGC~			Type	Long
+	Fields:	Name		~StatusGC~					Type	Long
+	Fields:	Name		~JobQueueStatus~			Type	Long		//	Ready / Cancelled / Error
+	Fields:	Name		~OrderItemStatus~			Type	Long		//	Ready / Cancelled / Error
+	Fields:	Name		~ResetErrorCode~			Type	Long		//	Ready / Cancelled / Error
+	Fields:	Name		~DoNotPerformUserActions~	Type	Long		//	DON'T PERFORM USER ACTIONS FOR THIS ERROR 
+	Fields:	Name		~REThread~					Type	Long		//	THE RENDER ENGINE'S THREAD (USED FOR SUSPENDING)
+	Fields:	Name		~SuspendType~				Type	Long		//	ARE WE CURRENTLY SUSPENDED, AND WHO SUSPENDED US
+	Fields:	Name		~PageGC~					Type	Reference	//	THE RENDERED PAGE DATA (FROM LoadPage a UGenCon *)
+	Fields:	Name		~PDFFileName~				Type	Text		//	Millers PDF FileName (until NJP2 v3.2 is available)
+	Fields:	Name		~XMLDir~					Type	Text		//	Millers Write XML File Directory (until NJP2 v3.2 is available)
+	;
+*/
+
+//	PRINT QUEUE JOB STATES
+int			 HOLD				= 0 ;
+int			 READY				= 1 ;
+int			 RESERVED			= 2 ;
+int			 PRINTING			= 3 ;
+int			 COMPLETED			= 4 ;
+int			 SAVED				= 5 ;
+int			 ERROR				= 6 ;
+int			 CANCELLED			= 7 ;
+int			 PENDING			= 8 ;
+
+ExecC() ;
+
+char	*NULL ;
+int		 FALSE = 0L ;
+int		 TRUE  = ! FALSE ;
+
+int		 gTesting = FALSE ;
+
+UGenCon	*gPrinterSetup	= NULL ;
+UGenCon	*gStatusGC		= NULL ;
+UGenCon	*gRELookAhead ;
+int		 gLogAmount = 0 ;
+int		gOrderFailedFlag = FALSE;
+int		gfirstPageFlag = TRUE;
+int		gLastPageID = 0;
+//  Set the following value to the minimum amount of disk space
+//	needed to be able to continue rendering.
+//	If you are trying to suspend rendering based upon another
+//	computer's disk space, use the following formula:
+//
+//	gDiskSpaceNeeded = FreeDiskSpaceThisMachine - (FreeDiskSpaceOtherMachine - WorkingSpace) ;
+//
+//	Note:	all values are in Gigabytes.
+//
+//	Example:	gDiskSpaceNeeded = FreeDiskSpaceThisMachine - (FreeDiskSpaceOtherMachine - WorkingSpace) ;
+//						22.6 Gb	 =		32.5 Gb				-	(	        10.0 Gb		 -   0.1 Gb ) ;
+//				This will suspend the render engine when there
+//				is less than 22.6 Gb of disk space left on this machine.  The render
+//				engine will only render 9.9 Gb of data before rendering is suspended.
+//
+//				If the gDiskSpaceNeeded value is negative, more disk space is needed on
+//				rendering machine.  Clean out old files, or add another disk drive to 
+//				the machine.
+//
+//	Rendering will continue when the FreeDiskSpaceThisMachine value gets above 22.6 Gb.
+//	This will happen when the Interface Application deletes the images that have been printed.
+//
+//	Note:	For this to work, the gDiskSpaceNeeded must be enough to hold at least 
+//			41 rendered images.  If there is not enough space, then rendering and
+//			printing will stop until someone can fix the problem.
+//
+//			Is there a way to warn the user this is the case ?
+//
+double	gDiskSpaceNeeded = 0.128 ;	//	0.128 gigabytes == 128 megabytes
+
+main()
+{
+	Debug(0) ;
+
+	gRELookAhead = GetTreeObject(_T("RELookAhead"),_T("[GenCons]")) ;
+	gLogAmount	 = gRELookAhead->GetLongValue(_T("RELogLevel")) ;
+}
+
+int Advertize()
+{
+	SessionLogDirect( _T("C_NexPress_Response.txt Main: (V1.00)")) ;
+	return( TRUE ) ;
+}
+
+//	THIS ROUTINE NEEDS TO LOOK FOR BOTH
+//	A RESPONSE FILE AND ERROR FILES.
+int Init(UGenCon *OrderGC, UGenCon *ResponseGC)
+{
+	int Result = 0 ;
+
+	ResponseGC->SetLongValue(_T("FoundResponse"), 0L) ;
+
+	ThrottlePrinting(ResponseGC) ;
+
+	Result = CheckForResponse( OrderGC, ResponseGC, _T("*.xml")) ;
+	if( gLogAmount > 7 )
+		{ SessionLogDirect(_T("C_NexPress_Response.txt: Init: After *.xml. Result = %ld"), Result ) ;}
+
+	return( Result ) ;
+}
+
+
+int CheckForResponse(UGenCon *OrderGC, UGenCon *ResponseGC, TCHAR *FileType)
+{
+	int		 Result = 0 ;
+	TCHAR	 FilePath[2048] ;
+	TCHAR	*ResponseFolder = NULL ;
+	TCHAR	 BackupFile[2048];
+	TCHAR	 BackupFolder[2048];
+
+	ResponseFolder = ResponseGC->GetStringValue(_T("ResponseFolder")) ;
+
+	sprintf( FilePath, _T("%s\\%s"), ResponseFolder, FileType ) ;
+
+	UList *theFileList = GetFileList(FilePath) ;
+
+	if( theFileList->GetNumEntries() > 0L )
+	{
+		SortBy( theFileList, _T("_NAME_") ) ;
+
+		UGenCon *FileEntry = theFileList->GetAt(0L) ;
+		if( FileEntry == NULL )
+		{
+			delete theFileList ;
+			return( FALSE ) ;
+		}
+
+		TCHAR	*FileName = FileEntry->GetStringValue(_T("FileName")) ;
+		sprintf( FilePath, _T("%s\\%s"), ResponseFolder, FileName ) ;
+
+		int ErrResult = CheckResponse( ResponseGC, FilePath ) ;
+		
+		//got response, ok to delete backup cmd file we made in case NJP went down
+		sprintf( BackupFolder, _T("%s\\Backup"), ResponseFolder ) ; //write an extra cmd file to this folder first in case NJP shuts down, then copy to control folder when completely written
+		sprintf( BackupFile, _T("%s\\%09ld.xml"), BackupFolder,gLastPageID );
+		if( gLogAmount > 4 )
+		{ SessionLogDirect(_T("C_NexPress_Response.txt: Init: BackupFile deleted = %s"), BackupFile ) ;}
+
+		DeleteThisFile(BackupFile);
+
+//????only set responsefilepath on parent response gencon?????
+		ResponseGC->SetAttrValue(_T("ResponseFilePath"), FilePath ) ;
+
+
+		Result = TRUE ;
+	}
+
+	delete theFileList ;
+	return( Result ) ;
+}
+
+
+long  CheckResponse( UGenCon *ResponseGC, TCHAR *FileName )
+{
+	long	Count = 0L ;
+	long	ErrCode = -102L ;
+
+	TCHAR	*FileText = NULL ;
+
+	while( FileText == NULL && Count < 5 )
+	{
+		FileText = GetFile(FileName) ;
+		Count++ ;
+		if( FileText == NULL )
+		{
+			Sleep( 250L ) ;
+		}
+	}
+
+	if( FileText )
+	{
+		if( gLogAmount > 3L )
+		{
+			int length = strlen(FileText);
+			if(length >= 3000)
+			{
+				SessionLogDirect( _T("C_NexPress_Response.CheckResponse:LargeSessionLog called:xml file text follows\n") ) ; 
+				LargeSessionLog(FileText);
+			}
+			else
+			{
+				SessionLogDirect( _T("C_NexPress_Response.CheckResponse:xml file text follows\n\"%s\""), FileText ) ; 
+			}
+		}
+
+		ErrCode = ParseJob( FileText, ResponseGC ) ;
+
+		free( FileText ) ;
+	}
+	return( ErrCode ) ;
+}
+
+long  ParseJob( TCHAR *Text, UGenCon *ResponseGC )
+{
+	TCHAR	Token[2048] ;
+	TCHAR	Line[2048] ;
+	TCHAR	ErrorMsg[2048] ;
+	TCHAR	ResponseCode[64] ;
+	int		EOOFlag = FALSE;
+	int		DefinedFieldsFlag = FALSE;
+	long	ErrCode;  //???fill in
+	long	ErrorType = 7;
+	TCHAR	sErrType[64];
+	UGenCon *RGC;
+	UList	*ChildrenUList = new UList;
+	TCHAR	 InsertCmd[1024] ;
+	TCHAR	*InsertTemplate;
+	long	sequence;
+	UPGenConList *gOrderItems;
+	int		Result;
+	int		i;
+	long	len;
+
+	UParser	*theParser = new UParser ;
+	theParser->SetText(Text) ;
+
+	theParser->GetXMLToken(Token) ;
+	while( *Token )
+	{
+		if( stricmp( Token, _T("<NJP2EndOfOrderResponse>")) == 0 )
+		{
+			EOOFlag = TRUE;
+			break;
+		}
+
+		theParser->GetXMLToken(Token) ;
+	}
+
+//	ResponseGC->Dump(_T("ResponseGC at start of ParseJob"));
+
+	if(EOOFlag == TRUE)
+	{
+		theParser->SetText(Text) ;
+		theParser->GetXMLToken(Token) ;
+		while( *Token )
+		{
+//			SessionLogDirect( _T("xml token = %s"), Token ) ;
+
+			if( strstr( Token, _T("<Order")) != NULL )
+			{//get the order_id and the result  <Order order_id="1000" result="PrintingSuccessfullyCompleted">
+				theParser->PutBack();
+				theParser->GetLine(Line,FALSE);
+				SessionLogDirect( _T("NexPress End of Order response:  \"%s\""), Line ) ;
+
+				if(strstr( Line, _T("PrintingSuccessfullyCompleted")) == NULL)
+				{ //order failed
+					gOrderFailedFlag = TRUE;
+				}
+			}
+
+			if( strstr( Token, _T("<filespec")) != NULL )
+			{ //get jobID's to update database  <filespec page_id="1001" result="ImageSuccessfulyProcessed" />
+				//copy parent to a child
+				RGC = ResponseGC->Copy();
+				if( gOrderFailedFlag == TRUE)
+				{//log each filespec line so we know which ones failed
+					SessionLogDirect( _T("NexPress End of Order response:  \"%s\""), Token ) ;
+				}
+
+				theParser->PutBack(); //put back the entire xml token
+				theParser->GetToken(Token);
+				while( stricmp(Token , _T(">")) != 0 )
+				{ //get regular tokens until the end of this xml token
+					if( stricmp( Token, _T("page_id")) == 0 )
+					{
+						theParser->GetToken(Token);
+						if( stricmp( Token, _T("=")) == 0 )
+						{
+							theParser->GetToken(Token); //this is the page_id
+							RGC->SetAttrValue(_T("ResponsePage"), Token ) ;
+							gLastPageID = atoi( Token ) ;
+
+//							SessionLogDirect( _T("page_id = %s"), Token ) ;
+						}
+					}
+					theParser->GetToken(Token);
+				}
+				//add child to ulist
+				ChildrenUList->InsertBack(RGC);
+			}
+
+			if( stricmp( Token, _T("<Comment>")) == 0 )
+			{ //get comment  <Comment>Success. Printing Complete.</Comment>
+				theParser->GetXMLToken(Token);  //Token is comment to log or display
+				if(gOrderFailedFlag == TRUE)
+				{ //set error code, error text, foundresponse and job queue and order item status in parent ResponseGC
+					len = strlen(Token);
+					Token[len-3] = 0x00;
+					sprintf( ErrorMsg, _T("Book failed to print.  Printer returned the following msg: \"%s\""), &Token[9]);
+					ResponseGC->SetAttrValue(_T("ErrorText"), ErrorMsg);
+//???what is a good error code???
+					ResponseGC->SetLongValue(_T("ResponseCode"), 1);
+
+					 //don't display error
+					ResponseGC->SetLongValue(_T("ErrorType"), 5 ) ; 
+					ResponseGC->SetLongValue(_T("FoundResponse"), 2L) ;
+					ResponseGC->SetLongValue(_T("JobQueueStatus"),  ERROR ) ;
+					ResponseGC->SetLongValue(_T("OrderItemStatus"), ERROR ) ;
+				}
+				else
+				{ //order sucess
+					ResponseGC->SetLongValue(_T("FoundResponse"), 1L) ;
+				}
+				ResponseGC->SetLongValue(_T("ResponseFlag"), 1L ) ;						
+				ResponseGC->SetAttrValue(_T("ResponseType"), _T("RESPONSE") ) ;					
+//				SessionLogDirect( _T("comment = %s"), Token ) ;	
+			}
+
+			if( stricmp( Token, _T("<TimeStamp>")) == 0 )
+			{ 
+				theParser->GetXMLToken(Token);  //Token is time, log it 
+//				SessionLogDirect( _T("timestamp = %s"), Token ) ;
+			}
+
+			theParser->GetXMLToken(Token) ;
+		}
+
+		//if error, set last child errorType to 7, so dialog goes up
+		if(RGC)
+		{
+			RGC->SetLongValue(_T("ErrorType"), 7 ) ; 
+		}
+		else
+		{
+			ResponseGC->SetLongValue(_T("ErrorType"), 7 ) ; 
+			SessionLogDirect( _T("C_NexPress_Response: Illegal response file, no filespec and page_id specified") ) ;
+		}
+
+		//add children ulist to parent ResponseGC
+		ResponseGC->SetChildren(ChildrenUList);
+	}
+
+	theParser->SetText(NULL) ;
+	delete theParser ;
+
+	return( ErrCode ) ;
+}
+
+TCHAR *GetBaseName( TCHAR *Src, TCHAR *Dst )
+{
+	strcpy( Dst, Src ) ;
+	long	loop = 0L ;
+
+	while( Dst[loop] != 0x2E && Dst[loop] != 0x00 )
+	{
+		loop++ ;
+	}
+
+	Dst[loop] = 0x00 ;
+
+	return( Dst ) ;
+}
+
+int GenerateSuccessResponse( UGenCon *ResponseGC )
+{
+	TCHAR	NewFilePath[2048] ;
+	TCHAR *ResponseType = ResponseGC->GetStringValue(_T("ResponseType")) ;
+	if( ResponseType && ResponseType[0] && stricmp( ResponseType, _T("ACKNOWLEDGE")) == 0 )
+	{
+		TCHAR	 *CmdPath = ResponseGC->GetStringValue(_T("ResponseFilePath"));
+
+		GetBaseName( CmdPath, NewFilePath ) ;
+		strcat( NewFilePath, _T(".rsp")) ;
+
+		char	*fp = fopen( NewFilePath, _T("wb")) ;
+		if( fp )
+		{
+			TCHAR	IOBuff[64] ;
+			TCHAR	theDate[64] ;
+			GetTimeNow(theDate,  _T("%m/%d/%y %H:%M:%S")) ;
+			long PageID = ResponseGC->GetLongValue(_T("ResponsePage")) ;
+			
+			IOBuff[0] = 0xFEFF ;
+			IOBuff[1] = 0x0000 ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+
+			sprintf( IOBuff, _T("TYPE: RESPONSE\n")) ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+
+			sprintf( IOBuff, _T("PAGE_ID: %ld\n"), PageID ) ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+
+			sprintf( IOBuff, _T("TIME: %s"), theDate ) ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+
+			sprintf( IOBuff, _T("CODE: %04ld"), 0L ) ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+			fclose(fp) ;
+		}
+	}
+}
+
+WriteUnicodeFile( char *fp, TCHAR *Text )
+{
+	long	Length = strlen( Text ) ;
+	fwrite( Text, 2, Length, fp ) ;
+
+	long	EndOfLine = 0x000A000D ;
+	fwrite( &EndOfLine, 2, 2, fp ) ;
+}
+
+UList *GetFileList(TCHAR *Path)
+{
+	long	*FileHandle ;
+	char	 FileData[2048] ;
+	TCHAR	 FileName[2048] ;
+	TCHAR	 FileDate[1024] ;
+	int		 Result ;
+	long	 FileAttr ;
+	long	 longHandle ;
+	UGenCon	*FileDataGC ;
+
+	UList	*theList = new UList ;
+
+	strcpy( FileName, Path ) ;
+	FileHandle = FindFirstFile( FileName, FileData ) ;
+	longHandle = FileHandle ;
+	if( longHandle != 0xFFFFFFFF )
+	{
+		FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+		Result = FindFileConvToGC( FileData, FileDataGC ) ;
+		FindFileConvTime( FileDataGC, _T("ACCESSED"), FileDate ) ;
+
+		theList->InsertBack(FileDataGC) ;
+
+		FileAttr = FileDataGC->GetLongValue(_T("FileAttributes")) ;
+		while( Result )
+		{
+			Result = FindNextFile( FileHandle, FileData ) ;
+			if( Result )
+			{
+				FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+				FindFileConvToGC( FileData, FileDataGC ) ;
+				theList->InsertBack(FileDataGC) ;
+			}
+		}
+
+		Result = FindClose( FileHandle ) ;
+	}
+	return( theList ) ;
+}
+
+long CalcNextSequenceOverrides( UADO *theADO ,TCHAR *OverrideType )
+{
+	long sequence = 0;
+	TCHAR	msg[1024];
+	sprintf(msg,_T("Select MAX(Sequence) From TemplateOverridesSetup Where OverrideType = \'%s\'"),OverrideType);
+
+	UPGenConList *MaxOrderItem = new UPGenConList( theADO ) ;
+
+	if( MaxOrderItem )
+	{
+		int Result = MaxOrderItem->Query( msg, _T("ReadOnly"), _T("Static") ) ;
+		if (Result != 1)
+		{
+			HandleDBError( theADO ) ;
+			delete MaxOrderItem ;
+			return (-1);
+		}
+	
+		UPGenCon	*pcon = (UGenCon *) MaxOrderItem->GetFirst();
+
+		if ( !pcon )
+		{
+			HandleDBError( theADO ) ;
+			delete MaxOrderItem ;
+			return( -1) ;
+		}
+
+		sequence = pcon->GetLongValue( _T("#0") );
+//		SessionLogDirect( _T("sequence = %ld"), sequence ) ;
+		delete MaxOrderItem;
+	}
+	return sequence+10;
+}
+
+
+long CalcNextSequenceTemplates( UADO *theADO )
+{
+	long sequence = 0;
+	TCHAR	msg[1024];
+	sprintf(msg,_T("Select MAX(Sequence) From Templates Where Category = 'All'"));
+
+	UPGenConList *MaxOrderItem = new UPGenConList( theADO ) ;
+
+	if( MaxOrderItem )
+	{
+		int Result = MaxOrderItem->Query( msg, _T("ReadOnly"), _T("Static") ) ;
+		if (Result != 1)
+		{
+			HandleDBError( theADO ) ;
+			delete MaxOrderItem ;
+			return (-1);
+		}
+	
+		UPGenCon	*pcon = (UGenCon *) MaxOrderItem->GetFirst();
+
+		if ( !pcon )
+		{
+			HandleDBError( theADO ) ;
+			delete MaxOrderItem ;
+			return( -1) ;
+		}
+
+		sequence = pcon->GetLongValue( _T("#0") );
+//		SessionLogDirect( _T("sequence = %ld"), sequence ) ;
+		delete MaxOrderItem;
+	}
+	return sequence+10;
+}
+
+//	CONNECT TO THE ACCESS DATA OBJECT (THE DATABASE)
+UADO *ConnectToADO()
+{
+	int		 result ;
+
+	UADO	*theADO = new UADO ;
+
+	if( theADO == NULL )
+	{
+		return(NULL) ;
+	}
+
+	result = ConnectKPIS( theADO ) ;
+	if( result )
+	{
+		delete theADO ;
+		return(NULL) ;
+	}
+
+	return( theADO ) ;
+}
+
+
+//	GET ENGLISH LANGUAGE TRANSLATION OF DATABASE ERROR
+void HandleDBError(UADO *anADO)
+{
+	long	ErrorCount, ErrorIndex ;
+	TCHAR	ADOErrDesc[2048] ;
+	TCHAR	theMsg[4096] ;
+	long	StopHere = 0 ;
+
+	Debug(StopHere) ;
+
+	ErrorCount = GetErrorCount( anADO ) ;
+	if( ErrorCount == 0L )
+	{
+		SessionLogDirect( _T("Lost Database Connection.") ) ;
+		MessageBox( _T("Lost Database Connection."), _T("MB_OK")) ;
+//		ShowDialog( _T("Lost Database Connection."), 0L ) ;
+	}
+	else
+	{
+		for( ErrorIndex = 0L ; ErrorIndex < ErrorCount ; ErrorIndex++ )
+		{
+			GetErrorDescription( anADO, ErrorIndex, ADOErrDesc ) ;
+			sprintf( theMsg, "Database Error: %s", ADOErrDesc ) ;
+			SessionLogDirect( theMsg ) ;
+			MessageBox( theMsg, _T("MB_OK")) ;
+//			ShowDialog( theMsg, 0L ) ;
+		}
+	}
+}
+
+
+//	HANDLE A SQL STATEMENT
+int DoSQL( TCHAR *theSQLStatement )
+{
+	int		result	= 0x80004005 ;	//	COULD NOT UPDATE BECAUSE LOCKED BY ANOTHER
+	long	count	= 0 ;
+	long	Level ;
+	int		RefreshResult ;
+
+	UADO	*theADO = ConnectToADO() ;
+	if( theADO == NULL )
+	{
+		SessionLogDirect( _T("DoSQL: Could not get ADO for \"%s\"."), theSQLStatement ) ;
+		return( FALSE ) ; 
+	}
+
+	while( result && count < 30 )
+	{
+		result = ADOCommand( theADO, theSQLStatement, "SQL", NULL ) ;
+		count++ ;
+		if( result != 0L )
+		{
+			RefreshResult = theADO->RefreshConnectionCache() ;
+//			Sleep(2000) ;	//	PUT BACK WHEN DONE DEBUGGING !!!! LK
+		}
+
+		if( gLogAmount >= 7 )
+		{
+			SessionLogDirect( "DoSQL: %s, result = %0lX, Count = %ld [%0lX]",
+								theSQLStatement, result, count, theADO ) ;
+		}
+	}
+
+	if( result != 0 )
+	{
+		HandleDBError(theADO) ;
+	}
+	else
+	{
+		RefreshResult = theADO->RefreshConnectionCache() ;
+		if( gLogAmount >= 7 )
+		{
+			SessionLogDirect("DoSQL: CommitTransaction result = %0lX", result) ;
+		}
+	}
+
+	delete theADO ;
+	return( result == 0 ) ;
+}
+
+int	DeleteThisFile( TCHAR *FilePath )
+{
+	int	Result = FALSE ;
+
+	if( FilePath )
+	{
+		if( *FilePath )
+		{
+			Result = unlink( FilePath ) ;
+			if( Result )
+			{
+				//	HANDLE THE ERROR
+				TCHAR	Msg[1024] ;
+				int		ErrNo = errno(Msg) ;
+				SessionLogDirect( _T("**\tC_NexPress_Response.DeleteThisFile: Error %ld \"%s\" deleting \"%s\""),
+								ErrNo, Msg, FilePath ) ;
+			}
+		}
+	}
+	return( Result ) ;
+}
+
+void ThrottlePrinting(UGenCon *ResponseGC)
+{
+	long	CurrentTime = Clock() ;
+	long	LastRecordCheck = 0L ;
+	int		RE_THRT_SUSPEND = 0x08 ;
+	int		RE_DISK_SUSPEND = 0x10 ;
+	int		REM_SUSPEND		= 0x9120 ;
+	int		REM_RESUME		= 0x9121 ;
+
+	gPrinterSetup   = ResponseGC->GetLongValue( _T("PrinterSetupGC") ) ;
+	LastRecordCheck = gPrinterSetup->GetLongValue(_T("LastThrottleChk")) ;
+
+	if( CurrentTime > LastRecordCheck + 30000 )	//	CHECK EVERY 30 SECONDS.
+	{
+		gPrinterSetup->SetLongValue( _T("LastThrottleChk"), CurrentTime ) ;
+
+		long	SuspendType		= ResponseGC->GetLongValue(_T("SuspendType")) ;
+
+		TCHAR	FilePath[2048] ;
+		TCHAR	*ResponseFolder = gPrinterSetup->GetStringValue( _T("ResponseFolder")) ;
+		sprintf( FilePath, _T("%s\\Backup\\*.xml"), ResponseFolder ) ;
+		UList *theFileList = GetFileList(FilePath) ;
+
+		long NumPrinterJobs = theFileList->GetNumEntries() ;
+		delete theFileList ;
+
+		int		Enabled = 0 ;
+		TCHAR	Value[2048] ;
+		int Result = GetSystemSettings( _T("NexPress"), _T("MaxNJPJobs"), Value, &Enabled ) ;
+
+		long	MaxPrinterJobs = 50000L ;
+		if( Result && Enabled )
+			{ MaxPrinterJobs = atoi( Value ) ; }
+
+
+		if( NumPrinterJobs < MaxPrinterJobs )
+		{
+			if( SuspendType & RE_THRT_SUSPEND )
+			{
+				CIThread *theREThread = ResponseGC->GetLongValue(_T("REThread")) ;
+				if( theREThread )
+				{
+					theREThread->PostThreadMessage( REM_RESUME, 0L, RE_THRT_SUSPEND ) ;
+					SessionLogDirect(_T("C_C_NexPress_Response.ThrottlePrinting: Rendering Continued.")) ;
+				}
+			}
+		}
+		else
+		{
+			if( (SuspendType & RE_THRT_SUSPEND) == 0 )
+			{
+				CIThread *theREThread = ResponseGC->GetLongValue(_T("REThread")) ;
+				if( theREThread )
+				{
+					theREThread->PostThreadMessage( REM_SUSPEND, 0L, RE_THRT_SUSPEND ) ;
+					SessionLogDirect(_T("C_C_NexPress_Response.ThrottlePrinting: Rendering Suspended.")) ;
+				}
+			}
+		}
+	}
+}
+

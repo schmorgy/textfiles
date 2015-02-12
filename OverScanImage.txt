@@ -1,0 +1,452 @@
+
+ScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+
+Left = <ScreenWidth> * .35;	Top = 7;	DialogWidth = 400; DialogHeight = 400;
+
+vGap = 5; hGap = 5; ButtonWidth = 90; ButtonHeight = 20;
+StaticTextWidth = 60;   StaticTextHeight = 20;
+EditTextWidth = 40;     EditTextHeight = 20;
+ComboBoxWidth = 70;		ComboBoxHeight = 60;
+
+MinImageWidth = 250; 
+ImageWidth = 250;  
+ImageHeight = 250;  
+MaxImageHeight = 500;
+gMaxFrame = 1;
+gMinFrame = 0;
+gFrameAdjusted = FALSE;
+
+gTimerCount = 0;
+gTimerID = 0;
+gHR500AFD_FrameLengthError = FALSE;
+
+NUMERIC DefineDialog()
+{
+	if ( !DictionaryExists( DDOverscanDialog ) )
+	{
+        Dictionary: DDOverscanDialog 
+            Fields: Name	OverScanImage		type text
+ 	}
+
+	Define: DlgData Using DDOverscanDialog;
+
+	Define: aDialog Using DDWinDef
+		Fields:	POSITION				<left>,<Top>,$DialogWidth,$DialogHeight 
+				TYPENAME				~Dialog~ 
+                Title					~Frame Adjustment Window~
+				StatusBar				~2 70 30~
+				WANTSMINIMIZEBOX		FALSE
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				//HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "" ) 
+
+		Contains: INLISTORDER
+		{
+		   Define: EdgeStaticText Using DDWinCtrlDef AsSymbol EdgeStaticText 
+				Fields: TypeName        StaticText 
+						Position		3,$vGap,25,$ButtonHeight
+						RightJustified	TRUE
+						GenConName		THIS
+						Text			Translate( ~Edge~ )
+
+			Define: EdgeComboBox Using DDWinCtrlDef AsSymbol EdgeComboBox 
+				Fields: TypeName        SComboBox  
+						Position		EdgeStaticText(GetRight,Position) + $hgap,
+										EdgeStaticText(GetTop,Position),
+										60,$ComboBoxHeight
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						GenConName		THIS
+						Tooltip			~Select the edge of the film to position~ ;
+
+
+			Define: FrameStaticText Using DDWinCtrlDef AsSymbol FrameStaticText
+				Fields: GENCONNAME		THIS
+						TYPENAME		StaticText
+						TEXT			~Frame~
+						RightJustified	TRUE
+						IsEnabled		T
+						POSITION		EdgeComboBox(GetRight,Position) + $hGap,
+										EdgeComboBox(GetTop,Position),
+										30,$ButtonHeight
+
+			Define: DecFrameNumButton Using DDWinCtrlDef AsSymbol DecFrameNumButton
+				Fields:	DACTIONSTEXT			ACTION EXEC ( OnIncFrameNumberButton(-1,TRUE) )
+						IsEnabled				T
+						POSITION				FrameStaticText(GetRight,Position) + $hGap,
+												FrameStaticText(GetTop,Position),
+												15,$ButtonHeight
+						TOOLTIP					~Previous frame number~
+						TYPENAME				~Button~ 
+						TEXT					~<~;
+
+			Define: FrameTextBox Using DDWinCtrlDef AsSymbol FrameTextBox       
+				Fields: GENCONNAME		THIS
+						TYPENAME		MaskedEditText
+						Mask			~#####~
+						PromptChar		~ ~ 
+						Position		DecFrameNumButton(GetRight,Position) - 2,
+										DecFrameNumButton(GetTop,Position), 
+										$EditTextWidth, $ButtonHeight
+						IActionsText    ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						Tooltip			Translate( ~Enter Frame Number to position~ )
+
+			Define: IncFrameNumButton Using DDWinCtrlDef AsSymbol IncFrameNumButton
+				Fields:	DACTIONSTEXT			ACTION EXEC ( OnIncFrameNumberButton(1,TRUE) )
+						IsEnabled				T
+						POSITION				FrameTextBox(GetRight,Position) - 2,
+												FrameTextBox(GetTop,Position),
+												15,$ButtonHeight
+						TOOLTIP					~Next frame number~
+						TYPENAME				~Button~ 
+						TEXT					~>~;
+
+			Define: GoTo_Button Using DDWinCtrlDef AsSymbol GoTo_Button 
+				Fields: TypeName		Button
+						IsEnabled		T
+						Text			~Go to~
+						Position		EdgeStaticText(GetLeft,Position),
+										EdgeStaticText(GetBottom,Position) + $vGap, 
+										40, $ButtonHeight
+						DActionsText	ACTIONS  ( "Exec(OnGotoButton())" )
+						IsHidden		T
+						IsEnabled		F
+						Tooltip			~Go To Frame #~
+
+			Define: DecGotoFrameNumButton Using DDWinCtrlDef AsSymbol DecGotoFrameNumButton
+				Fields:	DACTIONSTEXT			ACTION EXEC ( OnIncFrameNumberButton(-1,FALSE) )
+						IsEnabled				T
+						POSITION				GoTo_Button(GetRight,Position) + $hGap,
+												GoTo_Button(GetTop,Position),
+												15,$ButtonHeight
+						TOOLTIP					~Previous frame number~
+						TYPENAME				~Button~ 
+						IsHidden		T
+						IsEnabled		F
+						TEXT					~<~;
+
+			Define: GotoFrameNumberTextBox Using DDWinCtrlDef AsSymbol GotoFrameNumberTextBox       
+				Fields: TYPENAME		MaskedEditText
+						Mask			~#####~
+						PromptChar		~ ~ 
+						IsEnabled		T
+						Position		DecGotoFrameNumButton(GetRight,Position) - 2,
+										DecGotoFrameNumButton(GetTop,Position),
+										$EditTextWidth, $ButtonHeight
+						GenConName		THIS
+						IActionsText	~[Get]~
+						OActionsText	~[Save]~
+						IsHidden		T
+						IsEnabled		F
+						Tooltip			~Enter Frame Number To Go To~ ;
+
+			Define: IncGotoFrameNumButton Using DDWinCtrlDef AsSymbol IncGotoFrameNumButton
+				Fields:	DACTIONSTEXT			ACTION EXEC ( OnIncFrameNumberButton(1,FALSE) )
+						IsEnabled				T
+						POSITION				GotoFrameNumberTextBox(GetRight,Position) - 2,
+												GotoFrameNumberTextBox(GetTop,Position),
+												15,$ButtonHeight
+						TOOLTIP					~Next frame number~
+						TYPENAME				~Button~ 
+						IsHidden		T
+						IsEnabled		F
+						TEXT					~>~;
+
+			Define: PrevScanButton Using DDWinCtrlDef AsSymbol PrevScanButton 
+					Fields: TypeName                Button
+							IsEnabled				T
+							Text                    ~<< 1~
+							Position                IncGotoFrameNumButton(GetRight,Position) + $hGap * 2,
+													IncGotoFrameNumButton(GetTop,Position),
+													40, $ButtonHeight
+							DActionsText			ACTIONS  ( "Exec(OnNextPrevFrameButton(-1))" ) 
+							IsHidden		T
+							IsEnabled		F
+							Tooltip                 ~Scan the previous frame~
+
+			Define: NextScanButton Using DDWinCtrlDef AsSymbol NextScanButton 
+					Fields: TypeName                Button
+							IsEnabled				T
+							Text                    ~1 >>~
+							Position                PrevScanButton(GetRight,Position) + $hGap,
+													PrevScanButton(GetTop,Position),
+													40, $ButtonHeight
+							DActionsText			ACTIONS  ( "Exec(OnNextPrevFrameButton(1))" ) 
+							Tooltip                 ~Scan the next frame~
+
+
+
+			Define: InstructionsStaticText Using DDWinCtrlDef AsSymbol InstructionsStaticText
+				Fields: GENCONNAME		THIS
+						TYPENAME		StaticText
+						TEXT			~Position Frame~
+						RightJustified	FALSE
+						IsEnabled		T
+						Position		$hGap, GoTo_Button(GetBottom,Position) + $vGap,
+										$ImageWidth,$ButtonHeight
+
+			Define: TheImage Using DDWinCtrlDef AsSymbol TheImage 
+				Fields:	GENCONNAME		THIS
+						ISBITMAP		TRUE
+						LClickDnActionsText	ACTION EXEC ( OnMouseClick() )
+						POSITION		$hGap,InstructionsStaticText(GetBottom,Position) + $vGap, 
+										$ImageWidth,$ImageHeight
+						TOOLTIP			Translate( ~Adjust the frame location by clicking on an edge in this image~ )
+						TYPENAME		StaticText
+		}
+
+	DialogWidth = TheImage(GetRight,Position) + $hGap * 3;
+	DialogHeight = TheImage(GetBottom,Position) + $vGap * 2 + 50;
+
+	aDialog( Set,Position,~<Left> <Top> <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,aDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DlgData );
+
+	return TRUE;
+}
+
+
+NUMERIC OnIncFrameNumberButton( value, currentFrame )
+{
+	dlg( GetInput );
+	if ( <currentFrame> )
+	{
+		dlg( GetControlValue,~FrameTextBox~,Frame );
+		maxFrame = <gMaxFrame> + 1;
+	}
+	else
+	{
+		dlg( GetControlValue,~GotoFrameNumberTextBox~,Frame );
+		maxFrame = <gMaxFrame>;
+	}
+
+	if ( ~<Frame>~ == ~~ || !IsNumeric( ~<Frame>~ ) )			
+		{ return Warning( Translate( ~You must enter a frame number~ ) ); }
+
+	Frame = atof(~<Frame>~) + <value>;
+
+	if ( <Frame> < <gMinFrame> )
+	{	return Warning( Translate( ~Frame number cannot be less than <gMinFrame>~ ) ); }
+
+	if ( <Frame> > <maxFrame> )
+	{	return Warning( Translate( ~Frame number cannot be greater than <maxFrame>~ ) ); }
+
+
+	if ( <currentFrame> )
+	{
+		dlg( SetControlValue,~FrameTextBox~,~<Frame>~ );
+	}
+	else
+	{
+		dlg( SetControlValue,~GotoFrameNumberTextBox~,~<Frame>~ );
+	}
+
+
+	return TRUE;
+}
+
+NUMERIC OnGoToButton()
+{
+	if ( <gFrameAdjusted> )
+	{
+		return FALSE;
+	}
+
+    dlg( GetInput );
+	dlg( GetControlValue,~GotoFrameNumberTextBox~,GotoFrame );
+
+	if ( ~<GotoFrame>~ == ~~ || !IsNumeric( ~<GotoFrame>~ ) )			
+		{ return Warning( Translate( ~You must enter a frame number~ ) ); }
+
+	dlg( SetStatus,0,Translate( ~Moving to frame <GotoFrame> ~ ) );
+	Actions = ACTION Doc ( ~<Caller>Doc~ OpenOnce <Caller>Doc "GotoFrameAndScan(~<GotoFrame>~);" );
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+
+NUMERIC OnNextPrevFrameButton( Position )
+{
+	if ( <gFrameAdjusted> )
+	{
+		return FALSE;
+	}
+
+	if ( <Position> < 0 )
+	{
+		dlg( SetStatus,0,Translate( ~Moving to previous frame ~ ) );
+	}
+	else
+	{
+		dlg( SetStatus,0,Translate( ~Moving to next frame ~ ) );
+	}
+	Actions = ACTION Doc ( ~<Caller>Doc~ OpenOnce <Caller>Doc "ScanNextPrevFromOverScan(~<Position>~);" );
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnMouseClick()
+{
+	if ( <gFrameAdjusted> )
+	{
+		return FALSE;
+	}
+
+	gHR500AFD_FrameLengthError = FALSE;
+	Actions = ACTION Doc( ~<Caller>Doc~ OpenOnce <Caller>Doc "ResetHR500AFDFlag();" );
+	PerformActions( Actions );
+
+	gFrameAdjusted = TRUE;
+	dlg( GetControlMouseDown,TheImage,X, Y );
+	EdgePosition = <Y>;
+	Percent = 1.0 - (<EdgePosition> / <ImageHeight>);
+
+	displayPercent = <Percent> * 100.;
+	dlg( SetStatus,1,~<displayPercent>%~ );
+
+	if ( !SetFrameLocation( <Percent> ) )
+	{
+		dlg( SetStatus,0,Translate( ~Select Top or Bottom as this edge~ ) );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SetFrameLocation( Percent )
+{
+	dlg( GetInput );
+	dlg( GetControlValue,~FrameTextBox~,Frame );
+	dlg( GetControlValue,~EdgeComboBox~,SelectedEdge );
+
+	if ( !<Percent> || (~<SelectedEdge>~ == ~~) )
+	{
+		dlg( SetStatus,0,Translate( ~Left click on the <edge> edge of the frame~ ) );
+		return FALSE;
+	}
+
+	dlg( SetStatus,0,Translate( ~Moving to frame <Frame> ~ ) );
+	Actions = ACTION Doc ( ~<Caller>Doc~ OpenOnce <Caller>Doc "AdjustFrameLocation(~<Percent>~,~<SelectedEdge>~,~<Frame>~);" );
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+
+VOID UpdateEdgeList()
+{
+	StringList( EdgeChoices,New,InListOrder,AddStrings,~Bottom~,~Top~ );
+	dlg( SetControlFromStringList, ~EdgeComboBox~, EdgeChoices, Update );
+}
+
+
+NUMERIC OpenAsAnOverscanWindow( OverScan,ActualWidth,ActualHeight,Frame,gMaxScannedFrame,Msg,Caller,FilmDrive,FrameLengthError )
+{
+	App( ThisApp,MessagePump,100 );
+	Global( Caller );
+
+	gHR500AFD_FrameLengthError = <FrameLengthError>;
+
+	<FilmDrive>_SetupControls();
+
+	dlg( SetControlValue,~InstructionsStaticText~,Translate( ~<Msg>~ ) );
+	ImageHeight = <ActualHeight>;
+	dlg( SetControlValue,~FrameTextBox~,~<Frame>~ );
+	dlg( SetControlValue,~GotoFrameNumberTextBox~,~<Frame>~ );
+	dlg( SetStatus,0,Translate( ~Click on selected edge of frame ~ ) );
+	dlg( SetStatus,1,~~ );
+	gFrameAdjusted = FALSE;
+
+	gMaxFrame = <gMaxScannedFrame>;
+	
+	ImageMem( OverScanImageMem, Is, ~<OverScan>~, TEMPORARY );
+	
+	Bitmap( theBitmap );
+	if ( !theBitmap( CreateBitmapFromImageMem,OverScanImageMem ) )
+	{
+		return Warning( ~Failed to make bit map for image~ );
+	}
+
+	DialogWidth = $ActualWidth + $hGap * 3.5;
+	DialogHeight = $ActualHeight + $vGap * 4 + 30 + $ButtonHeight * 3;
+
+	dlg( SetWindowSize,<DialogWidth>,<DialogHeight> );
+	dlg( ControlRect,TheImage,SetSize,$ActualWidth,$ActualHeight );
+
+	dlg( SetControlBitMap,TheImage,theBitmap(Detach) );
+
+	Actions = ACTION Doc ( ~<Caller>Doc~ OpenOnce <Caller>Doc "DisplayOverScanComplete();" );
+	PerformActions( Actions );
+
+	if ( <gHR500AFD_FrameLengthError> )
+	{
+		HR500AFD_AlertUser();
+	}
+
+
+	return TRUE;
+}
+
+
+VOID Halse_SetupControls()
+{
+	dlg( EnableControls,TRUE,GoTo_Button,DecGotoFrameNumButton,GotoFrameNumberTextBox,
+							 IncGotoFrameNumButton,PrevScanButton );
+
+	dlg( ShowControls,TRUE,GoTo_Button,DecGotoFrameNumButton,GotoFrameNumberTextBox,
+							 IncGotoFrameNumButton,PrevScanButton );
+
+}
+
+VOID HR500AFD_SetupControls()
+{
+	dlg( EnableControls,FALSE,GoTo_Button,DecGotoFrameNumButton,GotoFrameNumberTextBox,
+							  IncGotoFrameNumButton,PrevScanButton );
+
+	dlg( ShowControls,FALSE,GoTo_Button,DecGotoFrameNumButton,GotoFrameNumberTextBox,
+							 IncGotoFrameNumButton,PrevScanButton );
+
+	dlg( SetControlValue,~EdgeComboBox~,~Top~ );
+
+}
+
+VOID HR500AFD_AlertUser()
+{
+	if ( Defined(dlg) )
+	{
+		if ( <gHR500AFD_FrameLengthError> )
+		{
+			Beep();
+			dlg(FlashWindow, 1);
+			Sleep(500);
+			dlg(FlashWindow, 1);
+			Action = STR ( HR500AFD_AlertUser(); );
+			QueueContentsAfter( Action,500 );
+		}
+	}
+}
+
+NUMERIC DoCancelButton()
+{
+	if ( <gHR500AFD_FrameLengthError>  )
+	{
+		gHR500AFD_FrameLengthError = FALSE;
+		Actions = ACTION Doc( ~<Caller>Doc~ OpenOnce <Caller>Doc "ResetHR500AFDFlag();" );
+		PerformActions( Actions );
+	}
+
+	Actions = ACTION Doc( <Caller>Doc OpenOnce <Caller>Doc "OnDismissOverScanWindow(<gFrameAdjusted>);" );
+	PerformActions( Actions );
+	dlg( End );
+	Exit();
+	return TRUE;
+}
+
+DefineDialog();
+UpdateEdgeList();

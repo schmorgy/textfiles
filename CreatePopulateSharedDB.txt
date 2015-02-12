@@ -1,0 +1,1106 @@
+IncludeClass(BaseClass);
+
+Include: ~FormattingRoutines.txt~;
+
+Class( CPSharedDB,Extends,BaseClass,
+		Member,fMaxCategories,Numeric,5,
+		Member,fMaxLayouts,Numeric,10,
+		Member,fCreateSampleData,Numeric,FALSE,
+		Member,fNumSampleCustomers,Numeric,0,
+		Member,fCreateSampleImages,Numeric,FALSE,
+		Member,fDropTablesFirst,Numeric,TRUE,		
+		Member,fDb,Object,ADO );
+
+VOID CPSharedDB::CPSharedDB()
+{
+	BaseHtml::LoadTranslationFile( Startup,AppStartupStrings,AppStartup );
+	BaseHtml::LoadTranslationFile( Startup,DBPopulateData,DBPopulateData );
+}
+
+NUMERIC CPSharedDB::CreateSharedDBTables( CreateSampleData, NumSampleCustomers, CreateSampleImages, DropTablesFirst )
+{
+	fCreateSampleData = ~<CreateSampleData>~;
+	fNumSampleCustomers = ~<NumSampleCustomers>~;
+ 	fCreateSampleImages = ~<CreateSampleImages>~;
+	fDropTablesFirst = ~<DropTablesFirst>~;
+
+	if ( Authorized( KEXDSS ) )
+	{
+		HtmlView( fHtmlView,FromActiveView,Private );
+	}
+
+	if ( !ConnectToDatabase() )
+	{
+		return FALSE;
+	}
+
+	Go();	
+
+	return TRUE;
+}
+
+NUMERIC CPSharedDB::ConnectToDatabase()
+{
+	UpdateStatus( ~<$TR.AppStartupStrings(ConnectingSharedDatabase)>~ );
+
+	if ( !ado( fDb,Connect ) )
+	{
+		fDb( GetErrorDescription,theErr );
+		Log( Session,~Unable to connect to the shared database.  <theErr>~ );
+
+		UpdateStatus( ~<$TR.AppStartupStrings(UnableToConnectShared)>~ );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+VOID CPSharedDB::Go()
+{
+	ForgetPermanent( BackgroundOrderProcessor );
+
+	Log( Session,~Creating Database Tables~ );
+
+	if ( <fDropTablesFirst> )
+	{
+        UpdateStatus( ~<$TR.AppStartupStrings(DeletingTables)>~ );
+		DropTables(TableDefinitions);
+	}
+
+	UpdateStatus( ~<$TR.AppStartupStrings(CreatingTables)>~ );
+	if ( !CreateTables(TableDefinitions) )
+	{
+		UpdateStatus( ~<$TR.AppStartupStrings(CreateSharedDBTablesFailed)>~ );
+		return;		
+	}
+
+	
+	UpdateStatus( ~<$TR.AppStartupStrings(PopulateDatabase)>~ );
+
+	AddDatabaseVersion();
+	AddUser( ~<$App.WindowLoginName>~,TRUE );
+	AddCustomer( ~Lab~ );
+	AddOrderForCustomer( ~Test~,~Lab~ );
+	AddOrderForCustomer( ~QA~,~Lab~ );
+	AddCustomer( ~Product~ );
+	AddOrderForCustomer( ~Backgrounds~,~Product~ );
+	SetSystemSettings( ~NativeAdjust~,~HR500~,~1.0~,TRUE );
+	SetSystemSettings( ~EmbeddedProfiles~,~Read~,~1.0~,TRUE );
+	SetSystemSettings( ~AdjustImages~,~Scale~,~1.0~,TRUE );
+	SetSystemSettings( ~AdjustImages~,~RGBToDensityScale~,~3.6~,TRUE );
+	SetSystemSettings( ~AdjustImages~,~AdjustInPrintDensity~,~1~,TRUE );
+	SetSystemSettings( ~Thumbnail~,~Sharpening~,~0~,TRUE );
+	SetSystemSettings( ~Scanning~,~FilmtermAdjustFrameCount~,~1000~,TRUE );
+
+	SetSystemSettings( ~BarCode~,~FontFamily~,~Arial~,TRUE );
+	SetSystemSettings( ~BarCode~,~FontSize~,~30~,TRUE );
+
+
+	//					  OrderID,	  Roll,      Frame,						Path,                                      ImageType
+	AddImageForOrder( ~Backgrounds~,~Product~,~WeddingBG~,~<$App.ShareDirectory>\ArtWork\Backgrounds\WeddingBG8x10x250.jpg~,1 );
+	AddImageForOrder( ~Backgrounds~,~Product~,~OlympicBG~,~<$App.ShareDirectory>\ArtWork\Backgrounds\OlympicBG6x8_4x250.JPG~,1 );
+
+
+	AddOrderForCustomer( ~Textures~,~Product~ );
+	AddOrderForCustomer( ~Masks~,~Product~ );
+	AddImageForOrder( ~Masks~,~Product~,~DiffusedMask~,~<$App.ShareDirectory>\ArtWork\Masks\DiffusedMask.tif~,1 );
+	AddOrderForCustomer( ~Images~,~Product~ );
+	AddImageForOrder( ~Images~,~Product~,~Shirley~,~<$App.ShareDirectory>\ArtWork\Images\Shirley~,1 );
+	AddImageForOrder( ~Textures~,~Product~,~GlowingBall~,~<$App.ShareDirectory>\ArtWork\Textures\GlowingBall.tif~,1 );
+	AddImageForOrder( ~Textures~,~Product~,~ShinyMetalHorizontal~,~<$App.ShareDirectory>\ArtWork\Textures\ShinyMetalHorizontal.tif~,1 );
+	AddImageForOrder( ~Textures~,~Product~,~SunsetSky~,~<$App.ShareDirectory>\ArtWork\Textures\SunsetSky.tif~,1 );
+	AddImageForOrder( ~Textures~,~Product~,~Walnut~,~<$App.ShareDirectory>\ArtWork\Textures\Walnut.tif~,1 );
+	
+	AddOrderForCustomer( ~Frames~,~Product~ );
+	AddImageForOrder( ~Frames~,~Product~,~Gray256x328Frame~,~<$App.ShareDirectory>\ArtWork\Frames\Gray256x328Frame.tif~,1 );
+	AddImageForOrder( ~Frames~,~Product~,~metalic256x328Frame~,~<$App.ShareDirectory>\ArtWork\Frames\metalic256x328Frame.tif~,1 );
+	AddImageForOrder( ~Frames~,~Product~,~walnut256x328Frame~,~<$App.ShareDirectory>\ArtWork\Frames\walnut256x328Frame.tif~,1 );
+	AddImageForOrder( ~Frames~,~Product~,~Wood256x328Frame~,~<$App.ShareDirectory>\ArtWork\Frames\Wood256x328Frame.tif~,1 );
+	AddImageForOrder( ~Frames~,~Product~,~Gray328x256Frame~,~<$App.ShareDirectory>\ArtWork\Frames\Gray328x256Frame.tif~,1 );
+	AddImageForOrder( ~Frames~,~Product~,~metalic328x256Frame~,~<$App.ShareDirectory>\ArtWork\Frames\metalic328x256Frame.tif~,1 );
+	AddImageForOrder( ~Frames~,~Product~,~walnut328x256Frame~,~<$App.ShareDirectory>\ArtWork\Frames\walnut328x256Frame.tif~,1 );
+	AddImageForOrder( ~Frames~,~Product~,~Wood328x256Frame~,~<$App.ShareDirectory>\ArtWork\Frames\Wood328x256Frame.tif~,1 );
+	AddImageForOrder( ~Frames~,~Product~,~GoldOvalFrame~,~<$App.ShareDirectory>\ArtWork\Frames\GoldOvalFrame1436x1798.JPG~,1 );
+
+	AddDefaultPrinterModels();
+	PopulateServices();
+
+	RemoveDirectories();
+	
+	// Still populate random customers and orders for DP2.
+	if ( <fCreateSampleData> && Authorized( DP2 ) )
+	{ 
+
+		CreateLayouts();
+
+		Rand( Seed,1 );					// RE-SEED THE RANDOM NUMBER GENERATOR
+
+		NumRecords = ~<fNumSampleCustomers>~;
+
+		PopulateCustomersTable( $NumRecords );
+
+		PopulateOrdersTable( $NumRecords );
+
+		PopulateOrdersItemsTable( 1,8 );
+	}
+
+	// LAB REFERENCE IMAGE
+	AddOrderForCustomer( ~Reference~,~Lab~ );
+	AddImageForOrder( ~Reference~,~Images~,~Normal~,~<$App.ShareDirectory>\Images\LabReference_srgb.jpg~,0,~SRGB~ );
+
+	App( Application );
+	Application( MessagePump,0 );
+
+	UpdateStatus( ~<$TR.AppStartupStrings(DatabaseTablesCreated)>~ );
+
+	if ( Defined( fHtmlView ) )
+	{
+		fHtmlView( Set, ~Button1~, 0, disabled, ~~ );
+		fHtmlView( Set, ~Button2~, 0, disabled, ~~ );
+	}
+}
+
+STR RandomDate()
+{
+	aMonth	= Rand( Min,1,Max,12 );
+	aDay	= Rand( Min,1,Max,28 );
+	aYear	= Rand( Min,1998,Max,1998 );
+
+	return ~<aYear>/<aMonth>/<aDay>~;
+}
+
+STR RandomPhone()
+{
+	area	= Rand( Min,100,Max,999 );
+	prefix	= Rand( Min,100,Max,999 );
+	suffix	= Rand( Min,1000,Max,9999 );
+
+	return ~<area><prefix><suffix>~;
+}
+
+NUMERIC CPSharedDB::MakeTestImages( startImage,numImages,dstPath,format )
+{
+	TestImageLayoutPath = ~<$App.ShareDirectory>\Layouts\TestImageLayout.txt~;
+
+	if ( !Document( Job,ParseFile,~<TestImageLayoutPath>~ ) )
+	{
+		msg = TR( AppStartupStrings, ParseLayoutError, ~<TestImageLayoutPath>~ );
+		Log( Session, ~<msg>~ );
+		UpdateStatus( ~<msg>~ );
+
+		return FALSE;
+	}
+
+	if ( !Job( GetRenderList,0,RenderList ) )
+	{ 
+		msg = TR( AppStartupStrings, NoRenderList, ~<TestImageLayoutPath>~ );
+		Log( Session, ~<msg>~ );
+		UpdateStatus( ~<msg>~ );
+
+		return FALSE;
+	}
+
+	if ( !RenderList( GetNonNullNode,~IPrompt:~,0,TheNode ) )
+	{
+		msg = TR( AppStartupStrings, NoImageNode, ~<TestImageLayoutPath>~ );
+		Log( Session, ~<msg>~ );
+		UpdateStatus( ~<msg>~ );
+
+		return FALSE;
+	}
+
+	TheNode( Set,~IFile:~,~<$App.ShareDirectory>\Images\Shirley~ );
+	ForgetLocal( TheNode );
+
+	if ( !RenderList( GetNonNullNode,~TPrompt:~,0,TheTextNode ) )
+	{
+		msg = TR( AppStartupStrings, NoTextNode, ~<TestImageLayoutPath>~ );
+		Log( Session, ~<msg>~ );
+		UpdateStatus( ~<msg>~ );
+
+		return FALSE;
+	}
+
+	EndImage = <startImage> + <numImages> - 1;
+
+	while ( <startImage> <=  <EndImage>  )
+	{
+		TheTextNode( Set,~Text:~,~<startImage>~ );
+
+		OutputPath = ~<dstPath>\<$str.$startImage.%03ld>.jpg~;
+
+		if ( !RenderList( RenderToDisk,~<OutputPath>~,500 ) )
+		{
+			msg = TR( AppStartupStrings, RenderError, ~<TestImageLayoutPath>~ );
+			Log( Session, ~<msg>~ );
+			UpdateStatus( ~<msg>~ );
+
+			return FALSE;
+		}
+
+		++startImage;
+	}
+
+	return TRUE;
+}
+
+NUMERIC CPSharedDB::PopulateCustomersTable( num )
+{
+	if ( !<fCreateSampleData> )
+	{
+		return TRUE;
+	}
+
+	UpdateStatus( ~<$TR.AppStartupStrings(AddingCustomers)>~ );
+
+	if ( !fDb( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,CustomerTable,~SELECT * FROM Customers~ ) )
+	{
+		return FALSE;
+	}
+
+	while ( <num--> )
+	{
+		CustomerTable( AddNew );
+		CustomerTable( SetFields,	
+						ID,			~<$Func.id=Rand(Min,1000,Max,9999999)>~,
+						Name,		~<$Func.RandStr(MinLen,5,MaxLen,10,CapitalizeFirst)> Studio~,
+						Contact,	~<$Func.RandStr(MinLen,4,MaxLen,20,CapitalizeFirst)>~,
+						Street,		~<$Func.Rand(Min,10,Max,999)> <$Func.RandStr(MinLen,8,MaxLen,15,CapitalizeFirst)> Street~,
+						County,		~<$Func.RandStr(MaxLen,20,CapitalizeFirst)>~,
+						City,		~<$Func.RandStr(MinLen,8,MaxLen,13,CapitalizeFirst)>~,
+						State,		~<$Func.RandStr(MinLen,2,MaxLen,15).Upper>~,
+						Country,	~<$Func.RandStr(MaxLen,20,CapitalizeFirst)>~,
+						ZipCode,	~<$Func.Rand(Min,10000,Max,99999)>~,
+						EMail,		~<$Func.RandStr(MaxLen,10)>@<$Func.RandStr(MaxLen,8)>.com~,
+						Phone1,		~<$Func.RandomPhone()>~,
+						Phone2,		~<$Func.RandomPhone()>~ );
+
+		CustomerTable( Update );
+
+		msg = TR( AppStartupStrings, AddedCustomer, ~<id>~, ~<num>~ );
+		UpdateStatus( ~<msg>~ );
+
+		if ( !<fCreateSampleData> )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+VOID CPSharedDB::AddUser( User,SuperUser )
+{
+	if ( !fDb( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,UsersTable,~SELECT * FROM Users~ ) )
+	{
+		return;
+	}
+
+	UsersTable( AddNew );
+	UsersTable( SetFields,UserName,~<User>~,Category,~Order Entry~,ComputerName,~<$App.ComputerName>~ );
+	
+	if ( $SuperUser )
+	{
+		UsersTable( SetFields,Admin,1 );
+		UsersTable( SetFields,Debug,1 );
+	}
+
+	UsersTable( SetFields,ImageEditing,1 );
+	UsersTable( SetFields,LayoutEditing,1 );
+	UsersTable( SetFields,OrderItemResequencing,1 );
+
+	UsersTable( Update );
+}
+
+NUMERIC CPSharedDB::AddProfile( &Table,Name,Device,Type,EditableSpace,Path )
+{
+	err = Table( AddNew,Item );
+
+	err = Item( SetValue,Name,~<Name>~,Device,~<Device>~,Type,~<Type>~,EditableSpace,~<EditableSpace>~,Path,~<Path>~ );
+
+	return Table( Update );
+}
+
+VOID CPSharedDB::AddDatabaseVersion()
+{
+	cmd = ~Insert Into DatabaseInfo(Version) Values(<$[Symbols].DatabaseVersion[Long]>)~;
+
+	if ( !fDb( Cmd,~<cmd>~ ) )
+	{
+		return;
+	}
+}
+
+VOID CPSharedDB::AddCustomer( Which )
+{
+	if ( !fDb( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,CustomerTable,~SELECT * FROM Customers~ ) )
+	{
+		return;
+	}
+
+	CustomerTable( AddNew );
+	CustomerTable( SetFields,ID,~<Which>~ );
+	CustomerTable( Update );
+}
+
+NUMERIC CPSharedDB::InsertNewCustomer( ID,Name,Contact,Street,County,City,State,ZipCode,Email,Fax,Phone1 )
+{
+
+	Fields = ~ID,Name,Contact,Street,County,City,State,ZipCode,Email,Fax,Phone1~;
+	Values = ~'<ID>','<Name>','<Contact>','<Street>','<County>','<City>','<State>','<ZipCode>','<Email>','<Fax>','<Phone1>'~;
+
+	Cmd = ~Insert Into Customers(<Fields>) Values(<Values>)~;
+
+	if ( !fDb( CMD,~<Cmd>~ ) )
+	{
+		fDb( GetErrorDescription,theErr );
+		return Warning( ~Could not <Cmd>. <theErr>~ );
+	}
+
+	return TRUE;
+}
+
+VOID CPSharedDB::AddOrderForCustomer( OrderID,CustomerID )
+{
+	if ( !fDb( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,OrderTable,~SELECT * FROM Orders~ ) )
+	{
+		return;
+	}
+
+	OrderTable( AddNew );
+	OrderTable( SetFields,ID,~<OrderID>~,CustomerID,~<CustomerID>~ );
+	OrderTable( Update );
+}
+
+VOID CPSharedDB::AddImageForOrder( OrderID,Roll,Frame,Path,ImageType,Profile )
+{
+	if ( !fDb( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,ImagesTable,~SELECT * FROM Images~ ) )
+	{
+		return;
+	}
+
+	Frame = IsNumeric( ~<Frame>~ ) ? Format( ~<Frame>~,~<$[Symbols].FrameFormat[Value]>~ ) : ~<Frame>~;
+	Roll = IsNumeric( ~<Roll>~ ) ? Format( ~<Roll>~,~<$[Symbols].RollFormat[Value]>~ ) : ~<Roll>~;
+
+	ImagesTable( AddNew );
+	ImagesTable( SetFields,OrderID,~<OrderID>~,Roll,~<Roll>~,Frame,~<Frame>~ );
+	ImagesTable( SetFields,Path,~<Path>~,ImageType,~<ImageType>~,Gamma,1.0 );
+	ImagesTable( SetFields,CropX,50.0,CropY,50.0,CropWidth,100.0,CropLength,100.0 );
+
+	if ( !IsNull( ~<Profile>~ ) )
+	{
+		ImagesTable( SetFields,ICCProfile,~<Profile>~ );
+	}
+
+	ImagesTable( Update );
+}
+
+NUMERIC CPSharedDB::PopulateOrdersTable( num )
+{
+	if ( !<fCreateSampleData> )
+	{
+		return TRUE;
+	}
+
+	UpdateStatus( ~<$TR.AppStartupStrings(AddingOrders)>~ );
+
+	if ( !fDb( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,OrderTable,~SELECT * FROM Orders~ ) )
+	{
+		return FALSE;
+	}
+
+	if ( !fDb( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,CustomerTable,~SELECT * FROM Customers Where ID <> 'Lab' and ID <> 'Product'~ ) )
+	{
+		return FALSE;
+	}
+
+	NumOfCustomers = CustomerTable( Rows );
+
+	while ( <num--> )
+	{
+		WhichCustomer = 0;
+		if ( <NumOfCustomers> > 1 )
+		{
+			WhichCustomer = Rand( Min,1,Max,$NumOfCustomers - 1 );	// Find a random customer
+		}
+		CustomerTable( Move,$WhichCustomer );		
+
+		CustomerTable( Get,ID,Cust );
+
+		OrderTable( AddNew );
+		OrderTable( SetFields,	
+					ID,				~<$Func.id=Rand(Min,1000,Max,999999)>~,
+					CustomerID,		~<Cust>~,
+					OrderDate,		~<$Func.RandomDate()>~,
+					ShipDate,		~<$Func.RandomDate()>~,
+					Priority,		~<$Func.Rand(Max,100)>~,
+					RunCount,		0,
+					Status,			~<$Func.RandStr(OneOf,Hold,Ready,Scan)>~ );
+		OrderTable( Update );
+
+		msg = TR( AppStartupStrings, AddedOrder, ~<id>~, ~<num>~ );
+		UpdateStatus( ~<msg>~ );
+
+		if ( !<fCreateSampleData> )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+STR CPSharedDB::MakePreviewPathFromPath( Path,CreateDirectory )
+{
+	if ( $CreateDirectory )
+		{ Directory( Create,~<$str.$Path.Path>\Preview~ ); }
+
+	return ~<$str.$Path.Path>\Preview\<$str.$Path.FileName>.jpg~;
+}
+
+NUMERIC CPSharedDB::PopulateOrdersItemsTable( MinItems,MaxItems )
+{
+	if ( !<fCreateSampleData> )
+	{
+		return TRUE;
+	}
+
+	UpdateStatus( ~<$TR.AppStartupStrings(AddingOrderItems)>~ );
+
+	if ( !Directory( Create,$App.Share + ~OrderImages~ ) )
+	{
+		return FALSE;
+	}
+
+	if ( !fDb( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,OrderItemsTable,~SELECT * FROM OrderItems~ ) )
+	{
+		return FALSE;
+	}
+
+	if ( !fDb( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,OrdersTable,~SELECT * FROM Orders Where CustomerID <> 'Product'~ ) )
+	{
+		return FALSE;
+	}
+
+	if ( !fDb( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,ImagesTable,~SELECT * FROM Images~ ) )
+	{
+		return FALSE;
+	}
+
+	MoreOrders = OrdersTable( MoveFirst );
+	Count = OrdersTable( Rows );
+	while ( $MoreOrders )
+	{
+		NumOfItems = Rand( Min,$MinItems,Max,$MaxItems );
+
+		NumOfImages = $NumOfItems + Rand( Min,$NumOfItems,Max,$NumOfItems + 5 );
+
+		OrdersTable( Get,ID,Order );
+
+		Roll = ThisImage = 1;
+
+		if ( ~<Order>~ != ~~ )
+		{
+			while ( <NumOfItems--> > 0 )
+			{
+				id = Rand( Min,1000,Max,9999 );
+
+				if ( !Directory( Create,~<$App.ShareDirectory>\OrderJobs\<Order>~ ) )
+				{
+					return FALSE;
+				}
+
+				theJob = ~<$App.ShareDirectory>\OrderJobs\<Order>\Job_<id>~;
+				
+				theJobPreview = MakePreviewPathFromPath( ~<theJob>~,TRUE );
+
+				msg = TR( AppStartupStrings, CreatingJob, ~<theJob>~, ~<NumOfItems>~ );
+				UpdateStatus( ~<msg>~ );
+
+				PaddedFrameNumber = Format( ~<ThisImage>~,~<$[Symbols].FrameFormat[Value]>~ );
+				Roll = Format( ~<Roll>~,~<$[Symbols].RollFormat[Value]>~ );
+
+				if ( !CreateJob( ~<theJob>~,TestLayout,~<Order>~,~<Roll>~,~<id>~,~<PaddedFrameNumber>.jpg~,1 ) )
+				{
+					return FALSE;
+				}
+
+				OrderItemsTable( AddNew );
+				OrderItemsTable( SetFields,	
+									ID,						~<ThisImage>~,
+									OrderID,				~<Order>~,
+									ProductID,				~TestLayout<$Func.Rand(Min,1,Max,19)>~,
+									Quantity,				~<$Func.Rand(Min,1,Max,3)>~,
+									Sequence,				~<ThisImage>~,
+									JobPath,				~<theJob>~,
+									PreviewPath,			~<theJobPreview>~,
+									Status,					~<$Func.RandStr(OneOf,Ready,NotReady)>~,
+									Printable,				~1~,
+									Instructions,			~<$Func.RandStr(MaxLen,12)> <$Func.RandStr(MaxLen,12)> <$Func.RandStr(MaxLen,12)>~ );
+									
+				OrderItemsTable( Update );
+				++ThisImage;
+			}
+
+			if ( !CreateImagesForOrder( <Count-->,~<Order>~,$NumOfImages,ImagesTable ) )
+			{
+				return FALSE;
+			}
+
+			if ( !<fCreateSampleData> )
+			{
+				return FALSE;
+			}
+		}
+
+		MoreOrders = OrdersTable( MoveNext );
+	}
+
+	return TRUE;
+}
+
+NUMERIC CPSharedDB::CreateImagesForOrder( Count,Order,NumOfImages,&ImagesTable )
+{
+	NextImage = Frame = Roll = 1;
+
+	if ( <fCreateSampleImages> )
+	{
+		msg = TR( AppStartupStrings, CreatingImages, ~<NumOfImages>~, ~<Order>~ );
+		UpdateStatus( ~<msg>~ );
+		
+		Roll = Format( ~<Roll>~,~<$[Symbols].RollFormat[Value]>~ );
+
+		OrderImagesDirectory = ~<$App.ShareDirectory>\OrderImages\<Order>\<Roll>~;
+
+		if ( !Directory( Create,~<OrderImagesDirectory>~) )
+		{
+			return FALSE;
+		}
+
+		if ( !MakeTestImages( 1,$NumOfImages,~<OrderImagesDirectory>~,~<$[Symbols].FrameFormat[Value]>~ ) )
+		{
+			return FALSE;
+		}
+	}
+
+	while ( $NumOfImages )
+	{
+		PaddedFrameNumber = Format( ~<NextImage>~,~<$[Symbols].FrameFormat[Value]>~ );
+		Roll = Format( ~<Roll>~,~<$[Symbols].RollFormat[Value]>~ );
+
+		ImagesTable( AddNew );
+		ImagesTable( SetFields,	
+						OrderID,			~<Order>~,
+						Roll,				~<Roll>~,
+						Frame,				~<PaddedFrameNumber>~,
+						Category,			~All~,
+						Sequence,			~<Frame>~,
+						CropX,				50.0,
+						CropY,				50.0,
+						CropWidth,			100.0,
+						CropLength,			100.0,
+						Gamma,				1.0,
+						Path,				~<$App.ShareDirectory>\OrderImages\<Order>\<Roll>\<PaddedFrameNumber>.jpg~,
+						Width,				256,
+						Length,				328,
+						ICCProfile,			~SRGB~ );
+		ImagesTable( Update );
+
+		--NumOfImages;
+		++Frame;
+		++NextImage;
+	}
+
+	return TRUE;
+}
+
+LayoutCount = 0;
+
+VOID CPSharedDB::CreateLayouts()
+{
+	fDb( BeginTransaction );
+	if ( !fDb( CmdType,SQL,Lock,Optimistic,Cursor,Dynamic,RECORDSET,Products,~SELECT * FROM Products~ ) )
+	{
+		return;
+	}
+
+	BasePath = $App.ShareDir + ~Layouts~;
+	if ( !Directory( Create,~<BasePath>~ ) )				// NEED A LAYOUTS DIRECTORY
+	{
+		Exit( GetLastErrorMsg() );
+		return;
+	}
+
+	thisCategory = 0;
+	while ( <++thisCategory> <= <fMaxCategories> )
+	{
+		msg = TR( AppStartupStrings, AddingLayouts, ~<LayoutCount>~, ~<thisCategory>~ );
+		UpdateStatus( ~<msg>~ );
+
+		thisName = 0;
+		LayoutsInThisCategory = Rand(Min,1,Max,$fMaxLayouts);
+		while ( <++thisName> <= $LayoutsInThisCategory )
+		{
+			CreateLayout( ~<BasePath>~,Category<thisCategory>,TestLayout<++LayoutCount> );
+
+			IF 1
+			{
+				Products( AddNew );
+				Products( SetFields,	
+							ID,~TestLayout<LayoutCount>~,
+							LayoutName,~TestLayout<LayoutCount>~,
+							Category,~Category<thisCategory>~,
+							Sequence,<thisName>,
+							ProductType,~Digital~,
+							ProductLayoutPath,~<$App.ShareDirectory>\Layouts\Category<thisCategory>\TestLayout<LayoutCount>~,
+							PreviewPath,~~ );
+				Products( Update );
+			}
+		}
+	}
+	fDb( CommitTransaction );
+}
+
+VOID CPSharedDB::CreateLayout( BasePath,Category,Name )
+{
+	if ( !Directory( Create,~<BasePath>\<Category>~ ) )	// NEED A DIRECTORY FOR THIS LAYOUT
+	{ 
+		return;
+	}
+	
+	theLayout = ~<BasePath>\<Category>\<Name>~;
+
+	if ( file( Layout,Open,~<theLayout>~,Create,Write ) )	
+	{
+		Layout( ~FileType: Layout~ );
+		Layout( ~Macros:   |Macros.txt|~ );
+		Layout( ~UnitOfMeasure: Inches~ );
+		Layout( ~Use: $App.ShareDir + |OutputSpecifications\MultiPrinter\Default8x10.txt|~ );
+		Layout( ~Main:~ );
+
+		Layout( ~  IWidth: 8~ );
+		Layout( ~  IHeight: 10~ );
+		Layout( ~  IColor: 0 <$Func.Rand(Min,0,Max,255)> <$Func.Rand(Min,0,Max,255)> <$Func.Rand(Min,0,Max,255)>~ );
+
+		Layout( ~IL: 1~ );
+		Layout( ~  ILocation: 1 .25 6 (328 * 6 / 256)~ );
+		Layout( ~  IPrompt: |Select an image|~ );
+		Layout( ~  AutoCrop: 50 50 50 50 100 100~ );
+		Layout( ~  IColor: 0 0 0 255~ );
+		Layout( ~  SharpenFaster: 80~ );
+		Layout( ~  MaskFile: $App.ShareDir + |Layouts\OvalMask.tif|~ );
+
+		Layout( ~IL: 2~ );
+		Layout( ~  ILocation: 1 .25 0 0  ~ );
+		Layout( ~  TLocation: 0 8.0 6 1.2~ );
+		Layout( ~  IColor: 0 255 255 255~ );
+		Layout( ~  TColor: 0 0 0 0~ );
+		Layout( ~  TPrompt: |Enter Some Text|~ );
+		Layout( ~  Text: | |~ );
+
+		Layout( ~SaveImage:~ );
+		Layout( ~  SaveName: $App.ShareDir + |OrderOutput\[-]|~ );
+		Layout(	~  SaveFileType: JPEG~ );
+		Layout(	~  Copies: 1~ );
+
+		Layout( Close );
+		return;
+	}
+}
+
+STR CPSharedDB::RandomLayoutSearch( path,search,desiredEntry )
+{
+	LastLayout = ~TestLayout1~;
+
+	count = 0;
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~<path>\<search>~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,layout );
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+			continue;
+
+		LastLayout = ~<layout>~;
+
+		++count;
+
+		if ( <count> >= <desiredEntry> )
+		{
+			return ~<layout>~;
+		}
+	}
+
+	return ~<LastLayout>~;
+}
+
+NUMERIC CPSharedDB::CreateJob( theJob,Layout,Order,Roll,OrderItem,ImageName,Quantity )
+{
+	if ( !file( Job,Open,~<theJob>~,Create,Write ) )	// Open a job file
+	{
+		return 0;
+	}
+
+	CategoryNumber = Rand(Min,1,Max,<fMaxCategories>);
+	thisCategory = ~Category<CategoryNumber>~;
+	Desired = Rand(Min,1,Max,$fMaxLayouts);
+	thisLayout = RandomLayoutSearch( $App.ShareDir + ~Layouts\<thisCategory>~,~TestLayout*.*~,<Desired> );
+
+	Job( ~FileType: Job~ );
+	Job( ~Use: |<thisLayout>|~ );
+
+	Job( ~Main:~ );
+
+	Job( ~IC: 1~ );
+	Job( ~  IFile: $App.ShareDir + |OrderImages\<Order>\<Roll>\<ImageName>|~ );
+
+	Job( ~IC: 2~ );
+	Job( ~  Text: |<Order> <OrderItem> <Quantity>|~ );
+
+	Job( Close );
+
+	return 1;
+}
+
+VOID CPSharedDB::RecursiveDirectoryDelete( path,search,&count )
+{
+	count = 0;
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~<path>\<search>~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		{	
+			RecursiveDirectoryDelete( ~<aPath>~,~<search>~,count );
+			
+			Directory( Remove,~<aPath>~ );
+			continue;
+		}
+
+		if ( !Files( Delete,~<aPath>~ ) )
+		{
+			return;
+		}
+		++count;
+	}
+}
+
+NUMERIC CPSharedDB::RecursiveDirectoryCount( path,search,&count )
+{
+	MoreFiles = findfile( aDirectoryEntry,Find,~<path>\<search>~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		{	
+			count += RecursiveDirectoryCount( ~<aPath>~,~<search>~,count );
+			continue;
+		}
+
+		++count;
+	}
+
+	return 1;
+}
+
+VOID CPSharedDB::RemoveDirectories()
+{
+	if ( !Directory( Create,$App.ShareDir + ~OrderJobs~ ) )
+	{
+		return;
+	}
+	
+	if ( !Directory( Create,$App.ShareDir + ~OrderOutput~ ) )
+	{
+		return;
+	}
+	
+	if ( !Directory( Create,$App.ShareDir + ~OrderImages~ ) )
+	{
+		return;
+	}
+	
+	if ( !Directory( Create,$App.ShareDir + ~JRLs~ ) )
+	{
+		return;
+	}
+
+	RecursiveDirectoryDelete( $App.ShareDir + ~JRLs~,~*.*~,count );
+	Directory( Remove,$App.ShareDir + ~JRLs~ );
+}
+
+VOID CPSharedDB::AddAnotherLayout( &ProductsTable )
+{
+	ProductsTable( AddNew );
+	ProductsTable( SetFields,
+					ID,					~<++cnt>~,
+					Name,				~<ProductName_FieldType>~,
+					Category,			~<ProductName_FieldType>~,
+					ProductType,		~Digital~,
+					ProductLayoutPath,	~<Path_FieldType>~,
+					PreviewPath	,		~<Path_FieldType>~ );	
+
+	ProductsTable( Update );
+}
+
+NUMERIC CPSharedDB::RecursiveSearchForLayouts( path,search,&count )
+{
+    MoreFiles = findfile( aDirectoryEntry,Find,~<path>\<search>~ );
+
+    while ( $Morefiles )
+    {
+            Morefiles = aDirectoryEntry( Next );
+
+            aDirectoryEntry( Get,Path,aPath );
+                    
+            if ( aDirectoryEntry( Dots ) )
+                    continue;
+                    
+            if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+            {       
+                    count += RecursiveDirectoryCount( ~<aPath>~,~<search>~,count );
+                    continue;
+            }
+
+            aDirectoryEntry( Get,Title,theFile );
+            AddAnotherLayout( $count,~<aPath>~,~<theFile>~ );
+    }
+
+    return 1;
+}
+
+NUMERIC CPSharedDB::AddPrinterModel( &PrinterModelsList,Model,Advance,Width,VSpillOver,HSpillOver,ForeignDevice )
+{
+	PrinterModelsList( AddNew,Item );
+
+	Item( Set,Model,~<Model>~ );
+	Item( Set,MaxPaperWidth,~<Width>~ );
+	Item( Set,MaxPaperAdvance,~<Advance>~ );
+	Item( Set,VSpillOver,~<VSpillOver>~ );
+	Item( Set,HSpillOver,~<HSpillOver>~ );
+
+	return PrinterModelsList( Update );
+}
+
+NUMERIC CPSharedDB::AddDefaultPrinterModels()
+{
+	if ( !PGenConList( PrinterModelsList,Connection,fDb,Cursor,Dynamic,QUERY,~Select * From PrinterModels~ ) )
+	{ 
+		return FALSE;
+	}
+
+	AddPrinterModel( PrinterModelsList,~Kodak LED~,30,20,.304,.304,0 );
+
+	AddPrinterModel( PrinterModelsList,~KPDM~,18,12,.02,.02,0 );
+	AddPrinterModel( PrinterModelsList,~KPDM II~,18,12,.02,.02,0 );
+	AddPrinterModel( PrinterModelsList,~Kodak LFCRT~,14,11,.02,.02,0 );
+	AddPrinterModel( PrinterModelsList,~Kodak CRT~,7,5,.02,.02,0 );
+
+	AddPrinterModel( PrinterModelsList,~Kodak XLS~,7,5,0,0,0);
+
+	AddPrinterModel( PrinterModelsList,~Disk~,0,0,0,0,0 );
+
+	AddPrinterModel( PrinterModelsList,~Kodak RP30~,18,12,0.03,0.03,0 );
+	AddPrinterModel( PrinterModelsList,~Kodak SRP30~,18,12,0.03,0.03,0 );
+	AddPrinterModel( PrinterModelsList,~Kodak RR30~,12,120,0.0,0.0,0 );
+
+	AddPrinterModel( PrinterModelsList,~Windows Printer~,30,30,0,0,0 );
+	AddPrinterModel( PrinterModelsList,~NexPress~,8.5,11.0,0.125,0.125,0);
+	AddPrinterModel( PrinterModelsList,~Kodak7000Thermal~,6.0,8.0,0,0,0);
+	AddPrinterModel( PrinterModelsList,~Kodak8810Thermal~,8.0,12.0,0,0,0);
+	AddPrinterModel( PrinterModelsList,~KodakD4000Thermal~,8.0,12.0,0,0,0);
+
+
+	return TRUE;
+}
+
+NUMERIC CPSharedDB::ExecSQL( theSQL )
+{
+	Log( Session,~<theSQL>~ );
+
+	if ( !fDb( CMD,~<theSQL>~ ) )
+	{
+		fDb( GetErrorDescription,theErr );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC CPSharedDB::CreateTables( TableDefinitions )
+{
+	if ( !GenCon( TableDefinitions,GetFrom,~<TableDefinitions>~,~[Database]~ ) )
+	{ 
+		return FALSE;
+	}
+
+	while ( TableDefinitions( GetNext,TableDefinition ) )
+	{
+		if ( !CreateTable( TableDefinition ) )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC CPSharedDB::CreateTable( &TableDefinition )
+{
+	TableDefinition( CreateTableDefinition,Definition,fDb );
+	TableDefinition( Get,TableName,Tablename );
+
+	msg = TR( AppStartupStrings, CreatingTable, ~<TableName>~ );
+	UpdateStatus( ~<msg>~ );
+
+	if ( !ExecSQL( ~CREATE TABLE <Tablename> (<Definition>)~ ) )
+	{
+		return FALSE;
+	}
+
+	if ( GenCon( TableIndexes,Is,TableDefinition(GetNumeric,Indexes) ) )
+	{
+		while ( TableIndexes( GetNext,IndexDefinition ) )
+		{	
+			if ( !ExecSQL( ~<$Con.IndexDefinition[Text]>~ ) )
+			{
+				return FALSE;
+			}	
+		}
+	}
+
+	return TRUE;
+}
+
+VOID CPSharedDB::DropTables( TableDefinitions )
+{
+	if ( !GenCon( TableDefinitions,GetFrom,~<TableDefinitions>~,~[Database]~ ) )
+	{ 
+		return;
+	}
+
+	while ( TableDefinitions( GetPrev,TableDefinition ) )
+	{
+		DropTable( TableDefinition );
+	}
+}
+
+VOID CPSharedDB::DropTable( &TableDefinition )
+{
+	TableDefinition( CreateTableDefinition,Definition,fDb );
+	TableDefinition( Get,TableName,Tablename );
+
+	msg = TR( AppStartupStrings, DroppingTable, ~<TableName>~ );
+	UpdateStatus( ~<msg>~ );
+
+	if ( !fDb( CMD,~DROP TABLE <TableName>~ ) )
+	{
+		fDb( GetErrorDescription,theErr );
+		Log( Session,~Could not drop the TABLE <TableName> [<theErr>]~ );
+	}
+}
+
+// SETUP FIELD TYPES FOR THE VARIOUS FIELDS IN THE DATABASE
+
+	Settings_FieldType					=	~CHAR(32)~;
+
+	CustomerID_FieldType				=	~CHAR(40)~;
+
+	OrderID_FieldType					=	~CHAR(20)~;
+	Roll_FieldType						=	~CHAR(20)~;
+	Frame_FieldType						=	~CHAR(32)~;
+	Path_FieldType						=	~CHAR(255)~;
+
+	CategoryID_FieldType				=	~CHAR(40)~;
+
+	Name_FieldType						=	~CHAR(40)~;
+	Street_FieldType					=	~CHAR(40)~;
+	County_FieldType					=	~CHAR(40)~;
+	City_FieldType						=	~CHAR(40)~;
+	State_FieldType						=	~CHAR(40)~;
+	Country_FieldType					=	~CHAR(40)~;
+	ZipCode_FieldType					=	~CHAR(40)~;
+	EMail_FieldType						=	~CHAR(40)~;
+	Phone1_FieldType					=	~CHAR(10)~;
+	Phone2_FieldType					=	~CHAR(10)~;
+
+	Date_FieldType						=	~CHAR(24)~;
+	Priority_FieldType					=	~CHAR(15)~;
+	Boolean_FieldType					=	~CHAR(1)~;
+	SpecialInstructions_FieldType		=	~CHAR(80)~;
+
+	OrderItemID_FieldType				= 	~CHAR(15)~;
+
+	ProductID_FieldType					= 	~CHAR(15)~;
+	ProductName_FieldType				= 	~CHAR(64)~;
+	ProductType_FieldType				= 	~CHAR(20)~;
+	VariableText_FieldType				=	~LONGTEXT~;
+
+	ComputerName_FieldType				=	~CHAR(64)~;
+	QueueName_FieldType					=	~CHAR(64)~;
+	PrinterName_FieldType				=	~CHAR(64)~;
+	PrinterModel_FieldType				=	~CHAR(32)~;
+	Status_FieldType					=	~CHAR(32)~;
+	PaperWidth_FieldType				=	~DOUBLE~;
+	PaperLength_FieldType				=	~DOUBLE~;
+	PaperType_FieldType					=	~CHAR(32)~;
+	PaperSurface_FieldType				=	~CHAR(32)~;
+	PaperOpacity_FieldType				=	~CHAR(32)~;
+
+StringList( StatesList,New,InListOrder,AddStrings,AK,AX,CA,CO,FL,ID,WA,MT,NM,NY,OH,OR,PA,SC,SD );
+
+NUMERIC CPSharedDB::PopulateServices()
+{
+	i = 0;
+
+	while ( <++i> < 100 )
+	{
+		fDb( Cmd,~Insert Into JobServices(ID) Values(<i>)~ );
+		fDb( Cmd,~Insert Into NegativeServices(ID) Values(<i>)~ );
+		fDb( Cmd,~Insert Into PrintServices(ID) Values(<i>)~ );
+		fDb( Cmd,~Insert Into CropServiceCodes(ID) Values(<i>)~ );
+	}
+
+	return TRUE;
+}
+
+VOID CPSharedDB::UpdateStatus( msg )
+{
+	Log( Session, ~<msg>~ );
+	
+	if ( Defined( fHtmlView ) )
+	{
+		fHtmlView( SetInnerHTML,~InfoSection~,0,~<msg>~ );
+		fHtmlView( Pump );
+	}
+	else if ( Defined( dlg ) )
+	{
+		dlg( SetString,~<msg>~ ,Status,0,Update );
+	}
+	else
+	{
+		StatusBarText( ~<msg>~ );
+	}
+}

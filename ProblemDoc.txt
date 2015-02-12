@@ -1,0 +1,768 @@
+IncludeClass(BaseDialog);
+IncludeClass(BaseInternet);
+
+Class( ProblemDialog,Extends,BaseDialog,
+		Member,fZipPath,Str,~~,
+		Member,fZip,Object,Zip,
+		Member,fFirstTime,Numeric,1,
+		Member,fExternalFilesList,Object,StringList,Constructor,New );
+
+VOID	ProblemDialog::ProblemDialog()
+{
+	Title = ~Report A Problem~;
+	Left = 200;
+	Dictionary = ~DDProblemDialog~;
+	HelpPage = ~Report_CustProblem.htm~;
+	hGap = 5;
+
+	fFirstTime = TRUE;
+}
+
+
+VOID	ProblemDialog::RecursiveDirectoryDelete( path,search )
+{
+	MoreFiles = findfile( aDirectoryEntry,Find,~<path>\<search>~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		{
+			RecursiveDirectoryDelete( ~<aPath>~,~<search>~,count );
+			
+			Directory( Remove,~<aPath>~ );
+			continue;
+		}
+
+		Files( ChMod,~<aPath>~,Write );
+
+		if ( !Files( Delete,~<aPath>~ ) )
+		{
+			GetLastError( ErrorString,msg );
+			Warning(~Error trying to delete <aPath>.  <msg>~ );
+			return;
+		}
+	}
+}
+
+
+
+NUMERIC ProblemDialog::HandleImageDrop( &SelectedImages,&SrcView )
+{
+	Directory( Create,~<$App.Directory>\Problem\Images~ );
+	
+	Count = 0;
+
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		if ( !IsNull( ~<$con.Image[path]>~ ) )
+		{
+			TheDestPath = ~<$App.Directory>\Problem\Images\<$con.Image[path].pathwithoutvolume>~;
+			Files( Copy,~<$con.Image[path]>~,~<TheDestPath>~ );
+			++Count;
+		}
+		else
+		{
+			log( Session,~<$con.Image[OrderID]>,<$con.Image[Roll]>,<$con.Image[Frame]> has no image~ );
+		}
+	}
+
+	return Warning( ~Copied <Count> Images~ );
+}
+
+
+
+NUMERIC ProblemDialog::RewriteJobOrLayout( SrcPath,DstPath )
+{
+	if ( !Document( Job,ParseFile,~<SrcPath>~ ) )
+	{
+		return Failure( Translate( ~An error occured while parsing <SrcPath>~ ) );
+	}
+
+	if ( !Job( GetRenderList,0,RenderList ) )
+	{ 
+		return Failure( Translate( ~There was no render list for <SrcPath>~ ) );
+	}
+
+	return RenderList( WriteJob,~<DstPath>~ );
+}
+
+
+
+NUMERIC ProblemDialog::HandleOrderItemDrop( &SelectedOrderItems,&SrcView )
+{
+	Directory( Create,~<$App.Directory>\Problem\OrderItems~ );
+	
+	Count = 0;
+
+	while ( SelectedOrderItems( GetNext,OrderItem ) )
+	{
+		if ( !IsNull( ~<$con.OrderItem[JobPath]>~ ) )
+		{
+			TheDestPath = ~<$App.Directory>\Problem\OrderItems\<$con.OrderItem[JobPath].pathwithoutvolume>~;
+			Files( Copy,~<$con.OrderItem[JobPath]>~,~<TheDestPath>~ );
+
+			ParsedDestPath = ~<$str.$TheDestPath.WithoutExt>_RolledOut.txt~;
+			RewriteJobOrLayout( ~<$con.OrderItem[JobPath]>~,~<ParsedDestPath>~ );
+			++Count;
+		}
+		else
+		{
+			Warning( ~<$con.OrderItem[OrderID]>,<$con.OrderItem[ID]> has no job~ );
+		}
+	}
+
+	return Warning( ~Copied <Count> OrderItems~ );
+}
+
+
+NUMERIC ProblemDialog::HandleProductDrop( &SelectedProducts,&SrcView )
+{
+	Directory( Create,~<$App.Directory>\Problem\Products~ );
+	
+	Count = 0;
+
+	while ( SelectedProducts( GetNext,Product ) )
+	{
+		if ( !IsNull( ~<$con.Product[ProductLayoutPath]>~ ) )
+		{
+			TheDestPath = ~<$App.Directory>\Problem\Products\<$con.Product[ProductLayoutPath].pathwithoutvolume>~;
+			Files( Copy,~<$con.Product[ProductLayoutPath]>~,~<TheDestPath>~ );
+
+			ParsedDestPath = ~<$str.$TheDestPath.WithoutExt>_RolledOut.txt~;
+			RewriteJobOrLayout( ~<$con.Product[ProductLayoutPath]>~,~<ParsedDestPath>~ );
+			++Count;
+		}
+		else
+		{
+			Warning( ~<$con.Product[ID]> has no layout~ );
+		}
+	}
+
+	return Warning( ~Copied <Count> Products~ );
+}
+
+
+
+NUMERIC	ProblemDialog::ProcessDraggedFile( &DraggedFile )
+{
+	Path = GetFileName( DraggedFile );
+
+	MakeTildeSafe( Path );
+
+	fExternalFilesList( AddString,~<Path>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC	ProblemDialog::DragComplete( &DraggedFiles )
+{
+	Count = GetDragCount( DraggedFiles );
+
+	Warning( ~Processed <Count> files~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ProblemDialog::CreateSchemaDump( SchemaType )
+{
+	dlg( SetStatus,0,~Adding <SchemaType> ...~ );
+
+	if ( !PGenConList( SchemaList,Connect,Cursor,Keyset,Schema,~<SchemaType>~ ) )
+	{
+		return FALSE;
+	}
+
+	Path = ~<$App.Directory>\Problem\<SchemaType>.xml~;
+
+	SchemaList( Save,~<$App.Directory>\Problem\<SchemaType>.xml~,~XML~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC ProblemDialog::CreateTableDump( Query,TableName )
+{
+	dlg( SetStatus,0,~Adding <TableName> ...~ );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		return FALSE;
+	}
+
+	Path = ~<$App.Directory>\Problem\<TableName>.xml~;
+
+	List( Save,~<$App.Directory>\Problem\<TableName>.xml~,~XML~ );
+
+	return TRUE;
+}
+
+NUMERIC ProblemDialog::AddTablesToZip()
+{
+	CreateTableDump( ~Select * From WorkstationSettings~,~WorkstationSettings~ );
+	CreateTableDump( ~Select * From SystemSettings~,~SystemSettings~ );
+	CreateTableDump( ~Select * From Settings~,~UserSettings~ );
+	CreateTableDump( ~Select * From Users~,~Users~ );
+	CreateTableDump( ~Select * From Printers~,~Printers~ );
+	CreateTableDump( ~Select * From QueueDefinition~,~PrinterQueues~ );
+	CreateTableDump( ~Select * From PrinterRes~,~PrinterRes~ );
+	CreateTableDump( ~Select * From Profiles~,~Profiles~ );
+	CreateTableDump( ~Select * From RemoteJobDirs~,~RemoteJobDirs~ );
+	CreateTableDump( ~Select * From ReportQueue~,~ReportQueue~ );
+	
+	CreateTableDump( ~Select * From ExportImageSetups~,~ExportImageSetups~ );
+
+	CreateTableDump( ~Select * From RImage~,~RImage~ );
+
+	CreateTableDump( ~Select * From RImageEditListTemplates~,~RImageEditListTemplates~ );
+	CreateTableDump( ~Select * From RImageMergeTemplates~,~RImageMergeTemplates~ );
+	CreateTableDump( ~Select * From RImageTemplates~,~RImageTemplates~ );
+
+	CreateTableDump( ~Select * From ScanSetups~,~ScanSetups~ );
+	CreateTableDump( ~Select * From RetouchBatchSetup~,~RetouchBatchSetup~ );
+	CreateTableDump( ~Select * From Tasks~,~Tasks~ );
+
+	CreateTableDump( ~Select * From IDs~,~IDs~ );
+	CreateTableDump( ~Select * From ProShotsUtilization~,~ProShotsUtilization~ );
+
+	CreateSchemaDump( ~Indexes~ );
+	CreateSchemaDump( ~Statistics~ );
+	CreateSchemaDump( ~PrimaryKeys~ );
+	CreateSchemaDump( ~ForeignKeys~ );
+	CreateSchemaDump( ~Columns~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ProblemDialog::AddPrinterFilesToZip( )
+{
+	fZip( Files,~<$App.ShareDirectory>\PrintRecords\*.*~ );
+	AddFiles(Recursively);
+
+	dlg( SetStatus,0,~Adding IPS files ...~ );
+	fZip( Files,~<$App.Directory>\SessionLogs\IPS\*.*~ );
+
+	dlg( SetStatus,0,~Adding d-workflow files ...~ );
+	fZip( Files,~<$App.Directory>\..\d-workflow\logs\server\*.*~ );
+	fZip( Files,~<$App.Directory>\..\d-workflow\config\server\pdmplus.ini~ );
+	AddFiles();
+
+	fZip( Files,~<$App.Directory>\..\d-workflow\server\d-workflow\DB\*.*~ );
+	AddFiles(Recursively);
+
+	dlg( SetStatus,0,~Adding Netprinter files ...~ );
+	fZip( Files,~<$App.Directory>\..\Netprinter Interface Application\Logfiles\*.*~ );
+	fZip( Files,~<$App.Directory>\..\Netprinter Interface Application\IACmdBuffer\*.*~ );
+	AddFiles();
+
+	fZip( Files,~<$App.Directory>\..\Netprinter Interface Application\DBIA\DB\*.*~ );
+
+	return AddFiles(Recursively);
+}
+
+
+NUMERIC ProblemDialog::AddDraggedFilesToZip( )
+{
+	dlg( SetStatus,0,~Adding dragged files ...~ );
+
+	fZip( Files,~<$App.Directory>\Problem\Images\*.*~ );
+	AddFiles(Recursively);
+
+	fZip( Files,~<$App.Directory>\Problem\OrderItems\*.*~ );
+	AddFiles(Recursively);
+
+	fZip( Files,~<$App.Directory>\Problem\Products\*.*~ );
+	AddFiles(Recursively);
+
+	fZip( Files,~<$App.Directory>\Problem\DraggedFiles\*.*~ );
+	AddFiles(Recursively);
+
+	return TRUE;
+}
+
+NUMERIC ProblemDialog::AddFilesToZip( )
+{
+	dlg( SetStatus,0,~Adding standard files ...~ );
+
+	fZip( Files,~<$App.Directory>\Problem\*.*~ );
+	fZip( Files,~<$App.Directory>\SessionLogs\*.*~ );
+	fZip( Files,~<$App.Directory>\Heap\*.*~ );
+	fZip( Files,~<$App.Directory>\TraceFiles\<$App.Title>\*.*~ );
+	fZip( Files,~<$App.Volume>\TiffHeaderDump.txt~ );
+	fZip( Files,~<$App.Volume>\JpegHeaderDump.txt~ );
+	fZip( Files,~<$App.Directory>\SessionLogs\<$App.Title>\*.*~ );
+
+	return AddFiles();
+}
+
+NUMERIC ProblemDialog::AddDynaZipFilesToZip()
+{
+	dlg( SetStatus,0,~Adding zip logs~ );
+
+	fZip( Files,~<$Sys.WindowsDirectory>\DYNAZIP.LOG~ );
+	fZip( Files,~<$Sys.WindowsDirectory>\DZIPLOG.TXT~ );
+
+	return AddFiles();
+}
+
+
+NUMERIC ProblemDialog::AddExternalFiles()
+{
+	dlg( SetStatus,0,~Adding external files ...~ );
+
+	more = fExternalFilesList( GetFirstString,Path );
+
+	while ( <more> )
+	{
+		fZip( Files,~<Path>~ );
+
+		more = fExternalFilesList( GetNextString,Path );
+	}
+
+	AddFiles();
+
+	fExternalFilesList( DeleteAll );
+
+	return TRUE;
+}
+
+
+NUMERIC ProblemDialog::CaptureEventLogs()
+{
+	dlg( SetStatus,0,~Saving the Application Event Log~ );
+	EventLog( Type,Application,Path,~<$App.Directory>\Problem\Application.evt~,Backup );
+
+	dlg( SetStatus,0,~Saving the System Event Log~ );
+	EventLog( Type,System,Path,~<$App.Directory>\Problem\System.evt~,Backup );
+
+	return TRUE;
+}
+
+
+NUMERIC ProblemDialog::CreateDescription( theDirectory,&From,&When,&Description )
+{
+	if ( !File( theFile,Open,~<theDirectory>\Problem.txt~,Create,Write ) )	// CREATE AND OPEN THE JOB
+	{
+		return Warning( ~Failed to open <theDirectory>\Problem.txt~ );
+	}
+
+	theFile( WriteContentsOf,From );
+	theFile( CRLF );
+	theFile( WriteContentsOf,When );
+	theFile( CRLF );
+	theFile( WriteContentsOf,Description );
+	theFile( CRLF );
+
+	thefile( Close );
+	
+	return TRUE;
+}
+
+NUMERIC ProblemDialog::Initialize()
+{
+	Directory( Create,~<$App.Directory>\Problem~ );
+
+	RecursiveDirectoryDelete( ~<$App.Directory>\Problem~,~*.*~ );
+
+	return TRUE;
+}
+
+NUMERIC ProblemDialog::SendViaFTP( Customer )
+{
+	dlg( SetStatus,0,~Sending file to Kodak FTP site Customers/<Customer>~ );
+
+	if ( !FTPFileToKodak( ~<fZipPath>~,~DP2~,~CustomerCare~,~<Customer>~ ) )
+	{
+		return Warning( ~Failed to ftp file <fZipPath> to Customers/<Customer>.  <$func.GetLastErrorMsg()>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC LogThreadList()
+{
+	log( Session,~Active Threads:~ );
+
+	if ( !GenCon( ThreadsList,GetFrom,Threads,~[GenCons]~ ) )
+	{
+		return Warning( ~Could not find thread list~ );
+	}
+
+	while ( ThreadsList( GetNext,aThread ) )
+	{
+		aThread( GetName,Name );
+		log( Session,~	<$con.aThread.name>~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC ProblemDialog::AddToZipFile(path)
+{
+	fZip( Files,~<path>~ );
+
+	return AddFiles();
+}
+
+
+NUMERIC ProblemDialog::AddFiles(Mode)
+{
+	dlg( SetStatus,0,~Zipping ... <Mode>~ );
+
+	if ( SimilarStr( ~<Mode>~,Recursively ) )
+	{
+		fZip( Recurse,TRUE );
+	}
+
+	if ( <fFirstTime> )
+	{
+		fZip( Operation,Add,Path,~<fZipPath>~ );
+		fFirstTime = FALSE;
+	}
+	else
+	{
+		fZip( Operation,Update,Path,~<fZipPath>~ );
+	}
+
+	if ( !fZip( Zip ) )
+	{
+		fZip( Clear,Diagnostics,TRUE );
+		return Warning( ~Zip failure.   <$func.GetLastErrorMsg()>~ );
+	}
+
+	fZip( Clear,Diagnostics,TRUE );
+
+	fZip( Recurse,FALSE );
+
+	return TRUE;
+}
+
+
+
+NUMERIC ProblemDialog::Initial()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DlgData[Customer]>~ ) )		{ return Warning( ~Customer can't be NULL~ ); }
+	if ( IsNull( ~<$con.DlgData[When]>~ ) )			{ return Warning( ~When can't be NULL~ ); }
+	if ( IsNull( ~<$con.DlgData[Description]>~ ) )	{ return Warning( ~Description To can't be NULL~ ); }
+
+	FileName = ~PR_<$Date.SortableDateTime>.zip~;
+
+	Directory( Create,~<$App.Directory>\ProblemReports~ );
+
+	fZipPath = ~<$App.Directory>\ProblemReports\<FileName>~;
+
+	Files( Delete,~<$Sys.WindowsDirectory>\DYNAZIP.LOG~ );
+	Files( Delete,~<$Sys.WindowsDirectory>\DZIPLOG.TXT~ );
+
+	Files( Delete,~<fZipPath>~ );
+
+	Log( Session,~Creating Problem Report: <fZipPath>~ );
+	Log( Session,~Report Description:      <$con.DlgData[Description]>~ );
+
+	fZip( Clear,Diagnostics,TRUE );
+
+	return TRUE;
+}
+
+
+NUMERIC ProblemDialog::OnGoButton( WantEmail,WantFTP )
+{
+	ReturnOnFailure( Initial() );
+
+	Customer	= ~FROM: <$con.DlgData[Customer]>~;
+	When		= ~WHEN: <$con.DlgData[When]>~;
+	Description = ~DESC: <$con.DlgData[Description]>~;
+
+	dlg( SetStatus,0,~Zipping ....~ );
+
+	CreateDescription( ~<$App.Directory>\Problem~,Customer,When,Description );
+
+	LargestFreeBlock = GetLargestFreeBlockSize();
+
+	Log( Session,~Max Virtual Memory = <LargestFreeBlock>~ );
+
+	Debug( DumpMemoryUsage,~~,Log );
+
+	CaptureEventLogs();
+
+	LogThreadList();
+
+	Debug( DumpHeaps );
+
+	Debug( DumpDLLBaseAddresses );
+
+	Log( FlushSessionLog );
+
+	AddTablesToZip();
+
+	AddFilesToZip();
+
+	AddPrinterFilesToZip();
+
+	AddDraggedFilesToZip();
+
+	AddExternalFiles();
+
+	AddDynaZipFilesToZip();
+
+	if ( <WantEmail> )
+	{
+		SendTo = ~<$con.DlgData[SendTo]>~;
+
+		if ( IsNull( ~<SendTo>~ ) )		{ return Warning( ~Send To can't be NULL~ ); }
+
+		CR = chr(0x0D);  LF = chr(0x0A);
+
+		Msg = ~<Customer><CR><LF><When><CR><LF><Description>~;
+
+		dlg( SetStatus,0,~EMailing ...~ );
+
+		if ( !SendMail( Subject,~Problem Report From <$con.DlgData[Customer]>~,
+				Contents,~<Msg>~,
+				Recipient,~DP2 Customer Care~,~<SendTo>~,
+				Attachment,~Problem.zip~,~<fZipPath>~ ) )
+		{
+			Warning( ~Failed to email to <SendTo>. <$func.GetLastErrorMsg()>.  Try Zip And FTP.~ );
+		}
+	}
+
+	if ( <WantFTP> )
+	{
+		dlg( SetStatus,0,~Sending via FTP ...~ );
+
+		if ( SendViaFTP( ~<$con.DlgData[Customer]>~ ) )
+		{
+			SendTo = ~<$con.DlgData[SendTo]>~;
+
+			if ( MessageBox( ~Zip file was sent.  Would you like to email a notification to <SendTo>~,YESNO ) == YES )
+			{
+				if ( IsNull( ~<SendTo>~ ) )		{ return Warning( ~Send To can't be NULL~ ); }
+
+				CR = chr(0x0D);  LF = chr(0x0A);
+
+				Msg = ~<Customer><CR><LF><When><CR><LF>DP2/CustomerCare/<$con.DlgData[Customer]>/<$str.$fZipPath.filename> is on FTP Site.<CR><LF><CR><LF><Description>~;
+
+				dlg( SetStatus,0,~EMailing ...~ );
+
+				if ( !SendMail( Subject,~Problem Report From <$con.DlgData[Customer]> On FTP Site~,
+							Contents,~<Msg>~,
+							Recipient,~DP2 Customer Care~,~<SendTo>~ ) )
+				{
+					Warning( ~Failed to email a notification to <SendTo>. The zip file was sent so do not send it again.  <$func.GetLastErrorMsg()>~ );
+				}
+			}
+		}
+	}
+
+	dlg( SetStatus,0,~Cleaning up ...~ );
+
+	RecursiveDirectoryDelete( ~<$App.Directory>\Problem~,~*.*~ );
+
+	Warning( ~The Problem is stored at <fZipPath> for your future reference.  Delete it if you don't need it.~ );
+	
+	return dlg( SetStatus,0,~Created: <fZipPath> ~ );
+}
+
+
+VOID ProblemDialog::DefineControls()
+{
+	EnterableFieldWidth = 450;
+
+	Define: SendToPrompt Using DDWinCtrlDef AsSymbol SendToPrompt
+		Fields:	GENCONNAME			THIS
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			$hGap,$vGap, 70, $ButtonHeight
+				TEXT				Translate( ~Send To~ )
+				RIGHTJUSTIFIED		TRUE
+				TYPENAME			StaticText
+				FONTWEIGHT			600
+				
+	Define: SendToField Using DDWinCtrlDef AsSymbol SendToField
+		Fields:	GENCONNAME			THIS
+				GENCONFIELD			SendTo
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			SendToPrompt(GetRight,Position) + $hGap,SendToPrompt(GetTop,Position)-2, <EnterableFieldWidth>*.75, $ButtonHeight
+				TYPENAME			MaskedEditText	
+				ALLOWEDCHARS		~'~	
+
+	Define: SendToComboBox Using DDWinCtrlDef AsSymbol SendToComboBox 
+		Fields: TYPENAME			SComboBox  
+				POSITION			SendToField(GetRight,Position)+$hGap, SendToPrompt(GetTop,Position), <EnterableFieldWidth>*.25, $ButtonHeight*5
+				IACTIONSTEXT		~[GetList(CareCenterList) Get]~
+				DACTIONSTEXT		~[Save Exec("<THIS>.OnCustomerCare()")]~
+				OACTIONSTEXT		~[Save]~
+				GENCONNAME			THIS
+				ISENABLED			T
+				GENCONFIELD			~CareCenter~
+				ISINDEX				TRUE
+				TOOLTIP				~Select the desired customer care center~ ;
+
+	Define: CustomerPrompt Using DDWinCtrlDef AsSymbol CustomerPrompt
+		Fields:	GENCONNAME			THIS
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			SendToPrompt(GetLeft,Position),SendToPrompt(GetBottom,Position)+$vGap, SendToPrompt(GetWidth,Position), $ButtonHeight
+				TEXT				Translate( ~Customer~ )
+				RIGHTJUSTIFIED		TRUE
+				TYPENAME			StaticText
+				FONTWEIGHT			600
+				
+	Define: CustomerField Using DDWinCtrlDef AsSymbol CustomerField
+		Fields:	GENCONNAME			THIS
+				GENCONFIELD			Customer
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			CustomerPrompt(GetRight,Position) + $hGap,CustomerPrompt(GetTop,Position)-2, 450, $ButtonHeight
+				TYPENAME			MaskedEditText
+				DisAllowedChars		~ /\><`"*~		
+				MASK				RepeatStr(24,~%~)  
+	
+	Define: WhenPrompt Using DDWinCtrlDef AsSymbol WhenPrompt
+		Fields:	GENCONNAME			THIS
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			CustomerPrompt(GetLeft,Position),CustomerPrompt(GetBottom,Position)+$vGap, CustomerPrompt(GetWidth,Position), $ButtonHeight
+				TEXT				Translate( ~When~ )
+				RIGHTJUSTIFIED		TRUE
+				TYPENAME			StaticText
+				FONTWEIGHT			600
+				
+	Define: WhenField Using DDWinCtrlDef AsSymbol WhenField
+		Fields:	GENCONNAME			THIS
+				GENCONFIELD			When
+				IACTIONSTEXT		ACTIONS ( Get )
+				DACTIONSTEXT		ACTIONS ( Save )
+				OACTIONSTEXT		ACTIONS ( Save )
+				POSITION			WhenPrompt(GetRight,Position) + $hGap,WhenPrompt(GetTop,Position), CustomerField(GetWidth,Position), $ButtonHeight
+				TYPENAME			StaticText
+				AllowedChars		~'~	
+				ReadOnly			~T~	
+				MASK				RepeatStr(128,~%~)  
+				
+	Define: DescriptionPrompt Using DDWinCtrlDef AsSymbol DescriptionPrompt
+		Fields:	GENCONNAME			THIS
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			WhenPrompt(GetLeft,Position),WhenPrompt(GetBottom,Position)+$vGap, WhenPrompt(GetWidth,Position), $ButtonHeight
+				TEXT				Translate( ~Description~ )
+				RIGHTJUSTIFIED		TRUE
+				TYPENAME			StaticText
+				FONTWEIGHT			600
+				
+	Define: DescriptionField Using DDWinCtrlDef AsSymbol DescriptionField
+		Fields:	GENCONNAME			THIS
+				GENCONFIELD			Description
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			DescriptionPrompt(GetRight,Position) + $hGap,DescriptionPrompt(GetTop,Position)-2, CustomerField(GetWidth,Position), $ButtonHeight*8
+				TYPENAME			MLEditText	
+				ALLOWEDCHARS		~'~	
+				NoHorizontalScroll	~T~
+				MASK				RepeatStr(2048,~%~)  ;
+
+	Position = GetDialogCenter() - ($ButtonWidth+$hGap)*2.5;
+
+
+	Define: SendButton Using DDWinCtrlDef AsSymbol SendButton
+		Fields:	GENCONNAME			THIS
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnGoButton(TRUE,FALSE) )
+				POSITION			$Position,DescriptionField(GetBottom,Position) + $vGap, $ButtonWidth,$ButtonHeight
+				TEXT				Translate( ~Zip and Email~ )
+				TYPENAME			Button
+
+	Define: SendViaFTPButton Using DDWinCtrlDef AsSymbol SendViaFTPButton
+		Fields:	GENCONNAME			THIS
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnGoButton(FALSE,TRUE) )
+				POSITION			SendButton(GetRight,Position)+$hGap,SendButton(GetTop,Position), $ButtonWidth,$ButtonHeight
+				TEXT				Translate( ~Zip and FTP~ )
+				TYPENAME			Button
+				ISENABLED			FALSE
+	
+	Define: ZipButton Using DDWinCtrlDef AsSymbol ZipButton
+		Fields:	GENCONNAME			THIS
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnGoButton(FALSE,FALSE) )
+				POSITION			SendViaFTPButton(GetRight,Position)+$hGap,SendViaFTPButton(GetTop,Position), $ButtonWidth,$ButtonHeight
+				TEXT				Translate( ~Just Zip~ )
+				TYPENAME			Button
+
+	Define: ReportsButton Using DDWinCtrlDef AsSymbol ReportsButton
+		Fields:	GENCONNAME			THIS
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.BrowseReports() )
+				POSITION			ZipButton(GetRight,Position)+$hGap,ZipButton(GetTop,Position), $ButtonWidth,$ButtonHeight
+				TEXT				Translate( ~View Reports~ )
+				TYPENAME			Button
+
+	Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+		Fields:	GENCONNAME			THIS
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.DoCancelButton() )
+				POSITION			ReportsButton(GetRight,Position)+$hGap,ReportsButton(GetTop,Position), $ButtonWidth,$ButtonHeight
+				TEXT				Translate( ~Cancel~ )
+				TYPENAME			Button
+}
+
+
+VOID ProblemDialog::BrowseReports()
+{
+	action = ACTION DOC ( Explorer Open ExplorerDoc "Init(~Explore~,~<$App.Directory>\ProblemReports~);" );
+	PerformActions( action );
+}
+
+
+VOID ProblemDialog::OnCustomerCare()
+{
+	dlg( GetInput );
+
+	Stringlist( Emails,GetList,CareCenterEmails,Permanent );
+
+	Index = DlgData( GetNumeric,CareCenter );
+
+	Emails( GetStringAt,<Index>,EmailAddress );
+
+	dlg( SetStrings,SendTo,~<EmailAddress>~ );
+	dlg( SetStrings,When,~<$Date.DateTime>~ );
+
+}
+
+
+VOID ProblemDialog::DefineDictionary()
+{
+	StringList:	Name ~CareCenterList~
+		Fields: String	~United States~
+		Fields: String	~Australia~
+	Hang:	CareCenterList	~[STRINGS]~
+
+	StringList:	Name ~CareCenterEmails~
+		Fields: String	~us-dp2-support@kodak.com~
+		Fields: String	~anz-dp2-support@kodak.com~
+	Hang:	CareCenterEmails	~[STRINGS]~
+
+	Dictionary: ~<Dictionary>~ 
+		Fields: Name Description	type text
+		Fields: Name When			type text
+		Fields: Name Customer		type text
+		Fields: Name SendTo			type text
+		Fields: Name CareCenter		type long
+		Fields: Name EventLogs		type long
+		Fields: Name SessionLogs	type long
+}
+
+
+
+ProblemDialog( New,thisDialog );	// Instantiate an object of class ProblemDialog
+
+ThisDialog.DefineDialog();
+
+ThisDialog.OnCustomerCare();		// Init the email address to something sensible
+
+ThisDialog.Initialize();
+
+
+

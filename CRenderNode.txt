@@ -1,0 +1,2309 @@
+//	CRenderNode.txt
+ 
+//	THIS FILE WILL CREATE A RENDER CHAIN FOR A SINGLE JOB NODE.
+
+//	AddTransformData( long S1, long S2, long S3, long Out, char *operation, double *rect, double CacheNode ) ;
+//	AddTransformToList( char *theList, char *XformName, long Xform, long cached ) ;
+//	AdjustImageResolution( char *theNode, long ImaSource ) ;
+//	ComputeNewImageSize(double * NewImageSize, double * OrigImageSize, double * cropRect, double *nodeRect ) ;
+//	CreateNodeChain( char *theNode ) ;
+//	CreateNodeRect( double *ILocation, double *TLocation, double *NodeRect ) ;
+//	DeleteTransformList( char *theList ) ;
+//	DoLUT( char *aLUT, long ImaXform, char *type, char *source ) ;
+//	DoMatrix( char *theMatrix, long ImaXform, char *type ) ;
+//	DumpTransformData() ;
+//	DumpTransformList( char *theList ) ;
+//  GetCopyFromSource( URenderNode *theNode, double *theRect, UIma * theIma, long showImages, 
+//							long backgroundRef, UList * theImageList, UList * theXFormList)
+//	GetDefaultBackground( char *theNode, double *theRect ) ;
+//	GetIFile( char *theNode, double *theRect ) ;
+//	GetInputSource( char *theNode, double *theRect ) ;
+//	GetMask( char *theNode, double *theRect, char *theType , char ** theMaskList) ;
+//	GetFrameMask( long FrameXform, char *theNode, double *theRect,  char * InterpType) ;
+//	GetNodeRect( char *theNode, double *theRect ) ;
+//	GetRotationText(double Rotate, double *aRect ) ;
+//	GetSolidColor( char *theNode, double *theRect, double *theColor ) ;
+//	HandleAutoCrop( char *theNode, long ImaXform, double *theRect, double *OrigImageSize, double *NewImageSize, double *cropRect ) ;
+//	HandleCDRGB( char *theNode, long ImaXform ) ;
+//	HandleColorMatrix( char *theNode, long ImaXform ) ;
+//	HandleCrop( char *theNode, long ImaXform ) ;
+//	HandleImageNode( char *theNode ) ;
+//	HandleFrame( char *theNode ) ;
+//	HandleLUT( char *theNode, long ImaXform ) ;
+//	HandleMirror( char *theNode, long ImaXform, double *theRect ) ;
+//	HandlePreviewOptions( char *thePVGC ) ;
+//	HandleResample(  long ImaXform, double *theRect, char *InterpType, int WantCaching ) ;
+//	HandleFrameResample( long ImaXform, double *theRect, char *InterpType ) ;
+//	HandleSaturation( char *theNode, long ImaXform ) ;
+//	HandleSharpen( char *theNode, long ImaXform, double *srcImgRect )
+//	HandleTextNode( char *theNode, long ImaXform, double *theRect ) ;
+//	HandleXGamma( char *theNode, long ImaXform ) ;
+//	HandleOutputProfiles( char *theNode, long ImaXform ) ;
+//	HandleColorProfiles( char *theNode, long ImaXform ) ;
+//	IsImageNode( char *theNode, double *theRect ) ;
+//	IsTextNode( char *theNode, double *theRect ) ;
+//	LoadMatrix( char *MatrixPath, double *theMatrix ) ;
+//	RemoveXForms(char *theList) ;
+
+//	SOME USEFUL GLOBALS
+char	*NULL ;
+long	 TRUE = 1 ;
+long	 FALSE = 0 ;
+int		 x = 0, y = 1, w = 2, h = 3 ;
+
+UIma	*gIma ;
+char	*gImageList ;
+char	*gColorList ;
+char	*gMaskList ;
+char	*gBGColorMaskList ;
+char	*gFrameList ;
+char	*gFrameMaskList ;
+
+long	 CHANGEDSTATUS = 1;
+long	 PREVIEWSTATUS = 2 ;
+long	 gUpdating = CHANGEDSTATUS ;	//	ARE WE CREATING A NEW CHAIN OR UPDATING
+
+char	*gPreviewOptions ;
+long	 gShowBackground = TRUE ;
+long	 gShowImages = TRUE ;
+long	 gShowFrames = TRUE ;
+long	 gShowText = TRUE ;
+long	 gShowMasks = TRUE ;
+
+char	*gView;
+TCHAR	 gMonitorProfile[1024];
+TCHAR	 gJobOutputProfile[1024];
+TCHAR	 gEditSpaceProfile[1024];
+char	*gImageCorrections;
+
+
+long	 gBackgroundImage ;
+
+char	*gUIC; 
+
+int		 gTraceLevel ;
+int		 gRunMode ;
+char	*gLogger ;
+char	*gXformList ;
+
+char	*gDefaultMain ;
+char	*gDefaultNode ;
+
+TCHAR	 gLastErrorMsg[512] ;
+
+#include "CErrWarnInfo.txt"
+#include "CRenderOutputNode.txt"
+
+main()
+{
+	char	*UICGC ;
+	char	*theNode ;
+	TCHAR	*theMsg ;
+	TCHAR	 Value[128] ;
+	TCHAR	 TimeMsg[512] ;
+	long	 ImaXform ;
+	long	 StartClock = Clock() ;
+	long	 EndClock ;
+
+	Debug(0) ;
+
+	UICGC = GetCCodeGenCon() ;
+	if( UICGC == NULL )		{ return ; }
+
+	gDefaultMain = GetTreeObject( "DefaultMain", "[DEFAULTS]" ) ;
+	gDefaultNode = GetTreeObject( "DefaultImageNode", "[DEFAULTS]" ) ;
+
+	gLogger  = GetLongValue( UICGC, "Logger" ) ;
+	gRunMode = GetLongValue( UICGC, "RunMode" ) ;
+
+	gTraceLevel = 0 ;	//	THE LEAST DETAILED LEVEL FOR NOW !
+
+	gXformList = GetLongValue( UICGC, "XFormList" ) ;
+
+	theNode = GetLongValue(UICGC, "Node" ) ;
+	if( theNode == NULL )	{ return ; }
+
+	gIma = GetLongValue( UICGC, "Ima" ) ;
+	if( gIma == NULL )		{ return ; }
+
+	gUIC = GetLongValue( UICGC, "UIC" ) ;
+
+	gBackgroundImage = GetLongValue( UICGC, "XformRef" ) ;
+
+	// If there are preview options, then that means we are previewing to the
+	// screen.
+	gPreviewOptions = GetLongValue( UICGC, "PreviewOptions" ) ;
+	HandlePreviewOptions( gPreviewOptions ) ;
+
+	//	GET THE LISTS
+	gColorList	   = GetLongValue( theNode, "ColorTransformList" ) ;
+	gImageList	   = GetLongValue( theNode, "ImageTransformList" ) ;
+	gMaskList	   = GetLongValue( theNode, "MaskTransformList" ) ;
+	gBGColorMaskList = GetLongValue( theNode, "BGColorMaskTransformList" ) ;
+	gFrameList	   = GetLongValue( theNode, "FrameTransformList" ) ;
+	gFrameMaskList = GetLongValue( theNode, "FrameMaskTransformList" ) ;
+
+	//	GET THE VIEW, IF WE ARE GOING TO THE SCREEN.
+	gView = GetLongValue( UICGC, "View" ) ;
+
+	//  GET THE MONITOR, EDIT SPACE AND JOB OUTPUT PROFILES.
+	GetAttrValue( UICGC, "MonitorProfile", gMonitorProfile ) ;
+	GetAttrValue( UICGC, "JobOutputProfile", gJobOutputProfile ) ;
+	GetAttrValue( UICGC, "EditSpaceProfile", gEditSpaceProfile ) ;
+
+	//	IF THE CHAIN EXISTS THEN WE HAVE TO UPDATE THE CHAIN.
+	//	THE 2 MEANS TO CHECK THE PREVIEW STATUS MASK
+	if( gImageList )
+	{
+		gUpdating = PREVIEWSTATUS ;
+	}
+ 
+	// Get the image corrections, if any, for this node.
+	gImageCorrections = GetLongValue(theNode, "LatestCorrections");
+
+	GetAttrValue( theNode, "INTID:", Value ) ;
+	SessionLogDirect( "\t\tCRenderNode.txt NodeID = %s", Value ) ;
+
+	//	BUILD THE NODE CHAIN
+//================================================================
+	ImaXform = CreateNodeChain( theNode ) ;
+//================================================================
+
+
+//	printf("%s", "	Dumping gImageList:" ) ;
+//	DumpTransformList( gImageList ) ;
+	
+//	printf("%s", "	Dumping gMaskList:" ) ;
+//	DumpTransformList(  gMaskList ) ;
+
+//	ImaPrintGraph( gIma, ImaXform, 2, 1 ) ;
+
+	//	RETURN THE LISTS
+	SetLongValue( theNode,	"ColorTransformList",		gColorList ) ;
+	SetLongValue( theNode,	"ImageTransformList",		gImageList ) ;
+	SetLongValue( theNode,	"MaskTransformList",		gMaskList ) ;
+	SetLongValue( theNode,	"BGColorMaskTransformList",	gBGColorMaskList ) ;
+	SetLongValue( theNode,  "OutputTransformList",		gOutputXFormList ) ;
+	SetLongValue( UICGC,	"XformRef",					gBackgroundImage ) ;
+	SetLongValue( theNode,	"FrameTransformList",		gFrameList ) ;
+	SetLongValue( theNode,	"FrameMaskTransformList",	gFrameMaskList ) ;
+	SetLongValue( UICGC,	"XFormList",				gXformList ) ;
+
+	EndClock = Clock() ;
+	sprintf( TimeMsg, "Build Chain For Node took: %ldms", EndClock - StartClock ) ;
+	SessionLogDirect( "%s", TimeMsg ) ;
+
+	return( ImaXform ) ;
+}
+
+// It's legal to return with a NULL transform unless it is a background node
+CreateNodeChain( char *theNode )
+{
+	double	theRect[4] ;
+	long	ImaXform = 0L ;
+	long	ImaColorXform = 0L;
+	long	NodeType = 0L ;
+	long	ID = GetLongValue( theNode, "INTID:" ) ;
+
+	if( IsOutputNode( theNode ) )
+	{
+		ImaXform = HandleOutputNode( theNode, gBackgroundImage ) ;
+		return( ImaXform ) ;
+	}
+
+	if( IsImageNode( theNode, theRect ) != 0 )
+	{
+		// HandleSolidColorInImageNode has to be done before HandleImageNode; otherwise
+		// "PX" and "PY" will be wiped out if autocrop mode is F
+		ImaColorXform = HandleSolidColorInImageNode( theNode );
+		ImaXform = HandleImageNode( theNode ) ;
+		HandleFrame( theNode ) ;
+		NodeType = NodeType + 1 ;
+		if (ImaXform == 0)
+		{
+			ImaXform = ImaColorXform;
+		}
+	}
+
+
+	if( ImaColorXform == 0L && ImaXform == 0L && NodeType == 1 && ID == -9001)
+	{
+		// get the default background color if no IColor: or IFile: and a background node
+		ImaXform = GetDefaultBackground( theNode, theRect ) ;
+	}
+
+	//	CHECK TO SEE IF WE TRIED TO CREATE AN IMA CHAIN FOR THIS NODE
+	//	OR IF BOTH THE 'IsImageNode' AND 'IsTextNode' CALLS FAILED.
+	if( NodeType == 0L )
+	{
+		HandleWarning( "No transform chain created.  Node had no width or height.",1 ) ;
+	}
+
+	return( ImaXform ) ;
+}
+
+HandleSolidColorInImageNode(char *theNode )
+{
+	long	ImaXform, ImaXformMask, ImaColorXForm = 0;
+	double	cropRect[4];
+	double	OriginalColorRect[4];
+	double	MaskRect[4];
+	long	nodeID;
+
+//	DumpGenCon( theNode, "HandleSolidColorInImageNode:" ) ;
+
+	if( gUpdating )
+	{
+		//	IF WE GOT HERE WE MUST REMOVE THE OLD CHAIN AND START A NEW ONE.
+		DeleteTransformList( gColorList ) ;
+		gColorList = NewList() ;
+		gUpdating  = CHANGEDSTATUS ;	//	WE MUST RECREATE THE ENTIRE CHAIN.
+	}
+
+	nodeID = GetLongValue (theNode, "INTID:");
+
+	if (gShowImages == 0 && nodeID > 0)
+	{
+		return (0);
+	}
+
+	ImaColorXForm = GetInputColorSource( theNode, OriginalColorRect ) ;
+
+	if (ImaColorXForm)
+	{
+		// 
+		ImaXform = ImaColorXForm;
+		cropRect[0] = 0; cropRect[1] = 0;
+		cropRect[2] = 0; cropRect[3] = 0;
+		SetRectValue( theNode, "ActualCropRect", cropRect ) ;
+		// reset PX and PY to be at 0,0
+		SetDoubleValue (theNode, "PX", 0);
+		SetDoubleValue (theNode, "PY", 0);
+
+	}
+	
+	if( gShowMasks )
+	{
+		ImaXformMask  = GetMask( theNode, MaskRect , "BGColorMask:", &gBGColorMaskList) ;
+	}
+
+	else
+	{
+		if( gBGColorMaskList )
+		{
+			DeleteTransformList( gBGColorMaskList ) ;
+			gUpdating  = CHANGEDSTATUS ;	//	WE MUST RECREATE THE ENTIRE CHAIN.
+			gBGColorMaskList = NewList() ;
+		}
+
+	}
+
+	// Apply the output and monitor profiles, if necessary.
+	ImaXform = HandleColorProfiles( theNode, ImaXform ) ;
+
+	return( ImaXform ) ;
+}
+
+
+// Handle the IFile: part of the image node
+HandleImageNode( char *theNode )
+{
+	long	ImaXform, ImaXformMask, ImaColorXForm = 0, ImaCopyFromXform = 0;
+	double	cropRect[4];
+	double	NewImageSize[4], OriginalFileRect[4], OriginalColorRect[4];
+	double	MaskRect[4] , theColor[4];
+    double	theRect[4] ;
+	TCHAR	autoCropParams[256];
+	TCHAR	autoCropMode[10];
+	double	X,Y;
+	int		WantCaching = FALSE ;
+
+//	DumpGenCon( theNode, "HandleImageNode:" ) ;
+
+	if( gUpdating )
+	{
+		//	IF WE GOT HERE WE MUST REMOVE THE OLD CHAIN AND START A NEW ONE.
+		DeleteTransformList( gImageList ) ;
+		gImageList = NewList() ;
+		gUpdating  = CHANGEDSTATUS ;	//	WE MUST RECREATE THE ENTIRE CHAIN.
+	}
+
+	ImaXform = GetInputFileSource( theNode, OriginalFileRect ) ;
+	if( ImaXform == 0L )
+	{
+		ImaXform = GetCopyFromSource( theNode, OriginalFileRect,gIma, gShowImages, gBackgroundImage, gImageList,gXformList ) ;
+		ImaCopyFromXform = ImaXform;
+	}
+
+	if (ImaXform == 0L)
+	{
+		return 0L;
+	}
+
+
+	GetRectValue(theNode, "ILocation:", theRect) ;
+	theRect[0] = 0.0 ;	//	BECAUSE theRect IS IN X,Y,W,H
+	theRect[1] = 0.0 ;	//	AND WE WANT THE W & H ONLY !
+
+	// in case there is no autocrop or croprect, start with good values
+	CopyRect (NewImageSize, theRect);
+
+	if( AttrChanged( theNode, "AutoCrop:", gUpdating ))
+	{
+		GetAttrValue( theNode, "AutoCrop:", autoCropParams ) ;
+	}
+	else
+	{
+		if( GetLongValue( theNode, "INTID:") == -9001 )
+		{
+			GetAttrValue( gDefaultMain, "AutoCrop:", autoCropParams ) ;
+		}
+
+		else
+		{
+			GetAttrValue( gDefaultNode, "AutoCrop:", autoCropParams ) ;
+		}
+	}
+
+	if( AttrChanged( theNode, "AutoCropMode:", gUpdating ))
+	{
+		GetAttrValue( theNode, "AutoCropMode:", autoCropMode ) ;
+	}
+	else
+	{
+		if( GetLongValue( theNode, "INTID:") == -9001 )
+		{
+			GetAttrValue( gDefaultMain, "AutoCropMode:", autoCropMode ) ;
+		}
+
+		else
+		{
+			GetAttrValue( gDefaultNode, "AutoCropMode:", autoCropMode ) ;
+		}
+	}
+		
+	OriginalFileRect[3] =  OriginalFileRect[1] + OriginalFileRect[3];
+	OriginalFileRect[2] =  OriginalFileRect[2] + OriginalFileRect[0];
+	// for autocrop mode F, theRect is changed to the location to paste the image
+	// with the following call
+	ImaXform = HandleAutoCrop( theNode, autoCropParams,autoCropMode, ImaXform, theRect, OriginalFileRect, NewImageSize, cropRect ) ;
+
+	if( ImaXform == 0L )	{ return( ImaXform ) ; }
+
+	SetRectValue( theNode, "ActualCropRect", cropRect ) ;
+
+	// handle the autocrop mode F - adjust the paste location
+	SetDoubleValue (theNode, "PX", theRect[0]);
+	SetDoubleValue (theNode, "PY", theRect[1]);
+
+
+	if( gShowMasks )
+	{
+		ImaXformMask  = GetMask( theNode, MaskRect , "MaskFile:" ,&gMaskList) ;
+	}
+
+	else
+	{
+		if( gMaskList )
+		{
+			DeleteTransformList( gMaskList ) ;
+			gUpdating  = CHANGEDSTATUS ;	//	WE MUST RECREATE THE ENTIRE CHAIN.
+			gMaskList = NewList() ;
+		}
+
+	}
+
+	//	REMOVE ANYTHING AFTER IMAGE RESAMPLE FROM THE LIST !
+	RemoveXForms(gImageList) ;
+
+	if (ImaCopyFromXform == 0 )
+	{
+		ImaXform = HandleMirror( theNode, ImaXform, theRect ) ; 
+		ImaXform = HandleXGamma( theNode, ImaXform ) ;
+		ImaXform = HandleSaturation( theNode, ImaXform ) ;
+		ImaXform = HandleCDRGB( theNode, ImaXform ) ;
+		ImaXform = HandleLUT( theNode, ImaXform ) ;
+		ImaXform = HandleColorMatrix( theNode, ImaXform ) ;
+	}
+
+	if (ImaCopyFromXform == 0)
+	{
+		ImaXform = HandleSharpen( theNode, ImaXform, theRect ) ;
+	}
+
+	if (ImaCopyFromXform == 0)
+	{
+		// Apply the output and monitor profiles, if necessary.
+		ImaXform = HandleOutputProfiles( theNode, ImaXform ) ;
+	}
+
+	//	THESE MUST BE LAST FOR U/I cropping
+	if (gPreviewOptions)	//	DO THIS ONLY WHEN GOING TO THE SCREEN LK 01/25/99
+	{
+		ImaXform = HandleResample( ImaXform, NewImageSize, "L", "EXTEND", WantCaching ) ;  // pf 7/31/98
+	}
+
+	// don't do the crop if we don't have a transform, as this will cause an ImaError
+	// (ActualCropRect not set up)
+	if (ImaXform)
+	{
+		ImaXform = HandleCrop( theNode, ImaXform ) ;
+	}
+
+	return( ImaXform ) ;
+}
+
+
+// Handle the ColorInputProfile keyword.
+GetInputColorSource( char *theNode, double *theRect )
+{
+	long		ImaSource ;
+	TCHAR		inputProfile[1024];
+	long		ImaXform;
+
+	//	HANDLE A SOLID COLOR IMAGE SOURCE
+	if( AttrChanged( theNode, "IColor:", gUpdating ))
+	{
+		ImaSource = GetSolidColor( theNode, theRect, NULL ) ;
+	}
+
+	if (ImaSource)
+	{
+		if (gPreviewOptions)
+		{
+			GetAttrValue(theNode, "ColorInputProfile:", inputProfile);
+
+			if (gMonitorProfile &&
+				(strcmp(gMonitorProfile, "") != 0) &&
+				(strcmp(inputProfile, "") != 0))
+			{
+				ImaXform = ImaSource;
+				ImaSource =	ImaICCEffect(gIma, ImaSource,
+					inputProfile, "RGB", "IN", "PERCEPTUAL",
+					gEditSpaceProfile, "RGB", "OUT", "PERCEPTUAL");
+				AddTransformData(ImaXform, 0L, 0L, ImaSource, "ImaICCInputProfile", theRect, 0.0);
+				AddTransformToList( gImageList, "ImaICCInputProfile", ImaSource, FALSE ) ;
+			}
+		}
+		else
+		{
+			GetAttrValue(theNode, "ColorInputProfile:", inputProfile);
+
+			if (gJobOutputProfile &&
+				(strcmp(gJobOutputProfile, "") != 0) &&
+				(strcmp(inputProfile, "") != 0))
+			{
+				ImaXform = ImaSource;
+				ImaSource =	ImaICCEffect(gIma, ImaSource,
+								 inputProfile, "RGB", "IN", "PERCEPTUAL",
+								 gEditSpaceProfile, "RGB", "OUT", "PERCEPTUAL");
+				AddTransformData(ImaXform, 0L, 0L, ImaSource, "ImaICCInputProfile", theRect, 0.0);
+				AddTransformToList( gImageList, "ImaICCInputProfile", ImaSource, FALSE ) ;
+			}
+		}
+	}
+
+	return( ImaSource ) ;
+
+
+}
+
+GetInputFileSource( char *theNode, double *theRect )
+{
+	double		 ID ;
+	long		 ImaSource ;
+
+	//	IF WE ARE UPDATING THEN WE NEED TO CHECK FOR THE PREVIEW MASK
+	//	OTHERWISE WE NEED TO CHECK THE CHANGED MASK.
+	ID = GetDoubleValue( theNode, "INTID:" ) ;
+
+	if( ID == -9001.0 && gShowBackground)
+	{
+		if( AttrChanged( theNode, "IFile:", gUpdating ))
+		{
+			ImaSource = GetIFile( theNode, theRect ) ;
+			if (ImaSource >= 10000L )
+			{
+				return( ImaSource ) ;
+			}
+		}
+	}
+
+	
+	if( ID > 0 && gShowImages)
+	{
+
+		if( AttrChanged( theNode, "IFile:", gUpdating ) )
+		{
+			//	HANDLE SOURCE AS AN INPUT FILE.
+			ImaSource = GetIFile( theNode, theRect ) ;
+			if (ImaSource >= 10000 ) 
+			{
+				return( ImaSource);
+			}
+		}
+	}
+
+	return( 0L ) ;
+}
+
+
+
+
+
+
+
+HandleComposite( char *theNode, long ImaBG, long ImaFG,
+								long ImaMask , double *ILocation, double opacity )
+{
+	char		*aGC ;
+	long		 ImaXform ;
+
+	ImaXform = ImaComposite( gIma, ImaBG, ImaFG, ImaMask,
+					ILocation[x], ILocation[y],  "INCHES", 1, 0 ) ;
+
+	AddTransformData( ImaBG, ImaFG, ImaMask, ImaXform,
+											"ImaComposite", ILocation, -9100.0 ) ;
+	AddTransformToList( gImageList, "ImaComp0site", ImaXform, FALSE ) ;
+
+	return(ImaXform ) ;
+}
+
+
+// some examples of how to time operations:
+//StartClockSrc = Clock() ;
+// perform operation here
+//EndClockSrc = Clock() ;
+//satClock = EndClockSrc - StartClockSrc;
+//totalSatClock = totalSatClock + satClock;
+//sprintf( TimeMsg, "------> SATURATION SetLutValues took: %ldms", satClock ) ;
+//SessionLogDirect("%s", TimeMsg ) ;
+
+
+
+GetIFile( char *theNode, double *theRect )
+{
+	TCHAR	 word[256] ;
+	char	*Rotation ;
+	double	 Rotate = 0.0 ;
+	double	 RotateIC = 0.0 ;
+	double	 ArbitraryRotate = 0.0 ;
+	double	 ArbitraryRotateIC = 0.0 ;
+	int		 X, Y ;
+	int		 isDirectory ;
+	long	 ImaSource = 0L ;
+
+	long	 ImaXform ;
+	double	 cropWidth, cropHeight, cropX, cropY ,cropRect[4], zoom = 1.0, imageWidth, imageHeight;
+	TCHAR	 imageInputProfile[1024];
+	long	 isEditableSpace = FALSE;
+	char	*theLutObj ;
+	char	*theLut ;
+	double	 gammaIC ;
+	long	 gamma ;
+	char	*theMatrix ;
+	long	 satIC ;
+	long	 contrastIC, denIC, redIC, grnIC, bluIC ;
+
+
+	//	HANDLE the resolved SOURCE path S AN INPUT FILE.
+	GetResolvedValue( gUIC,theNode,"IFILE:",word, GetParent( theNode ) ) ;
+	ResolvePath( gUIC, word, word ) ;
+
+	// modified to ignore an IFile: with a null string 9/10/98
+	if (!strlen(word))
+	{
+		return (0L);
+	}
+
+	word = ConvertPathTo( word, "pc" ) ;
+	if( FileOrDirectoryExists( word, &isDirectory ) != TRUE )
+	{
+		sprintf( gLastErrorMsg, "File %s not found.", word ) ; 
+		return( 2L ) ;
+	}
+
+	ImaSource = ImaNewImageSource( gIma, "ANY", word ) ;
+	GetMaxResolution( gIma, ImaSource, &X, &Y ) ;
+	theRect[x] = 0.0 ; theRect[y] = 0.0 ;
+	theRect[w] = X	 ; theRect[h] = Y   ;
+
+	AddTransformData( 0L, 0L, 0L, ImaSource, "ImaFileSource", theRect, GetDoubleValue( theNode, "INTID:") ) ;
+	AddTransformToList( gImageList, "ImaFileSource", ImaSource, FALSE ) ;
+
+
+	imageWidth = X;
+	imageHeight = Y;
+
+	if (gImageCorrections)
+	{
+		cropX = 		GetDoubleValue( gImageCorrections, "CropX" ) ;
+		cropY =			GetDoubleValue( gImageCorrections, "CropY") ;
+		cropWidth	=	GetDoubleValue( gImageCorrections, "CropWidth" ) ;
+		cropHeight	=	GetDoubleValue( gImageCorrections, "CropLength") ;
+
+		if (		cropWidth > 0 && cropHeight > 0 
+				&&	cropX >= 0 && cropX <= 100
+				&&	cropY >= 0 && cropY <= 100)
+		{		
+			ComputeStandardCrop(gIma,imageWidth,imageHeight,zoom ,cropX,  cropY,
+					 cropWidth, cropHeight, cropRect);
+			ImaXform  = ImaSource ;
+			ImaSource = ImaCrop( gIma, ImaSource, "PIXELS", cropRect ) ;
+			AddTransformData( ImaXform, 0L, 0L, ImaSource, "ImaCropCorrection", cropRect, GetDoubleValue( theNode, "INTID:") ) ;
+			AddTransformToList( gImageList, "ImaCropCorrection", ImaSource, FALSE ) ;
+			GetMaxResolution( gIma, ImaSource, &X, &Y ) ;
+			theRect[x] = 0.0 ; theRect[y] = 0.0 ;
+			theRect[w] = X	 ; theRect[h] = Y   ;
+		}
+	}
+	
+	// INPUT ICC PROFILE
+	if (gImageCorrections)
+	{
+		GetAttrValue( gImageCorrections, "ICCProfile", imageInputProfile ) ;
+		isEditableSpace = GetLongValue( gImageCorrections, "IsICCProfileEditableSpace" ) ;
+	}
+
+	if (gPreviewOptions)
+	{
+		if (gMonitorProfile && (strcmp(gMonitorProfile, "") != 0) &&
+			gJobOutputProfile && (strcmp(gJobOutputProfile, "") != 0))
+		{
+			if ((imageInputProfile != NULL && strcmp(imageInputProfile, "") != 0) &&
+				(gEditSpaceProfile != NULL && strcmp(gEditSpaceProfile, "") != 0) &&
+				!isEditableSpace)
+			{
+				ImaXform = ImaSource;
+				ImaSource =	ImaICCEffect(gIma, ImaSource,
+					imageInputProfile, "RGB", "IN", "PERCEPTUAL",
+					gEditSpaceProfile, "RGB", "OUT", "PERCEPTUAL");
+				AddTransformData(ImaXform, 0L, 0L, ImaSource, "ImaICCInputProfile", theRect, 0.0);
+				AddTransformToList( gImageList, "ImaICCInputProfile", ImaSource, FALSE ) ;
+			}
+		}
+	}
+	else
+	{
+		if (gJobOutputProfile && (strcmp(gJobOutputProfile, "") != 0))
+		{
+			if ((imageInputProfile != NULL && strcmp(imageInputProfile, "") != 0) &&
+				(gEditSpaceProfile != NULL && strcmp(gEditSpaceProfile, "") != 0) &&
+				!isEditableSpace)
+			{
+				ImaXform = ImaSource;
+				ImaSource =	ImaICCEffect(gIma, ImaSource,
+					imageInputProfile, "RGB", "IN", "PERCEPTUAL",
+					gEditSpaceProfile, "RGB", "OUT", "PERCEPTUAL");
+				AddTransformData(ImaXform, 0L, 0L, ImaSource, "ImaICCInputProfile", theRect, 0.0);
+				AddTransformToList( gImageList, "ImaICCInputProfile", ImaSource, FALSE ) ;
+			}
+		}
+	}
+
+	// ROTATE FROM DISK
+	if( AttrChanged( theNode, "RotateFromDisk:", gUpdating ) )
+	{
+		Rotate = GetDoubleValue( theNode, "RotateFromDisk:" ) ;
+	}
+
+	if (gImageCorrections)
+	{
+		RotateIC = GetDoubleValue(gImageCorrections, "orgROTATEFROMDISK") +
+				GetDoubleValue(gImageCorrections, "ROTATEFROMDISK");
+	}
+
+	Rotate = Rotate + RotateIC;
+	if( Rotate != 0.0  )
+	{
+		Rotation  = GetRotationText(Rotate, theRect ) ;
+		ImaXform  = ImaSource ;
+		ImaSource = ImaReorient( gIma, ImaXform, Rotation ) ;
+		AddTransformData(ImaXform, 0L, 0L, ImaSource, "ImaReorient", theRect, 0.0);
+		AddTransformToList( gImageList, "ImaReorient", ImaSource, FALSE ) ;
+	}
+
+	// PF (2/25/99) the IRotation: keyword is not supported.  Also, it has a different meaning
+	// than the arbitary rotation correction, and is not additive.
+	// The IRotation: keyword means to rotate the image and node.
+	// The arbitrary rotation correction rotates the image but not the node.
+
+	if (gImageCorrections)
+	{
+		ArbitraryRotateIC = GetDoubleValue(gImageCorrections, "orgARBITRARYROTATION") +
+					GetDoubleValue(gImageCorrections, "ARBITRARYROTATION");
+	}
+
+	ArbitraryRotate = ArbitraryRotate + ArbitraryRotateIC;
+	while ( ArbitraryRotate >= 360.0 )
+	{
+		ArbitraryRotate = ArbitraryRotate - 360.0;
+	}
+
+	while ( ArbitraryRotate < 0.0 )
+	{
+		ArbitraryRotate = ArbitraryRotate + 360.0;
+	}
+
+	if( ArbitraryRotateIC != 0.0 )
+	{
+		ImaXform  = ImaSource ;
+		ImaSource = ImaRotate(gIma, ImaXform, ArbitraryRotate, "NEAREST", FALSE, "INNERSIZE");
+		AddTransformData(ImaXform, 0L, 0L, ImaSource, "ImaRotate", theRect, 0.0);
+		AddTransformToList( gImageList, "ImaRotate", ImaSource, FALSE ) ;
+	}
+
+	// GAMMA
+	if (gImageCorrections)
+	{
+		gammaIC = GetDoubleValue( gImageCorrections, "orgGAMMA" ) +
+			GetDoubleValue( gImageCorrections, "GAMMA" );
+	}
+
+	// Multiply the result by 100.
+	gamma = gammaIC * 100;
+
+	// Make sure gamma from image corrections is within a valid range.
+	if (gamma != 0)
+	{
+		if ( gamma < 30 )
+		{
+			gamma = 30 ;
+		}
+		if ( gamma > 500 )
+		{
+			gamma = 500 ;
+		}
+
+		theLutObj = NewLut() ;
+
+		//						 D	 R   G   B   Con  G		   Sat  Invert Threshold
+		SetLutValues( theLutObj, 0L, 0L, 0L, 0L, 0,   gamma, 0,   0,     -1 ) ;
+
+		theLut = GetLutPtr( theLutObj ) ;
+
+		ImaXform  = ImaSource ;
+		ImaSource = DoLUT( theLut, ImaXform, "CHAR", "XGamma" ) ;
+
+		Delete( theLutObj ) ;
+	}
+
+
+	// SATURATION
+	if (gImageCorrections)
+	{
+		satIC = GetDoubleValue(gImageCorrections, "orgSATURATION") + 
+			GetDoubleValue (gImageCorrections, "Saturation");
+	}
+
+	if (satIC != 0)
+	{
+		theLutObj = NewLut() ;
+		//						 D	 R   G   B    Con Gam  Sat	   Invert Threshold
+		SetLutValues( theLutObj, 0L, 0L, 0L, 0L,  0,  100, satIC,  0,     -1 ) ;
+
+		theMatrix = GetMatrixPtr( theLutObj ) ;
+
+		ImaXform  = ImaSource ;
+		ImaSource = DoMatrix( theMatrix, ImaXform, "Saturation Matrix" ) ;
+		Delete( theLutObj ) ;
+	}
+
+	// CONTRAST, DENSITY, RED, GREEN, BLUE
+	if (gImageCorrections)
+	{
+		// Get the contrast value from the image corrections.
+		contrastIC = GetDoubleValue(gImageCorrections, "orgCONTRAST") 
+			+ GetDoubleValue (gImageCorrections, "contrast");
+
+		// Get the density value from the image corrections.
+		denIC = GetDoubleValue(gImageCorrections, "orgDENSITY")
+			+ GetDoubleValue (gImageCorrections, "density");
+
+		// Get the red value from the image corrections.
+		redIC = GetDoubleValue(gImageCorrections, "orgRED")
+			+ GetDoubleValue (gImageCorrections, "red");
+
+		// Get the green value from the image corrections.
+		grnIC = GetDoubleValue(gImageCorrections, "orgGREEN")
+			+ GetDoubleValue (gImageCorrections, "green");
+
+		// Get the blue value from the image corrections.
+		bluIC = GetDoubleValue(gImageCorrections, "orgBLUE")
+			+ GetDoubleValue (gImageCorrections, "blue");
+	}
+
+	if (redIC != 0 || grnIC != 0 || bluIC != 0 || contrastIC != 0 || denIC != 0)
+	{
+		theLutObj = NewLut() ;
+		//						 D	    R	   G	  B	     Con	     G     Sat Invert  Threshold
+		SetLutValues( theLutObj, denIC, redIC, grnIC, bluIC, contrastIC, 100,  0 , 0,      -1 ) ;
+		theLut = GetLutPtr( theLutObj ) ;
+		ImaXform  = ImaSource ;
+		ImaSource = DoLUT( theLut, ImaXform, "CHAR", "CDRGB" ) ;
+		theLutObj = Delete( theLutObj ) ;
+	}
+
+
+	return( ImaSource ) ;
+}
+
+
+GetDefaultBackground( char *theNode, double *theRect )
+{
+	double	theColor[4] ;
+	long	ImaXform = 0L ;
+
+	if( GetLongValue( theNode, "INTID:") == -9001 )
+	{
+		GetRectValue( gDefaultMain, "ICOLOR:", theColor ) ;
+	}
+	else
+	{
+		GetRectValue( gDefaultNode, "ICOLOR:", theColor ) ;
+	}
+
+	ImaXform = GetSolidColor( theNode, theRect, theColor ) ;
+
+	return( ImaXform ) ;
+}
+
+GetRotationText(double Rotate, double *aRect )
+{
+	double		temp ;
+
+	if( Rotate % 360.0 == 90.0 || Rotate == 1.0 )
+	{
+		temp = aRect[x] ;
+		aRect[x] = aRect[y] ;
+		aRect[y] = temp ;
+		temp = aRect[w] ;
+		aRect[w] = aRect[h] ;
+		aRect[h] = temp ;
+		return( "RCW" ) ;
+	}
+	if( Rotate % 360.0 == 180.0 || Rotate == 2.0 )
+	{
+		return( "R180" ) ;
+	}
+	if( Rotate % 360.0 == 270.0 || Rotate == 1.0 )
+	{
+		temp = aRect[x] ;
+		aRect[x] = aRect[y] ;
+		aRect[y] = temp ;
+		temp = aRect[w] ;
+		aRect[w] = aRect[h] ;
+		aRect[h] = temp ;
+		return( "RCCW" ) ;
+	}
+	return( "NOP" ) ;
+}
+
+
+GetSolidColor( char *theNode, double *theRect, double *theColor )
+{
+	double	Color[4], temp ;
+	int		X, Y ;
+	long	ImaSource = 0L ;
+
+	if( theColor )
+	{
+		Color[0] = theColor[0] ; Color[1] = theColor[1] ;
+		Color[2] = theColor[2] ; Color[3] = theColor[3] ;
+	}
+	else
+	{
+		GetRectValue( theNode, "IColor:", Color ) ;
+	}
+
+	if( GetDoubleValue( theNode, "INTID:" ) == -9001.0 )
+	{
+		GetRectValue( theNode, "ILocation:", theRect ) ;
+	}
+	else
+	{
+		GetNodeRect( theNode, theRect ) ;
+	}
+
+	temp = Color[0] ;
+	Color[0] = Color[1] ;
+	Color[1] = Color[2] ;
+	Color[2] = Color[3] ;
+	Color[3] = temp ;
+
+	ImaSource = ImaConstant( gIma, theRect[w], theRect[h], 3, Color, "INCHES" ) ;
+
+	AddTransformData( 0L, 0L, 0L, ImaSource, "ImaConstant", theRect, GetDoubleValue( theNode, "INTID:") ) ;
+	AddTransformToList( gColorList, "ImaConstant", ImaSource, FALSE ) ;
+
+	return( ImaSource ) ;
+}
+
+HandleOutputProfiles( char *theNode, long ImaXform )
+{
+	int		isDirectory ;
+	long	ImaXform2;
+	TCHAR	imageInputProfile[1024];
+	long	isEditableSpace = FALSE;
+	double  theRect[4];
+	theRect[0] = 0;
+	theRect[1] = 0;
+	theRect[2] = 0;
+	theRect[3] = 0;
+
+	if (gImageCorrections)
+	{
+		GetAttrValue( gImageCorrections, "ICCProfile", imageInputProfile ) ;
+		isEditableSpace = GetLongValue( gImageCorrections, "IsICCProfileEditableSpace" ) ;
+	}
+
+	if (gPreviewOptions)
+	{
+		if (gMonitorProfile && (strcmp(gMonitorProfile, "") != 0) &&
+			gJobOutputProfile && (strcmp(gJobOutputProfile, "") != 0))
+		{
+			if (((imageInputProfile != NULL && strcmp(imageInputProfile, _T("")) != 0) &&
+					(gEditSpaceProfile != NULL && strcmp(gEditSpaceProfile, _T("")) != 0) &&
+					!isEditableSpace) ||
+				(imageInputProfile != NULL && strcmp(imageInputProfile, _T("")) != 0 && isEditableSpace))
+			{
+				if (imageInputProfile != NULL && strcmp(imageInputProfile, _T("")) != 0 && isEditableSpace)
+				{
+					ImaXform2 = ImaXform;
+					ImaXform = ImaICCEffect(gIma, ImaXform,
+						imageInputProfile, "RGB", "IN", "PERCEPTUAL",
+						gJobOutputProfile, "RGB", "OUT", "PERCEPTUAL",
+						gJobOutputProfile, "RGB", "IN", "PERCEPTUAL",
+						gMonitorProfile, "RGB", "OUT", "PERCEPTUAL");
+					AddTransformData(ImaXform2, 0L, 0L, ImaXform, "ImaICCOutputProfile", theRect, 0.0);
+					AddTransformToList( gImageList, "ImaICCOutputProfile", ImaXform, FALSE ) ;
+				}
+				else
+				{
+					ImaXform2 = ImaXform;
+					ImaXform = ImaICCEffect(gIma, ImaXform,
+						gEditSpaceProfile, "RGB", "IN", "PERCEPTUAL",
+						gJobOutputProfile, "RGB", "OUT", "PERCEPTUAL",
+						gJobOutputProfile, "RGB", "IN", "PERCEPTUAL",
+						gMonitorProfile, "RGB", "OUT", "PERCEPTUAL");
+					AddTransformData(ImaXform2, 0L, 0L, ImaXform, "ImaICCOutputProfile", theRect, 0.0);
+					AddTransformToList( gImageList, "ImaICCOutputProfile", ImaXform, FALSE ) ;
+				}
+			}
+		}
+	}
+	else
+	{
+		if (gJobOutputProfile && strcmp(gJobOutputProfile, "") != 0)
+		{
+			if (((imageInputProfile != NULL && strcmp(imageInputProfile, _T("")) != 0) &&
+					(gEditSpaceProfile != NULL && strcmp(gEditSpaceProfile, _T("")) != 0) &&
+					!isEditableSpace) ||
+				(imageInputProfile != NULL && strcmp(imageInputProfile, _T("")) != 0 && isEditableSpace))
+			{
+				if (imageInputProfile != NULL && strcmp(imageInputProfile, _T("")) != 0 && isEditableSpace)
+				{
+					ImaXform2 = ImaXform;
+					ImaXform =	ImaICCEffect(gIma, ImaXform, 
+						imageInputProfile, "RGB", "IN", "PERCEPTUAL",
+						gJobOutputProfile, "RGB", "OUT", "PERCEPTUAL");
+					AddTransformData(ImaXform2, 0L, 0L, ImaXform, "ImaICCOutputProfile", theRect, 0.0);
+					AddTransformToList( gImageList, "ImaICCOutputProfile", ImaXform, FALSE ) ;
+				}
+				else
+				{
+					ImaXform2 = ImaXform;
+					ImaXform =	ImaICCEffect(gIma, ImaXform, 
+						gEditSpaceProfile, "RGB", "IN", "PERCEPTUAL",
+						gJobOutputProfile, "RGB", "OUT", "PERCEPTUAL");
+					AddTransformData(ImaXform2, 0L, 0L, ImaXform, "ImaICCOutputProfile", theRect, 0.0);
+					AddTransformToList( gImageList, "ImaICCOutputProfile", ImaXform, FALSE ) ;
+				}
+			}
+		}
+	}
+
+	return (ImaXform);
+}
+
+
+HandleColorProfiles( char *theNode, long ImaXform )
+{
+	int		isDirectory ;
+	long	bInputProfileApplied;
+	long	ImaXform2;
+	double  theRect[4];
+	theRect[0] = 0;
+	theRect[1] = 0;
+	theRect[2] = 0;
+	theRect[3] = 0;
+
+	bInputProfileApplied = FALSE;
+
+	// Check to see if a color input profile was applied.  If not, there is no need
+	// to apply the output/monitor profiles.
+	if( AttrChanged( theNode, "ColorInputProfile:", gUpdating ) )
+	{
+		bInputProfileApplied = TRUE;
+	}
+
+	if (!bInputProfileApplied)
+	{
+		return (ImaXform);
+	}
+
+	if (gPreviewOptions)
+	{
+		if (strcmp(gJobOutputProfile, "") != 0)
+		{
+			ImaXform2 = ImaXform;
+			ImaXform = ImaICCEffect(gIma, ImaXform,
+				gEditSpaceProfile, "RGB", "IN", "PERCEPTUAL",
+				gJobOutputProfile, "RGB", "OUT", "PERCEPTUAL",
+				gJobOutputProfile, "RGB", "IN", "PERCEPTUAL",
+				gMonitorProfile, "RGB", "OUT", "PERCEPTUAL");
+			AddTransformData(ImaXform2, 0L, 0L, ImaXform, "ImaICCOutputProfile", theRect, 0.0);
+			AddTransformToList( gColorList, "ImaICCOutputProfile", ImaXform, FALSE ) ;
+		}
+		else
+		{
+			if (gMonitorProfile && (strcmp(gMonitorProfile, "") != 0))
+			{
+				ImaXform2 = ImaXform;
+				ImaXform = ImaICCEffect(gIma, ImaXform, 
+					gEditSpaceProfile, "RGB", "IN", "PERCEPTUAL",
+					gMonitorProfile, "RGB", "OUT", "PERCEPTUAL");
+				AddTransformData(ImaXform2, 0L, 0L, ImaXform, "ImaICCMonitorProfile", theRect, 0.0);
+				AddTransformToList( gColorList, "ImaICCMonitorProfile", ImaXform, FALSE ) ;
+			}
+		}
+	}
+	else
+	{
+		if (strcmp(gJobOutputProfile, "") != 0)
+		{
+			ImaXform2 = ImaXform;
+			ImaXform =	ImaICCEffect(gIma, ImaXform, 
+				gEditSpaceProfile, "RGB", "IN", "PERCEPTUAL",
+				gJobOutputProfile, "RGB", "OUT", "PERCEPTUAL");
+			AddTransformData(ImaXform2, 0L, 0L, ImaXform, "ImaICCOutputProfile", theRect, 0.0);
+			AddTransformToList( gColorList, "ImaICCOutputProfile", ImaXform, FALSE ) ;
+		}
+	}
+
+	return (ImaXform);
+}
+
+// theRect is in ltrb coordinates.  InterpType is "C", "L" or "N"
+HandleResample( long ImaXform, double *theRect, TCHAR *InterpType, TCHAR * ResampleMode, int WantCaching )
+{
+	double		Width, Height ;
+	long		ImaXform2 ;
+
+	if( ImaXform == 0L )	{ return( ImaXform ) ; }
+
+	Width  = theRect[w] - theRect[x] ;
+	Height = theRect[h] - theRect[y] ;
+
+	if (strcmp("C", InterpType) == 0)
+	{
+		ImaXform2 = ImaResample( gIma, ImaXform, Width, Height, "INCHES",
+									"BICUBIC", ResampleMode  ) ;
+	}
+	else
+	{
+		if (strcmp ("N", InterpType) == 0)
+		{
+		//	LogThisProcessMemoryInfo( "HandleResample: Before" ) ;
+			ImaXform2 = ImaResample( gIma, ImaXform, Width, Height, "INCHES",
+										"NEAREST", ResampleMode  ) ;
+		}
+		else
+		{
+			ImaXform2 = ImaResample( gIma, ImaXform, Width, Height, "INCHES",
+										"BILINEAR", ResampleMode  ) ;
+		}
+
+	}
+//	LogThisProcessMemoryInfo( "HandleResample: After" ) ;
+
+	if( ImaXform2 == 0L )
+	{
+		return( 0L ) ;
+	}
+
+	if( WantCaching )
+	{
+		ImaSetCaching( gIma, ImaXform2, TRUE ) ;
+	}
+
+	AddTransformData( ImaXform, 0L, 0L, ImaXform2, "ImaResample", theRect, 0.0 ) ;
+	AddTransformToList( gImageList, "ImaResample", ImaXform2, WantCaching ) ;
+
+	return( ImaXform2 ) ;
+}
+
+
+/* HandleFrameResample takes theRect in LTWH (left top width height) format */
+HandleFrameResample(long ImaXform, double *theRect,  TCHAR *InterpType)
+{
+	double		Width, Height;
+	long ImaXform2;
+
+	if (ImaXform == 0L)
+	{
+		return (ImaXform);
+	}
+
+	Width  = theRect[w];
+	Height = theRect[h];
+	
+	ImaXform2 = ImaXform;
+	if (strcmp("C", InterpType) == 0)
+	{
+		ImaXform =
+			ImaResample(gIma, ImaXform, Width, Height, "INCHES",
+								"BICUBIC", "SCALEXY");
+	}
+	else
+	{
+		if (strcmp ("N", InterpType) == 0)
+		{
+			ImaXform = ImaResample( gIma, ImaXform, Width, Height, "INCHES",
+										"NEAREST", "SCALEXY"  ) ;
+		}
+		else
+		{
+			ImaXform = ImaResample( gIma, ImaXform, Width, Height, "INCHES",
+										"BILINEAR", "SCALEXY"  ) ;
+		}
+
+	}
+
+	ImaSetCaching(gIma, ImaXform, TRUE);
+
+	AddTransformData(ImaXform2, 0L, 0L, ImaXform, "ImaFrameResample", theRect, 0.0);
+	AddTransformToList(gFrameList, "ImaFrameResample", ImaXform, TRUE);
+
+	return (ImaXform);
+}
+
+
+HandleCrop( char *theNode, long ImaXform )
+{
+	double	cropRect[4] ;
+	long	ImaXform2 = ImaXform ;
+
+	if( AttrChanged( theNode, "ActualCropRect" ))
+	{
+		GetRectValue( theNode, "ActualCropRect", cropRect ) ;
+
+		if (cropRect[2] - cropRect[0] > 0 && cropRect[3] - cropRect[1] > 0)
+		{
+			// ImaCrop takes cropRect in ltrb format
+			ImaXform = ImaCrop( gIma, ImaXform2, "INCHES", cropRect ) ;
+			AddTransformData( ImaXform2, 0L, 0L, ImaXform, "ImaCrop", cropRect, 0.0 ) ;
+			AddTransformToList( gImageList, "ImaCrop", ImaXform, FALSE ) ;
+
+			if( ImaXform == 0L )
+			{
+				ImaPrintGraph( gIma, ImaXform2, 2, 1 ) ;
+				//HandleError(ImaGetLastErrorMsg( gIma )) ;
+			}
+		}
+	}
+	return( ImaXform ) ;
+}
+
+
+
+// On entry
+// theNode = node we are trying to crop
+// ImaXForm = previous ima transform to build on
+// theRect - node size, which is the rect we are cropping to in ltrb coordinates
+// origImageSize - original size of the input image in ltrb coordinates
+HandleAutoCrop( char * theNode, char *autoCropParms, char * autoCropMode, long ImaXform, double *theRect, double *OrigImageSize, double * NewImageSize , double *cropRect )
+{
+	TCHAR		word[256],		mode[10] ;
+	char		*aGC ;
+	double		ILocation[4],	TLocation[4] ;
+	double		RatioWidth,		RatioHeight ;
+	double		Width1, Width2, Height1, Height2 ;
+	int			result ;
+	long		ImaXform2 , ResampleTransform;
+	int			WantCaching = TRUE ;
+
+	if( ImaXform == 0L )	{ return( ImaXform ) ; }
+
+	ImaXform2 = ImaXform ;
+
+	RatioWidth = 0.0 ; RatioHeight = 0.0 ;
+
+	result = ComputeAutoCrop( gIma, autoCropParms, RatioWidth, RatioHeight,
+									OrigImageSize, cropRect, theRect, autoCropMode[0] ) ;
+
+	ComputeNewImageSize( NewImageSize, OrigImageSize, cropRect, theRect ) ;
+
+	// Resample the source image to the proper size
+	// Resample the image based on the the image resize mode.
+	if( AttrChanged( theNode, "ImageResize:", gUpdating ))
+	{
+		GetAttrValue( theNode, "ImageResize:", mode ) ;
+	}
+	else
+	{
+		if( GetLongValue( theNode, "INTID:") == -9001 )
+		{
+			GetAttrValue( gDefaultMain, "ImageResize:", mode ) ;
+		}
+
+		else
+		{
+			GetAttrValue( gDefaultNode, "ImageResize:", mode ) ;
+		}
+	}
+
+	ImaXform2 = HandleResample(  ImaXform2, NewImageSize, mode, "EXTEND",  WantCaching ) ;
+			
+	MapRect( cropRect, OrigImageSize, NewImageSize ) ;
+
+	return( ImaXform2 ) ;
+}
+
+
+HandleMirror( char *theNode, long ImaXform, double *theRect )
+{
+	long	 Xform = ImaXform ;
+	long	 Flip  = FALSE ;
+
+	if( AttrChanged( theNode, "MIRRORHORIZONTAL:", gUpdating ))
+	{
+		Flip = GetLongValue( theNode, "MIRRORHORIZONTAL:" ) ;
+		if( Flip )
+		{
+			Xform = ImaReorient( gIma, Xform, "FHOR" ) ;
+			AddTransformData(ImaXform, 0L, 0L, Xform, "Flip Horizontal", theRect, 0.0);
+			AddTransformToList( gImageList, "Flip Horizontal", Xform, FALSE ) ;
+		}
+	}
+
+	if( AttrChanged( theNode, "MIRRORVERTICAL:", gUpdating ))
+	{
+		Flip = GetLongValue( theNode, "MIRRORVERTICAL:" ) ;
+		if( Flip )
+		{
+			Xform = ImaReorient( gIma, Xform, "FVER" ) ;
+			AddTransformData(ImaXform, 0L, 0L, Xform, "Flip Vertical", theRect, 0.0);
+			AddTransformToList( gImageList, "Flip Vertical", Xform, FALSE ) ;
+		}
+	}
+
+	return( Xform ) ;
+}
+
+
+
+GetMask( char *theNode, double *theRect, char * theType , char **theMaskList)
+{
+	TCHAR	 word[256] ;
+	TCHAR	 TimeMsg[512], TimeMsg2[512] ;
+	char	*srcGC ;
+	char	*anIter ;
+	char	*XformGC ;
+	double	 Width, Height ;
+	double	 dstRect[4] ;
+	int		 X, Y ;
+	int		 isDirectory ;
+	long	 ImaXformMask = 0L ;
+	long	 ImaXform2 ;
+	long	 ImaXform ;
+	long	 StartClock, EndClock ;
+
+	if( AttrChanged( theNode, theType, gUpdating ) )
+	{
+		//	IF WE GOT HERE AND THE *theMaskList EXISTS WE MUST
+		//	GET RID OF IT AND START OVER
+
+		if( *theMaskList != NULL )
+		{
+			DeleteTransformList( *theMaskList ) ;
+			gUpdating  = CHANGEDSTATUS ;	//	WE MUST RECREATE THE ENTIRE CHAIN.
+		}
+
+		*theMaskList = NewList() ;
+		GetResolvedValue( gUIC,theNode,theType,word, GetParent( theNode ) ) ;
+		ResolvePath( gUIC, word, word ) ;
+
+		word = ConvertPathTo( word, "pc" ) ;
+		if( FileOrDirectoryExists( word, &isDirectory ) != TRUE )
+		{
+			sprintf( gLastErrorMsg, "File %s not found.", word ) ; 
+			return( 2L ) ;
+		}
+
+		StartClock = Clock() ;
+		ImaXformMask = ImaNewImageSource( gIma, "ANY", word ) ;
+
+		GetMaxResolution( gIma, ImaXformMask, &X, &Y ) ;
+		dstRect[w] = X ; dstRect[h] = Y ;
+		EndClock = Clock() ;
+
+		sprintf( TimeMsg, "ImaAnyImageSource %s took: ", word ) ;
+		sprintf( TimeMsg2, "%ldms", EndClock - StartClock ) ;
+		strcat( TimeMsg, TimeMsg2 ) ;
+		SessionLogDirect("%s", TimeMsg ) ;
+
+		AddTransformData(0L, 0L, 0L, ImaXformMask, "ImaMaskSource", dstRect, GetDoubleValue( theNode, "INTID:"));
+		AddTransformToList( *theMaskList, "ImaMaskSource", ImaXformMask, FALSE ) ;
+
+		if( ImaXformMask )
+		{
+			GetNodeRect( theNode, dstRect ) ;
+
+			Width  = dstRect[w];
+			Height = dstRect[h];
+
+			ImaXform2 = ImaXformMask ;
+
+			ImaXformMask = ImaResample( gIma, ImaXform2, Width, Height,
+								"INCHES", "BILINEAR", "SCALEXY" ) ;
+
+			AddTransformData( ImaXform2, 0L, 0L, ImaXformMask, "ImaResample", dstRect, 0.0 ) ;
+			AddTransformToList( *theMaskList, "ImaResample", ImaXformMask, TRUE ) ;
+
+		}
+	}
+	return( ImaXformMask ) ;
+}
+
+
+GetFrameMask( long FrameXform, char *theNode, double *theRect, char * InterpType )
+{
+	TCHAR	 word[1024] ;
+	char	*srcGC ;
+	char	*anIter ;
+	char	*XformGC ;
+	double	 Width, Height ;
+	double	 dstRect[4] ;
+	int		 X, Y ;
+	int		 isDirectory ;
+	long	 ImaXformMask = 0L ;
+	long	 ImaXform2 ;
+	long	 ImaXform ;
+	char	*theLutObj ;
+	char	*theLut ;
+	long	 sink;
+	double	 matrix[9];
+	double   kernel[9];
+	long	feathering;
+	double	tolerance;
+	double	Color[4];
+
+	sink = 0;
+
+	//	IF WE GOT HERE AND THE gFrameMaskList EXISTS WE MUST
+	//	GET RID OF IT AND START OVER
+	if( gFrameMaskList )
+	{
+		DeleteTransformList( gFrameMaskList ) ;
+		gUpdating  = CHANGEDSTATUS ;	//	WE MUST RECREATE THE ENTIRE CHAIN.
+	}
+
+	gFrameMaskList = NewList() ;
+
+	GetAttrValue( theNode, "FrameMask:", word ) ;
+	if( AttrChanged( theNode, "FrameMask:", gUpdating ) && strlen (word) != 0 )
+	{
+
+		GetResolvedValue( gUIC,theNode,"FrameMask:",word, GetParent( theNode ) ) ;
+		ResolvePath( gUIC, word, word ) ;
+
+		word = ConvertPathTo( word, "pc" ) ;
+		if( FileOrDirectoryExists( word, &isDirectory ) != TRUE )
+		{
+			sprintf( gLastErrorMsg, "File %s not found.", word ) ; 
+			return( 2L ) ;
+		}
+
+		ImaXformMask = ImaNewImageSource( gIma, "ANY", word ) ;
+
+		GetMaxResolution( gIma, ImaXformMask, &X, &Y ) ;
+		dstRect[w] = X ; dstRect[h] = Y ;
+
+		AddTransformData(0L, 0L, 0L, ImaXformMask, "ImaFrameMaskSource", theRect, 0.0);
+		AddTransformToList( gFrameMaskList, "ImaFrameMaskSource", ImaXformMask, FALSE ) ;
+
+		if( ImaXformMask )
+		{
+			GetNodeRect( theNode, dstRect ) ;
+
+			Width  = dstRect[w];
+			Height = dstRect[h];
+
+			ImaXform2 = ImaXformMask ;
+
+			if (strcmp(InterpType, "C") == 0)
+			{
+				ImaXformMask = ImaResample( gIma, ImaXform2, Width, Height,
+									"INCHES", "BICUBIC", "SCALEXY" ) ;
+			}
+			else
+			{
+				ImaXformMask = ImaResample( gIma, ImaXform2, Width, Height,
+									"INCHES", "BILINEAR", "SCALEXY" ) ;
+			}
+
+			AddTransformData(ImaXform2, 0L, 0L, ImaXformMask, "ImaFrameMaskResample", theRect, 0.0);
+			AddTransformToList( gFrameMaskList, "ImaFrameMaskResample", ImaXformMask, TRUE ) ;
+		}
+	}
+	else
+	{
+
+		GetFrameMaskInsideColor( theNode,  Color ) ;
+		tolerance = GetFrameMaskTolerance (theNode);
+		feathering = GetFrameMaskFeathering(theNode);
+		// THERE Is a problem here.... CreateFrameMask uses intermediate transforms
+		// that do not appear in the list and therefore are not deleted until the
+		// job is closed (PDF 6/18/99)
+		ImaXformMask = CreateFrameMask (theNode, gIma, FrameXform, Color[1], Color[2],Color[3], tolerance, feathering, gFrameMaskList,gXformList );
+		AddTransformData(FrameXform, 0L, 0L, ImaXformMask, "ImaFrameMask", theRect, 0.0);
+		AddTransformToList( gFrameMaskList, "ImaFrameMask", ImaXformMask, TRUE ) ;
+		
+	}
+
+	return( ImaXformMask ) ;
+}
+
+
+HandleSharpen( char *theNode, long ImaXform, double *srcImgRect )
+{
+//	char	*OutputNode ;
+	double	kernel[10] ;
+	double	SharpenAmt = 0.0 ;
+	double	SharpenFactor = 1.0 ;
+	long	ImaSharpenRef ;
+	double	NodeRect[4] ;
+	double	RequestedPPU ;
+
+	Debug(0) ;
+
+	if( AttrChanged( theNode, "SharpenFaster:", gUpdating ) )
+	{
+		SharpenAmt = GetDoubleValue( theNode, "SharpenFaster:" ) ;
+
+		if( SharpenAmt > 0.0 )
+		{
+			//	MUST ADD TO 1.0
+			kernel[0] = 3.0 ;	//	KERNEL SIZE
+			kernel[1] = 0.25 ;
+			kernel[2] = 0.50 ;
+			kernel[3] = 0.25 ;
+		}
+	}
+
+	if( SharpenAmt == 0.0 && AttrChanged( theNode, "Sharpen:", gUpdating ))
+	{
+		SharpenAmt = GetDoubleValue( theNode, "Sharpen:" ) ;
+
+		if( SharpenAmt > 0.0 )
+		{
+			//	MUST ADD TO 1.0
+			kernel[0] = 5.0 ;	//	KERNEL SIZE
+			kernel[1] = 0.1004 ;
+			kernel[2] = 0.2396 ;
+			kernel[3] = 0.3200 ;
+			kernel[4] = 0.2396 ;
+			kernel[5] = 0.1004 ;
+
+/*			kernel[0] = 5.0 ;	//	KERNEL SIZE
+			kernel[1] = kernel[5] = 0.0625 ;
+			kernel[2] = kernel[4] = 0.2500 ;
+			kernel[3] = 0.3750 ;
+*/
+		}
+	}
+
+	if( SharpenAmt > 0.0 )
+	{
+/*		if( gPreviewOptions )
+		{
+			//	WE NEED TO REDUCE THE SHARPENING AMOUNT TO MAKE IT WYSIWYG
+			if(IsImageNode( theNode, NodeRect ))
+			{
+				//	ZZZZZZZZZZZZZZZZZZZ
+//				OutputNode = GetOutputNode( GetParent( theNode ) ) ;
+				RequestedPPU = GetRequestedPPU( GetParent( theNode ) ) ;
+
+				if( srcImgRect[2] > srcImgRect[3] )
+				{
+					if( srcImgRect[2] )
+						{ SharpenFactor = 500.0 / (srcImgRect[2] * RequestedPPU) ; }
+				}
+				else
+				{
+					if( srcImgRect[3] )
+						{ SharpenFactor = 500.0 / (srcImgRect[3] * RequestedPPU) ; }
+				}
+				SharpenAmt *= SharpenFactor ;
+			}
+		}
+
+		if( gPreviewOptions == NULL )
+		{
+			//	WE NEED TO REDUCE THE SHARPENING AMOUNT TO MAKE IT WYSIWYG
+			if(IsImageNode( theNode, NodeRect ))
+			{
+				//	ZZZZZZZZZZZZZZZZZZZ
+//				OutputNode = GetOutputNode( GetParent( theNode ) ) ;
+				RequestedPPU = GetRequestedPPU( GetParent( theNode ) ) ;
+
+				if( srcImgRect[2] > srcImgRect[3] )
+				{
+					if( srcImgRect[2] )
+						{ SharpenFactor = (srcImgRect[2] * RequestedPPU) / 500.0 ; }
+				}
+				else
+				{
+					if( srcImgRect[3] )
+						{ SharpenFactor = (srcImgRect[3] * RequestedPPU) / 500.0 ; }
+				}
+				SharpenAmt *= SharpenFactor ;
+			}
+		}
+*/
+
+
+		ImaSharpenRef = ImaUnSharpMask(gIma, ImaXform, kernel, SharpenAmt/50.0, "MIRROR" ) ;
+
+		if( ImaSharpenRef == 0L )
+		{
+			return( 0L ) ;
+		}
+
+//		ImaSetCaching( gIma, ImaSharpenRef, TRUE ) ;
+
+		kernel[0] = SharpenAmt ;
+
+		AddTransformData( ImaXform, 0L, 0L, ImaSharpenRef, "SharpenFaster", kernel, 0.0);
+//		AddTransformToList( gImageList, "SharpenFaster", ImaSharpenRef, TRUE ) ;
+		AddTransformToList( gImageList, "SharpenFaster", ImaSharpenRef, FALSE ) ;
+
+		return( ImaSharpenRef ) ;
+	}
+
+	return( ImaXform ) ;
+}
+
+
+
+
+//	DRGB LUT
+HandleCDRGB( char *theNode, long ImaXform )
+{
+	char	*theLutObj ;
+	char	*theLut ;
+	char	*aParser ;
+	TCHAR	 value[128] ;
+	long	 contrast, den, red, grn, blu, invert ;
+	long	 LutXform ;
+
+	contrast	= 0L;
+	den			= 0L;
+	invert		= 0L;
+	red			= 0L;
+	grn			= 0L;
+	blu			= 0L;
+
+	if( AttrChanged( theNode, "DENSITY:", gUpdating ))
+	{
+		den = GetLongValue( theNode, "DENSITY:" ) ;
+	}
+
+	if( AttrChanged( theNode, "RGB:", gUpdating ))
+	{
+		GetAttrValue( theNode, "RGB:", value ) ;
+		aParser = NewParser() ;
+		SetText( aParser, value ) ;
+		den = den + GetLong( aParser ) ;
+		red = GetLong( aParser ) ; 
+		grn = GetLong( aParser ) ; 
+		blu = GetLong( aParser ) ; 
+		SetText( aParser, NULL ) ;
+		aParser = Delete( aParser ) ;
+	}
+	
+	if( AttrChanged( theNode, "CONTRAST:", gUpdating ))
+	{
+		contrast = GetLongValue( theNode, "CONTRAST:" ); 
+	}
+
+	if( AttrChanged( theNode, "NEGATIVE:", gUpdating ))
+	{
+		invert = GetLongValue( theNode, "NEGATIVE:" ) ;
+	}
+
+	if (red != 0 || grn != 0 || blu != 0 || contrast != 0 || den != 0 || invert)
+	{
+		theLutObj = NewLut() ;
+		//						 D	  R	   G	B	 Con	   G     Sat Invert  Threshold
+		SetLutValues( theLutObj, den, red, grn, blu, contrast, 100,  0 , invert, -1 ) ;
+		theLut = GetLutPtr( theLutObj ) ;
+		LutXform = DoLUT( theLut, ImaXform, "CHAR", "CDRGB" ) ;
+		theLutObj = Delete( theLutObj ) ;
+		return( LutXform ) ;
+	}
+
+	return( ImaXform ) ;
+}
+
+
+HandleLUT( char *theNode, long ImaXform )
+{
+	char		*theLut ;
+	long		 LutXForm ;
+	TCHAR		 LutPath[300] ;
+	TCHAR		*theFilePath ;
+
+	if( AttrChanged( theNode, "LUT:", gUpdating ))
+	{
+		GetAttrValue( theNode, "LUT:", LutPath ) ;
+		theFilePath = ConvertPathTo( LutPath, "pc" ) ;
+		theLut = LoadLut( theFilePath ) ;
+		if( theLut )
+		{
+			LutXForm = DoLUT( theLut, ImaXform, "CHAR", "CDRGB" ) ;
+			return( LutXForm ) ;
+		}
+	}
+	return( ImaXform ) ;
+}
+
+
+HandleXGamma( char *theNode, long ImaXform )
+{
+	char	*theLutObj ;
+	char	*theLut ;
+	double	 gammaNode ;
+	long	 gamma ;
+	long	 gammaXform ;
+
+	gammaNode = 0.0 ;
+
+	if( AttrChanged( theNode, "XGAMMA:", gUpdating ))
+	{
+		// Get the gamma value from the node.
+		gammaNode = GetDoubleValue( theNode, "XGAMMA:" ) ;
+	}
+
+	// Multiply the gamma by 100.
+	gamma = gammaNode * 100;
+
+	// Make sure gamma is within a valid range.
+	if (gamma != 0)
+	{
+		if ( gamma < 30 )
+		{
+			gamma = 30 ;
+		}
+		if ( gamma > 500 )
+		{
+			gamma = 500 ;
+		}
+
+		theLutObj = NewLut() ;
+		//						 D	 R   G   B   Con  G		 Sat  Invert Threshold
+		SetLutValues( theLutObj, 0L, 0L, 0L, 0L, 0,   gamma, 0,   0,     -1 ) ;
+		theLut = GetLutPtr( theLutObj ) ;
+		gammaXform = DoLUT( theLut, ImaXform, "CHAR", "XGamma" ) ;
+		Delete( theLutObj ) ;
+		return( gammaXform ) ;
+	}
+
+	return( ImaXform ) ;
+}
+
+
+DoLUT( char *aLUT, long ImaXform, TCHAR *type, TCHAR *source )
+{
+	long	 ImaLutRef ;
+	double	 ViewRect[4] ;
+
+	ViewRect[0] = 128 ;
+	ViewRect[1] = aLUT[128] ;
+	ViewRect[2] = aLUT[384] ;
+	ViewRect[3] = aLUT[640] ;
+
+	ImaLutRef = ImaLUT( gIma, ImaXform, aLUT, 3, 256L, type ) ;
+
+	AddTransformData( ImaXform,  0L, 0L, ImaLutRef, source, ViewRect, 0.0 ) ;
+	AddTransformToList( gImageList, source, ImaLutRef, FALSE ) ;
+
+	return( ImaLutRef ) ;
+}
+
+DoFrameLUT( char *aLUT, long ImaXform, TCHAR *type, TCHAR *source )
+{
+	long	 ImaLutRef ;
+	double	 ViewRect[4] ;
+
+	ViewRect[0] = 128 ;
+	ViewRect[1] = aLUT[128] ;
+	ViewRect[2] = aLUT[384] ;
+	ViewRect[3] = aLUT[640] ;
+
+	ImaLutRef = ImaLUT( gIma, ImaXform, aLUT, 3, 256L, type ) ;
+
+	AddTransformData( ImaXform,  0L, 0L, ImaLutRef, source, ViewRect, 0.0 ) ;
+	AddTransformToList( gFrameMaskList, source, ImaLutRef, FALSE ) ;
+
+	return( ImaLutRef ) ;
+}
+
+//	SATURATION
+HandleSaturation( char *theNode, long ImaXform )
+{
+	char	*theLutObj ;
+	char	*theMatrix ;
+	long	 sat ;
+	long	 satXform ;
+
+	sat = 0L ;
+
+	if( AttrChanged( theNode, "SATURATION:", gUpdating ))
+	{
+		// Get the saturation value from the node.
+		sat = GetLongValue( theNode, "SATURATION:" ) ;
+	}
+
+	if (sat != 0)
+	{
+		theLutObj = NewLut() ;
+		//						 D	 R   G   B    Con Gam  Sat	 Invert Threshold
+		SetLutValues( theLutObj, 0L, 0L, 0L, 0L,  0,  100, sat,  0,     -1 ) ;
+		theMatrix = GetMatrixPtr( theLutObj ) ;
+		satXform = DoMatrix( theMatrix, ImaXform, "Saturation Matrix" ) ;
+		Delete( theLutObj ) ;
+		return( satXform ) ;
+	}
+
+	return( ImaXform ) ;
+}
+
+HandleColorMatrix( char *theNode, long ImaXform )
+{
+	char	matrix[256] ;
+	long	ImaColorMatrixRef ;
+	double	theMatrix[9] ;
+
+	if( AttrChanged( theNode, "ColorMatrix:", gUpdating ) )
+	{
+		GetAttrValue( theNode, "ColorMatrix:", matrix ) ;
+
+		if(matrix[0] != 0 )
+		{
+			theMatrix = LoadMatrix( matrix, theMatrix ) ;
+			ImaColorMatrixRef = DoMatrix( theMatrix, ImaXform, "ColorMatrix" ) ;
+			theMatrix = free( theMatrix ) ;
+			return( ImaColorMatrixRef ) ;
+		}
+	}
+
+	return( ImaXform ) ;
+}
+
+DoMatrix( char *theMatrix, long ImaXform, TCHAR *type )
+{
+	long ImaColorMatrixRef ;
+
+	ImaColorMatrixRef = ImaCMatrix( gIma, ImaXform, theMatrix ) ;
+
+	AddTransformData( ImaXform, 0L, 0L, ImaColorMatrixRef, type, theMatrix, 0.0 ) ;
+	AddTransformToList( gImageList, type, ImaColorMatrixRef, FALSE ) ;
+
+	return( ImaColorMatrixRef ) ;
+}
+
+
+LoadMatrix( TCHAR *MatrixPath, double *theMatrix )
+{
+	TCHAR	*theFilePath ; 
+	TCHAR	*theText ;
+
+	theFilePath = ConvertPathTo( MatrixPath, "pc" ) ;
+	theText = GetFile( theFilePath ) ;
+	if( theText )
+	{
+		//	CREATE A PARSER
+		aParser = NewParser() ;
+		if( aParser )
+		{
+			SetText( aParser, theText ) ;
+	
+			theMatrix[0] = GetDouble( aParser ) ;
+			theMatrix[1] = GetDouble( aParser ) ;
+			theMatrix[2] = GetDouble( aParser ) ;
+			GetDouble( aParser ) ;	//	IGNORE THE 4th VALUE
+			theMatrix[3] = GetDouble( aParser ) ;
+			theMatrix[4] = GetDouble( aParser ) ;
+			theMatrix[5] = GetDouble( aParser ) ;
+			GetDouble( aParser ) ;	//	IGNORE THE 4th VALUE
+			theMatrix[6] = GetDouble( aParser ) ;
+			theMatrix[7] = GetDouble( aParser ) ;
+			theMatrix[8] = GetDouble( aParser ) ;
+										//	IGNORE THE 4th VALUE
+			
+			//	DELETE THE PARSER
+			SetText( aParser, NULL ) ;
+			Delete( aParser ) ;
+		}
+		theText = free( theText ) ;
+	}
+	return( theMatrix ) ;
+}
+
+/* We use FrameRectOverlapX and FrameRectOverlapY if they are nonzero
+ else we use FrameRect */
+
+HandleFrame(char *theNode)
+{
+	long	 ImaXform;
+	double	 OrigFrameSize[4];
+	double	 MaskRect[4];
+    double	 theRect[4];
+	TCHAR	 resizeType[256];
+	double	 theOverlapX, theOverlapY;
+	double	 nodeWidth, nodeHeight, dFrameWidth, dFrameHeight;
+
+//	DumpGenCon(theNode, "HandleFrame:");
+
+	// Get the frame file source.
+	ImaXform = GetFrameSource(theNode, OrigFrameSize);
+	if (ImaXform != 0L)
+	{
+		// Get the frame rect.  The frame rect is relative to the image node.
+		GetFrameRect(theNode, theRect);
+
+		// Get the frame resizing algorithm.  This can be either BILINEAR or
+		// BICUBIC (the default if BILINEAR).
+		GetAttrValue(theNode, "FrameResize:", resizeType);
+
+		// Resample the frame based on the frame rect.
+		if( AttrChanged( theNode, "FrameResize:", gUpdating ))
+		{
+			GetAttrValue( theNode, "FrameResize:", resizeType ) ;
+		}
+		else
+		{
+			if( GetLongValue( theNode, "INTID:") == -9001 )
+			{
+				GetAttrValue( gDefaultMain, "FrameResize:", resizeType ) ;
+			}
+
+			else
+			{
+				GetAttrValue( gDefaultNode, "FrameResize:", resizeType ) ;
+			}
+		}
+
+		ImaXform = HandleFrameResample(ImaXform, theRect, resizeType);
+		if (ImaXform != 0L)
+		{
+			// Get the frame mask for the frame.
+			ImaXform  = GetFrameMask(ImaXform, theNode, MaskRect, resizeType);
+		}
+	}
+
+	return;
+}
+
+GetFrameSource( char *theNode, double *theRect )
+{
+	long		 ImaSource ;
+
+	if( gUpdating )
+	{
+		//	IF WE GOT HERE WE MUST REMOVE THE OLD CHAIN AND START A NEW ONE.
+		DeleteTransformList( gFrameList ) ;
+		gFrameList = NewList() ;
+		gUpdating  = CHANGEDSTATUS ;	//	WE MUST RECREATE THE ENTIRE CHAIN.
+	}
+
+	if( gShowFrames )
+	{
+		if( AttrChanged( theNode, "FrameFile:", gUpdating ))
+		{
+			ImaSource = GetFrameFile( theNode, theRect ) ;
+			if (ImaSource) 
+			{
+				return( ImaSource ) ;
+			}
+		}
+	}
+
+	return( 0L ) ;
+}
+
+GetFrameFile( char *theNode, double *theRect )
+{
+	TCHAR	 word[256] ;
+	char	*Rotation ;
+	char	*srcGC ;
+	char	*anIter ;
+	char	*XformGC ;
+	double	 FrameRect = 0.0 ;
+	int		 X, Y ;
+	int		 isDirectory ;
+	long	 cache ;
+	long	 ImaSource = 0L ;
+	long	 ImaXform ;
+	TCHAR	units[256];
+
+
+	GetResolvedValue( gUIC,theNode,"FrameFile:",word, GetParent( theNode ) ) ;
+	ResolvePath( gUIC, word, word ) ;
+
+	// ignore a FrameFile: with a null string
+	if (!strlen(word))
+	{
+		return (0L);
+	}
+
+	word = ConvertPathTo( word, "pc" ) ;
+	if( FileOrDirectoryExists( word, &isDirectory ) != TRUE )
+	{
+		sprintf( gLastErrorMsg, "File %s not found.", word ) ; 
+		return( 0L ) ;
+	}
+	ImaSource = ImaNewImageSource( gIma, "ANY", word ) ;
+
+	GetMaxResolution( gIma, ImaSource, &X, &Y ) ;
+
+	theRect[x] = 0.0 ; theRect[y] = 0.0 ;
+	theRect[w] = X	 ; theRect[h] = Y   ;
+
+	AddTransformData(0L, 0L, 0L, ImaSource, "ImaFrameFileSource", theRect, 0.0);
+	AddTransformToList( gFrameList, "ImaFrameFileSource", ImaSource, FALSE ) ;
+
+	return( ImaSource ) ;
+}
+
+
+
+
+IsImageNode( char *theNode, double *theRect )
+{
+	GetRectValue( theNode, "ILocation:", theRect ) ;
+	return( theRect[w] * theRect[h] ) ;
+}
+
+IsOutputNode( char *theNode )
+{
+	int		isOutputNode = FALSE ;
+
+	long ID = GetLongValue( theNode, "INTID:" ) ;
+	switch( ID )
+	{
+		case	-9002	:	//	DISK
+		case	-9003	:	//	CRT
+		case	-9004	:	//	LED
+		case	-9005	:	//	XLS
+		case	-9026	:	//	XLS
+		case	-9024	:	//	MEMORY
+		case	-9025	:	//	BITMAP
+		case	-9030	:	//	NT PRINTER
+			isOutputNode = TRUE ;
+			break ;
+	}
+	return( isOutputNode ) ;
+}
+
+
+
+
+
+HandlePreviewOptions( char *thePVGC )
+{
+	char value [256];
+/*	gShowMasks = 0;
+	gShowBackground = 0;	PLEASE DO NOT DEFAULT THESE HERE !
+	gShowImages = 0;		THESE ARE DEFAULTED TO ON FOR 
+	gShowFrames = 0;		RENDERING TO OUTPUT DEVICES
+	gShowText = 0;			(SEE TOP OF FILE)
+*/
+	if( gPreviewOptions )
+	{
+		GetAttrValue( thePVGC, "ShowMasks", value) ;
+		if (value[0] == 'T' || value [0] == 't')
+		{
+			gShowMasks  = 1;
+		}
+
+		if (value[0] == 'F' || value [0] == 'f')
+		{
+			gShowMasks  = 0;
+		}
+
+		GetAttrValue( thePVGC, "ShowBackground", value) ;
+		if (value[0] == 'T' || value [0] == 't')
+		{
+			gShowBackground  = 1;
+		}
+
+		if (value[0] == 'F' || value [0] == 'f')
+		{
+			gShowBackground  = 0;
+		}
+		
+		GetAttrValue( thePVGC, "ShowImages", value) ;
+		if (value[0] == 'T' || value [0] == 't')
+		{
+			gShowImages  = 1;
+		}
+
+		if (value[0] == 'F' || value [0] == 'f')
+		{
+			gShowImages  = 0;
+		}
+
+		GetAttrValue( thePVGC, "ShowFrames", value) ;
+		if (value[0] == 'T' || value [0] == 't')
+		{
+			gShowFrames  = 1;
+		}
+
+		if (value[0] == 'F' || value [0] == 'f')
+		{
+			gShowFrames  = 0;
+		}
+
+		GetAttrValue( thePVGC, "ShowText", value) ;
+		if (value[0] == 'T' || value [0] == 't')
+		{
+			gShowText  = 1;
+		}
+
+		if (value[0] == 'F' || value [0] == 'f')
+		{
+			gShowText  = 0;
+		}
+	}
+}
+
+// GetNodeRect returns in l,t, w, h format
+GetNodeRect( char *theNode, double *theRect )
+{
+	double	ILocation[4], TLocation[4] ;
+
+	GetRectValue( theNode, "ILocation:", ILocation ) ;
+	GetRectValue( theNode, "TLocation:", TLocation ) ;
+	CreateNodeRect( ILocation, TLocation, theRect ) ;
+}
+
+NormalRect( double *theRect )
+{
+    theRect[w] = theRect[w] - theRect[x] ;
+    theRect[h] = theRect[h] - theRect[y] ;
+    theRect[x] = 0.0 ;
+    theRect[y] = 0.0 ;
+}
+
+CopyRect( double *dstRect, double *srcRect )
+{
+	dstRect[x] = srcRect[x] ;
+	dstRect[y] = srcRect[y] ;
+	dstRect[w] = srcRect[w] ;
+	dstRect[h] = srcRect[h] ;
+}
+
+
+CreateNodeRect( double *ILocation, double *TLocation, double *NodeRect )
+{
+	NodeRect[x] = ILocation[x] + TLocation[x] ;
+	NodeRect[y] = ILocation[y] + TLocation[y] ;
+	if (ILocation[w] != 0)
+	{
+		NodeRect[w] = ILocation[w] ;
+	}
+	else
+	{
+		NodeRect[w] = TLocation[w] ;
+	}
+	if (ILocation[h] != 0)
+	{
+		NodeRect[h] = ILocation[h] ;
+	}
+	else
+	{
+		NodeRect[h] = TLocation[h] ;
+	}
+}
+
+// compute the new image size for an image to be placed into  a manually cropped node
+// On input - OrigImageSize is the unscaled size in pixels of the original image to be cropped
+//            cropRect - contains the unscaled crop rectangle
+//			  nodeRect - coontains the size of the image node.  This is after it has been scaled for previewing
+//						It will not be scaled for production
+// OrigImageSize, cropRect and nodeRect are unchanged by this routine	  
+ComputeNewImageSize( double * NewImageSize, double * OrigImageSize, double * cropRect, double *nodeRect )
+{
+	NewImageSize[0] = 0;
+	NewImageSize[1] = 0;
+	NewImageSize[2] = OrigImageSize [2] * (nodeRect[2]  - nodeRect [0]) / (cropRect[2] - cropRect [0]);
+	NewImageSize[3] = OrigImageSize [3] * (nodeRect[3]  - nodeRect [1]) / (cropRect[3] - cropRect [1]);
+}
+
+RemoveXForms(char *theList)
+{
+	char	*anIter ;
+	char	*aGC ;
+	long	 XForm ;
+	long	 FoundResample = 0 ;
+
+	anIter = CreateIterator( theList ) ;
+	aGC = GetFirst( anIter ) ;
+	while( aGC )
+	{
+		if( FoundResample == 0 )
+		{
+			if( strcmp( GetName( aGC ), "ImaResample" ) == 0 )
+			{
+				FoundResample = 1 ;
+			}
+			aGC = GetNext( anIter ) ;
+		}
+		else
+		{
+			XForm = GetLongValue( aGC, "XFormRef" ) ;
+			ReleaseImaReference( gIma, XForm ) ;
+			RemoveItem( theList, aGC ) ;
+			aGC = Delete( aGC ) ;
+			aGC = GetCurrent( anIter ) ;
+		}
+	}
+	anIter = Delete( anIter ) ;
+	gUpdating  = CHANGEDSTATUS ;	//	WE MUST RECREATE THE ENTIRE CHAIN.
+}
+
+
+AddTransformToList( char *theList, TCHAR *XformName, long Xform, long cached )
+{
+	char *theXformGC ;
+
+	if( theList == NULL )	{ return ; }
+
+	theXformGC = CreateGenCon( GetDataDictionary( "DDNodeXform" )) ;
+
+	if( theXformGC == NULL)	{ return ; }
+
+	SetName( theXformGC, XformName ) ;
+	SetLongValue( theXformGC, "XFormRef", Xform ) ;
+	SetLongValue( theXformGC, "Cached", cached ) ;
+
+	InsertBack( theList, theXformGC ) ;
+}
+
+
+DeleteTransformList( char *theList )
+{
+	char	*anIter ;
+	char	*XformGC ;
+	long	 ImaXform ;
+
+	if( theList )
+	{
+		anIter = CreateIterator( theList ) ;
+		XformGC = GetFirst( anIter ) ;
+		while( XformGC )
+		{
+			ImaXform = GetLongValue( XformGC, "XFormRef" ) ;
+			ReleaseImaReference( gIma, ImaXform ) ;
+			XformGC = GetNext( anIter ) ;
+		}
+
+		anIter = Delete( anIter ) ;
+		theList = Delete( theList ) ;
+	}
+	return( NULL ) ;
+}
+
+
+AddTransformData( long S1, long S2, long S3, long Out,
+					TCHAR *operation, double *rect, double CacheNode )
+{
+	char *aDataDict ;
+	char *aGC ;
+
+	aDataDict = GetDataDictionary( "DDImaXformInfo" ) ;
+	aGC = CreateGenCon( aDataDict ) ;
+
+	if( gXformList == NULL )
+	{
+		gXformList = NewUList() ;
+	}
+
+	SetLongValue( aGC, "Input1", S1 ) ;
+	SetLongValue( aGC, "Input2", S2 ) ;
+	SetLongValue( aGC, "Input3", S3 ) ;
+	SetLongValue( aGC, "Output", Out ) ;
+	SetAttrValue( aGC, "Operation", operation ) ;
+
+	if( rect )
+	{
+		SetRectValue( aGC, "OutputSize", rect ) ;
+	}
+	else
+	{
+		//Debug(1) ;
+	}
+
+	SetDoubleValue( aGC, "CacheNode", CacheNode ) ;
+
+	InsertFront( gXformList, aGC ) ;
+}
+
+
+DumpTransformData()
+{
+	char	*aGC ;
+	char	*anIter ;
+	TCHAR	*theBuffer ;
+
+	if( gXformList )
+	{
+		anIter = New( "UListIterator", gXformList ) ;
+		aGC = GetLast( anIter ) ;
+		while( aGC )
+		{
+			DumpGenCon( aGC, "DDImaXformInfo" ) ;
+			ShowGenCon( aGC ) ;
+			theBuffer = GetJobBuffer( aGC, NULL ) ;
+			HandleInfo( theBuffer, 4 ) ;
+			free( theBuffer ) ;
+
+			aGC = GetPrev( anIter ) ;
+		}
+		anIter = Delete( anIter ) ;
+	}
+}
+
+
+
+DumpTransformList( char *theList )
+{
+	char	*aGC ;
+	char	*anIter ;
+
+	if( theList )
+	{
+		anIter = New( "UListIterator", theList ) ;
+		aGC = GetFirst( anIter ) ;
+		while( aGC )
+		{
+			ShowGenCon( aGC ) ;
+			aGC = GetNext( anIter ) ;
+		}
+		anIter = Delete( anIter ) ;
+	}
+}
+

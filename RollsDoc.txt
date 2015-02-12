@@ -1,0 +1,784 @@
+// RollsDoc.txt
+//    Globals:	DocumentOrderID - Order Id of Rolls being displayed
+//				DocumentQuery
+
+Define:	RollsMessages Using DDSymbol
+	Fields:	Value	~These strings are Rolls related strings used by the user interface.~
+	Contains:
+	{
+		Define: TooManyRecsForQuery using DDText	Fields: Text ~There are too many items for a limited search.\nDo you want to display all the SubjectInfo for the Order instead of only the Rolls?~
+	}
+
+
+maxQueryLength = 1400;	
+
+Include: ~Utilities2~;
+
+VOID RefreshDoc()
+{
+	KillTimer( 1 );
+	RefreshListView();
+}
+
+NUMERIC RefreshListView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	Start = Ticks();
+
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	Count = List( NumEntries );
+	DataWindow( StatusBar,Text,Translate( RollsDocMessages,ReadingRolls,<Count> ) );
+
+	SetDocumentData( List(GetObject) );	
+	DataWindow( RefreshWindow );
+
+	Duration = (Ticks() - <Start>) / 1000;
+
+	return DataWindow( StatusBar,Text,Translate(RollsDocMessages,ReadRolls,~<Count>~,~<Duration>~) );
+}
+
+
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,Changed,Orig,ChangedRow,IsNewRow ) )
+		{ return Warning(  Translate(UIMessages,NoRowsSelected) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.Changed[OrderID]>~ == ~~ )
+		{ return Warning( Translate(RollsDocMessages,BlankOrderID) ); }
+
+	if ( ~<$con.Changed[Roll]>~ == ~~ )
+		{ return Warning( Translate(RollsDocMessages,BlankRoll) ); }
+
+	Key = STR ( OrderID = '<$con.Orig[OrderID]>' And Roll = '<$con.Orig[Roll]>' );
+	Query = ~Select * From Rolls Where <Key>~;
+
+	if ( <IsNewRow> )
+	{
+		if (!AddNew( Changed,Orig,Query,Key ))
+			{ return FALSE; }
+	}
+	else
+	{
+
+		if (!UpdateExisting( Changed,Orig,Query,Key ))
+			{ return FALSE; }
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateExisting( &Changed,&Orig,&Query,&Key )
+{
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( UpdateFrom,Changed,~<Key>~,FALSE ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+	}
+
+	DataView( CommitChanges );
+
+	return TRUE;
+}
+	
+
+
+NUMERIC AddNew( &Changed,&Orig,&Query,&Key )
+{
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( UpdateFrom,Changed,~<Key>~,TRUE ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+	}
+
+	DataView( CommitChanges );
+
+	return TRUE;
+}
+
+
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,ToDelete ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	count = ToDelete( ChildCount );
+
+	if ( MessageBox( Translate(RollsDocMessages,RemovingRows,~<count>~),YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( ToDelete( GetNext,Roll ) )
+	{
+
+		Cmd = ~Delete From Rolls Where OrderID = '<$con.Roll[OrderID]>' AND Roll = '<$con.Roll[Roll]>'~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) ) );
+		}
+
+		RowsToDelete( AddString,ToDelete(GetCurrentPosition) );
+
+		//dBase( LogActivity,Msg,~Deleted Roll <$con.Roll[Roll]> for Order <$con.Roll[OrderID]>~,Type,Info );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	if ( !DataView( GetSelectedRows,RowsToImitate ) )		
+	{ 
+		Document( Doc,This );
+		GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+		NewRow( Set,OrderID,~<DocumentOrderID>~ );
+		NewRow( Set,Roll,Format( ~1~,~<$[Symbols].RollFormat[Value]>~ ) );
+	}
+	else // IMITATE THE SELECTED ROW
+	{
+		RowsToImitate( GetFirst,RowToImitate );
+		GenCon( NewRow,IsCopyOf,RowToImitate );
+
+		RowToImitate( Get,Roll,Roll );
+
+		if ( IsNumeric( ~<Roll>~ ) )
+		{
+			len = strlen( ~<Roll>~ );
+			NewRow( Set,Roll,Format( ~<++Roll>~,~%0<len>ld~ ) );
+		}
+		else
+		{
+			NewRow( Set,Roll,~~ );
+		}
+	}
+
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate(UIMessages,AddRowFailed) ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,~Roll~ );
+
+	return TRUE;
+}
+
+
+NUMERIC AllOptions()
+{
+	return DataView( DisplayMenu,ListViewMenu,0,0  );
+}
+
+
+NUMERIC RightClickInListView()
+{
+	return DataView( DisplayMenu,ListViewMenu );
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,ListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,ListViewMenu,0,0  );
+	}
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( Translate(UIMessages,NotImplemented,~<what>~) );
+	return TRUE;
+}
+
+
+VOID RememberWindowLocation( &theWindow,Item )
+{
+	theWindow( SaveWindowLocation,WindowLocation,~<Item>~ );
+}
+
+
+// OrderID - the one OrderID of the records displayed as a result of the query
+NUMERIC Init( OrderID,DocumentQuery )
+{
+	DataWindow( Set,Title,Translate( RollsDocMessages,Title,~<OrderID>~ ) );
+
+	Start = Ticks();
+
+	if ( !PGenConList( List,Connect,CursorLocation,Client,Lock,ReadOnly,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{ 
+		List(GetErrorDescription,0,theErr);
+		Error( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	Count = List( NumEntries );
+	StatusBarText( Translate(RollsDocMessages,ReadingRolls,<Count>) );
+
+	if ( FALSE )
+	{
+		if ( MessageBox( Translate(DBMessages,LargeQuery,~<DocumentQuery>~,~<Count>~),YESNO ) != YES )
+		{
+			Search();
+			Exit();
+		}
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	DocumentOrderID = ~<OrderID>~;
+
+	Global( DocumentOrderID,DocumentQuery );
+
+	WindowLocation = ~<$User.WindowLocation[List]>~;
+
+	if ( ~<WindowLocation>~ != ~~ )
+		{ DataWindow( Set,Position,~<WindowLocation>~ ); }
+
+	if ( Defined( ListViewMenu ) )
+	{
+		DataWindow( SetWindowOrder,Top );
+		return RefreshListView( TRUE );
+	}
+
+	DefineMenu( FALSE );
+
+	if ( !DataWindow( CreateWindow,~Rolls~ ) )
+		{ Error( Translate(UIMessages,CreateWindowFailed,~Rolls~) ); }
+
+	Duration = (Ticks() - <Start>) / 1000;
+
+	return DataWindow( StatusBar,Text,Translate(RollsDocMessages,ReadRolls,~<Count>~,~<Duration>~) );
+}
+
+
+
+NUMERIC Search()
+{
+	Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( Orders );" ) );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC ScanIntoSelectedOrderRoll()
+{
+	if ( !DataView( GetSelectedRows,Selected ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	if ( !Selected( GetFirst,Roll ) )
+		{ return Warning( Translate( Translate(UIMessages,NoRowsSelected) ) ); }
+
+	if ( ~<$con.Roll[OrderID]>~ == ~~ )
+		{ return Warning( Translate(RollsDocMessages,BlankOrderID) ); }
+
+	if ( ~<$con.Roll[Roll]>~ == ~~ )
+		{ return Warning( Translate(RollsDocMessages,BlankRoll) ); }
+
+	if ( Numeric(~<$[Symbols].RunVersion[Value]>~) >= 2.1 )
+	{
+		Actions = ACTION Doc ( ~StartScanningDoc~ OpenOnce StartScanningDoc "InitOrderRollFrame(~<$con.Roll[OrderID]>~,~<$con.Roll[Roll]>~,~~);" );
+	}
+	else
+	{
+		Actions = ACTION Doc ( ~ScannerDoc~ OpenOnce ScannerDoc "OnChangeOrderRollFrame(~Sizzle~,~<$con.Roll[OrderID]>~,~<$con.Roll[Roll]>~,~~);" );
+	}
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseDataView()~ ); }
+
+	return TRUE;
+}
+
+
+
+
+
+NUMERIC OpenSelected()
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( Translate( UIMessages,NoRowsSelected ) ); }
+
+	count = SelectedRows( ChildCount );
+
+	if ( <count> == 0 )
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }	
+
+	while ( SelectedRows( GetNext,Row ) )
+	{
+		OrderID = ~<$con.Row[OrderID]>~;
+		Roll = ~<$con.Row[Roll]>~;
+
+		Query = ~Select * From Images Where OrderID = '<OrderID>' AND Roll = '<Roll>' Order By OrderID,Roll,Frame~;
+
+		OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+		OpenMethod = (<count> > 1) ? Open : <OpenMethod>;
+
+		Actions = ACTION Doc ( ImagesDoc <OpenMethod> ImagesDoc "Init( ~<OrderID>~,TRUE,~<Query>~,0 );" );
+		PerformActions( Actions );
+	}
+
+	if ( KeyState( LSHIFT ) )
+	{ 
+		Queue( ~OnCloseDataView()~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SetScanFlag( value )
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( Translate( UIMessages,NoRowsSelected ) ); }
+
+	count = SelectedRows( ChildCount );
+
+	if ( <count> == 0 )
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }	
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	while ( SelectedRows( GetNext,Row ) )
+	{
+		if ( IsNull( ~<$con.Row[OrderID]>~ ) )
+		{
+			return Warning( ~OrderID cannot be blank~ );
+		}
+
+		if ( IsNull( ~<$con.Row[Roll]>~ ) )
+		{
+			return Warning( ~Roll cannot be blank~ );
+		}
+
+		Cmd = ~Update Images Set Scan = <value> Where OrderID = '<$con.Row[OrderID]>' AND Roll = '<$con.Row[Roll]>'~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~ ) );
+		}
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC SeeFrames()
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( Translate( UIMessages,NoRowsSelected ) ); }
+
+	count = SelectedRows( ChildCount );
+
+	if ( <count> == 0 )
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }	
+
+	while ( SelectedRows( GetNext,Row ) )
+	{
+		OrderID = ~<$con.Row[OrderID]>~;
+		Roll = ~<$con.Row[Roll]>~;
+
+		Query = ~Select * From Images Where OrderID = '<OrderID>' AND Roll = '<Roll>' Order By OrderID,Roll,Frame~;
+
+		OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+		OpenMethod = (<count> > 1) ? Open : <OpenMethod>;
+		
+		Actions = ACTION Doc ( ImagesDataDoc <OpenMethod> ImagesDataDoc "FrameDataForOrderRoll( ~<OrderID>~,FALSE,~<Query>~,0,~<OrderID>~,~<Roll>~ );" );
+		PerformActions( Actions );
+	}
+	
+	if ( KeyState( LSHIFT ) )
+	{ 
+		Queue( ~OnCloseDataView()~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SeeSubjectInfo()
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( Translate( UIMessages,NoRowsSelected ) ); }
+
+	if ( !SelectedRows(MakeSQLList,RollsList,TRUE,Roll) )
+		{ return Warning( Translate( UIMessages,NoRowsSelected ) ); }
+
+	theQuery = ~Select SubjectID From Images Where OrderID = '<DocumentOrderID>' AND Roll In (<RollsList>)~;
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	if ( !GetSubjectOrderIDInfoType( ~<DocumentOrderID>~, InfoType, SubjectInfoOrderId) )
+	{	return FALSE;	}
+
+	count = List(NumEntries);
+	if (<count> < 1)
+	{	
+		theQuery = ~Select * From SubjectInfo Where OrderID = '<SubjectInfoOrderId>' AND SubjectID Is Null~;
+	}
+	else
+	{
+		List(MakeSQLList,IDList,TRUE,SubjectID);
+		len = strlen(~<IDList>~);
+		if (<len> > (<maxQueryLength>-120))
+		{
+			if ( MessageBox( Translate(RollsMessages,TooManyRecsForQuery),YESNO ) != YES )
+			{ return FALSE; }
+			theQuery = ~Select * From SubjectInfo Where OrderID = '<SubjectInfoOrderId>' Order By SubjectID~;
+		}
+		else
+		{
+			theQuery = ~Select * From SubjectInfo Where OrderID = '<SubjectInfoOrderId>' AND SubjectID In (<IDList>) Order By SubjectID~;
+		}
+	}
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTION Doc ( ~SubjectInfo~ <OpenMethod> SubjectInfoDoc "Init2( ~<SubjectInfoOrderId>~,~<InfoType>~,~<theQuery>~ );" );
+	PerformActions( Actions );
+
+	return TRUE;
+
+}
+
+Include: ~FilmTypesCombo.txt~;
+
+NUMERIC RefreshComboBox()
+{
+	DataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+
+	if ( ~<ColumnName>~ == ~SCANSETUP~ )
+	{
+		UpdateScanSetupsCombo( ColumnDefinition,<row>,<col>);
+	}
+	else if ( ~<ColumnName>~ == ~FILMTYPE~ )
+	{
+		UpdateFilmTypesCombo( DataView,ColumnDefinition,<row>,<col>,TRUE,0,0,0 );
+	}
+	else if ( ~<ColumnName>~ == ~RETOUCHBATCHSETUP~ )
+	{
+		UpdateRetouchBatchSetupsCombo(ColumnDefinition,<row>,<col>);
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateScanSetupsCombo( &ColumnDefinition,Row,Col )
+{
+	Query = STR ( Select Name From ScanSetups Order By Name );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( ~Database query failed: <Query>. <theErr>~ );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,ScanSetups,Name );
+
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,ScanSetups(GetCopyOf) );
+
+		DataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateRetouchBatchSetupsCombo( &ColumnDefinition,Row,Col )
+{
+	Query = STR ( Select Name From RetouchBatchSetup Order By Name );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,Setups,Name );
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,Setups(GetCopyOf) );
+
+		DataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+NUMERIC OrderImageQuery( OrderID,Query )
+{
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTION Doc ( ImagesDoc <OpenMethod> ImagesDoc "Init( ~<OrderID>~,TRUE,~<Query>~,0 );" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( Translate(UIMessages,CancelChanges),YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+Include: ~ExportSelectedToFile~;
+
+
+VOID DefineMenu( RecordSetIsAFile )
+{
+	Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu	// created once
+		Fields:		Position	(-1)		
+		Contains:	INLISTORDER
+		{
+			Define:	OpenSelected	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuOpen )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( OpenSelected() )
+
+			Define:	AddRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuAdd )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( AddRecord() )
+
+			Define:	Search	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuFind )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( Search() )
+					
+			Define:	NULL1 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	SaveAllChanges	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuSaveChanges )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SaveAllChanges() )
+
+			Define:	ForgetAllChanges	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuCancelChanges )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+			Define:	DeleteRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuDelete )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DeleteRecord() )
+
+			Define:	Refresh	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuRefresh )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RefreshListView(TRUE) )
+
+			Define:	NULL2 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	SetScanFlag	using	DDMenuItemDef
+				Fields:	Text		Translate( RollsDocMessages,SetScanFlag )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SetScanFlag(TRUE) )
+
+			Define:	ClearScanFlag	using	DDMenuItemDef
+				Fields:	Text		Translate( RollsDocMessages,ClearScanFlag )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SetScanFlag(FALSE) )
+
+			Define:	NULL3 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	Rolls	using	DDMenuItemDef
+				Fields:	Text		Translate( RollsDocMessages,Frames )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeFrames(TRUE) )
+
+			Define:	SubjectInfo	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuSubjectInfo )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeSubjectInfo() )
+			Define:	Export	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuExport )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( ExportSelectedToFile(Dataview,Rolls) )
+IF 0
+{
+			Define:	RememberWindowLoc	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,RememberWindowLoc )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RememberWindowLocation(DataWindow,RollsList) )	
+}		
+		}
+
+	Global( ListViewMenu );
+}
+
+
+Include: ~DefineStdGridButtons~;
+
+
+if ( !GenCon( TableDefinition,GetFrom,Rolls,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The Rolls Table is not properly defined~ ); }
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+Define: DataWindow Using DDWinDef
+	Fields:		Title					Translate(RollsDocMessages,Title)
+				Position				0 70 70 20
+				IsPositionPercent		T
+				EnableStatusBar			F
+				Purpose					~Orders~
+				TypeName				SplitterWnd
+				SplitterRows			~2 14 90~
+				SplitterColumns			1
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "RollData.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons(Rolls) + 10;
+
+					Define: ScanButton Using DDWinCtrlDef AsSymbol ScanButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( ScanIntoSelectedOrderRoll() )
+								POSITION		$position + $hGap, $vGap $ButtonWidth $ButtonHeight
+								TEXT			Translate( RollsDocMessages,Scan )
+								TOOLTIP			Translate( RollsDocMessages,ScanToolTip )
+								TYPENAME		BUTTON
+
+					Define: FramesButton Using DDWinCtrlDef AsSymbol FramesButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( SeeFrames() )
+								POSITION		ScanButton(GetRight,Position) + $hGap, ScanButton(GetTop,Position) $ButtonWidth $ButtonHeight
+								TEXT			Translate( RollsDocMessages,Frames )
+								TOOLTIP			Translate( RollsDocMessages,FramesToolTip )
+								TYPENAME		BUTTON
+				}
+			
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition( GetReferenceTo,Fields )
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					DoubleClickActionsText	ACTION Exec ( OpenSelected() )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					CloseActionsText		ACTION Call ( OnCloseDataView() )
+					ComboBoxActionsText		ACTION Call ( RefreshComboBox() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "RollData.htm" )
+	}
+	
+
+

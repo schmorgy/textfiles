@@ -1,0 +1,423 @@
+IncludeClass(BaseHtml);
+
+Include: ~CreatePopulateSharedDB.txt~;
+Include: ~CreatePopulateWorkstationDB.txt~;
+
+
+VOID ReOpen()
+{
+}
+
+
+VOID CancelPressed()
+{
+	dlg( End );
+	Exit();
+}
+
+
+VOID RightClick()
+{
+	Define:	HiddenChoicesMenu Using DDMenuDef AsSymbol HiddenChoicesMenu
+		Fields:		Position	(-1)		
+		Contains:	INLISTORDER
+			{
+				Define:	Archiving	using	DDMenuItemDef
+					Fields:	Text		Translate( ~Archiving~ )
+							IDText		~ID~
+							ActionsText  ACTION Exec ( Archiving() )
+
+				Define:	SQLMaint	using	DDMenuItemDef
+					Fields:	Text		Translate( ~SQL Maintenance~ )
+							IDText		~ID~
+							ActionsText  ACTION Exec ( SQLMaintenance() )
+
+				Define:	EnableOKButton	using	DDMenuItemDef
+					Fields:	Text		Translate( ~Enable shared database table creation~ )
+							IDText		~ID~
+							ActionsText  ACTION Exec ( EnableOKButton() )
+
+				if ( KeyState( LSHIFT ) )
+				{
+					Define:	NULL1 using DDMenuItemDef
+						Fields:	Text		~~
+								IDText		~NULL~
+
+					Define:	EnableDbg	using	DDMenuItemDef
+						Fields:	Text		Translate( ~Enable Debugger~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( EnableDebugger(TRUE) )
+
+					Define:	DisableDbg	using	DDMenuItemDef
+						Fields:	Text		Translate( ~Disable Debugger~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( EnableDebugger(FALSE) )
+				}
+			}
+
+	dlg( DisplayMenu,HiddenChoicesMenu,0,0 );
+}
+
+
+VOID SQLMaintenance()
+{
+	Action = ACTION DOC ( SQLDoc Open SQLDoc );
+	PerformActions( Action );
+}
+
+
+VOID Archiving()
+{
+	Action = ACTION DOC ( DBDoc Open DBDoc "Init( ~DP2~, TRUE, TRUE, TRUE, ~~ );" );
+	PerformActions( Action );
+}
+
+
+VOID CreateDialog()
+{
+	Margin			= 8;
+	ControlHeight	= 20;
+	ButtonWidth		= 250;
+	ButtonHeight	= $ControlHeight * 1.5;
+	hGap			= 25;
+	vGap			= 20;
+
+	Dictionary:	DisplayDlgDictionary
+		Fields:	Name Status				Type text 
+		Fields:	Name WhichTables		Type text 
+		Fields:	Name WhichDatabase		Type text 
+		Fields:	Name Versions			Type text 
+		Fields:	Name SharedLocation		Type text 
+		Fields:	Name Populate			Type long 	
+		Fields:	Name CreateTheImages	Type long 
+		Fields:	Name NumRecords			Type long ;
+			
+	Define:	DisplayDlgGC Using DisplayDlgDictionary
+		Fields:	Status					~~
+				Populate				0
+				CreateTheImages			0
+				NumRecords				5 ;
+				
+	Define: DisplayDlg Using DDWinDef
+		Fields: Position				100 200 500 200
+				Title		~Database Table Creator~
+				TypeName	~Dialog~
+				HActionsText ACTION SHOWHELPPAGE ( KPISHelpFile "LoadDB.htm" )
+				RClickDnActionsText ACTION Exec ( RightClick() )
+				OActionsText ACTION Exec ( CancelPressed() )
+
+		Contains:
+		{
+			Define: WhichTables Using DDWinCtrlDef AsSymbol WhichTables
+				Fields:	Position		$Margin $Margin, 480, $ControlHeight
+						TypeName		STATICTEXT
+						GenConName		THIS
+						GenConField		WhichTables
+						IActionsText	~[Get]~
+						DActionsText	~[Get]~
+
+			Define: WhichDB Using DDWinCtrlDef AsSymbol WhichDB
+				Fields:	Position		$Margin WhichTables(GetBottom,Position) + 3, 480, $ControlHeight
+						TypeName		STATICTEXT
+						GenConName		THIS
+						GenConField		WhichDatabase
+						IActionsText	~[Get]~
+						DActionsText	~[Get]~
+
+			Define: WhichVersions Using DDWinCtrlDef AsSymbol WhichVersions
+				Fields:	Position		$Margin, WhichDB(GetBottom,Position) + 3, 480, $ControlHeight
+						TypeName		STATICTEXT
+						GenConName		THIS
+						GenConField		Versions
+						IActionsText	~[Get]~
+						DActionsText	~[Get]~
+
+			Define: SharedArea Using DDWinCtrlDef AsSymbol SharedArea
+				Fields:	Position		$Margin, WhichVersions(GetBottom,Position) + 3, 480, $ControlHeight
+						TypeName		STATICTEXT
+						GenConName		THIS
+						GenConField		SharedLocation
+						IActionsText	~[Get]~
+						DActionsText	~[Get]~
+
+			Define: ArchiveButton Using DDWinCtrlDef AsSymbol ArchiveButton
+				Fields:	Position		$Margin (SharedArea(GetBottom,Position) + $vGap) $ButtonWidth $ButtonHeight
+						TypeName		BUTTON
+						IsTabStop		1
+						Text			Translate( ~Archive Data From Previous Version First~ )
+						DActionsText	ACTION EXEC ( ArchiveData() ) 
+						Tooltip			Translate( ~If you forgot to archive your data from the previous version, here is your chance!~ );
+
+
+			Define: PopulateBox Using DDWinCtrlDef AsSymbol PopulateBox
+				Fields:	TypeName		CheckBox
+						IsTabStop		1
+						GenConName		THIS
+						IsEnabled		T
+						GenConField		~Populate~
+						Text			Translate( ~Populate With Practice Data~ )
+						Position		$Margin ArchiveButton(GetBottom,Position) + $vGap 160 $ControlHeight
+						IActionsText	~[Get]~
+						DActionsText	~[Save "Exec( OnPopulateBox() )"]~		
+						Tooltip			Translate( ~If checked will populate the database with random practice data~ );
+
+			Define: NumRecordsPrompt Using DDWinCtrlDef AsSymbol NumRecordsPrompt
+				Fields:	Position		(PopulateBox(GetRight,Position) + 20) PopulateBox(GetTop,Position) + 3 150 $ControlHeight
+						TypeName		STATICTEXT
+						Text			~Number Of Practice Customers~
+
+			Define: NumRecordsField Using DDWinCtrlDef AsSymbol NumRecordsField
+				Fields:	Position		NumRecordsPrompt(GetRight,Position) + 2, PopulateBox(GetTop,Position), 40, $ControlHeight
+						TypeName		MASKEDEDITTEXT
+						Mask			~#####~
+						PromptChar		~ ~ 
+						IsEnabled		F
+						GenConName		THIS
+						GenConField		NumRecords
+						IActionsText	~[Get]~ 
+						DActionsText	~[Save]~
+						OActionsText	~[Save]~ ;
+
+			Define: CreateTheImagesBox Using DDWinCtrlDef AsSymbol CreateTheImagesBox
+				Fields:	TypeName		CheckBox
+						IsTabStop		1
+						IsEnabled		F
+						GenConName		THIS
+						GenConField		~CreateTheImages~
+						Text			Translate( ~Create Practice Images~ )
+						Position		(NumRecordsField(GetRight,Position) + $hGap), NumRecordsField(GetTop,Position), 170 $ControlHeight
+						IActionsText	~[Get]~
+						DActionsText	~[Save]~
+						Tooltip			Translate( ~If checked will create random JPEG images to practice with.~ );
+
+					
+			Define: OKButton Using DDWinCtrlDef AsSymbol OKButton
+				Fields:	Position		$Margin CreateTheImagesBox(GetBottom,Position) + $vGap, $ButtonWidth $ButtonHeight
+						TypeName		BUTTON
+						IsTabStop		1
+						Text			Translate( ~Create Shared and Workstation Database Tables~ )
+						DActionsText	ACTION EXEC ( GoButton() ) 
+						Tooltip			Translate( ~Create the shared and workstation databases. This should only be done on the server!~ );
+
+			Define: OnlyOnServer Using DDWinCtrlDef AsSymbol OnlyOnServer
+				Fields:	Position		(OKButton(GetRight,Position) + 20) OKButton(GetTop,Position) + 5 250 $ControlHeight*2
+						TypeName		STATICTEXT
+						Text			~<---- Choose if this workstation is the server or a standalone <$App.Title> system~
+
+			Define: LocalButton Using DDWinCtrlDef AsSymbol LocalButton
+				Fields:	Position		$Margin (OKButton(GetBottom,Position) + $vGap) $ButtonWidth $ButtonHeight
+						TypeName		BUTTON
+						IsTabStop		1
+						Text			Translate( ~Create Workstation Database Tables Only~ )
+						DActionsText	ACTION EXEC ( RecreateLocalDatabase() ) 
+						Tooltip			Translate( ~Start creating the workstation database. Choose this if your workstation is not the server~ );
+		
+			Define: OnlyOnWorkstation Using DDWinCtrlDef AsSymbol OnlyOnWorkstation
+				Fields:	Position		(LocalButton(GetRight,Position) + 20) LocalButton(GetTop,Position) + 5 250 $ControlHeight*2
+						TypeName		STATICTEXT
+						Text			~<---- Choose if this workstation is not the server or you are recreating just the temporary Workstation tables~
+
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				Fields:	Position		$Margin (OnlyOnWorkstation(GetBottom,Position) + $vGap) $ButtonWidth $ButtonHeight
+						TypeName		BUTTON
+						IsTabStop		1
+						Text			Translate( ~Cancel~ )
+						DActionsText	ACTION EXEC ( CancelPressed() ) 
+						Tooltip			~Quit~
+
+			Define: StatusMsg Using DDWinCtrlDef AsSymbol StatusMsg
+				Fields:	Position		$Margin, CancelButton(GetBottom,Position) + $vGap, 480, $ControlHeight*2
+						TypeName		STATICTEXT
+						GenConName		THIS
+						GenConField		Status
+						IActionsText	~[Get]~
+						DActionsText	~[Get]~
+		}
+
+	DialogWidth = CreateTheImagesBox( GetRight,Position ) + $Margin + $HGap;
+	DialogHeight = StatusMsg( GetBottom,Position ) + $Margin + 20;
+	DisplayDlg( Set,Position,~50 50 <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,DisplayDlg,Data,DisplayDlgGC,Document,$Doc.This,New,Temporary );
+	Global( dlg,DisplayDlgGC );
+}
+
+
+NUMERIC OnPopulateBox()
+{
+	WantPopulation = dlg( GetInput,GetBoolean,Populate );
+	
+	return dlg( EnableControls,<WantPopulation>,CreateTheImagesBox,NumRecordsField );
+}
+
+
+VOID RecreateLocalDatabase()
+{
+	if ( MessageBox( ~Are you really sure you want to recreate the workstation database?~,YESNO ) != YES )
+	{ 
+		dlg( SetString,~No changes were made~ ,Status,0,Update );
+		return;
+	}
+
+	if ( MessageBox( ~I wouldn't ask twice if it wasn't important.\n\nAre you really sure you want to recreate the workstation database?~,YESNO ) != YES )
+	{ 
+		dlg( SetString,~No changes were made~ ,Status,0,Update );
+		return;
+	}
+
+	ForgetPermanent( BackgroundOrderProcessor );
+
+	EnableAllControls( FALSE );
+
+	// Create the workstation database tables.
+	CPWorkstationDB( New,CreateWorkstationDBObj );
+	CreateWorkstationDBObj.CreateWorkstationDBTables();
+
+	Abort();
+}
+
+
+NUMERIC CloseWindows()
+{
+	Index = 0;
+
+	app( ThisApp,MessagePump,3 );
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		Window( CloseWindow );
+		ThisApp( MessagePump,3 );
+		Index = 0;
+	}
+
+	ThisApp( MessagePump,0 );
+
+	return TRUE;
+}
+
+
+VOID GoButton()
+{
+	if ( MessageBox( ~Are you really sure you want to recreate the shared and workstation databases?~,YESNO ) != YES )
+	{ 
+		dlg( SetString,~No changes were made~ ,Status,0,Update );
+		return;
+	}
+
+	if ( MessageBox( ~I wouldn't ask twice if it wasn't important.\n\nAre you really sure you want to recreate the shared and workstation databases?~,YESNO ) != YES )
+	{ 
+		dlg( SetString,~No changes were made~ ,Status,0,Update );
+		return;
+	}
+
+	CloseWindows();
+
+	ForgetPermanent( BackgroundOrderProcessor );
+
+	EnableAllControls( FALSE );
+
+	Log( Session,~Creating Database~ );
+
+	CreateSampleData = dlg( GetInput,GetBoolean,Populate );
+	NumSampleCustomers = dlg( GetInput,GetValue,NumRecords );
+	CreateSampleImages = dlg( GetInput,GetBoolean,CreateTheImages );
+
+	// Create the shared database tables and sample data.
+	CPSharedDB( New,CreateSharedDBObj );
+	CreateSharedDBObj.CreateSharedDBTables( <CreateSampleData>, <NumSampleCustomers>, <CreateSampleImages>, TRUE );
+
+	// Create the workstation database tables.
+	CPWorkstationDB( New,CreateWorkstationDBObj );
+	CreateWorkstationDBObj.CreateWorkstationDBTables();
+
+	App( Application );
+	Application( MessagePump,0 );
+
+	// Load tasks and macros.
+	Action = ACTION DOC ( ReloadTasks Open Tasks "PopulateTasks(TRUE,TRUE);" );
+	PerformActions( Action );
+
+	Queue( ~CancelPressed();~ );
+}
+
+VOID ArchiveData()
+{
+	Action = ACTION DOC ( DBDoc OpenOnce DBDoc "Init( ~DP2~, TRUE, TRUE, TRUE, ~~ );" );
+	PerformActions( Action );
+}
+
+
+VOID EnableAllControls( enable )
+{
+	dlg( EnableControls,<enable>,OKButton,LocalButton,CancelButton );
+
+}
+
+VOID EnableOKButton(  )
+{
+	dlg( EnableControls,TRUE,OKButton );
+
+}
+
+NUMERIC Init(SharedDBExists,WorkstationDBExists,CalledFromStartup,ForceArchiving)
+{
+	if ( Defined( DisplayDlgGC ) )
+	{
+		return Warning( Translate( ~The database table creator is already open~ ) );
+	}
+
+	CreateDialog();
+
+	dlg( SetString,Translate( ~Previous database contents will be lost!  Press F1 for Help if you need advice.~),Status,0,Update );
+	dlg( SetString,~Shared data stored in <$App.ShareDirectory>~ ,SharedLocation,0,Update );
+	if ( !<SharedDBExists> && !<WorkstationDBExists> )
+	{
+		dlg( SetString,~NOTE:  Both the shared database tables and workstation database tables need to be created~ ,WhichTables,0,Update );
+	}
+	else if ( !<SharedDBExists> )
+	{
+		dlg( SetString,~NOTE:  The shared database tables need to be created~ ,WhichTables,0,Update );
+	}
+	else if ( !<WorkstationDBExists> )
+	{
+		if ( <CalledFromStartup> )
+		{
+			dlg( EnableControls, FALSE, OKButton );
+			dlg( EnableControls, FALSE, ArchiveButton );
+			dlg( EnableControls, FALSE, PopulateBox );
+		}
+
+		dlg( SetString,~NOTE:  The workstation database tables need to be created~ ,WhichTables,0,Update );
+	}
+	dlg( SetString,~Database type is <$Sym.DatabaseManager>~ ,WhichDatabase,0,Update );
+	dlg( SetString,~Program <$[Symbols].Version[Value]>. Shared Database Version V<$[Symbols].DatabaseVersion[Long]>.  Workstation Database Version V<$[Symbols].LocalDatabaseVersion[Long]>.~ ,Versions,0,Update );
+
+	if ( <ForceArchiving> )
+	{
+		dlg( EnableControls, FALSE, OKButton );
+		dlg( EnableControls, FALSE, LocalButton );
+		dlg( EnableControls, FALSE, CreateTheImagesBox );
+		dlg( EnableControls, FALSE, PopulateBox );
+		dlg( EnableControls, FALSE, NumRecordsPrompt );	
+		dlg( EnableControls, FALSE, OnlyOnServer );	
+		dlg( EnableControls, FALSE, OnlyOnWorkstation );
+		dlg( EnableControls, FALSE, StatusMsg );
+	}
+
+	return TRUE;
+}
+
+VOID ArchivingComplete()
+{
+	dlg( EnableControls, TRUE, OKButton );
+	dlg( EnableControls, TRUE, LocalButton );
+	dlg( EnableControls, TRUE, CreateTheImagesBox );
+	dlg( EnableControls, TRUE, PopulateBox );
+	dlg( EnableControls, TRUE, NumRecordsPrompt );	
+	dlg( EnableControls, TRUE, OnlyOnServer );	
+	dlg( EnableControls, TRUE, OnlyOnWorkstation );
+	dlg( EnableControls, TRUE, StatusMsg );
+}
+
+
+

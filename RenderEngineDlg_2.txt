@@ -1,0 +1,4451 @@
+//	RenderEngineDlg_2.txt
+
+ExecC() ;
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+
+
+// GLOBALS
+UGenCon	*gDataGC ;	//	DIALOG DATA
+UGenCon	*gDlgDef ;	//	DIALOG DEFINITION
+UGenDlg	*gDlg ;		//	THE ACTUAL DIALOG
+
+CIThread	*gThread ;		//	THE WORKING THREAD
+
+
+int	gClosed = FALSE ;		//	HAS THE DIALOG BEEN CLOSED ?
+
+
+int	gDebug = FALSE ;
+
+main()
+{
+	Debug(0) ;
+	SessionLogDirect( _T("RenderEngineDlg_2.main: Version 1.0.1")) ;
+//	Trace( 0x10 ) ;
+
+//	UCInterpreter	*thisCI = THIS() ;
+//	thisCI->SetProfiling( TRUE ) ;
+}
+
+SetDialogData(UGenCon *LocalGC, char *Dlg, UGenCon *DlgDef)
+{
+	Debug(0) ;
+	gDataGC	= LocalGC ;
+	gDlg	= Dlg ;
+	gDlgDef	= DlgDef ;
+
+	if( gDebug == FALSE )
+	{
+		StartDlgThread() ;
+	}
+
+	ShowHideControl( _T("Start"), 0L ) ;
+	ShowHideControl( _T("Tab1Shutdown"), 0L ) ;
+	ShowHideControl( _T("Tab1Suspend"), 0L ) ;
+	ShowHideControl( _T("Tab1Resume"), 0L ) ;
+	ShowHideControl( _T("Shutdown_Now"), 0L ) ;
+
+	UpdatePrinterControls() ;
+}
+
+void Close()
+{
+	Debug(0) ;
+
+	if( gClosed ) { return ; }
+
+	if( gDataGC )
+	{
+		UList	*theChildren = gDataGC->GetChildren() ;
+		if( theChildren )
+		{
+			//	THEN THE THREAD IS STILL RUNNING
+			if( gThread )
+			{
+				PostAThreadMessage( gThread, WM_QUIT, 0L, 0L ) ;
+			}
+
+			long	StartTime = Clock() ;
+			long	EndTime = StartTime ;
+
+			while( theChildren )
+			{
+				Sleep(250) ;
+				EndTime = Clock() ;
+				if( EndTime - StartTime > 10000 )
+				{
+					break ;
+				}
+				theChildren = gDataGC->GetChildren() ;
+			}
+		}
+	}
+
+	RemoveDebugTargetGC() ;		//	DEBUGGER2 CODE
+
+	CloseDialog(gDlg) ;
+	gDlg = NULL ;
+
+	gClosed = TRUE ;
+	PluckTreeObject( _T("REDialogData"), _T("[GenCons]") ) ;
+	if( gDataGC ) { delete gDataGC ; }
+	gDataGC = NULL ;
+
+}
+
+void term()
+{
+	Debug(0) ;
+	Close() ;
+}
+
+void Cancel()
+{
+	Debug(0) ;
+	Close() ;
+}
+
+
+
+			//	START-UP THREAD
+
+int	StartDlgThread()
+{
+	TCHAR		 FileName[2048] ;
+	TCHAR		*ExeDirectory = GetExeDirectory() ;
+
+	if( gDataGC->GetChildren())
+	{
+		//	THE THREAD IS ALREADY RUNNING
+		return( FALSE ) ;
+	}
+
+	int CheckTextLibFirst = TRUE ;
+	UGenCon	*CICheckTextLibFirst = GetTreeObject( _T("CICheckTextLibFirst"), _T("GENCONS")) ;
+	if( CICheckTextLibFirst )
+	{
+		CheckTextLibFirst = CICheckTextLibFirst->GetLongValue(_T("Long")) ;
+	}
+
+	sprintf( FileName, _T("%s\\CommonText\\RenderEngineDlg_2.txt"), ExeDirectory ) ;
+
+//	SessionLogDirect( _T("REDlg_2.StartDlgThread: FileName: \"%s\""), FileName ) ;
+
+	HangDebugTargetGC(FALSE) ;
+
+	int			 AllowDebugging = FALSE ;
+	CIThread	*theThread = new CIThread ;
+	theThread->SetRegisterName(_T("REDlgThread")) ;
+	int		Result = theThread->Setup(FileName, NULL, -2L, 2000L, gDataGC, CheckTextLibFirst, AllowDebugging ) ;
+	if( Result == FALSE )
+	{
+		delete theThread ;
+		return( FALSE ) ;
+	}
+
+	gThread = theThread ;
+
+	UGenCon *aGC = new UGenCon( GetDataDictionary( _T("DDLong"))) ;
+	if( aGC )
+	{
+		aGC->SetLongValue(_T("Long"), (long) gThread ) ;
+		gDataGC->AddChildBack(aGC) ;
+	}
+
+	//	PASS THE DIALOG WINDOW
+	PostAThreadMessage( gThread, REM_DIALOG, 0L, (long) gDlg ) ;
+
+	//	PASS THE DIALOG GENCON
+	PostAThreadMessage( gThread, REM_DATAGC, 0L, (long) gDataGC ) ;
+
+	//	START THE WORK
+//	PostAThreadMessage( gThread, 0x9002, 0L, 0L ) ;
+
+	return( TRUE ) ;
+}
+
+
+
+			//	THREADING CODE
+
+
+CIThread	*gThisThread ;
+int			 WM_QUIT  = 0x0012 ;
+int			 WM_TIMER = 0x0113 ;
+
+int			 gLogAmount ;
+UGenCon		*gStatusGC ;
+UList		*gStatusWaitList ;
+int			 gShuttingDown ;
+int			 gCheckTextLibFirst ;
+
+UGenCon		*gRELookAhead ;
+
+//	9000 SERIES FOR THE RENDER ENGINE DIALOG THREAD
+//	9100 SERIES FOR THE RENDER ENGINE MAIN THREAD
+//	9200 SERIES FOR THE RENDER ENGINE BATCH THREAD
+//	9300 SERIES FOR THE RENDER ENGINE RENDERING THREAD
+//	9400 SERIES FOR THE RENDER ENGINE RESPONSE THREAD
+//	9500 SERIES FOR THE RENDER ENGINE SCRIPT THREAD ?
+
+//	UNITS SERIES FOR SENDING DATA
+//	TENS SERIES FOR STARTUP AND SHUTDOWN
+//	TWENTY SERIES FOR SUSPEND AND RESUME
+//	THIRTY TO SIXTY SERIES FOR WORK COMMANDS
+//	SEVENTY SERIES FOR COMPLETE MESSAGES
+//	EIGHTY SERIES FOR CANCEL MESSAGES
+//	NINETY SERIES FOR ERROR MESSAGES
+
+//	THE RENDER ENGINE DIALOG THREAD
+int			 REM_DIALOG					= 0x9000 ;
+int			 REM_DATAGC					= 0x9001 ;
+int			 REM_RE_START				= 0x9010 ;
+int			 REM_RE_SHUTDOWN			= 0x9011 ;
+int			 REM_RE_HAS_SHUTDOWN		= 0x9012 ;
+int			 REM_RE_SUSPEND				= 0x9020 ;
+int			 REM_RE_RESUME				= 0x9021 ;
+int			 REM_RE_TIMER				= 0x9025 ;
+int			 REM_RE_SHOWSTATUS			= 0x9030 ;
+int			 REM_RE_SIREN				= 0x9090 ;
+//int			 REM_RE_WAIT_FOR_STATUS		= 0x9091 ;
+//int			 REM_RE_ADD_TO_WAIT_LIST	= 0x9092 ;
+int			 REM_RE_WAIT_FOR_STATUS		= 0x9091 ;
+int			 REM_UPDATE_PRINTER_SETUP	= 0x9092 ;
+int			 REM_RE_ADD_TO_WAIT_LIST	= 0x9093 ;
+
+//	THE RENDER ENGINE MAIN THREAD
+int			 REM_PRINTERSETUP			= 0x9102 ;
+int			 REM_STATUS_GC				= 0x9103 ;
+int			 REM_SHUTDOWN				= 0x9111 ;
+int			 REM_SUSPEND				= 0x9120 ;
+int			 REM_RESUME					= 0x9121 ;
+int			 REM_TIMER					= 0x9225 ;
+int			 REM_STATUS_REQUEST			= 0x9130 ;
+int			 REM_RESERVE_NEXT_BATCH		= 0x9131 ;
+int			 REM_GET_PAGE_LIST			= 0x9132 ;
+int			 REM_START_BATCH			= 0x9133 ;
+int			 REM_RESPONSESCRIPT			= 0x9134 ;
+int			 REM_DB_SQL					= 0x9135 ;
+int			 REM_GET_PRINTER_STATUS		= 0x9136 ;
+int			 REM_DELETE_JOB_RECORD		= 0x9137 ;
+int			 REM_ORDER_COMPLETE			= 0x9170 ;
+int			 REM_BATCH_COMPLETE			= 0x9171 ;
+int			 REM_CANCEL_BATCH			= 0x9180 ;
+
+
+//	THE RENDER ENGINE BATCH THREAD
+int			 REM_BATCH_PRINTERSETUP		= 0x9202 ;
+int			 REM_BATCH_STATUS_GC		= 0x9203 ;
+int			 REM_BATCH_BATCH_GC			= 0x9204 ;
+int			 REM_BATCH_START_RENDER		= 0x9205 ;
+int			 REM_BATCH_SHUTDOWN			= 0x9211 ;
+int			 REM_BATCH_SUSPEND			= 0x9220 ;
+int			 REM_BATCH_RESUME			= 0x9221 ;
+
+int			 REM_BATCH_TIMER			= 0x9225 ;
+
+int			 REM_BATCH_STATUS_REQ		= 0x9230 ;
+int			 REM_BATCH_PARSE_JOB		= 0x9234 ;
+int			 REM_BATCH_PRGRM_JOB		= 0x9235 ;
+int			 REM_BATCH_RENDER_JOB		= 0x9236 ;
+
+int			 REM_BATCH_ORDERCOMP		= 0x9250 ;
+int			 REM_BATCH_BATCHCOMP		= 0x9251 ;
+int			 REM_SCRIPT_COMPLETE		= 0x9252 ;
+
+int			 REM_BATCH_CANCEL_BATCH		= 0x9260 ;
+int			 REM_BATCH_CANCEL_ORDER		= 0x9261 ;
+int			 REM_BATCH_CANCEL_PAGE		= 0x9262 ;
+
+int			 REM_BATCH_PARSE_ERROR		= 0x9265 ;
+
+int			 REM_BATCH_RNDR_SUCCESS		= 0x9270 ;
+int			 REM_BATCH_RNDR_ERROR		= 0x9271 ;
+int			 REM_BATCH_RNDR_CANCEL		= 0x9272 ;
+
+int			 REM_BATCH_PRINT_SUCCESS	= 0x9280 ;
+int			 REM_BATCH_PRINT_ERROR		= 0x9281 ;
+int			 REM_BATCH_PRINT_CANCEL		= 0x9282 ;
+
+int			 REM_BATCH_MESSAGE_RESPONSE	= 0x9290 ;
+int			 REM_BATCH_PARSE_RESPONSE	= 0x9291 ;
+int			 REM_BATCH_RENDER_RESPONSE	= 0x9292 ;
+int			 REM_BATCH_PRINTER_RESPONSE = 0x9293 ;
+int			 REM_BATCH_EXCEPTION_RESPONSE = 0x9094 ;
+
+//	THE RENDER ENGINE PIE THREAD
+int			 REM_PIE_SET_PAGE			= 0x9300 ;
+int			 REM_PIE_START_RENDER		= 0x9301 ;
+int			 REM_PIE_STATUS				= 0x9330 ;
+
+//	THE RENDER ENGINE RESPONSE THREAD
+
+//	THE RENDER ENGINE SCRIPT THREAD
+
+UREDialog	*gREDlg ;
+
+int InitInstance(CIThread *ThisThread)
+{
+	gREDlg = new UREDialog ;
+	if( gREDlg )
+	{
+		UGenCon *DialogData = GetTreeObject( _T("REDialogData"), _T("[GenCons]")) ;
+		if( DialogData )
+		{
+			DialogData->SetLongValue( _T("DlgThread"), ThisThread ) ;
+		}
+		
+		gREDlg->InitInstance( ThisThread ) ;
+		return( TRUE ) ;
+	}
+
+
+	UCInterpreter	*thisCI = THIS() ;
+	thisCI->SetProfiling( TRUE ) ;
+
+	//	START THE THREAD HERE !
+	printf( _T("InitInstance: ThisThread: %08lX"), ThisThread ) ;
+	gThisThread = ThisThread ;
+	gShuttingDown = FALSE ;
+
+	//	TELL ALL THE RUNNING RENDER ENGINES THAT
+	//	THE DIALOG HAS BEEN STARTED.
+	UpdateRenderStatusDialogThread( ThisThread ) ;
+
+	gCheckTextLibFirst = TRUE ;
+	UGenCon	*CICheckTextLibFirst = GetTreeObject( _T("CICheckTextLibFirst"), _T("GENCONS")) ;
+	if( CICheckTextLibFirst )
+	{
+		gCheckTextLibFirst = CICheckTextLibFirst->GetLongValue(_T("Long")) ;
+	}
+
+	gRELookAhead	= GetTreeObject(_T("RELookAhead"),_T("[GenCons]")) ;
+
+	HangDebugTargetGC(TRUE) ;	//	DEBUGGER2 CODE
+
+	return( TRUE ) ;
+}
+
+int OnIdle( long Count )
+{
+	if( gREDlg )
+	{
+		Count = gREDlg->OnIdle( Count ) ;
+		return( Count ) ;
+	}
+
+//	printf( _T("%ld\n"), Count ) ;
+	return( Count ) ;
+}
+
+int ExitInstance()
+{
+	if( gREDlg )
+	{
+		gREDlg->ExitInstance() ;
+		delete gREDlg ;
+		return( TRUE ) ;
+	}
+
+	gShuttingDown = TRUE ;
+	if( gDataGC )
+	{
+		gDataGC->SetLongValue(_T("ThreadExit"), WM_QUIT ) ;
+		UList	*theChildren = gDataGC->GetChildren() ;
+		if( theChildren )
+		{
+			gDataGC->SetChildren(NULL) ;
+			delete theChildren ;
+		}
+	}
+	
+	PluckTreeObject( _T("REDialogData"), _T("[GenCons]") ) ;
+
+	if( gStatusWaitList )	{ delete gStatusWaitList ; }
+
+	//	TELL ALL THE RUNNING RENDER ENGINES THAT
+	//	THE DIALOG HAS GONE AWAY.
+	UpdateRenderStatusDialogThread( NULL ) ;
+
+	RemoveDebugTargetGC() ;		//	DEBUGGER2 CODE
+
+	UCInterpreter	*thisCI = THIS() ;
+	thisCI->SetProfiling( FALSE ) ;
+
+	return( TRUE ) ;
+}
+
+int PreTranslateMessage( UGenCon *pMsg)
+{
+	if( gREDlg )
+	{
+		gREDlg->PreTranslateMessage(pMsg) ;
+		return( TRUE ) ;
+	}
+
+	long		MessageHandled = FALSE ;
+	long		Value ;
+
+	long		Message = pMsg->GetLongValue(_T("Message")) ;
+	long		wParam  = pMsg->GetLongValue(_T("wParam"))  ;
+	long		lParam  = pMsg->GetLongValue(_T("lParam"))  ;
+
+	if( Message != WM_TIMER && gLogAmount >= 7 )
+	{
+		SessionLogDirect( _T("\tREDlg.PreTranslateMessage: Msg: 0x%08lX, wParam: 0x%08lX, lParam: 0x%08lX"),
+									Message, wParam, lParam ) ;
+	}
+
+	switch( Message )
+	{
+		case		WM_TIMER	:	//	HANDLE TIMER CODE
+			PostAThreadMessage( gThisThread, REM_RE_TIMER, 0L, 0L ) ;
+			break ;
+
+		case	REM_RE_TIMER	:		//	REALLY HANDLE THE TIMER MESSAGE
+//			if( gShuttingDown == FALSE )
+//			{
+				GetRenderStatus() ;
+				KickREThread() ;
+//			}
+			break ;
+		case		REM_DIALOG	:	//	SET DIALOG POINTER
+			gDlg = lParam ;
+			MessageHandled = TRUE ;
+			break ;
+
+		case		REM_DATAGC	:	//	SET DATA GENCON
+			gDataGC = lParam ;
+			gLogAmount = gDataGC->GetLongValue(_T("LogValue")) ;
+			gRELookAhead->SetLongValue(_T("RELogLevel"), gLogAmount ) ;
+			MessageHandled = TRUE ;
+			break ;
+
+		case		REM_RE_START	:	//	START A RENDER ENGINE
+			Do_Start() ;
+			MessageHandled = TRUE ;
+			break ;
+
+		case		REM_RE_SHUTDOWN	:	//	SHUTDOWN A RENDER ENGINE
+			Do_Shutdown() ;
+			MessageHandled = TRUE ;
+			break ;
+
+		case		REM_RE_HAS_SHUTDOWN	:	//	RENDER ENGINE HAS SHUTDOWN
+			Do_HasShutdown(lParam) ;
+			MessageHandled = TRUE ;
+			break ;
+
+		case		REM_RE_SUSPEND	:	//	SUSPEND THE RENDER ENGINE
+			Do_Suspend() ;
+			MessageHandled = TRUE ;
+			break ;
+
+		case		REM_RE_RESUME	:	//	RESUME THE RENDER ENGINE
+			Do_Resume() ;
+			MessageHandled = TRUE ;
+			break ;
+
+		case	REM_RE_SHOWSTATUS	:	//	DISPLAY THIS STATUS
+			if( gShuttingDown == FALSE )
+			{
+				DisplayStatus( lParam ) ;
+			}
+			MessageHandled = TRUE ;
+			break ;
+
+		case		REM_RE_SIREN	:	//	RESUME THE RENDER ENGINE
+			Do_Siren() ;
+			MessageHandled = TRUE ;
+			break ;
+
+		case		REM_RE_WAIT_FOR_STATUS	:	//	WAITING FOR STATUS
+			if( gShuttingDown == FALSE )
+			{
+				StatusArrive() ;
+			}
+			MessageHandled = TRUE ;
+			break ;
+
+		case		REM_RE_ADD_TO_WAIT_LIST	:
+			if( gStatusWaitList == NULL ) { gStatusWaitList = new UList ; }
+			UGenCon	*aGC = (UGenCon *) lParam ;
+			gStatusWaitList->InsertBack( aGC ) ;
+
+			if( gLogAmount >= 8 )
+			{
+				SessionLogDirect( _T("REDlg_2.PreTranslateMsg: gStatusWaitList: 0x%08lX, aGC: 0x%08lX"),
+						gStatusWaitList, aGC ) ;
+			}
+			break ;
+	}
+
+	return( MessageHandled ) ;
+}
+
+void Start()
+{
+	if( gDebug )	{ Do_Start() ; }
+	else
+	{
+		PostAThreadMessage( gThread, REM_RE_START, 0L, 0L ) ;
+	}
+}
+
+void Shutdown()
+{
+//	gShuttingDown = TRUE ;
+	if( gDebug )	{ Do_Shutdown() ; }
+	else
+	{
+		PostAThreadMessage( gThread, REM_RE_SHUTDOWN, 0L, 0L ) ;
+	}
+}
+
+void Suspend()
+{
+	if( gDebug )	{ Do_Suspend() ; }
+	else
+	{
+		PostAThreadMessage( gThread, REM_RE_SUSPEND, 0L, 0L ) ;
+	}
+}
+
+void Resume()
+{
+	if( gDebug )	{ Do_Resume() ; }
+	else
+	{
+		PostAThreadMessage( gThread, REM_RE_RESUME, 0L, 0L ) ;
+	}
+}
+
+
+SaveErrorReportData()
+{
+	TCHAR		 DstImageName[2048] ;
+	TCHAR		*ExeDirectory = GetExeDirectory() ;
+
+	sprintf( DstImageName, _T("%s\\Scripts\\C_RP30_Setup.txt"), ExeDirectory ) ;
+
+	SessionLogDirect( _T("Saving RP30 Error Reporting Setup file: \"%s\""), DstImageName ) ;
+
+	if( DstImageName[0] )
+	{
+		char	*fp = fopen( DstImageName, _T("w")) ;
+		if( fp )
+		{
+			UGenCon *RELookAhead = GetTreeObject( _T("RELookAhead"), _T("[GenCons]")) ;
+			fprintf( fp, _T("SetFatalErrorToReady\t%ld\n"), RELookAhead->GetLongValue(_T("SetFatalErrorToReady"))) ;
+			fprintf( fp, _T("ReportPaperOut\t%ld\n"), RELookAhead->GetLongValue(_T("ReportPaperOut"))) ;
+			fprintf( fp, _T("ReportPaperJams\t%ld\n"), RELookAhead->GetLongValue(_T("ReportPaperJams"))) ;
+			fprintf( fp, _T("ReportComErrors\t%ld\n"), RELookAhead->GetLongValue(_T("ReportComErrors"))) ;
+			fprintf( fp, _T("ReportChemErrors\t%ld\n"), RELookAhead->GetLongValue(_T("ReportChemErrors"))) ;
+
+			fclose(fp) ;
+		}
+	}
+}
+
+
+
+void Update_Queue()
+{
+	Do_Update_Queue() ;
+}
+
+void Show_Setup(int Update)
+{
+	Do_Show_Setup(Update) ;
+}
+
+void OpenTables()
+{
+	Do_OpenTables() ;
+}
+
+
+void SavePerformance()
+{
+	UGenCon *PieDefaults = (UGenCon *) GetTreeObject( _T("PIEDefaultsGC"), _T("[GenCons]")) ;
+	if( PieDefaults )
+	{
+		TCHAR	*ExeDirectory = GetExeDirectory() ;
+		TCHAR	 FilePath[1024] ;
+		sprintf( FilePath, _T("%s\\RenderPerformance.txt"), ExeDirectory ) ;
+		char	*fp = fopen( FilePath, _T("w")) ;
+		if( fp )
+		{
+			fprintf( fp, _T("%s\n\n"), _T("//	Render Peformance Settings")) ;
+//			fprintf( fp, _T("Processors\t\t\t%ld\n"), PieDefaults->GetLongValue(_T("Processors"))) ;
+			fprintf( fp, _T("ConcurrentRenders\t%ld\n"), PieDefaults->GetLongValue(_T("ConcurrentRenders"))) ;
+			fprintf( fp, _T("SplitAlgorithms\t\t%ld\n"), PieDefaults->GetLongValue(_T("SplitAlgorithms"))) ;
+			fprintf( fp, _T("AllowResizeOnRead\t%ld\n\n"), PieDefaults->GetLongValue(_T("AllowResizeOnRead"))) ;
+			fprintf( fp, _T("NewWorkDelayTime\t%ld\n\n"), PieDefaults->GetLongValue(_T("NewWorkDelayTime"))) ;
+			fclose( fp ) ;
+		}
+	}
+}
+
+
+void FlushMode()
+{
+	SuspendMode() ;
+	WriteModeAction(_T("FLUSH\n")) ;
+	UGenCon *ModeStatusGC = WaitForModeStatus() ;
+	delete ModeStatusGC ;
+}
+
+void ShutdownMode()
+{
+	WriteModeAction(_T("SHUTDOWN\n")) ;
+	UGenCon *ModeStatusGC = WaitForModeStatus() ;
+	delete ModeStatusGC ;
+}
+
+void ResumeMode()
+{
+	WriteModeAction(_T("RESUME\n")) ;
+	UGenCon *ModeStatusGC = WaitForModeStatus() ;
+	delete ModeStatusGC ;
+}
+
+void SuspendMode()
+{
+	WriteModeAction(_T("Suspend\n")) ;
+	UGenCon *ModeStatusGC = WaitForModeStatus() ;
+	delete ModeStatusGC ;
+}
+
+void StatusMode()
+{
+	WriteModeAction(_T("Status\n")) ;
+	UGenCon *ModeStatusGC = WaitForModeStatus() ;
+	delete ModeStatusGC ;
+}
+
+void Delete_PageMode()
+{
+	TCHAR	 Action[1024] ;
+	sprintf( Action, _T("DELETE_JOB\nPAGE_ID: %s\n"), gDataGC->GetStringValue(_T("PageID"))) ;
+	WriteModeAction(Action ) ;
+	UGenCon *ModeStatusGC = WaitForModeStatus() ;
+	delete ModeStatusGC ;
+}
+
+void Get_Resolutions()
+{
+	WriteModeAction(_T("GET_RESOLUTIONS\n")) ;
+	UGenCon *ModeStatusGC = WaitForModeStatus() ;
+
+	if( ModeStatusGC )
+	{
+		UpdatePrinterResTable( ModeStatusGC ) ;
+		delete ModeStatusGC ;
+
+		MessageBox( _T("Printer Resolutions have been updated."), _T("MB_OK")) ;
+	}
+}
+
+int		MODIFY_AFTER_THIS = TRUE ;
+
+void Do_Start()
+{
+	TCHAR	FuncCall[1024] ;
+
+	TCHAR	*PrinterName = gDataGC->GetStringValue(_T("PrinterList")) ;
+	TCHAR	*QueueName   = gDataGC->GetStringValue(_T("QueueList")) ;
+
+	UGenCon *PrinterSetup = GetTreeObject( PrinterName, _T("Renderers") ) ;
+	if( PrinterSetup )
+	{
+		TCHAR	Msg[1024] ;
+		sprintf( Msg, _T("Printer \"%s\" is already running."), PrinterName ) ;
+		ReportError( Msg, 0, 0 ) ;
+		return ;
+	}
+
+	PrinterSetup = GetPrinterSetup( PrinterName, QueueName ) ;
+
+	if( PrinterSetup )
+	{
+		//	AT THIS POINT WE HAVE THE PRINTER SETUP
+
+		//	LAUNCH THE HOT FOLDER APPLICATION
+
+		int Result = TRUE ;
+
+		TCHAR	Msg[1024] ;
+		sprintf( Msg, _T("\"%s\"\r\n\twith queue\r\n\"%s\"\r\n\tis being started."), PrinterName, QueueName ) ;
+		SessionLogDirect( _T("RenderEngineDlg_2: \"%s\"."), Msg ) ;
+		gDataGC->SetAttrValue(_T("DetailedStatus"), Msg ) ;
+		DisplayControlValues( gDlg ) ;
+
+		TCHAR	*StartUpScript = PrinterSetup->GetStringValue(_T("BIStartUpScript")) ;
+		if( StartUpScript )
+		{
+			if( *StartUpScript )
+			{
+				sprintf( FuncCall, _T("Init(0x%08lX);"), PrinterSetup ) ;
+				Result = CallScript( StartUpScript, FuncCall ) ;
+				if( gLogAmount >= 8 )
+				{
+					SessionLogDirect( _T("**\tREDlg_2.Do_Start: Result = %d"), Result ) ;
+				}
+			}
+		}
+
+		if( Result == FALSE )
+		{
+			delete PrinterSetup ;
+			sprintf( Msg, _T("Could not start Printer: \"%s\". Please check the prniter and communications, and try again."),
+											PrinterName ) ;
+			SessionLogDirect( _T("RenderEngineDlg_2: \"%s\"."), Msg ) ;
+			gDataGC->SetAttrValue(_T("DetailedStatus"), Msg ) ;
+			if( gDlg )
+			{
+				DisplayControlValues( gDlg ) ;
+			}
+
+			return( Result ) ;
+		}
+
+		StartUpScript = PrinterSetup->GetStringValue(_T("StartUpScript")) ;
+		if( StartUpScript )
+		{
+			if( *StartUpScript )
+			{
+				sprintf( FuncCall, _T("Init(0x%08lX);"), PrinterSetup ) ;
+				CallScript( StartUpScript, FuncCall ) ;
+			}
+		}
+
+		HangTreeObject( PrinterSetup, _T("Renderers")) ;
+
+		//	PUT THE STATUS GENCON AS A CHILD OF THE PRINTER SETUP
+		gStatusGC = InitializeStatusGC( PrinterName ) ;
+		PrinterSetup->AddChildBack( gStatusGC ) ;
+
+		//	UPDATE THE PRINTER TABLE TO SAY WE ARE RUNNING AND
+		//	TO SPECIFY THE QUEUENAME THE USER SELECTED.
+		UpdatePrinterTable( PrinterName, _T("Run"), QueueName ) ;
+
+
+		//	START UP THE MAIN PROCESSOR THREAD !
+		CIThread	*theREThread = StartREThread( PrinterSetup, gStatusGC ) ;
+
+		//	SAVE THE THREAD POINTER HERE !
+		gStatusGC->SetLongValue( _T("REThread"), (long) theREThread ) ;
+
+		//	UPDATE THE DIALOG STATUS	(Do this last)
+		sprintf( Msg, _T("%s and %s has started."), PrinterName, QueueName ) ;
+		if( gLogAmount >= 8 )
+		{
+			SessionLogDirect( _T("RenderEngineDlg_2: \"%s\"."), Msg ) ;
+		}
+		gDataGC->SetAttrValue(_T("StatusMsg"), Msg ) ;
+		if( gDlg )
+		{
+			DisplayControlValues( gDlg ) ;
+		}
+
+	}
+}
+
+//	MOVE THE SCRIPTS FROM THE TREE TO THE CURRENT SETUP
+int SetupScripts( UGenCon *PrinterSetup )
+{
+	int	Result = FALSE ;
+	if( PrinterSetup )
+	{
+		TCHAR	 ScriptPath[1024] ;
+		TCHAR	*ExePath = GetExeDirectory() ;
+
+		TCHAR *PrinterModel = PrinterSetup->GetStringValue(_T("PrinterModel")) ;
+		UGenCon	*PrintingScriptsGC = (UGenCon *) GetTreeObject( PrinterModel, _T("[PrintingScripts]")) ;
+
+		if( gLogAmount >= 3 )
+		{
+			SessionLogDirect( _T("REDlg_2.SetupScripts: Model: \"%s\", ScriptGC: 0x%08lX"),
+										PrinterModel, PrintingScriptsGC ) ;
+		}
+
+		if( PrintingScriptsGC )
+		{
+			TCHAR	*aScript = PrintingScriptsGC->GetStringValue(_T("StartupScript")) ;
+			if( aScript[0] )
+			{
+				sprintf( ScriptPath, _T("%s\\CommonText\\%s"), ExePath, aScript ) ;
+				PrinterSetup->SetAttrValue(_T("BIStartupScript"), ScriptPath ) ;
+				if( gLogAmount >= 3 )
+				{
+					SessionLogDirect( _T("REDlg_2.SetupScripts: Startup: \"%s\""), ScriptPath ) ;
+				}
+			}
+
+			aScript = PrintingScriptsGC->GetStringValue(_T("StartPrintingScript")) ;
+			if( aScript[0] )
+			{
+				sprintf( ScriptPath, _T("%s\\CommonText\\%s"), ExePath, aScript ) ;
+				PrinterSetup->SetAttrValue(_T("BIStartPrintingScript"), ScriptPath ) ;
+				if( gLogAmount >= 3 )
+				{
+					SessionLogDirect( _T("REDlg_2.SetupScripts: StartPrinting: \"%s\""), ScriptPath ) ;
+				}
+			}
+
+			aScript = PrintingScriptsGC->GetStringValue(_T("PrintCompleteScript")) ;
+			if( aScript[0] )
+			{
+				sprintf( ScriptPath, _T("%s\\CommonText\\%s"), ExePath, aScript ) ;
+				PrinterSetup->SetAttrValue(_T("BIPrintCompleteScript"), ScriptPath ) ;
+				if( gLogAmount >= 3 )
+				{
+					SessionLogDirect( _T("REDlg_2.SetupScripts: PrintComplete: \"%s\""), ScriptPath ) ;
+				}
+			}
+
+			aScript = PrintingScriptsGC->GetStringValue(_T("OrderCompleteScript")) ;
+			if( aScript[0] )
+			{
+				sprintf( ScriptPath, _T("%s\\CommonText\\%s"), ExePath, aScript ) ;
+				PrinterSetup->SetAttrValue(_T("BIOrderCompleteScript"), ScriptPath ) ;
+				if( gLogAmount >= 3 )
+				{
+					SessionLogDirect( _T("REDlg_2.SetupScripts: OrderComplete: \"%s\""), ScriptPath ) ;
+				}
+			}
+
+			aScript = PrintingScriptsGC->GetStringValue(_T("ResponseScript")) ;
+			if( aScript[0] )
+			{
+				sprintf( ScriptPath, _T("%s\\CommonText\\%s"), ExePath, aScript ) ;
+				PrinterSetup->SetAttrValue(_T("BIResponseScript"), ScriptPath ) ;
+				if( gLogAmount >= 3 )
+				{
+					SessionLogDirect( _T("REDlg_2.SetupScripts: Response: \"%s\""), ScriptPath ) ;
+				}
+			}
+
+			aScript = PrintingScriptsGC->GetStringValue(_T("ShutDownScript")) ;
+			if( aScript[0] )
+			{
+				sprintf( ScriptPath, _T("%s\\CommonText\\%s"), ExePath, aScript ) ;
+				PrinterSetup->SetAttrValue(_T("BIShutDownScript"), ScriptPath ) ;
+				if( gLogAmount >= 3 )
+				{
+					SessionLogDirect( _T("REDlg_2.SetupScripts: Shutdown: \"%s\""), ScriptPath ) ;
+				}
+			}
+
+			Result = TRUE ;
+		}
+	}
+	return( Result ) ;
+}
+
+UGenCon *InitializeStatusGC( TCHAR *PrinterName )
+{
+	UGenCon	*StatusGC = new UGenCon( GetDataDictionary(_T("DDREStatus"))) ;
+	TCHAR	Name[64] ;
+	TCHAR	DateAndTime[64] ;
+
+	sprintf( Name, _T("%s.Status"), PrinterName ) ;
+	StatusGC->SetName( Name ) ;
+	StatusGC->SetAttrValue( _T("Status"), _T("Idle")) ;
+	GetTimeNow( DateAndTime, _T("%H:%M:%S")) ;
+	StatusGC->SetAttrValue( _T("Time"), DateAndTime ) ;
+	StatusGC->SetLongValue( _T("DlgThread"), gThisThread ) ;
+	StatusGC->SetLongValue( _T("LogAmount"), gDataGC->GetLongValue(_T("RELogValue")) ) ;
+	StatusGC->SetLongValue( _T("DlgDataGC"), gDataGC ) ;
+	return( StatusGC ) ;
+}
+
+
+long CallScript( TCHAR *ScriptName, TCHAR *FuncCall )
+{
+	long	Result ;
+	TCHAR	FilePath[2048] ;
+	TCHAR	FileName[280] ;
+	TCHAR	FileExtn[32] ;
+
+	if( gLogAmount >= 3 )
+	{
+		SessionLogDirect( _T("****\tREBatchThread.CallScript: \"%s\", \"%s\"."), ScriptName, FuncCall ) ;
+	}
+	
+	GetFilePathNameAndExt( ScriptName, FilePath, FileName, FileExtn ) ;
+
+	if( FileName[0] == 'C' && FileName[1] == '_' )
+	{
+		Result = CallCScript( ScriptName, FuncCall ) ;
+	}
+	else
+	{
+		//	BUILD THE FUNCTION CALL
+		Result = CallKPLScript( ScriptName, FuncCall ) ;
+	}
+	return( Result ) ;
+}
+
+//	CALL A SCRIPT HERE !
+long CallCScript( TCHAR *ScriptName, TCHAR *FuncCall )
+{
+	if( gLogAmount >= 7 )
+	{
+		SessionLogDirect( _T("****\tREBatchThread.CallCScript: \"%s\", \"%s\"."), ScriptName, FuncCall ) ;
+	}
+
+	TCHAR		 ScriptPath[2048] ;
+	GetScriptPath( ScriptName, ScriptPath ) ;
+
+	if( gLogAmount >= 5 )
+	{
+		SessionLogDirect( _T("****\tREDlg_2.CallCScript: \"%s\", \"%s\", \"%s\"."), ScriptName, FuncCall, ScriptPath ) ;
+		SessionLogDirect( _T("****\tREDlg_2.CallCScript: gCheckTextLibFirst: %ld"), gCheckTextLibFirst ) ;
+	}
+
+	UCInterpreter *Interp = new UCInterpreter ;
+	if( Interp )
+	{
+		Interp->SetCheckTextLibFirst( gCheckTextLibFirst ) ;
+		long Result = Interp->InterpretC( ScriptPath ) ;
+		Result = Interp->CallBack( FuncCall ) ;
+		Result = Interp->GetLongReturn() ;
+		delete Interp ;
+	}
+	return( Result ) ;
+}
+
+
+long CallKPLScript( TCHAR *ScriptName, TCHAR *FuncCall )
+{
+	int		Result = 0 ;
+
+	TCHAR	ScriptPath[2048] ;
+
+	GetScriptPath( ScriptName, ScriptPath ) ;
+
+	UIC		*theUIC = new UIC ;
+	if( theUIC )
+	{
+		//										CheckLib IsJob	Unicode	  Trigger
+		theUIC->ParseFile( ScriptPath, NULL,		0,		0,		0,		FuncCall ) ;
+		Result = theUIC->GetLastError()	;
+
+		TCHAR	*TxtResult = theUIC->GetScriptReturnValue() ;
+		if( TxtResult )
+		{
+			if( *TxtResult )
+			{
+				Result = atoi( TxtResult ) ;
+			}
+		}
+		//	DELETE THE INSTRUCTION CLASS OBJECT SO WE HAVE NO MEMORY LEAKS.
+		delete theUIC ;
+	}
+
+	return( Result ) ;
+}
+
+
+TCHAR	*GetScriptPath( TCHAR *ScriptName, TCHAR *Path )
+{
+	int		 IsDirectory ;
+
+	if( FileOrDirectoryExists( ScriptName, &IsDirectory ) )
+	{
+		strcpy( Path, ScriptName ) ;
+		return( Path ) ;
+	}
+
+	TCHAR	*ShareDirectory = GetShareDirectory() ;
+
+	sprintf( Path, _T("%s\\Scripts\\%s"), ShareDirectory, ScriptName ) ;
+
+	if( FileOrDirectoryExists( Path, &IsDirectory ) )
+	{
+		return( Path ) ;
+	}
+
+	TCHAR	*ExeDirectory = GetExeDirectory() ;
+
+	sprintf( Path, _T("%s\\Scripts\\%s"), ExeDirectory, ScriptName ) ;
+
+	if( FileOrDirectoryExists( Path, &IsDirectory ) )
+	{
+		return( Path ) ;
+	}
+
+	strcpy( Path, ScriptName ) ;
+
+	return( Path ) ;
+}
+
+TCHAR	*GetShareDirectory()
+{
+	TCHAR	*ShareDir = NULL ;
+	UGenCon	*Symbols_ShareDir = GetTreeObject( _T("ShareDirectory"), _T("[Symbols]")) ;
+	if( Symbols_ShareDir )
+	{
+		ShareDir = Symbols_ShareDir->GetStringValue(_T("Value")) ;
+	}
+	return( ShareDir ) ;
+}
+
+CIThread *StartREThread(UGenCon *thePrinterSetup, UGenCon *theStatusGC)
+{
+	TCHAR		 FileName[2048] ;
+	TCHAR		*ExeDirectory = GetExeDirectory() ;
+
+	sprintf( FileName, _T("%s\\CommonText\\REThread.txt"), ExeDirectory ) ;
+
+	int CheckTextLibFirst = TRUE ;
+	UGenCon	*CICheckTextLibFirst = GetTreeObject( _T("CICheckTextLibFirst"), _T("GENCONS")) ;
+	if( CICheckTextLibFirst )
+	{
+		CheckTextLibFirst = CICheckTextLibFirst->GetLongValue(_T("Long")) ;
+	}
+
+	if( gLogAmount >= 5 )
+	{
+		SessionLogDirect( _T("REDlg_2.StartREThread: FileName: \"%s\""), FileName ) ;
+	}
+
+	CIThread	*theThread = new CIThread ;
+	if( theThread )
+	{
+		if( gLogAmount >= 8 )
+		{
+			SessionLogDirect( _T("REDlg_2.StartREThread: theThread: 0x%08lX"), theThread ) ;
+		}
+
+		int	 AllowDebugging = FALSE ;
+		theThread->SetRegisterName( _T("REMainThread")) ;
+		int		Result = theThread->Setup(FileName, NULL, -2L, 1000L, thePrinterSetup, CheckTextLibFirst, AllowDebugging ) ;
+
+		if( gLogAmount >= 8 )
+		{
+			SessionLogDirect( _T("REDlg_2.StartREThread: Back From theThread->Setup: Result = %ld"), Result ) ;
+		}
+
+		if( Result == FALSE )
+		{
+			delete theThread ;
+			return( NULL ) ;
+		}
+
+		//	PASS THE DIALOG GENCON
+		PostAThreadMessage( theThread, REM_PRINTERSETUP, 0L, (long) thePrinterSetup ) ;
+
+		//	PASS THE DIALOG WINDOW
+		PostAThreadMessage( theThread, REM_STATUS_GC, 0L, (long) theStatusGC ) ;
+	}
+	return( theThread ) ;
+}
+
+
+void UpdateRenderStatusDialogThread( CIThread *ThreadPtr)
+{
+	long	 Count = 0L ;
+	UList	*theChildren ;
+	UGenCon	*theStatus ;
+
+	UGenCon *theRenderers = GetTreeObject(_T("Renderers"), _T("[]")) ;
+	if( theRenderers )
+	{
+		UList	*TheListOfRenderers = theRenderers->GetChildren() ;
+		if( TheListOfRenderers )
+		{
+			UListIterator	*anIter = new UListIterator( TheListOfRenderers ) ;
+			if( anIter )
+			{
+				UGenCon	*aRenderer = anIter->GetFirst() ;
+				while( aRenderer )
+				{
+					theChildren = aRenderer->GetChildren() ;
+					if( theChildren )
+					{
+						theStatus = theChildren->GetAt(0L) ;
+						if( theStatus )
+						{
+							theStatus->SetLongValue( _T("DlgThread"), (long) ThreadPtr ) ;
+						}
+					}
+					aRenderer = anIter->GetNext() ;
+				}
+				delete anIter ;
+			}
+		}
+	}
+}
+
+long	gLastKick = 0L ;
+void KickREThread()
+{
+	long	Now = Clock() ;
+	if( gLastKick < Now - 30000 )
+	{
+		if( gStatusGC )
+		{
+			CIThread *theREThread = (CIThread *) gStatusGC->GetLongValue( _T("REThread")) ;
+			if( theREThread )
+			{
+				PostAThreadMessage( theREThread, WM_TIMER, 0L, 0L ) ;
+			}
+		}
+		gLastKick = Now ;
+	}
+}
+
+void GetRenderStatus()
+{
+	long		 Count = 0L ;
+	UList		*theChildren ;
+	UGenCon		*theStatus ;
+	TCHAR		 TmpString[1024] ;
+	TCHAR		 RndrString[1024] ;
+	TCHAR		*StatusText = malloc( 100 * 1024 ) ;
+	TCHAR		*Batch ;
+	TCHAR		*Order ;
+	TCHAR		*Status ;
+	TCHAR		*theTime ;
+	TCHAR		*RenderName ;
+	long		 Item ;
+	long		 JobID ;
+	long		 QtyRendered ;
+	CIThread	*theREThread ;
+
+	StatusText[0] = 0x00 ;
+
+//	SessionLogDirect( _T("**\tREDlg_2.GetRenderStatus: Entering")) ;
+
+	UGenCon *theRenderers = GetTreeObject(_T("Renderers"), _T("[]")) ;
+//	SessionLogDirect( _T("**\tREDlg_2.GetRenderStatus: theRenderers: 0x%08lX"), theRenderers ) ;
+
+	if( theRenderers )
+	{
+		UList	*TheListOfRenderers = theRenderers->GetChildren() ;
+//		SessionLogDirect( _T("**\tREDlg_2.GetRenderStatus: TheListOfRenderers: 0x%08lX"), TheListOfRenderers ) ;
+		if( TheListOfRenderers )
+		{
+			UListIterator	*anIter = new UListIterator( TheListOfRenderers ) ;
+			if( anIter )
+			{
+				UGenCon	*aRenderer = anIter->GetFirst() ;
+//				SessionLogDirect( _T("**\tREDlg_2.GetRenderStatus: aRenderer: 0x%08lX"), aRenderer ) ;
+				while( aRenderer )
+				{
+					theChildren = aRenderer->GetChildren() ;
+//					SessionLogDirect( _T("**\tREDlg_2.GetRenderStatus: theChildren: 0x%08lX"), theChildren ) ;
+					if( theChildren )
+					{
+						theStatus = theChildren->GetAt(0L) ;
+//						SessionLogDirect( _T("**\tREDlg_2.GetRenderStatus: theStatus: 0x%08lX"), theStatus ) ;
+						if( theStatus )
+						{
+							theREThread = (CIThread *) theStatus->GetLongValue(_T("REThread")) ;
+//							SessionLogDirect( _T("**\tREDlg_2.GetRenderStatus: theREThread: 0x%08lX"), theREThread ) ;
+							if( theREThread == NULL )
+							{
+								break ;
+							}
+
+							Batch		= theStatus->GetStringValue(_T("Batch")) ;
+							Order		= theStatus->GetStringValue(_T("Order")) ;
+							Item		= theStatus->GetLongValue(_T("Item")) ;
+							JobID		= theStatus->GetLongValue(_T("JobID")) ;
+							Status		= theStatus->GetStringValue(_T("Status")) ;
+							QtyRendered = theStatus->GetLongValue(_T("QtyRendered")) ;
+							theTime		= theStatus->GetStringValue(_T("Time")) ;
+							RenderName	= aRenderer->GetName() ;
+
+							if( Batch  == NULL )	{ Batch  = _T(" ") ; }
+							if( Order  == NULL )	{ Order  = _T(" ") ; }
+							if( Status == NULL )	{ Status = _T(" ") ; }
+
+							if( stricmp( _T("Idle"), Status ) == 0 ||
+								stricmp( _T("Susp"), Status ) == 0 )
+							{
+								sprintf( TmpString, 
+									_T("%-8.8s %-20.20s %-10.10s Qty Rendered: %ld\r\n"),
+										theTime, RenderName, Status, QtyRendered ) ;
+							}
+
+							if( stricmp( _T("Throttled"), Status ) == 0 )
+							{
+								sprintf( TmpString, 
+									_T("%-8.8s %-20.20s Qty Rendered: %ld\r\n%s\r\n"),
+										theTime, RenderName, QtyRendered,
+										_T("Paused, waiting for printer.")) ;
+							}
+
+							if( stricmp( _T("Throttled (Disk)"), Status ) == 0 )
+							{
+								sprintf( TmpString, 
+									_T("%-8.8s %-20.20s Qty Rendered: %ld\r\n%s\r\n"),
+										theTime, RenderName, QtyRendered,
+										_T("Paused, waiting for disk space.")) ;
+							}
+
+							if( stricmp( _T("Rndr"), Status ) == 0 )
+							{
+								sprintf( RndrString, _T("NodeID: %ld Op: %s\r\n\t%ld of %ld Nodes."),
+									theStatus->GetLongValue(_T("CurrentNodeID")),
+									theStatus->GetStringValue(_T("Operation")),
+									theStatus->GetLongValue(_T("CurrentNode")),
+									theStatus->GetLongValue(_T("TotalNodes")) ) ;
+
+								sprintf( TmpString, 
+									_T("%-8.8s %-20.20s %-10.10s Qty Rendered: %ld\r\n\tBatch:\t%-10.10s\r\n\tOrder:\t%-32.32s\r\n\tItem:\t%04ld\r\n\tPageID:\t%04ld\r\n\t%s\r\n"),
+									theTime, RenderName, Status,
+									QtyRendered, Batch, Order, Item,
+									JobID, RndrString ) ;
+							}
+
+							strcat( StatusText, TmpString ) ;
+
+							if( theREThread )
+							{
+								//	REQUEST A STATUS UPDATE !
+								PostAThreadMessage( theREThread, REM_STATUS_REQUEST, 0L, 0L ) ;
+							}
+							
+							Count++ ;
+						}	//	if theStatus
+
+					}	//	if Children
+
+					aRenderer = anIter->GetNext() ;
+				}	//	while aRenderer
+
+				delete anIter ;
+			}	//	if anIter
+
+		}	//	if theListOfRenderers
+
+	}	//	If Renderers
+
+//	SessionLogDirect( _T("**\tREDlg_2.GetRenderStatus: Count: %ld"), Count ) ;
+	if( Count == 0L )
+	{
+		strcpy( StatusText, _T("No Render Engines currently running.")) ;
+	}
+
+	CWnd	*theWnd = GetCtrlWindow(_T("DetailedStatus")) ;
+//	SessionLogDirect( _T("**\tREDlg_2.GetRenderStatus: theWnd:0x%08lX"), theWnd ) ;
+
+	if( theWnd )
+	{
+		TCHAR	*LastStatusText = gDataGC->GetStringValue(_T("DetailedStatus")) ;
+//		SessionLogDirect( _T("**\tREDlg_2.GetRenderStatus: LastStatusText: \"%s\""), LastStatusText ) ;
+		if( LastStatusText )
+		{
+			if( strcmp( LastStatusText, StatusText ))
+			{
+				gDataGC->SetAttrValue( _T("DetailedStatus"), StatusText ) ;
+				theWnd->SetWindowText( StatusText ) ;
+			}
+		}
+		else
+		{
+			gDataGC->SetAttrValue( _T("DetailedStatus"), StatusText ) ;
+			theWnd->SetWindowText( StatusText ) ;
+		}
+	}
+
+//	SessionLogDirect( _T("**\tREDlg_2.GetRenderStatus: StatusText: \"%s\""), StatusText ) ;
+	free( StatusText ) ;
+}
+
+void DisplayStatus( TCHAR *Msg )
+{
+	if( Msg )
+	{
+		gDataGC->SetAttrValue(_T("StatusMsg"), Msg ) ;
+
+		CWnd	*theWnd = GetCtrlWindow( _T("StatusMsg")) ;
+		if( theWnd )
+		{
+			theWnd->SetWindowText( Msg ) ;
+		}
+		free( Msg ) ;
+	}
+}
+
+CWnd *GetCtrlWindow(TCHAR *ControlName)
+{
+	CWnd	 *aWnd		= NULL ;
+	UWinCtrl *aWinCtrl	= NULL ;
+
+	if( gDlg )
+	{
+		UGenCon *aWinCtrlGC = gDlg->GetWinCtrlByName( ControlName ) ;
+		if( aWinCtrlGC )
+		{
+			aWinCtrl = (UWinCtrl *) aWinCtrlGC->GetLongValue(_T("UWinCtrl")) ;
+			if( aWinCtrl )
+			{
+				aWnd = aWinCtrl->GetControl() ;
+			}
+		}
+	}
+	return( aWnd ) ;
+}
+
+
+void Do_Update_Queue()
+{
+	TCHAR	*PrinterName = gDataGC->GetStringValue(_T("PrinterList")) ;
+	TCHAR	*QueueName = gDataGC->GetStringValue(_T("QueueList")) ;
+
+	UGenCon *PrinterSetup = GetTreeObject( PrinterName, _T("Renderers") ) ;
+	if( PrinterSetup )
+	{
+		TCHAR *OldQueueName = PrinterSetup->GetStringValue(_T("QueueName")) ;
+		if( stricmp( OldQueueName, QueueName ))
+		{
+			UGenCon *NewPrinterSetup = GetPrinterSetup(PrinterName, QueueName ) ;
+
+			if( NewPrinterSetup )
+			{
+				CopyPrinterGC( PrinterSetup, NewPrinterSetup ) ;
+				delete NewPrinterSetup ;
+
+				PrinterSetup->SetAttrValue(_T("QueueName"), QueueName ) ;
+				PrinterSetup->Dump( _T("Updated Print Queue") ) ;
+
+				TCHAR	Msg[1024] ;
+				sprintf( Msg, _T("%s was changed to %s."), PrinterName, QueueName ) ;
+				gDataGC->SetAttrValue(_T("StatusMsg"), Msg ) ;
+				if( gDlg )
+				{
+					DisplayControlValues( gDlg ) ;
+				}
+
+				UpdatePrinterTable( PrinterName, NULL, QueueName ) ;
+			}
+		}
+	}
+}
+
+//	WHEN CHANGING THIS TABLE - DON'T FORGET TO FIX UP THE ADD PRINTER WIZARD !!!!
+//	NOTE: WHEN CHANGING DATA IN THE PRINTER OR QUEUE DEFINITION TABLES...
+//			YOU MUST CHANGE REDialog.cpp, RenderEngineDlg_2.txt, 
+//			ScannerRenderEngine.cpp, CRenderEngineMain.txt, and FieldTypes.txt
+//			and AlterExistingTables, Render.txt (page and printer setup)
+
+UGenCon *GetPrinterSetup( TCHAR *PrinterName, TCHAR *QueueName )
+{
+	if( PrinterName == NULL )	{ return( NULL ) ; }
+	if( QueueName == NULL )		{ return( NULL ) ; }
+
+	if( stricmp( PrinterName, _T("None")) == 0 )	{ return( NULL ) ; }
+	if( stricmp( QueueName,   _T("None")) == 0 )	{ return( NULL ) ; }
+
+	UGenCon *PrinterSetup = new UGenCon( GetDataDictionary( _T("DDPrinterSetups"))) ;
+	if( PrinterSetup == NULL )
+	{
+		return( HandleFatalError( _T("Render Engine Error: Cannot get PrinterSetup GC.") )) ;
+	}
+
+	PrinterSetup->SetName( PrinterName ) ;
+
+	TCHAR	theQuery[1024] ;
+	sprintf( theQuery, _T("Select * from Printers Where PrinterName = '%s'"), PrinterName ) ;
+
+	GetARecord( theQuery, 1L, PrinterSetup ) ;
+
+	sprintf( theQuery, _T("Select * from QueueDefinition Where QueueName = '%s'"), QueueName ) ;
+
+	GetARecord( theQuery, 2L, PrinterSetup ) ;
+
+	//	BECAUSE THE QUEUE NAME MAY HAVE BEEN OVER-WRITTEN BY THE QUEUENAME IN
+	//	THE PRINTER TABLE, WE MUST UPDATE THE QUEUENAME HERE.
+	PrinterSetup->SetAttrValue(_T("QueueName"), QueueName ) ;
+
+	PrinterSetup->SetLongValue(_T("LogAmount"), gDataGC->GetLongValue(_T("LogValue"))) ;
+
+	//	EXPAND THE CONTROL FOLDER PATHS
+	SetupControlFolders(PrinterSetup) ;
+
+	//	FIND ANY SCRIPTS TO BE RUN
+	SetupScripts( PrinterSetup ) ;
+
+	PrinterSetup->Dump(_T("The Printer Setup")) ;
+
+	return( PrinterSetup ) ;
+}
+
+void Do_OpenTables()
+{
+	TCHAR	 FuncCall[1024] ;
+	TCHAR	*PrinterName	= gDataGC->GetStringValue(_T("PrinterList")) ;
+	TCHAR	*QueueName		= gDataGC->GetStringValue(_T("QueueList")) ;
+
+	if( PrinterName )
+	{
+		if( stricmp( PrinterName, _T("None")) != 0 )
+		{
+			sprintf( FuncCall, _T("Init(~%s~, ~Select * From Printers Where PrinterName = '%s'~) ;"), PrinterName, PrinterName ) ;
+			OpenADocument( _T("PrintersDoc.txt"), _T("Script"), FuncCall ) ;
+		}
+	}
+
+	if( QueueName )
+	{
+		if( stricmp( QueueName, _T("None")) != 0 )
+		{
+			sprintf( FuncCall, _T("Init(~%s~, ~Select * From QueueDefinition Where QueueName = '%s'~) ;"), QueueName, QueueName ) ;
+			OpenADocument( _T("PrinterQueuesDoc.txt"), _T("Script"), FuncCall ) ;
+
+			sprintf( FuncCall, _T("Init(~%s~, ~Select * From JobQueue Where QueueName = '%s'~) ;"), QueueName, QueueName ) ;
+			OpenADocument( _T("JobQueueDoc.txt"), _T("Script"), FuncCall ) ;
+		}
+	}
+}
+
+void Show_Queue()
+{
+	TCHAR	 FuncCall[1024] ;
+	TCHAR	*QueueName		= gDataGC->GetStringValue(_T("QueueList")) ;
+
+	if( QueueName )
+	{
+		if( stricmp( QueueName, _T("None")) != 0 )
+		{
+			sprintf( FuncCall, _T("Init(~%s~, ~Select * From JobQueue Where QueueName = '%s'~) ;"), QueueName, QueueName ) ;
+			OpenADocument( _T("JobQueueDoc.txt"), _T("Script"), FuncCall ) ;
+		}
+	}
+}
+
+void Do_Show_Setup(int Update)
+{
+	TCHAR	*PrinterName	= gDataGC->GetStringValue(_T("PrinterList")) ;
+	TCHAR	*QueueName		= gDataGC->GetStringValue(_T("QueueList")) ;
+
+//	Debug(1) ;
+
+	UGenCon *PrinterSetup = GetTreeObject( PrinterName, _T("Renderers") ) ;
+	if( PrinterSetup )
+	{
+		if( Update )
+		{
+			UGenCon *NewPrinterSetup = GetPrinterSetup( PrinterName, QueueName ) ;
+
+			if( NewPrinterSetup )
+			{
+				//	TELL USER THAT CHANGES WILL AFFECT NEXT BATCH QWERTY
+				TCHAR	*Msg = _T("Do you want the changes to take affect on the next batch?") ;
+				int Result = MessageBox( Msg, _T("MB_YESNO")) ;
+				TCHAR	*UserResponse = _T("Yes") ;
+				if( Result == 7 )	{ UserResponse = _T("No") ; }
+
+				SessionLogDirect( _T("REDlg2.Do_Show_Setup:  \"%s\" User Said: \"%s\"."),
+											Msg, UserResponse ) ;
+				if( Result == 6 )
+				{
+					CopyPrinterGC( PrinterSetup, NewPrinterSetup ) ;
+
+					PrinterSetup->SetAttrValue(_T("QueueName"), QueueName ) ;
+
+					CIThread	*theThread = GetREThread( PrinterName ) ;
+					if( theThread )
+					{
+						PostAThreadMessage( theThread, REM_PRINTERSETUP, 0L, (long) PrinterSetup ) ;
+					}
+				}
+				delete NewPrinterSetup ;
+			}
+		}
+
+		ShowPrinterSetup( PrinterSetup ) ;
+	}
+}
+
+void ShowPrinterSetup( UGenCon *PrinterSetup )
+{
+	TCHAR	 Buffer[1024] ;
+	TCHAR	*PrinterData = malloc( 100 * 1024 ) ;
+	if( PrinterData )
+	{
+		UList	*theDict = PrinterSetup->GetDataDict() ;
+		if( theDict == NULL )
+		{
+			free( PrinterData ) ;
+			return(NULL) ;
+		}
+
+		TCHAR	Value[1024] ;
+		TCHAR	*AttrName ;
+
+		PrinterData[0] = 0 ;
+
+		UListIterator	*anIter = new UListIterator( theDict ) ;
+
+		UObject		*theAttribute = anIter->GetFirst() ;
+
+		while( theAttribute )
+		{
+			AttrName = theAttribute->GetName() ;
+			if( AttrName )
+			{
+				PrinterSetup->GetAttrValue( AttrName, Value ) ;
+				sprintf( Buffer, _T("%-20.20s %s\r\n"), AttrName, Value ) ;
+				strcat( PrinterData, Buffer ) ;
+			}
+
+			theAttribute = anIter->GetNext() ;
+		}
+		delete anIter ;
+
+		gDataGC->SetAttrValue(_T("Setup"), PrinterData ) ;
+		if( gDlg )
+		{
+			DisplayControlValues( gDlg ) ;
+		}
+
+		free( PrinterData ) ;
+	}
+}
+
+
+CIThread *GetREThread( TCHAR *PrinterName )
+{
+	CIThread	*theThread = NULL ;
+
+	UGenCon *PrinterSetup = GetTreeObject( PrinterName, _T("Renderers") ) ;
+	if( PrinterSetup == NULL )	{ return( theThread ) ; }
+
+	UList	*theChildren = PrinterSetup->GetChildren() ;
+	if( theChildren == NULL )	{ return( theThread ) ; }
+
+	UGenCon	*theStatus = theChildren->GetAt(0L) ;
+	if( theStatus == NULL )		{ return( theThread ) ; }
+
+	theThread = theStatus->GetLongValue(_T("REThread")) ;
+
+	return( theThread ) ;
+}
+
+void Do_Shutdown()		//	TBD  THIS IS TEMPORARY UNTIL WE GET FURTHER IN
+{
+	TCHAR	*PrinterName = gDataGC->GetStringValue(_T("PrinterList")) ;
+	long	 ShutdownNow = gDataGC->GetLongValue(_T("Shutdown_Now")) ;
+	long	 NumJobsToBePrinted = 0L ;
+
+	UGenCon *PrinterSetup = GetTreeObject( PrinterName, _T("Renderers") ) ;
+	if( PrinterSetup )
+	{
+		TCHAR	 Msg[1024] ;
+		UGenCon *ModeStatusGC ;
+		int		 PrinterIsSuspended ;
+
+		NumJobsToBePrinted = GetNumJobsToBePrinted(PrinterSetup, &PrinterIsSuspended ) ;
+
+		if( gLogAmount >= 5 )
+		{
+			SessionLogDirect( _T("REDlg_2.Do_Shutdown: NumJobsToBePrinted: %ld"), NumJobsToBePrinted ) ;
+			SessionLogDirect( _T("REDlg_2.Do_Shutdown: PrinterIsSuspended: %d"), PrinterIsSuspended ) ;
+		}
+
+		if( ShutdownNow )
+		{
+			if( NumJobsToBePrinted )
+			{
+				sprintf( Msg,  _T("There are %ld Jobs waiting to be printed. Do you want to cancel these jobs?"), NumJobsToBePrinted ) ;
+			}
+			else
+			{
+				sprintf( Msg,  _T("Are you sure you want to shut down \"%s\"?"), PrinterName ) ;
+			}
+		}
+		else	//	NOT SHUTDOWN NOW
+		{
+			if( NumJobsToBePrinted )
+			{
+				sprintf( Msg,  _T("Are you sure you want to shut down \"%s\"? (%ld Jobs still to be printed.)"),
+							PrinterName, NumJobsToBePrinted ) ;
+			}
+			else
+			{
+				sprintf( Msg,  _T("Are you sure you want to shut down \"%s\"?"), PrinterName ) ;
+			}
+		}
+
+		int	Result = MessageBox( Msg, _T("MB_YESNO")) ;
+
+		TCHAR	*UserResponse = _T("Yes") ;
+		if( Result == 7 )	{ UserResponse = _T("No") ; }
+
+		SessionLogDirect( _T("REDlg2.Do_Shutdown: Now: %ld, \"%s\" User Said: \"%s\"."),
+									ShutdownNow, Msg, UserResponse ) ;
+
+		if( Result == 6 )	//	YES
+		{
+//			gShuttingDown = TRUE ;
+			if( NumJobsToBePrinted && ShutdownNow )
+			{
+				WriteModeAction(_T("SUSPEND\n")) ;
+				ModeStatusGC = WaitForModeStatus() ;
+				delete ModeStatusGC ;
+
+				WriteModeAction(_T("FLUSH\n")) ;
+				ModeStatusGC = WaitForModeStatus() ;
+				delete ModeStatusGC ;
+			}
+
+			CIThread	*REThread = GetREThread( PrinterName ) ;
+			if( REThread )
+			{
+				PostAThreadMessage( REThread, REM_SHUTDOWN, 0L, ShutdownNow ) ;
+			}
+
+			if( ShutdownNow )
+			{
+				sprintf( Msg, _T("%s is shutting down."), PrinterName ) ;
+			}
+			else
+			{
+				sprintf( Msg, _T("%s will shutdown at batch end. Be sure printer is not suspended."), PrinterName ) ;
+			}
+
+			gDataGC->SetAttrValue(_T("StatusMsg"), Msg ) ;
+			if( gDlg )
+			{
+				DisplayControlValues( gDlg ) ;
+			}
+		}
+
+		//	RESTART THE HOT FOLDER
+		if( PrinterIsSuspended == FALSE )
+		{
+			if(	IsModePrinter( PrinterSetup ) )
+			{
+				WriteModeAction(_T("RESUME\n")) ;
+				ModeStatusGC = WaitForModeStatus() ;
+				delete ModeStatusGC ;
+			}
+		}
+	}
+}
+
+long GetNumJobsToBePrinted(UGenCon *PrinterSetup, int *PrinterIsSuspended)
+{
+	long	NumJobsToBePrinted = 0L ;
+
+	*PrinterIsSuspended = FALSE ;
+
+	if(	IsModePrinter( PrinterSetup ) )
+	{
+		//	GET MODE STATUS
+		WriteModeAction(_T("STATUS_JOB_COUNT\n")) ;
+
+		UGenCon *ModeStatusGC = WaitForModeStatus() ;
+		if( ModeStatusGC )
+		{
+			NumJobsToBePrinted = ModeStatusGC->GetLongValue(_T("NumberJobs:")) ;
+			TCHAR	*State = ModeStatusGC->GetStringValue(_T("State:")) ;
+			if( State )
+			{
+				if( stricmp( State, _T("Suspended")) == 0 )
+				{
+					*PrinterIsSuspended = TRUE ;
+				}
+			}
+			delete ModeStatusGC ;
+		}
+	}
+	return( NumJobsToBePrinted ) ;
+}
+
+int	IsModePrinter( UGenCon *PrinterSetup )
+{
+	int	IsMode = FALSE ;
+	TCHAR	*PrinterModel = PrinterSetup->GetStringValue(_T("PrinterModel")) ;
+	if(	stricmp( PrinterModel, _T("Kodak LED"))		== 0 ||
+		stricmp( PrinterModel, _T("Kodak CRT"))		== 0 ||
+		stricmp( PrinterModel, _T("Kodak LFCRT"))	== 0 ||
+		stricmp( PrinterModel, _T("KPDM"))			== 0 ||
+		stricmp( PrinterModel, _T("KPDM II"))		== 0 ||
+		stricmp( PrinterModel, _T("NexPress"))		== 0 ||
+		stricmp( PrinterModel, _T("NT Printer"))	== 0 ||
+		stricmp( PrinterModel, _T("Windows Printer")) == 0 )
+	{
+		IsMode = TRUE ;
+	}
+	return( IsMode ) ;
+}
+
+
+//	AT THIS POINT THE RENDER ENGINE HAS SHUT DOWN
+//	SO LET'S DO THE CLEAN UP.
+void Do_HasShutdown(UGenCon *PrinterSetup)
+{
+	gStatusGC = NULL ;
+
+	TCHAR	*PrinterName = PrinterSetup->GetStringValue(_T("PrinterName")) ;
+
+	SessionLogDirect( _T("REDlg2.HasShutdown: Printer: %s"), PrinterName ) ;
+
+	PluckTreeObject( PrinterName, _T("Renderers")) ;
+
+	TCHAR	Msg[1024] ;
+	sprintf( Msg, _T("%s has been shutdown."), PrinterName ) ;
+	gDataGC->SetAttrValue(_T("StatusMsg"), Msg ) ;
+	if( gDlg )
+	{
+		DisplayControlValues( gDlg ) ;
+	}
+
+	TCHAR	*Status = _T("Shutdown") ;
+	if( gDataGC->GetLongValue(_T("Shutdown_Now")))	{ Status = _T("Quit") ; }
+
+	UpdatePrinterTable( PrinterName, Status, NULL ) ;
+
+	delete PrinterSetup ;
+}
+
+
+int Do_Suspend()
+{
+	TCHAR		 Msg[1024] ;
+	TCHAR		*PrinterName = gDataGC->GetStringValue(_T("PrinterList")) ;
+
+	CIThread	*REThread = GetREThread( PrinterName ) ;
+	if( REThread )
+	{
+		PostAThreadMessage( REThread, REM_SUSPEND, 0L, 1L ) ;
+
+		sprintf( Msg, _T("%s has been suspended."), PrinterName ) ;
+		gDataGC->SetAttrValue(_T("StatusMsg"), Msg ) ;
+		if( gDlg )
+		{
+			DisplayControlValues( gDlg ) ;
+		}
+		SessionLogDirect( _T("REDlg2.Do_Suspend: Printer: %s has been suspended."), PrinterName ) ;
+	}
+	return( TRUE ) ;
+}
+
+int Do_Resume()
+{
+	TCHAR	Msg[1024] ;
+	TCHAR		*PrinterName = gDataGC->GetStringValue(_T("PrinterList")) ;
+	CIThread	*REThread = GetREThread( PrinterName ) ;
+	if( REThread )
+	{
+		PostAThreadMessage( REThread, REM_RESUME, 0L, 1L ) ;
+
+		sprintf( Msg, _T("%s has been resumed."), PrinterName ) ;
+		gDataGC->SetAttrValue(_T("StatusMsg"), Msg ) ;
+		if( gDlg )
+		{
+			DisplayControlValues( gDlg ) ;
+		}
+		SessionLogDirect( _T("REDlg2.Do_Resume: Printer: %s has been resumed."), PrinterName ) ;
+	}
+}
+
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//
+//	THESE ROUTINES ARE FOR THE PRINTER CONTROL TAB OF THE DIALOG !
+
+int Help()
+{
+	Debug(1) ;
+}
+
+
+int LaunchPrinter()
+{
+	TCHAR	FuncCall[1024] ;
+
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+
+	if( PrinterSetup )
+	{
+		TCHAR	*StartUpScript = PrinterSetup->GetStringValue(_T("BIStartUpScript")) ;
+		if( StartUpScript )
+		{
+			if( *StartUpScript )
+			{
+				sprintf( FuncCall, _T("Init(0x%08lX);"), PrinterSetup ) ;
+				CallScript( StartUpScript, FuncCall ) ;
+			}
+		}
+
+		StartUpScript = PrinterSetup->GetStringValue(_T("StartUpScript")) ;
+		if( StartUpScript )
+		{
+			if( *StartUpScript )
+			{
+				sprintf( FuncCall, _T("Init(0x%08lX);"), PrinterSetup ) ;
+				CallScript( StartUpScript, FuncCall ) ;
+			}
+		}
+	}
+	return( TRUE ) ;
+}
+
+
+int ShutdownPrinter()
+{
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+
+	if( PrinterSetup )
+	{
+		TCHAR	*PrinterName = gDataGC->GetStringValue(_T("PrinterList")) ;
+
+		TCHAR	Msg[1024] ;
+		sprintf( Msg,  _T("Are you sure you want to shut down \"%s\"."), PrinterName ) ;
+
+		int	Result = MessageBox( Msg, _T("MB_YESNO")) ;
+
+		TCHAR	*UserResponse = _T("Yes") ;
+		if( Result == 7 )	{ UserResponse = _T("No") ; }
+
+		SessionLogDirect( _T("REDlg2.Do_Shutdown: \"%s\" User Said: \"%s\"."),
+									Msg, UserResponse ) ;
+
+		if( Result == 6 )	//	YES
+		{
+			UGenCon *RP30Setup = (UGenCon *) PrinterSetup->GetLongValue(_T("RP30Setup")) ;
+			if( RP30Setup )
+			{
+				StopNetPrintMode() ;
+				WriteAction( _T("299.act"), _T("ACTION: 0999")) ;
+				if( gLogAmount >= 5 )
+				{
+					SessionLogDirect( _T("RP30: Sent ShutdownInterfaceApp") ) ;
+				}
+				Sleep(1000) ;
+			}
+			else	//	ELSE MODE
+			{
+				WriteModeAction(_T("SHUTDOWN\n")) ;
+				UGenCon *ModeStatusGC = WaitForModeStatus() ;
+				delete ModeStatusGC ;
+			}
+		}
+	}
+	return( Result == 6 ) ;
+}
+
+
+int SuspendPrinter()
+{
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+
+	if( PrinterSetup )
+	{
+		//	IF RP30 THEN
+		TCHAR	*PrinterModel = PrinterSetup->GetStringValue(_T("PrinterModel")) ;
+		UGenCon *RP30Setup = (UGenCon *) PrinterSetup->GetLongValue(_T("RP30Setup")) ;
+		if( RP30Setup || stricmp( PrinterModel, _T("Kodak RP30")) == 0 )
+		{
+			WriteAction( _T("206.act"), _T("ACTION: 0006")) ;
+			if( gLogAmount >= 5 )
+			{
+				SessionLogDirect( _T("RP30: Sent StopNetPrintMode") ) ;
+			}
+			WaitForStatus(_T("206.sta")) ;
+		}
+		else	//	ELSE MODE
+		{
+			WriteModeAction(_T("Suspend\n")) ;
+			UGenCon *ModeStatusGC = WaitForModeStatus() ;
+			delete ModeStatusGC ;
+		}
+	}
+	return( TRUE ) ;
+}
+
+
+int ResumePrinter()
+{
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+
+	if( PrinterSetup )
+	{
+		//	IF RP30 THEN
+		UGenCon *RP30Setup = (UGenCon *) PrinterSetup->GetLongValue(_T("RP30Setup")) ;
+		if( RP30Setup )
+		{
+			WriteAction( _T("207.act"), _T("ACTION: 0007")) ;
+			if( gLogAmount >= 5 )
+			{
+				SessionLogDirect( _T("RP30: Sent RestartNetPrint") ) ;
+			}
+			WaitForStatus(_T("207.sta")) ;
+
+			NetPrintMode() ;
+		}
+		else	//	ELSE MODE
+		{
+			WriteModeAction(_T("RESUME\n")) ;
+			UGenCon *ModeStatusGC = WaitForModeStatus() ;
+			delete ModeStatusGC ;
+		}
+	}
+	return( TRUE ) ;
+}
+
+
+int Get_Status()
+{
+	TCHAR	*PrinterName = gDataGC->GetStringValue(_T("PrinterList")) ;
+	UGenCon	*PrinterSetup = GetTreeObject( PrinterName, _T("[Renderers]")) ;
+
+	if( PrinterSetup )
+	{
+		TCHAR	*PrinterModel	= PrinterSetup->GetStringValue(_T("PrinterModel")) ;
+
+		if( stricmp( PrinterModel, _T("Kodak RP30")) == 0 )
+		{
+			WriteAction( _T("303.act"), _T("ACTION: 0003")) ;
+			WaitForStatus(_T("303.sta")) ;
+		}
+		else
+		{
+			WriteModeAction(_T("STATUS\n")) ;
+			UGenCon *ModeStatusGC = WaitForModeStatus() ;
+			delete ModeStatusGC ;
+			int	Result = MessageBox( _T("Status written to SessionLog."), _T("MB_OK")) ;
+		}
+	}
+
+	return( TRUE ) ;
+}
+
+int Clean_Folders()
+{
+	CleanFolders() ;
+}
+
+int Delete_Page()
+{
+	int	Result = Delete_PageMode() ;
+	return( Result ) ;
+}
+
+int Delete_All_Pages()
+{
+	int Result = FlushMode() ;
+	return( Result ) ;
+}
+
+//=============================================================================
+//=============================================================================
+
+int RestoreNJPJobs()
+{
+	int Result = FALSE ;
+
+	SessionLogDirect( _T("REDlg2.RestoreNJPJobs")) ;
+	
+	UGenCon	*PrinterSetup = FindPrinterSetup() ;
+	if( PrinterSetup )
+	{
+		TCHAR	*ControlFolder	= PrinterSetup->GetStringValue( _T("ControlFolder")) ;
+		TCHAR	*ResponseFolder	= PrinterSetup->GetStringValue( _T("ResponseFolder")) ;
+
+		TCHAR	 SrcFileName[2048] ;
+		TCHAR	 DstFileName[2048] ;
+		TCHAR	*FileName = NULL ;
+		UGenCon	*aFileGC  = NULL ;
+
+		sprintf( SrcFileName, _T("%s\\Backup\\*.xml"), ResponseFolder ) ;
+
+		UList	*theFileList = GetFileList( SrcFileName ) ;
+		if( theFileList )
+		{
+			long	NumEntries = theFileList->GetNumEntries() ;
+			long	EntryNum ;
+			for( EntryNum = 0L ; EntryNum < NumEntries ; EntryNum++ )
+			{
+				aFileGC = theFileList->GetAt( EntryNum ) ;
+				if( aFileGC )
+				{
+					FileName = aFileGC->GetStringValue( _T("FileName")) ;
+				}
+				sprintf( SrcFileName, _T("%s\\Backup\\%s"), ResponseFolder, FileName ) ;
+				sprintf( DstFileName, _T("%s\\%s"), ControlFolder, FileName ) ;
+
+				SessionLogDirect( _T("REDlg2.RestoreNJPJobs: Copying: \"%s\" to \"%s\"."), SrcFileName, DstFileName ) ;
+
+				CopyFile( SrcFileName, DstFileName ) ;
+				Result = TRUE ;
+			}
+
+			delete theFileList ;
+		}
+	}
+
+	return( Result ) ;
+}
+
+int CopyFile( TCHAR *SrcFileName, TCHAR *DstFileName )
+{
+	int		 Result = TRUE ;
+	long	 Length = 0L ;
+	long	 BytesWritten = 0L ;
+
+	char	*FileData = GetTheFile( SrcFileName, &Length ) ;
+	if( FileData )
+	{
+		char	*fp = fopen( DstFileName, _T("wb")) ;
+		if( fp )
+		{
+			BytesWritten = fwrite( FileData, 1L, Length, fp ) ;
+			if( BytesWritten != Length )
+			{
+				printf( _T("Could not write \"%s\", Error: %d, %s\r\n"), DstFileName, Error, Msg ) ;
+				Result = FALSE ;
+			}
+			fclose( fp ) ;
+		}
+		else
+		{
+			printf( _T("Could not open \"%s\", Error: %d, %s\r\n"), DstFileName, Error, Msg ) ;
+			Result = FALSE ;
+		}
+
+		free( FileData ) ;
+	}
+	else
+	{
+		printf( _T("Could not open \"%s\", Error: %d, %s\r\n"), SrcFileName, Error, Msg ) ;
+		Result = FALSE ;
+	}
+
+	return( Result ) ;
+}
+
+TCHAR *GetTheFile(TCHAR *Path, long *Len)
+{
+	TCHAR	*Text = NULL ;
+
+	char *fp = fopen( Path, _T("rb")) ;
+	if( fp )
+	{
+		fseek( fp, 0L, 2 ) ;
+		int	Length = ftell(fp) ;
+		fseek( fp, 0L, 0 ) ;
+		Text = malloc( (Length + 32) * 2 ) ;
+		fread( Text, 2, Length, fp ) ;
+		fclose( fp ) ;
+	}
+	*Len = Length ;
+	return( Text ) ;
+}
+
+//=============================================================================
+//=============================================================================
+
+int Net_Print_Mode()
+{
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+
+	if( PrinterSetup )
+	{
+		//	IF RP30 THEN
+		UGenCon *RP30Setup = (UGenCon *) PrinterSetup->GetLongValue(_T("RP30Setup")) ;
+		if( RP30Setup )
+		{
+			NetPrintMode() ;
+		}
+	}
+}
+
+int Stop_NetPrint()
+{
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+
+	if( PrinterSetup )
+	{
+		//	IF RP30 THEN
+		UGenCon *RP30Setup = (UGenCon *) PrinterSetup->GetLongValue(_T("RP30Setup")) ;
+		if( RP30Setup )
+		{
+			StopNetPrintMode() ;
+		}
+	}
+}
+
+int Restart_NetPrint()
+{
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+
+	if( PrinterSetup )
+	{
+		//	IF RP30 THEN
+		UGenCon *RP30Setup = (UGenCon *) PrinterSetup->GetLongValue(_T("RP30Setup")) ;
+		if( RP30Setup )
+		{
+			WriteAction( _T("207.act"), _T("ACTION: 0007")) ;
+			if( gLogAmount >= 5 )
+			{
+				SessionLogDirect( _T("RP30: Sent RestartNetPrint") ) ;
+			}
+			WaitForStatus(_T("207.sta")) ;
+		}
+	}
+}
+
+int Force_End_Order()
+{
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+
+	if( PrinterSetup )
+	{
+		//	IF RP30 THEN
+		UGenCon *RP30Setup = (UGenCon *) PrinterSetup->GetLongValue(_T("RP30Setup")) ;
+		if( RP30Setup )
+		{
+			WriteAction( _T("204.act"), _T("ACTION: 0004")) ;
+			if( gLogAmount >= 5 )
+			{
+				SessionLogDirect( _T("RP30: Sent Resync IA (Force EOO)") ) ;
+			}
+			WaitForStatus(_T("204.sta")) ;
+		}
+	}
+}
+
+UGenCon *FindPrinterSetup()
+{
+	UGenCon	*PrinterSetup = NULL ;
+
+	TCHAR	*PrinterName = gDataGC->GetStringValue(_T("PrinterList")) ;
+
+	if( PrinterName )
+	{
+		if( *PrinterName )
+		{
+			PrinterSetup = GetTreeObject( PrinterName, _T("Renderers") ) ;
+			if( PrinterSetup == NULL )
+			{
+				TCHAR	*QueueName = gDataGC->GetStringValue(_T("QueueList")) ;
+				PrinterSetup = GetPrinterSetup( PrinterName, QueueName ) ;
+			}
+		}
+	}
+	return( PrinterSetup ) ;
+}
+
+NetPrintMode()
+{
+	WriteAction( _T("205.act"), _T("ACTION: 0005")) ;
+	if( gLogAmount >= 5 )
+	{
+		SessionLogDirect( _T("RP30: Sent NetPrintMode") ) ;
+	}
+	WaitForStatus(_T("205.sta")) ;
+}
+
+
+StopNetPrintMode()
+{
+	WriteAction( _T("206.act"), _T("ACTION: 0006")) ;
+
+	if( gLogAmount >= 5 )
+	{
+		SessionLogDirect( _T("RP30: Sent StopNetPrintMode") ) ;
+	}
+
+	MessageBox(_T("Please wait until the Printer Resets then clear the \"Reset\" message from the printer."),
+					_T("MB_OK")) ;
+	WaitForStatus(_T("206.sta")) ;
+}
+
+
+//	CALL WITH 001.ACT, ACTION: 0005
+WriteAction( TCHAR *FileName, TCHAR *Text )
+{
+	TCHAR	 FilePath[2048] ;
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+	if( PrinterSetup )
+	{
+		TCHAR	*ControlFolder = PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+
+		sprintf( FilePath, _T("%s\\%s"), ControlFolder, FileName ) ;
+		char	*fp = fopen( FilePath, _T("wb")) ;
+		if( fp )
+		{
+			TCHAR	IOBuff[32] ;
+			IOBuff[0] = 0xFEFF ;
+			IOBuff[1] = 0x0000 ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+
+			WriteUnicodeFile( fp, Text ) ;
+			fclose(fp) ;
+		}
+	}
+}
+
+
+WriteUnicodeFile( char *fp, TCHAR *Text )
+{
+	long	Length = strlen( Text ) ;
+	fwrite( Text, 2, Length, fp ) ;
+
+	long	EndOfLine = 0x000A000D ;
+	fwrite( &EndOfLine, 2, 2, fp ) ;
+}
+
+int CleanFolders()
+{
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+//	UGenCon *PrinterSetup = GetTreeObject( PrinterName, _T("Renderers") ) ;
+	if( PrinterSetup )
+	{
+		TCHAR	*PrinterName = PrinterSetup->GetStringValue(_T("PrinterName")) ;
+		UGenCon *RenderPrinterSetup = GetTreeObject( PrinterName, _T("Renderers") ) ;
+		if( RenderPrinterSetup == PrinterSetup )
+		{
+			MessageBox( _T("Please Shut down the render engine before cleaning folders."), _T("MB_OK")) ;
+			return( FALSE ) ;
+		}
+
+//		CleanFiles(PrinterSetup->GetStringValue(_T("ResponseFolder")), _T("*.*")) ;
+		CleanFiles(PrinterSetup->GetStringValue(_T("ResponseFolder")), _T("*.sta")) ;
+		CleanFiles(PrinterSetup->GetStringValue(_T("ResponseFolder")), _T("*.err")) ;
+
+//		CleanFiles(PrinterSetup->GetStringValue(_T("ControlFolder")), _T("*.*")) ;
+		CleanCommandFiles(PrinterSetup->GetStringValue(_T("ControlFolder")), _T("*.cmd")) ;
+		CleanFiles(PrinterSetup->GetStringValue(_T("ControlFolder")), _T("*.act")) ;
+
+		TCHAR	*SourcePath = PrinterSetup->GetStringValue(_T("OutputPath")) ;
+		TCHAR	 OutputPath[2048] ;
+		ExpandFolderPath(SourcePath, OutputPath) ;
+
+		TCHAR	 FilePath[1024] ;
+		TCHAR	 FileName[1024] ;
+		TCHAR	 FileExtn[1024] ;
+		GetFilePathNameAndExt( OutputPath, FilePath, FileName, FileExtn ) ;
+
+		CleanFiles( FilePath, _T("*.jpg") ) ;
+		CleanFiles( FilePath, _T("*.tif") ) ;
+
+		SourcePath = PrinterSetup->GetStringValue(_T("SpotColorMaskPath")) ;
+		if( SourcePath )
+		{
+			ExpandFolderPath(SourcePath, OutputPath) ;
+
+			GetFilePathNameAndExt( OutputPath, FilePath, FileName, FileExtn ) ;
+
+			CleanFiles( FilePath, _T("*.jpg") ) ;
+			CleanFiles( FilePath, _T("*.tif") ) ;
+		}
+
+		delete PrinterSetup ;
+	}
+	return( TRUE ) ;
+}
+
+
+int CleanFiles(TCHAR *FolderPath, TCHAR *FileType)
+{
+	TCHAR			 FilePath[2048] ;
+	TCHAR			*FileName ;
+
+	//	DELETE PREVIOUS FILES.
+	if( FolderPath == NULL )	{ return( FALSE ) ; }
+
+	sprintf( FilePath, _T("%s\\%s"), FolderPath, FileType ) ;
+
+	UList			*theFiles = GetFileList(FilePath) ;
+	UListIterator	*anIter = new UListIterator(theFiles) ;
+
+	UGenCon	*aFileGC = anIter->GetLast() ;
+	while( aFileGC )
+	{
+		FileName = aFileGC->GetStringValue(_T("FileName")) ;
+		sprintf( FilePath, _T("%s\\%s"), FolderPath, FileName ) ;
+		SessionLogDirect(_T("C_RP30_Control.CleanFiles: deleting \"%s\"\r\n"), FilePath ) ;
+		unlink( FilePath ) ;
+		aFileGC = anIter->GetPrev() ;
+	}
+
+	delete anIter ;
+	delete theFiles ;
+	return( TRUE ) ;
+}
+
+int CleanCommandFiles(TCHAR *FolderPath, TCHAR *FileType)
+{
+	TCHAR			 FilePath[2048] ;
+	TCHAR			 ErrorMsg[512] ;
+	TCHAR			*FileName ;
+	TCHAR			 ImageFilePath[2048] ;
+	TCHAR			*CmdText ;
+
+	int				 LastError = 0 ;
+	int				 Error = 0 ;
+	int				 Dot = '.' ;
+
+	//	DELETE PREVIOUS FILES.
+	if( FolderPath == NULL )	{ return( FALSE ) ; }
+
+	sprintf( FilePath, _T("%s\\%s"), FolderPath, FileType ) ;
+
+	UList			*theFiles = GetFileList(FilePath) ;
+	UListIterator	*anIter = new UListIterator(theFiles) ;
+
+	UGenCon	*aFileGC = anIter->GetLast() ;
+	while( aFileGC )
+	{
+		FileName = aFileGC->GetStringValue(_T("FileName")) ;
+		if( FileName[0] != Dot )
+		{
+			sprintf( FilePath, _T("%s\\%s"), FolderPath, FileName ) ;
+			SessionLogDirect(_T("C_RP30_Startup.CleanFiles: deleting \"%s\"\r\n"), FilePath ) ;
+
+			CmdText = GetFile( FilePath ) ;
+
+			GetImageFilePath( CmdText, ImageFilePath ) ;
+			if( *ImageFilePath )
+			{
+				Error = unlink( ImageFilePath ) ;
+			}
+
+			Error = unlink( FilePath ) ;
+			if( Error == -1 )
+			{
+				LastError = GetLastError() ;
+				Error = errno(ErrorMsg) ;
+				SessionLogDirect( _T("Can't unlink \"%s\" LastError: %d, Error: %d, %s"),
+														FilePath, LastError, Error, ErrorMsg ) ;
+			}
+		}
+
+		aFileGC = anIter->GetPrev() ;
+	}
+
+	delete anIter ;
+	delete theFiles ;
+	return( TRUE ) ;
+}
+
+TCHAR *GetImageFilePath( TCHAR *CmdText, TCHAR *OutBuffer )
+{
+	TCHAR	*Result = NULL ;
+	TCHAR	 Token[2048] ;
+
+	OutBuffer[0] = 0x00 ;
+
+	if( CmdText )
+	{
+		UParser *aParser = new UParser ;
+		aParser->SetText( CmdText ) ;
+
+		aParser->GetToken(Token) ;
+		while( *Token )
+		{
+			if( stricmp( Token, _T("FILENAME:")) == 0 )
+			{
+				aParser->GetLine( Token, FALSE ) ; 
+				strcpy( OutBuffer, Token ) ;
+				break ;
+			}
+			aParser->GetToken( Token ) ;
+		}
+
+		aParser->SetText( NULL ) ;
+		delete aParser ;
+	}
+	return( OutBuffer ) ;
+}
+
+UList *GetFileList(TCHAR *Path)
+{
+	long	*FileHandle ;
+	char	 FileData[2048] ;
+	TCHAR	 FileName[2048] ;
+	TCHAR	 FileDate[1024] ;
+	int		 Result ;
+	long	 FileAttr ;
+	long	 longHandle ;
+	UGenCon	*FileDataGC ;
+
+	UList	*theList = new UList ;
+
+	strcpy( FileName, Path ) ;
+	FileHandle = FindFirstFile( FileName, FileData ) ;
+	longHandle = FileHandle ;
+	if( longHandle != 0xFFFFFFFF )
+	{
+		FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+		Result = FindFileConvToGC( FileData, FileDataGC ) ;
+		FindFileConvTime( FileDataGC, _T("ACCESSED"), FileDate ) ;
+
+		theList->InsertBack(FileDataGC) ;
+
+		FileAttr = FileDataGC->GetLongValue(_T("FileAttributes")) ;
+		while( Result )
+		{
+			Result = FindNextFile( FileHandle, FileData ) ;
+			if( Result )
+			{
+				FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+				FindFileConvToGC( FileData, FileDataGC ) ;
+				theList->InsertBack(FileDataGC) ;
+			}
+		}
+
+		Result = FindClose( FileHandle ) ;
+	}
+	return( theList ) ;
+}
+
+//=============================================================================
+//=============================================================================
+void GetFilePathNameAndExt( TCHAR *Source, TCHAR *FilePath, TCHAR *FileName, TCHAR *FileExtn )
+{
+	TCHAR	Src[2048] ;
+	strcpy( Src, Source ) ;
+
+	FileExtn[0] = 0 ;
+	FileName[0] = 0 ;
+	FilePath[0] = 0 ;
+
+	if( strchr( Src, 0x2E ) )
+	{
+		GetLastToken( Src, FileExtn, 0x2E ) ;	//	"." GET THE EXTENSION
+	}
+
+	if( strchr( Src, 0x5C ) )
+	{
+		GetLastToken( Src, FileName, 0x5C ) ;	//	"\" GET THE BASE FILE NAME
+		strcpy( FilePath, Src ) ;				//		GET THE PATH
+	}
+	else
+	{
+		strcpy( FileName, Src ) ;
+	}
+
+}
+
+void GetLastToken( TCHAR *Source, TCHAR *Dst, int SrchChar )
+{
+	long	SrcPos = strlen( Source ) - 1L ;
+	long	DstPos = 0L ;
+
+	Dst[DstPos] = 0x00 ;
+
+	while( SrcPos >= 0L && Source[SrcPos] != SrchChar )
+	{
+		SrcPos-- ;
+	}
+
+	if( SrcPos >= 0L )
+	{
+		Source[SrcPos] = 0x00 ;
+		SrcPos++ ;
+
+		while( Source[SrcPos] )
+		{
+			Dst[DstPos] = Source[SrcPos] ;
+			SrcPos++ ;
+			DstPos++ ;
+		}
+		Dst[DstPos] = 0x00 ;
+	}
+}
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+
+int Do_Siren()
+{
+
+//	C:\WINNT\MEDIA\*.wav
+
+	TCHAR		 FileName[2048] ;
+	TCHAR		*ExeDirectory = GetExeDirectory() ;
+
+	sprintf( FileName, _T("%s\\Alarm.wav"), ExeDirectory ) ;
+
+	PlaySound( FileName ) ;
+
+/*	Beep(  440L, 200L ) ;
+	Beep(  880L, 200L ) ;
+	Beep(  440L, 200L ) ;
+	Beep(  880L, 200L ) ;
+	Beep(  440L, 200L ) ;
+	Beep(  880L, 200L ) ;
+	Beep(  440L, 200L ) ;
+*/
+	return( TRUE ) ;
+}
+
+
+void GetQueueList()
+{
+	UStringList	*thePrinterList = GetTreeObject( _T("PrinterList"), _T("Strings")) ;
+	UStringList	*theModelList = GetTreeObject( _T("PrinterListModels"), _T("Strings")) ;
+
+	if( thePrinterList == NULL )	{ return ; }
+	if( theModelList   == NULL )	{ return ; }
+
+	UStringList *QueueList = GetTreeObject( _T("QueueList"), _T("Strings")) ;
+
+	if( QueueList )
+	{
+		PluckTreeObject( _T("QueueList"), _T("Strings") ) ;
+		delete QueueList ;
+		QueueList = NULL ;
+	}
+
+	TCHAR	theSelectedPrinter[1024] ;
+	TCHAR	theSelectedModel[1024] ;
+
+	if( gDataGC )
+	{
+		gDataGC->GetAttrValue(_T("PrinterList"), theSelectedPrinter ) ;
+
+		TCHAR	*PrinterName ;
+		long NumEntries = thePrinterList->GetNumEntries() ;
+		long loop ;
+		for( loop = 0L ; loop < NumEntries ; loop++ )
+		{
+			PrinterName = thePrinterList->GetString(loop) ;
+			if( stricmp( PrinterName, theSelectedPrinter ) == 0 )
+			{
+				strcpy( theSelectedModel, theModelList->GetString(loop)) ;
+				break ;
+			}
+		}
+
+		if( theSelectedModel[0] == 0 )
+		{
+			return( HandleFatalError( _T("RenderEngine Error: Could not get associated printer model."))) ;
+		}
+
+		UADO	*theADO = ConnectToADO() ;
+		if( theADO == NULL )
+		{
+			return( HandleFatalError( _T("RenderEngine Error: Could not connect to database."))) ;
+		}
+
+		UPGenConList	*thePGCList = new UPGenConList( theADO ) ;
+		if( thePGCList == NULL )
+		{
+			delete theADO ;
+			return( HandleFatalError( _T("RenderEngine Error: Could not get recordset."))) ;
+		}
+
+		TCHAR	theQuery[1024] ;
+		sprintf( theQuery, _T("SELECT QueueName from QueueDefinition WHERE PrinterModel = '%s'"), theSelectedModel ) ;
+
+		int Result = Query( thePGCList, theQuery, _T("ReadOnly"), _T("Static") ) ;
+
+		if( Result != 1 )
+		{
+			delete thePGCList ;
+			delete theADO ;
+			return( HandleFatalError( _T("RenderEngine Error: Queue query failed."))) ;
+		}
+
+		QueueList = new UStringList ;
+		if( QueueList == NULL )
+		{
+			delete thePGCList ;
+			delete theADO ;
+			return( HandleFatalError( _T("RenderEngine Error: Could not get queue list."))) ;
+		}
+
+		QueueList->SetName( _T("QueueList")) ;
+		QueueList->AddString( _T("None"), FALSE ) ;
+
+		TCHAR		 QueueName[1024] ;
+
+		UPGenCon	*thePGC = GetFirst( thePGCList ) ;
+		while( thePGC )
+		{
+			thePGC->GetAttrValue( _T("QueueName"), QueueName ) ;
+			QueueList->AddString( QueueName, FALSE ) ;
+			thePGC = GetNext( thePGCList ) ;
+		}
+
+		HangTreeObject( QueueList, _T("Strings") ) ;
+
+		if( gDlg )
+		{
+			Result = StringListToControl( gDlg, _T("QueueList"), QueueList ) ;
+		}
+
+		TCHAR	theQueue[256] ;
+		GetQueueNameForPrinter( theSelectedPrinter, theQueue ) ;
+
+		gDataGC->SetAttrValue(_T("QueueList"), theQueue ) ;
+
+		if( gDlg )
+		{
+			DisplayControlValues( gDlg ) ;
+		}
+
+		delete thePGCList ;
+		delete theADO ;
+
+		int	ShowControl = TRUE ;
+		if( stricmp( theSelectedPrinter, _T("None")) == 0 )
+			{ ShowControl = FALSE ; }
+
+		ShowHideControl( _T("Start"), ShowControl ) ;
+		ShowHideControl( _T("Tab1Shutdown"), ShowControl ) ;
+		ShowHideControl( _T("Tab1Suspend"), ShowControl ) ;
+		ShowHideControl( _T("Tab1Resume"), ShowControl ) ;
+		ShowHideControl( _T("Shutdown_Now"), ShowControl ) ;
+		
+		UpdatePrinterControls() ;
+	}
+}
+
+
+void GetQueueNameForPrinter( TCHAR *theSelectedPrinter, TCHAR *theQueue )
+{
+	UGenCon *PrinterSetup = new UGenCon( GetDataDictionary( _T("DDPrinterSetups"))) ;
+	if( PrinterSetup == NULL )
+	{
+		return( HandleFatalError( _T("Render Engine Error: Cannot get PrinterSetup GC.") )) ;
+	}
+
+	TCHAR	 theSQLCmd[1024] ;
+	TCHAR	*theQuery = _T("Select QueueName From Printers Where PrinterName = '%s'") ;
+	sprintf( theSQLCmd, theQuery, theSelectedPrinter ) ;
+
+	GetARecord( theSQLCmd, 1L, PrinterSetup ) ;	//	GET THE PRINTER RECORD
+	PrinterSetup->GetAttrValue(_T("QueueName"), theQueue ) ;
+	delete PrinterSetup ;
+}
+
+int UpdatePrinterResTable( UGenCon *ModeStatusGC )
+{
+	TCHAR	 UpdateCmd[1024] ;
+	TCHAR	*UpdateStatement = _T("UPDATE PrinterRes SET Resolution = %6.3lf WHERE PrinterName = '%s' AND Sequence = %ld") ;
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+	TCHAR	*PrinterName  = PrinterSetup->GetStringValue(_T("PrinterName")) ;
+
+	int				 Result		  = 0L ;
+	long			 Sequence	  = 1L ;
+	double			 aRes		  = 0.0 ;
+	UList			*Resolutions  = ModeStatusGC->GetChildren() ;
+	UListIterator	*anIter = new UListIterator( Resolutions ) ;
+	UGenCon			*aResolution  = (UGenCon *) anIter->GetFirst() ;
+	while( aResolution )
+	{
+		aRes = aResolution->GetDoubleValue( _T("Double")) ;
+		sprintf( UpdateCmd, UpdateStatement, aRes, PrinterName, Sequence ) ;
+
+		Result = DoSQL( UpdateCmd ) ;
+
+		Sequence++ ;
+		aResolution  = (UGenCon *) anIter->GetNext() ;
+	}
+}
+
+
+int UpdatePrinterTable( TCHAR *PrinterName, TCHAR *Status, TCHAR *QueueName )
+{
+	TCHAR	 UpdateCmd[1024] ;
+	TCHAR	*UpdateTemplate = NULL ;
+	long	 StatusNumber = 0L ;
+
+	if( QueueName && Status )
+	{
+		StatusNumber = GetStatusNumber( Status ) ;
+		UpdateTemplate = _T("Update Printers Set QueueName = '%s', Status = %ld Where PrinterName = '%s'") ;
+		sprintf( UpdateCmd, UpdateTemplate, QueueName, StatusNumber, PrinterName ) ;
+	}
+	else
+	{
+		if( Status )
+		{
+			StatusNumber = GetStatusNumber( Status ) ;
+			UpdateTemplate = _T("Update Printers Set Status = %ld Where PrinterName = '%s'") ;
+			sprintf( UpdateCmd, UpdateTemplate, StatusNumber, PrinterName ) ;
+		}
+		else
+		{
+			UpdateTemplate = _T("Update Printers Set QueueName = '%s' Where PrinterName = '%s'") ;
+			sprintf( UpdateCmd, UpdateTemplate, QueueName, PrinterName ) ;
+		}
+	}
+
+	if( gLogAmount > 7 )
+	{
+		SessionLogDirect( _T("RenderEngine: \"%s\"."), UpdateCmd ) ;
+	}
+
+	int Result = DoSQL( UpdateCmd ) ;
+
+	return( Result ) ;
+}
+
+// 	Shutdown = 0, Run = 1, Suspend = 2, Quit = 3 ) ;
+
+long GetStatusNumber( TCHAR *Status )
+{
+	if( stricmp( Status, _T("Run")) == 0 )		{ return( 1L ) ; }
+	if( stricmp( Status, _T("Suspend")) == 0 )	{ return( 2L ) ; }
+	if( stricmp( Status, _T("Quit")) == 0 )		{ return( 3L ) ; }
+
+	return( 0L ) ;	//	SHUTDOWN
+}
+
+UGenCon	*GetARecord( TCHAR *theQuery, long RecordType, UGenCon *theGC )
+{
+	UADO	*theADO = ConnectToADO() ;
+	if( theADO == NULL )
+	{
+		return( HandleFatalError( _T("RenderEngine Error: Could not connect to database."))) ;
+	}
+
+	UPGenConList	*thePGCList = new UPGenConList( theADO ) ;
+	if( thePGCList == NULL )
+	{
+		delete theADO ;
+		return( HandleFatalError( _T("RenderEngine Error: Could not get recordset."))) ;
+	}
+
+	int Result = Query( thePGCList, theQuery, _T("ReadOnly"), _T("Static") ) ;
+
+	if( Result != 1 )
+	{
+		delete thePGCList ;
+		delete theADO ;
+		TCHAR	ErrMsg[1024] ;
+		sprintf( ErrMsg, _T("RenderEngine Error: Query failed %ld \"%s\"."), Result, theQuery ) ;
+		return( HandleFatalError( ErrMsg ) ) ;
+	}
+
+	UPGenCon	*thePGC = thePGCList->GetFirst() ;
+
+	if( thePGC )
+	{
+		if( RecordType == 1L )			//	THE PRINTER RECORD
+		{
+			CopyPrinterGC( theGC, thePGC ) ;
+		}
+
+		if( RecordType == 2L )			//	THE QUEUE RECORD
+		{
+			GetQueueInfo( theGC, thePGC ) ;
+		}
+	}
+
+	delete thePGCList ;
+	delete theADO ;
+
+	return( theGC ) ;
+}
+
+DoSQL( TCHAR *theSQLStatement )
+{
+	int		result	= 0x80004005 ;	//	COULD NOT UPDATE BECAUSE LOCKED BY ANOTHER
+	long	count	= 0 ;
+	long	Level ;
+	int		RefreshResult ;
+
+	UADO	*theADO = ConnectToADO() ;
+
+	while( result && count < 30 )
+	{
+		result = ADOCommand( theADO, theSQLStatement, "SQL", NULL ) ;
+		count++ ;
+		if( result != 0L )
+		{
+			RefreshResult = theADO->RefreshConnectionCache() ;
+			Sleep(2000) ;
+		}
+
+		if( gLogAmount > 7 )
+		{
+			SessionLogDirect( "DoSQL: %s, result = %0lX, Count = %ld [%0lX]",
+								theSQLStatement, result, count, theADO ) ;
+		}
+	}
+
+	if( result != 0 )
+	{
+		HandleDBError(theADO) ;
+	}
+	else
+	{
+		RefreshResult = theADO->RefreshConnectionCache() ;
+		if( gLogAmount > 7 )
+		{
+			SessionLogDirect("DoSQL: CommitTransaction result = %0lX", result) ;
+		}
+	}
+
+	delete theADO ;
+	return( result == 0 ) ;
+}
+
+UADO *ConnectToADO()
+{
+	int		 result ;
+
+	UADO	*theADO = new UADO ;
+
+	if( theADO == NULL )
+	{
+		return(NULL) ;
+	}
+
+	result = ConnectKPIS( theADO ) ;
+	if( result )
+	{
+		delete theADO ;
+		return(NULL) ;
+	}
+
+	return( theADO ) ;
+}
+
+ 
+UGenCon *CopyPrinterGC( UGenCon *PrinterSetup, UGenCon *thePrinterRecord )
+{
+	TCHAR		*AttrName ;
+	TCHAR		 Value[2048] ;
+	long		 Order = 0L ;
+
+	UDataDict	*theDict = thePrinterRecord->GetDataDict() ;
+	if( theDict == NULL )
+	{
+		return(NULL) ;
+	}
+
+	UAttribute	*theAttribute = theDict->GetAttributeByOrder(Order) ;
+
+	while( theAttribute )
+	{
+		AttrName = theAttribute->GetName() ;
+		if( AttrName )
+		{
+			if( stricmp( AttrName, _T("RP30Setup")) != 0 &&		//	DON'T OVER-WRITE THESE FIELDS.
+				stricmp( AttrName, _T("LogFile")) != 0	&&
+				stricmp( AttrName, _T("DiskThrottleQty")) != 0 &&
+				stricmp( AttrName, _T("DiskPFThrottleQty")) != 0 &&
+				stricmp( AttrName, _T("DiskWriteResponse")) != 0 )
+			{
+				thePrinterRecord->GetAttrValue( AttrName, Value ) ;
+				PrinterSetup->SetAttrValue( AttrName, Value ) ;
+			}
+		}
+
+		Order++ ;
+		theAttribute = theDict->GetAttributeByOrder(Order) ;
+	}
+
+	return( PrinterSetup ) ;
+}
+
+
+GetQueueInfo( UGenCon *thePrinterGC, UGenCon *thePGC )
+{
+	TCHAR			 value[2048] ;
+	TCHAR			 ErrMsg[1024] ;
+	int				 result ;
+	int				 getQueueColorOffset = FALSE ;
+
+
+	//	WE FOUND THE RECORD
+	thePGC->GetAttrValue(_T("PaperType"), value ) ;
+	thePrinterGC->SetAttrValue(_T("PaperType"), value ) ;
+
+	thePGC->GetAttrValue(_T("PaperSurface"), value ) ;
+	thePrinterGC->SetAttrValue(_T("PaperSurface"), value ) ;
+
+	thePGC->GetAttrValue(_T("PaperOpacity"), value ) ;
+	thePrinterGC->SetAttrValue(_T("PaperOpacity"), value ) ;
+
+	thePGC->GetAttrValue(_T("PackageCut"), value ) ;
+	thePrinterGC->SetAttrValue(_T("PackageCut"), value ) ;
+
+	thePGC->GetAttrValue(_T("PaperAdvance"), value ) ;
+	thePrinterGC->SetAttrValue(_T("PaperAdvance"), value ) ;
+
+	thePGC->GetAttrValue(_T("PaperWidth"), value ) ;
+	thePrinterGC->SetAttrValue( _T("PaperWidth"), value ) ;
+
+	thePGC->GetAttrValue(_T("Gamma"), value ) ;
+	thePrinterGC->SetAttrValue( _T("GammaTablePath"), value ) ;
+
+	thePGC->GetAttrValue(_T("PaperPack"), value ) ;
+	thePrinterGC->SetAttrValue( _T("PaperPackPath"), value ) ;
+
+	thePGC->GetAttrValue(_T("CalibrationLUT"), value ) ;
+	thePrinterGC->SetAttrValue( _T("CalLutPath"), value ) ;
+
+	HandleQueueOutputPath(thePrinterGC, thePGC ) ;
+
+	double	Resolution = thePGC->GetDoubleValue( _T("Resolution")) ;
+	if( Resolution > 1.0 )
+	{
+		thePrinterGC->SetDoubleValue( _T("Resolution"), Resolution ) ;
+	}
+
+//	thePGC->GetAttrValue(_T("Resolution"), value ) ;
+//	thePrinterGC->SetAttrValue( _T("Resolution"), value ) ;
+
+	thePGC->GetAttrValue(_T("NoiseReduction"), value ) ;
+	thePrinterGC->SetAttrValue( _T("NoiseReduction"), value ) ;
+
+	thePGC->GetAttrValue(_T("PaperFill"), value ) ;
+	thePrinterGC->SetAttrValue( _T("PaperFill"), value ) ;
+
+	thePGC->GetAttrValue(_T("BreakOnNewImage"), value ) ;
+	thePrinterGC->SetAttrValue( _T("BreakOnNewImage"), value ) ;
+
+	thePGC->GetAttrValue(_T("BreakOnNewOrder"), value ) ;
+	thePrinterGC->SetAttrValue( _T("BreakOnNewOrder"), value ) ;
+
+	thePGC->GetAttrValue(_T("SpillOverType"), value ) ;
+	thePrinterGC->SetAttrValue( _T("SpillOverType"), value ) ;
+
+	thePGC->GetAttrValue(_T("SpillOverAmt"), value ) ;
+	thePrinterGC->SetAttrValue( _T("SpillOverAmt"), value ) ;
+
+	//	GetItemValue is for Printer Over-riding the Queue
+	GetItemValue( _T("StartPrinting"), thePGC, thePrinterGC ) ;
+
+	GetItemValue( _T("OnPrintComplete"), thePGC, thePrinterGC ) ;
+
+	GetItemValue( _T("OnOrderComplete"), thePGC, thePrinterGC ) ;
+
+	GetItemValue( _T("ControlFolder"), thePGC, thePrinterGC ) ;
+
+	GetItemValue( _T("ResponseFolder"), thePGC, thePrinterGC ) ;
+
+
+	thePGC->GetAttrValue(_T("ReverseSeq"), value ) ;
+	thePrinterGC->SetAttrValue( _T("ReverseSeq"), value ) ;
+
+	thePGC->GetAttrValue(_T("BookCollation"), value ) ;
+	thePrinterGC->SetAttrValue( _T("BookCollation"), value ) ;
+
+	//	USED TO FORCE ALL JOBS IN ORDER TO BE PLACED IN A PDF FILE.
+	int	ForcePDFOutput = thePGC->GetLongValue(_T("ForcePDFOutput")) ;
+	thePrinterGC->SetLongValue( _T("ForcePDFOutput"), ForcePDFOutput ) ;
+
+	//	USED TO CORRECT GRAY SCALE PORTION OF IMAGE AFTER COLOR MANAGEMENT
+	long NeutralizeGrayscale = thePGC->GetLongValue( _T("NeutralizeGrayscale")) ;
+	thePrinterGC->SetLongValue( _T("NeutralizeGrayscale"), NeutralizeGrayscale ) ;
+
+	thePGC->GetAttrValue(_T("FirstOrderSize"), value ) ;
+	thePrinterGC->SetAttrValue( _T("FirstOrderSize"), value ) ;
+
+	thePGC->GetAttrValue(_T("MaximumOrderSize"), value ) ;
+	thePrinterGC->SetAttrValue( _T("MaximumOrderSize"), value ) ;
+
+	thePGC->GetAttrValue(_T("OrderSizeTimeout"), value ) ;
+	thePrinterGC->SetAttrValue( _T("OrderSizeTimeout"), value ) ;
+
+
+	thePGC->GetAttrValue(_T("EmbedProfile"), value ) ;
+	thePrinterGC->SetAttrValue( _T("EmbedProfileInOutputImage"), value ) ;
+
+	GetItemValue( _T("Configuration"), thePGC, thePrinterGC ) ;
+
+	thePGC->GetAttrValue(_T("QualityOR"), value ) ;
+	thePrinterGC->SetAttrValue( _T("QualityOR"), value ) ;
+
+	thePGC->GetAttrValue(_T("PrintingRenderingIntent"), value ) ;
+	thePrinterGC->SetAttrValue( _T("PrintingRenderingIntent"), value ) ;
+
+	thePGC->GetAttrValue(_T("ICCProfile"), value ) ;
+	if( stricmp( value, Translate(_T("None"))) == 0 )
+		{ thePrinterGC->SetAttrValue(_T("ICCProfile"), _T("")) ; }
+	else
+		{ thePrinterGC->SetAttrValue( _T("ICCProfile"), value ) ; }
+
+	getQueueColorOffset =	thePrinterGC->GetLongValue(_T("Brt")) |
+							thePrinterGC->GetLongValue(_T("Red")) |
+							thePrinterGC->GetLongValue(_T("Grn")) |
+							thePrinterGC->GetLongValue(_T("Blu")) |
+							thePrinterGC->GetLongValue(_T("Con")) |
+							thePrinterGC->GetLongValue(_T("Sat")) ;
+
+	getQueueColorOffset = getQueueColorOffset | (thePrinterGC->GetDoubleValue(_T("Gam")) != 1.0);
+
+	if( getQueueColorOffset == 0 )
+	{
+		thePGC->GetAttrValue(_T("Brt"), value ) ;
+		thePrinterGC->SetAttrValue( _T("Brt"), value ) ;
+
+		thePGC->GetAttrValue(_T("Red"), value ) ;
+		thePrinterGC->SetAttrValue( _T("Red"), value ) ;
+
+		thePGC->GetAttrValue(_T("Grn"), value ) ;
+		thePrinterGC->SetAttrValue( _T("Grn"), value ) ;
+
+		thePGC->GetAttrValue(_T("Blu"), value ) ;
+		thePrinterGC->SetAttrValue( _T("Blu"), value ) ;
+
+		thePGC->GetAttrValue(_T("Con"), value ) ;
+		thePrinterGC->SetAttrValue( _T("Con"), value ) ;
+
+		thePGC->GetAttrValue(_T("Sat"), value ) ;
+		thePrinterGC->SetAttrValue( _T("Sat"), value ) ;
+
+		thePGC->GetAttrValue(_T("Gam"), value ) ;
+		thePrinterGC->SetAttrValue( _T("Gam"), value ) ;
+	}
+
+	int	UseOverrides = thePGC->GetLongValue(_T("UseOverrides")) ;
+	if( UseOverrides )
+	{
+		thePrinterGC->SetLongValue( _T("UseOverrides"), UseOverrides ) ;
+
+		thePGC->GetAttrValue(_T("ResolutionOR"), value ) ;
+		thePrinterGC->SetAttrValue( _T("ResolutionOR"), value ) ;
+
+		thePGC->GetAttrValue(_T("DeltaRotation"), value ) ;
+		thePrinterGC->SetAttrValue( _T("DeltaRotation"), value ) ;
+
+		thePGC->GetAttrValue(_T("DeltaSharpen"), value ) ;
+		thePrinterGC->SetAttrValue( _T("DeltaSharpen"), value ) ;
+
+		thePGC->GetAttrValue(_T("PaperWidthOR"), value ) ;
+		thePrinterGC->SetAttrValue( _T("PaperWidthOR"), value ) ;
+
+		thePGC->GetAttrValue(_T("PaperSurfaceOR"), value ) ;
+		thePrinterGC->SetAttrValue( _T("PaperSurfaceOR"), value ) ;
+
+		thePGC->GetAttrValue(_T("PrinterResizeOR"), value ) ;
+		thePrinterGC->SetAttrValue( _T("PrinterResizeOR"), value ) ;
+	}
+
+	return( TRUE ) ;
+}
+
+
+int HandleQueueOutputPath(UGenCon *thePrinterGC, UGenCon *thePGC )
+{
+	TCHAR	Value[2048] ;
+	int		HaveOutputPath = FALSE ;
+
+	TCHAR *SetupOutputPath = thePrinterGC->GetStringValue( _T("OutputPath")) ;
+	if( SetupOutputPath )
+	{
+		if( *SetupOutputPath )
+		{
+			HaveOutputPath = TRUE ;
+		}
+	}
+
+	if( HaveOutputPath == FALSE )
+	{
+		thePGC->GetAttrValue( _T("OutputPath"), Value ) ;
+		if( *Value )
+		{
+			thePrinterGC->SetAttrValue(_T("OutputPath"), Value ) ;
+
+			thePGC->GetAttrValue(_T("OutputFileType"), Value ) ;
+			thePrinterGC->SetAttrValue( _T("OutputFileType"), Value ) ;
+
+			HaveOutputPath = TRUE ;
+		}
+	}
+
+	Debug(0) ;
+	TCHAR *SpotColorMaskPath = GetAttribute( thePrinterGC, _T("SpotColorMaskPath") ) ;
+//	TCHAR *SpotColorMaskPath = thePrinterGC->GetStringValue( _T("SpotColorMaskPath")) ;
+	if( SpotColorMaskPath == NULL ) /*|| SpotColorMaskPath[0] == 0x00 ) */
+	{
+		thePGC->GetAttrValue( _T("SpotColorMaskPath"), Value ) ;
+		if( *Value )
+		{
+			thePrinterGC->SetAttrValue(_T("SpotColorMaskPath"), Value ) ;
+
+			thePGC->GetAttrValue(_T("SpotColorMaskType"), Value ) ;
+			thePrinterGC->SetAttrValue( _T("SpotColorMaskType"), Value ) ;
+		}
+	}
+
+	return( HaveOutputPath ) ;
+}
+
+//	GetItemValue is for Printer Over-riding the Queue
+void GetItemValue( TCHAR *Keyword, UGenCon *Src, UGenCon *Dst )
+{
+	TCHAR	Value[2048] ;
+
+	Dst->GetAttrValue( Keyword, Value ) ;
+	if( Value[0] == 0 )
+	{
+		Src->GetAttrValue( Keyword, Value ) ;
+		Dst->SetAttrValue( Keyword, Value ) ;
+	}
+}
+
+TCHAR	*GetAttribute( UGenCon *theGC, TCHAR *Attribute )
+{
+	TCHAR *theValue = theGC->GetStringValue( Attribute ) ;
+	if( theValue )
+	{
+		if( *theValue )
+		{
+			return( theValue ) ;
+		}
+	}
+	return( NULL ) ;
+}
+
+
+Translate(TCHAR *str)
+{
+	return( str ) ;
+}
+
+//=============================================================================
+//=============================================================================
+
+void ShowIPSLog()  
+{  
+	TCHAR	ProgramPath[1024] ;  
+	GetSystemDirectory( ProgramPath, 1024 ) ;  
+	strcat( ProgramPath, _T("\\Notepad.exe")) ;  
+  
+	TCHAR		*PrinterName = gDataGC->GetStringValue(_T("PrinterList")) ;
+	UGenCon		*PrinterSetup = GetTreeObject( PrinterName, _T("Renderers") ) ;
+	if( PrinterSetup )
+	{
+		TCHAR	*LogFile = PrinterSetup->GetStringValue(_T("LogFile")) ;
+		if( LogFile )
+		{
+			LaunchProgram( ProgramPath, LogFile ) ;  
+		}
+	}
+	else
+	{
+		MessageBox( _T("Render Engine must be running to show the IPS log."), _T("MB_OK")) ;
+	}
+}  
+
+void ShowSessionLog()  
+{  
+	TCHAR	ProgramPath[1024] ;  
+	GetSystemDirectory( ProgramPath, 1024 ) ;  
+	strcat( ProgramPath, _T("\\Notepad.exe")) ;  
+
+	TCHAR	*LogFilePath = GetLogFilePath() ;
+
+	if( LogFilePath )
+	{
+		LaunchProgram( ProgramPath, LogFilePath ) ;  
+	}
+}
+
+//	PULL THE PRINTER SETUP OFF THE TREE.
+void StopRE()
+{
+	TCHAR *PrinterName = gDataGC->GetStringValue(_T("PrinterList")) ;
+	UGenCon *thePrinterGC = PluckTreeObject( PrinterName, _T("[Renderers]")) ;
+	delete thePrinterGC ;
+}
+
+void SearchLogs()
+{
+	TCHAR	*ScriptName = _T("FindStringsInLogs_1cpp.txt") ;
+
+	UCInterpreter *Interp = new UCInterpreter ;
+	if( Interp )
+	{
+		Interp->SetCheckTextLibFirst( 1L ) ;
+		long Result = Interp->InterpretC( ScriptName ) ;
+		delete Interp ;
+	}
+}
+
+void LaunchMemMonitor()
+{
+	TCHAR	 ScriptPath[2048] ;
+	TCHAR	*ExeDirectory	= GetExeDirectory() ;  
+	
+	sprintf( ScriptPath, _T("%s\\Scripts\\Utilities\\MemoryMonitor\\MemoryMonitor_1.cpp"), ExeDirectory ) ;
+
+	UCInterpreter *Interp = new UCInterpreter ;
+	if( Interp )
+	{
+		long Result = Interp->InterpretC( ScriptPath ) ;
+		delete Interp ;
+	}
+}
+
+int LaunchSpy()
+{
+	Debug(0) ;
+	OpenADocument( _T("ThreadListDoc.txt"), _T("Script"), NULL ) ;
+}
+
+
+// filelib( _T("C"), _T("DP2_Text"), 0, NULL ) ;
+void UpdateTextLib()
+{
+	TCHAR	*FilePath = _T("CommonText\\*.*") ;
+	TCHAR	*argv = &FilePath ;
+
+	filelib( _T("F"), _T("DP2_Text"), 1, argv ) ;
+	filelib( _T("F"), _T("DP2D_Text"), 1, argv ) ;
+
+	FilePath = _T("TextFiles\\*.*") ;
+	filelib( _T("F"), _T("DP2_Text"), 1, argv ) ;
+	filelib( _T("F"), _T("DP2D_Text"), 1, argv ) ;
+}
+
+/*
+TCHAR	*GetCurrentLogFileName(TCHAR *FilePath, TCHAR *Extension)
+{
+	TCHAR	FileTemplate[2048] ;
+	sprintf( FileTemplate, _T("%s\\*.%s"), FilePath, Extension ) ;
+
+	UList	*theFileList = GetFileList( FileTemplate ) ;
+	if( theFileList )
+	{
+		theFileList->SortBy( _T("_NAME_")) ;
+
+		UListIterator	*anIter = new UListIterator( theFileList ) ;
+		UGenCon			*aFile  = (UGenCon *) anIter->GetLast() ;
+		if( aFile )
+		{
+			TCHAR	*theFileName = aFile->GetStringValue(_T("FileName")) ;
+			strcpy( FileTemplate, FilePath ) ;
+			sprintf( FilePath, _T("%s\\%s"), FileTemplate, theFileName ) ;
+		}
+
+		delete anIter ;
+		delete theFileList ;
+	}
+	return( FilePath ) ;
+}
+*/
+
+int LaunchProgram( TCHAR *AppPath, TCHAR *parm )  
+{  
+	TCHAR	*verb = _T("open") ;  
+	TCHAR	*file = AppPath ;  
+	TCHAR	 AppDir[2048] ;  
+  
+	GetAppDirectory( AppPath, AppDir ) ;  
+  
+	TCHAR	*defaultDirectory = AppDir ;  
+	TCHAR	*cmd = _T("SW_SHOW") ;  
+//	TCHAR	*cmd = _T("MAXIMIZE") ;  
+//	TCHAR	*cmd = _T("MINIMIZE") ;  
+  
+	long Result = ShellExecute(verb, file, parm, defaultDirectory, cmd ) ;  
+}  
+
+int	GetAppDirectory( TCHAR *FullPath, TCHAR *Directory )
+{
+	strcpy( Directory, FullPath ) ;
+	long	loop ;
+	long	length = strlen( FullPath ) ;
+
+	while( length > 0 )
+	{
+		if( Directory[length] == '\\' )
+		{
+			Directory[length] = 0 ;
+			length = 0 ;
+		}
+		length-- ;
+	}
+}
+
+//=============================================================================
+//=============================================================================
+//========================== HANDLE DIALOG CONTROLS ===========================
+//=============================================================================
+//=============================================================================
+int UpdatePrinterControls()
+{
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+	if( PrinterSetup )
+	{
+		TCHAR	*PrinterName  = PrinterSetup->GetStringValue(_T("PrinterName")) ;
+		TCHAR	*PrinterModel = PrinterSetup->GetStringValue(_T("PrinterModel")) ;
+
+		if( stricmp( PrinterModel, _T("Disk")) == 0 )
+		{
+			ShowDiskControls() ;
+		}
+
+		if( stricmp( PrinterModel, _T("Kodak CRT"))		== 0 ||
+			stricmp( PrinterModel, _T("Kodak LFCRT"))	== 0 ||
+			stricmp( PrinterModel, _T("KPDM"))			== 0 ||
+			stricmp( PrinterModel, _T("KPDM II"))		== 0  )
+		{
+			ShowCRTControls() ;
+		}
+
+		if( stricmp( PrinterModel, _T("Kodak LED"))		== 0 )
+		{
+			ShowLEDControls() ;
+		}
+
+		if( stricmp( PrinterModel, _T("Kodak RP30"))	== 0 )
+		{
+			ShowRP30ontrols() ;
+		}
+
+		if( stricmp( PrinterModel, _T("Noritsu"))		== 0 )
+		{
+			ShowNHFControls() ;
+		}
+
+		if( stricmp( PrinterModel, _T("Durst"))			== 0 )
+		{
+			ShowDurstControls() ;
+		}
+
+		if( stricmp( PrinterModel, _T("Windows Printer"))	== 0 ||
+			stricmp( PrinterModel, _T("NT Printer"))		== 0 )
+		{
+			ShowLEDControls() ;
+		}
+
+		if( stricmp( PrinterModel, _T("NexPress"))	== 0 )
+		{
+			ShowNexPressControls() ;
+		}
+
+		UGenCon *RenderPrinterSetup = GetTreeObject( PrinterName, _T("Renderers") ) ;
+		if( RenderPrinterSetup != PrinterSetup )
+		{
+			delete PrinterSetup ;
+		}
+
+	}
+	else
+	{
+		ShowDiskControls() ;
+	}
+
+	return( FALSE ) ;
+}
+
+
+int ShowDiskControls()
+{
+	ShowHideControl( _T("Launch"), 0L ) ;
+	ShowHideControl( _T("Tab4Shutdown"), 0L ) ;
+	ShowHideControl( _T("Tab4Suspend"), 0L ) ;
+	ShowHideControl( _T("Tab4Resume"), 0L ) ;
+	ShowHideControl( _T("Get Status"), 0L ) ;
+	ShowHideControl( _T("Clean Folders"), 0L ) ;
+	ShowHideControl( _T("Delete Page"), 0L ) ;
+	ShowHideControl( _T("PageID"), 0L ) ;
+	ShowHideControl( _T("Delete All Pages"), 0L ) ;
+	ShowHideControl( _T("Get Resolutions"), 0L ) ;
+	ShowHideControl( _T("Net Print Mode"), 0L ) ;
+	ShowHideControl( _T("Stop NetPrint"), 0L ) ;
+	ShowHideControl( _T("Restart NetPrint"), 0L ) ;
+	ShowHideControl( _T("Force End Order"), 0L ) ;
+	ShowHideControl( _T("ReportPaperOut"), 0L ) ;
+	ShowHideControl( _T("ReportPaperJams"), 0L ) ;
+	ShowHideControl( _T("ReportComErrors"), 0L ) ;
+	ShowHideControl( _T("ReportChemErrors"), 0L ) ;
+	ShowHideControl( _T("Restore NJP Jobs"), 0L ) ;
+}
+
+int ShowCRTControls()
+{
+	ShowHideControl( _T("Launch"), 1L ) ;
+	ShowHideControl( _T("Tab4Shutdown"), 1L ) ;
+	ShowHideControl( _T("Tab4Suspend"), 1L ) ;
+	ShowHideControl( _T("Tab4Resume"), 1L ) ;
+	ShowHideControl( _T("Get Status"), 1L ) ;
+	ShowHideControl( _T("Clean Folders"), 1L ) ;
+	ShowHideControl( _T("Delete Page"), 1L ) ;
+	ShowHideControl( _T("PageID"), 1L ) ;
+	ShowHideControl( _T("Delete All Pages"), 1L ) ;
+	ShowHideControl( _T("Get Resolutions"), 1L ) ;
+	ShowHideControl( _T("Net Print Mode"), 0L ) ;
+	ShowHideControl( _T("Stop NetPrint"), 0L ) ;
+	ShowHideControl( _T("Restart NetPrint"), 0L ) ;
+	ShowHideControl( _T("Force End Order"), 0L ) ;
+}
+
+int ShowLEDControls()
+{
+	ShowHideControl( _T("Launch"), 1L ) ;
+	ShowHideControl( _T("Tab4Shutdown"), 1L ) ;
+	ShowHideControl( _T("Tab4Suspend"), 1L ) ;
+	ShowHideControl( _T("Tab4Resume"), 1L ) ;
+	ShowHideControl( _T("Get Status"), 1L ) ;
+	ShowHideControl( _T("Clean Folders"), 1L ) ;
+	ShowHideControl( _T("Delete Page"), 1L ) ;
+	ShowHideControl( _T("PageID"), 1L ) ;
+	ShowHideControl( _T("Delete All Pages"), 1L ) ;
+	ShowHideControl( _T("Get Resolutions"), 1L ) ;
+	ShowHideControl( _T("Net Print Mode"), 0L ) ;
+	ShowHideControl( _T("Stop NetPrint"), 0L ) ;
+	ShowHideControl( _T("Restart NetPrint"), 0L ) ;
+	ShowHideControl( _T("Force End Order"), 0L ) ;
+}
+
+int ShowRP30ontrols()
+{
+	ShowHideControl( _T("Launch"), 1L ) ;
+	ShowHideControl( _T("Tab4Shutdown"), 1L ) ;
+	ShowHideControl( _T("Tab4Suspend"), 1L ) ;
+	ShowHideControl( _T("Tab4Resume"), 1L ) ;
+	ShowHideControl( _T("Get Status"), 1L ) ;
+	ShowHideControl( _T("Clean Folders"), 1L ) ;
+	ShowHideControl( _T("Delete Page"), 0L ) ;
+	ShowHideControl( _T("PageID"), 0L ) ;
+	ShowHideControl( _T("Delete All Pages"), 0L ) ;
+	ShowHideControl( _T("Get Resolutions"), 0L ) ;
+	ShowHideControl( _T("Net Print Mode"), 1L ) ;
+	ShowHideControl( _T("Stop NetPrint"), 1L ) ;
+	ShowHideControl( _T("Restart NetPrint"), 1L ) ;
+	ShowHideControl( _T("Force End Order"), 1L ) ;
+
+	ShowHideControl( _T("ReportPaperOut"), 1L ) ;
+	ShowHideControl( _T("ReportPaperJams"), 1L ) ;
+	ShowHideControl( _T("ReportComErrors"), 1L ) ;
+	ShowHideControl( _T("ReportChemErrors"), 1L ) ;
+}
+
+int ShowNHFControls()
+{
+	ShowHideControl( _T("Launch"), 0L ) ;
+	ShowHideControl( _T("Tab4Shutdown"), 0L ) ;
+	ShowHideControl( _T("Tab4Suspend"), 1L ) ;
+	ShowHideControl( _T("Tab4Resume"), 1L ) ;
+	ShowHideControl( _T("Get Status"), 0L ) ;
+	ShowHideControl( _T("Clean Folders"), 1L ) ;
+	ShowHideControl( _T("Delete Page"), 0L ) ;
+	ShowHideControl( _T("PageID"), 0L ) ;
+	ShowHideControl( _T("Delete All Pages"), 0L ) ;
+	ShowHideControl( _T("Get Resolutions"), 0L ) ;
+	ShowHideControl( _T("Net Print Mode"), 0L ) ;
+	ShowHideControl( _T("Stop NetPrint"), 0L ) ;
+	ShowHideControl( _T("Restart NetPrint"), 0L ) ;
+	ShowHideControl( _T("Force End Order"), 0L ) ;
+}
+
+int ShowNexPressControls()
+{
+	ShowHideControl( _T("Launch"), 0L ) ;
+	ShowHideControl( _T("Tab4Shutdown"), 0L ) ;
+	ShowHideControl( _T("Tab4Suspend"), 0L ) ;
+	ShowHideControl( _T("Tab4Resume"), 0L ) ;
+	ShowHideControl( _T("Get Status"), 0L ) ;
+	ShowHideControl( _T("Clean Folders"), 0L ) ;
+	ShowHideControl( _T("Delete Page"), 0L ) ;
+	ShowHideControl( _T("PageID"), 0L ) ;
+	ShowHideControl( _T("Delete All Pages"), 0L ) ;
+	ShowHideControl( _T("Get Resolutions"), 0L ) ;
+	ShowHideControl( _T("Net Print Mode"), 0L ) ;
+	ShowHideControl( _T("Stop NetPrint"), 0L ) ;
+	ShowHideControl( _T("Restart NetPrint"), 0L ) ;
+	ShowHideControl( _T("Force End Order"), 0L ) ;
+	ShowHideControl( _T("Restore NJP Jobs"), 1L ) ;
+}
+
+int ShowDurstControls()
+{
+	ShowHideControl( _T("Launch"), 0L ) ;
+	ShowHideControl( _T("Tab4Shutdown"), 0L ) ;
+	ShowHideControl( _T("Tab4Suspend"), 0L ) ;
+	ShowHideControl( _T("Tab4Resume"), 0L ) ;
+	ShowHideControl( _T("Get Status"), 0L ) ;
+	ShowHideControl( _T("Clean Folders"), 0L ) ;
+	ShowHideControl( _T("Delete Page"), 0L ) ;
+	ShowHideControl( _T("PageID"), 0L ) ;
+	ShowHideControl( _T("Delete All Pages"), 0L ) ;
+	ShowHideControl( _T("Get Resolutions"), 0L ) ;
+	ShowHideControl( _T("Net Print Mode"), 0L ) ;
+	ShowHideControl( _T("Stop NetPrint"), 0L ) ;
+	ShowHideControl( _T("Restart NetPrint"), 0L ) ;
+	ShowHideControl( _T("Force End Order"), 0L ) ;
+}
+
+int ShowHideControl( TCHAR *Field, long Show )
+{
+	int		 Result = 0 ;
+	CWnd	*theCtrl = GetCtrlWindow(Field) ;
+	if( theCtrl )
+	{
+		if( Show )
+		{
+//			SessionLogDirect( _T("REDlg_2.ShowHideControl: Hiding: \"%s\""), Field ) ;
+			Result = theCtrl->EnableWindow( TRUE ) ;
+		}
+		else
+		{
+//			SessionLogDirect( _T("REDlg_2.ShowHideControl: Showing: \"%s\""), Field ) ;
+			Result = theCtrl->EnableWindow( FALSE ) ;
+		}
+	}
+	else
+	{
+		SessionLogDirect( _T("REDlg_2.ShowHideControl: Could not find control for \"%s\""), Field ) ;
+	}
+
+	return( Result ) ;
+}
+
+
+//=============================================================================
+//=============================================================================
+//========================== SETUP CONTROL FOLDERS ============================
+//=============================================================================
+//=============================================================================
+UGenCon *gPrinterSetupGC ;
+
+int SetupControlFolders(UGenCon *PrinterSetup)
+{
+	TCHAR	 TempPath[2048] ;
+	int		 HFExePathSet = FALSE ;
+	int		 FolderPathSet = FALSE ;
+
+	gPrinterSetupGC = PrinterSetup ;
+
+	TCHAR *PrinterModel = PrinterSetup->GetStringValue(_T("PrinterModel")) ;
+	UGenCon	*PrintingScriptsGC = (UGenCon *) GetTreeObject( PrinterModel, _T("[PrintingScripts]")) ;
+
+	TCHAR	*HFExePath = gPrinterSetupGC->GetStringValue(_T("HFExePath")) ;
+	if( gLogAmount >= 9 )
+	{
+		SessionLogDirect( _T("REDlg_2.SetupControlFolders: HFExePath: \"%s\""), HFExePath ) ;
+	}
+
+	if( HFExePath )
+	{
+		if( HFExePath[0] )
+		{
+			ExpandFolderPath( HFExePath, TempPath ) ;
+			if( gLogAmount >= 9 )
+			{
+				SessionLogDirect( _T("REDlg_2.SetupControlFolders: Expanded HFExePath: \"%s\""), TempPath ) ;
+			}
+			gPrinterSetupGC->SetAttrValue( _T("HFExePath"), TempPath ) ;
+			HFExePathSet = TRUE ;
+		}
+	}
+	
+	if( HFExePathSet == FALSE && PrintingScriptsGC )
+	{
+		HFExePath = PrintingScriptsGC->GetStringValue(_T("HotFolderAppPath")) ;
+		if( gLogAmount >= 9 )
+		{
+			SessionLogDirect( _T("REDlg_2.SetupControlFolders: Default HFExePath: \"%s\""), HFExePath ) ;
+		}
+
+		if( HFExePath )
+		{
+			if( HFExePath[0] )
+			{
+				ExpandFolderPath( HFExePath, TempPath ) ;
+				gPrinterSetupGC->SetAttrValue( _T("HFExePath"), TempPath ) ;
+			}
+		}
+	}
+
+	SetupAFolder( PrintingScriptsGC, _T("ControlFolder") ) ;
+	SetupAFolder( PrintingScriptsGC, _T("ResponseFolder") ) ;
+//	SetupAFolder( PrintingScriptsGC, _T("OutputPath") ) ;
+
+}
+
+int SetupAFolder( UGenCon *PrintingScriptsGC, TCHAR *FolderName )
+{
+	TCHAR	TempPath[2048] ;
+	int	FolderSet = FALSE ;
+
+	TCHAR	*theFolderName = gPrinterSetupGC->GetStringValue(FolderName) ;
+	if( theFolderName )
+	{
+		if( theFolderName[0] )
+		{
+			ExpandFolderPath( theFolderName, TempPath ) ;
+			gPrinterSetupGC->SetAttrValue( FolderName, TempPath ) ;
+			FolderSet = TRUE ;
+		}
+	}
+
+	if( FolderSet == FALSE && PrintingScriptsGC )
+	{
+		theFolderName = PrintingScriptsGC->GetStringValue(FolderName) ;
+		if( theFolderName )
+		{
+			if( theFolderName[0] )
+			{
+				ExpandFolderPath( theFolderName, TempPath ) ;
+				gPrinterSetupGC->SetAttrValue( FolderName, TempPath ) ;
+				FolderSet = TRUE ;
+			}
+		}
+	}
+	return( FolderSet ) ;
+}
+
+
+int ExpandFolderPath(TCHAR *SrcPath, TCHAR *DstPath)
+{
+	if( gPrinterSetupGC == NULL )	{ return( FALSE ) ; }
+
+	TCHAR	 AppInstance[2048] ;
+	TCHAR	 Title[128];
+	TCHAR	 Instance[12];
+	TCHAR	*PrinterName  = gPrinterSetupGC->GetStringValue(_T("PrinterName")) ;
+	TCHAR	*QueueName	  = gPrinterSetupGC->GetStringValue(_T("QueueName")) ;
+	TCHAR	*ExeDirectory = GetExeDirectory() ;  
+
+
+	if( SrcPath )
+	{
+		int	SrcPos = 0 ;
+		int	DstPos = 0 ;
+		int TmpPos ;
+
+		while( SrcPath[SrcPos] )
+		{
+			if( SrcPath[SrcPos] == '[' )
+			{
+				if( SrcPath[SrcPos+1] == 'E' )	//	GET QUEUE NAME
+				{
+					if( QueueName )
+					{
+						DstPos = CopyString( DstPath, DstPos, QueueName ) ;
+					}
+				}
+
+				if( SrcPath[SrcPos+1] == 'F' )	//	GET EXE NAME
+				{
+					if( ExeDirectory )
+					{
+						DstPos = CopyString( DstPath, DstPos, ExeDirectory ) ;
+					}
+				}
+
+				if( SrcPath[SrcPos+1] == 'T' )	//	GET PRINTER NAME
+				{
+					if( PrinterName )
+					{
+						DstPos = CopyString( DstPath, DstPos, PrinterName ) ;
+					}
+				}
+
+				if( SrcPath[SrcPos+1] == 'A' )	//	GET APPLICATION INSTANCE
+				{
+					strcpy( Title, GetExeName() );
+
+					//	REMOVE TRAILING BLANKS CAUSED BY RUNNING FROM THE PROFILER !
+					StripTrailingBlanks( Title ) ;
+
+					ApplicationInstance( Instance );
+					sprintf( AppInstance, _T("%s_%s"), Title, Instance );
+
+					if( AppInstance[0] )
+					{
+						DstPos = CopyString( DstPath, DstPos, AppInstance ) ;
+					}
+				}
+
+				if( SrcPath[SrcPos+1] == 'V' )	//	GET DISK VOLUME
+				{
+					if( ExeDirectory )
+					{
+						ExeDirectory[1] = 0x00 ;
+						DstPos = CopyString( DstPath, DstPos, ExeDirectory ) ;
+					}
+				}
+
+				//	SKIP PAST THE SPECIAL SYMBOL "[X]"
+				SrcPos = SrcPos + 2 ;
+			}
+			else
+			{
+				DstPath[DstPos]	  = SrcPath[SrcPos] ;
+			}
+			SrcPos++ ;
+			DstPos++ ;
+		}
+	}
+	DstPath[DstPos] = 0x00 ;
+
+	if( gLogAmount >= 9 )
+	{
+		SessionLogDirect( _T("**\tREThread.ExpandFolderPath: Orig: \"%s\", FullPath: \"%s\""),
+								SrcPath, DstPath ) ;
+	}
+
+	CreateFullDirectoryPath( DstPath ) ;
+
+	return( DstPos ) ;
+}
+
+int CopyString( TCHAR *Dst, int DstPos, TCHAR *Src )
+{
+	int TmpPos = 0 ;
+	while( Src[TmpPos] )
+	{
+		Dst[DstPos] = Src[TmpPos] ;
+		DstPos++ ;
+		TmpPos++ ;
+	}
+	return( DstPos - 1 ) ;
+}
+
+
+//=============================================================================
+//=============================================================================
+
+HandleDBError(UADO *anADO)
+{
+	long	ErrorCount, ErrorIndex ;
+	TCHAR	ADOErrDesc[2048] ;
+	TCHAR	theMsg[4096] ;
+	long	StopHere = 0 ;
+
+	Debug(StopHere) ;
+
+	ErrorCount = GetErrorCount( anADO ) ;
+	if( ErrorCount == 0L )
+	{
+		HandleError( _T("LostDBConnection"), _T("Strings UIMessages")) ;
+	}
+	else
+	{
+		for( ErrorIndex = 0L ; ErrorIndex < ErrorCount ; ErrorIndex++ )
+		{
+			GetErrorDescription( anADO, ErrorIndex, ADOErrDesc ) ;
+			sprintf( theMsg, "Database Error: %s", ADOErrDesc ) ;
+			ShowDialog( theMsg ) ;
+		}
+	}
+}
+
+ShowDialog( TCHAR *theMsg )
+{
+	UGenCon	*aGC = new UGenCon( GetDataDictionary( _T("DDMessageDialog"))) ;
+	aGC->SetLongValue( _T("xPosition"), -1L ) ;
+	aGC->SetLongValue( _T("yPosition"), -1L ) ;
+	aGC->SetAttrValue( _T("Message1"), theMsg ) ;
+	aGC->SetLongValue( _T("DefaultButton"), 1L ) ;
+	aGC->SetAttrValue( _T("Button1"), _T("Oh...") ) ;
+	aGC->SetAttrValue( _T("Button1Response"), _T("Cancel") ) ;
+
+	SessionLogDirect( theMsg ) ;
+
+	MessageDialog( aGC, TRUE ) ;
+
+	delete aGC ;
+}
+
+HandleError( TCHAR *Name, TCHAR *Location )
+{
+	TCHAR *ErrStr = GetTreeString( Name, Location ) ;
+	if( ErrStr )
+	{
+		ShowDialog( ErrStr ) ;
+	}
+}
+
+TCHAR *HandleFatalError( TCHAR *ErrMsg )
+{
+	SessionLogDirect( ErrMsg ) ;
+	ReportError( ErrMsg, 0, 0 ) ;
+	return( NULL ) ;
+}
+
+
+int PostAThreadMessage( CIThread *theThread, long MsgNum, long wParam, long lParam )
+{
+	int		Result = 0 ;
+	int		Count  = 0 ;
+	long	LastError = 0L ;
+
+	if( theThread )
+	{
+		long	ThreadID = theThread->GetThreadID() ;
+
+		while( Result == 0 )
+		{
+			Result = theThread->PostThreadMessage( MsgNum, wParam, lParam ) ;
+			if( Result == 0 )
+			{
+				LastError = GetLastError() ;
+				SessionLogDirect( _T("RenderEngineDlg_2.PostAThreadMessage(0x%08lX, %ld, %ld): Failed: Thread: 0x%08lX, ThreadID: 0x%08lX, Error: %d"),
+						MsgNum, wParam, lParam, theThread, ThreadID, LastError ) ;
+				Sleep( 1000 ) ;
+			}
+
+			Count++ ;
+
+			if( Count > 5 )
+			{
+				break ;
+			}
+		}
+	}
+
+	return( Result ) ;
+}
+
+WriteModeAction(TCHAR *Action)
+{
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+	if( PrinterSetup && Action )
+	{
+		TCHAR	*ControlFolder	= PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+		TCHAR	 ActionPath[1024] ;
+
+		sprintf( ActionPath, _T("%s\\001.act"), ControlFolder ) ;
+
+		if( gLogAmount >= 5 )
+		{
+			SessionLogDirect( _T("RenderEngineDlg_2.WriteModeAction: Writing Flie: \"%s\"\nAction:\n%s"),
+					ActionPath, Action ) ;
+		}
+
+		char	*fp = fopen( ActionPath, _T("w")) ;
+		if( fp )
+		{
+			fprintf( fp, _T("ACTION: %s"), Action ) ;
+			fclose(fp) ;
+		}
+	}
+}
+
+
+UGenCon *WaitForModeStatus()
+{
+	UGenCon	*ModeStatusGC = NULL ;
+	TCHAR	*StatusText ;
+	UGenCon *PrinterSetup = FindPrinterSetup() ;
+	if( PrinterSetup )
+	{
+		TCHAR	*ResponseFolder	= PrinterSetup->GetStringValue(_T("ResponseFolder")) ;
+		TCHAR	 ResponsePath[1024] ;
+		sprintf( ResponsePath, _T("%s\\001.sta"), ResponseFolder ) ;
+
+		if( gLogAmount >= 5 )
+		{
+			SessionLogDirect( _T("RenderEngineDlg_2.WaitForStatus: ResponsePath: \"%s\""), ResponsePath ) ;
+		}
+
+		int	Count = 0L ;
+		while( Count < 10L )
+		{
+			StatusText = GetFile( ResponsePath ) ;
+			if( StatusText )
+			{
+				if( gLogAmount >= 5 )
+				{
+					SessionLogDirect( StatusText ) ;
+				}
+				ModeStatusGC = ParseModeStatus( StatusText ) ;
+				unlink( ResponsePath ) ;
+				free( StatusText ) ;
+				break ;
+			}
+
+			Sleep( 1000 ) ;
+			Count++ ;
+		}
+	}
+	return( ModeStatusGC ) ;
+}
+
+
+UGenCon *ParseModeStatus( TCHAR *Text )
+{
+	if( Text )
+	{
+		TCHAR		 Token[2048] ;
+		TCHAR		 Keyword[2048] ;
+		double		 Resolution ;
+		long		 NumberJobs ;
+		UGenCon		*aGC ;
+
+		UGenCon		*ModeStatusGC = new UGenCon( GetDataDictionary( _T("DDModeStatus"))) ;
+		UParser *theParser = new UParser ;
+		theParser->SetText( Text ) ;
+
+		theParser->GetToken( Keyword ) ;
+		while( *Keyword )
+		{
+			if( stricmp( Keyword, _T("Type:")) == 0 ||
+				stricmp( Keyword, _T("Action:")) == 0 ||
+				stricmp( Keyword, _T("Code:")) == 0 )
+			{
+				theParser->GetToken(Token) ;
+				ModeStatusGC->SetAttrValue( Keyword, Token ) ;
+			}
+
+			if( stricmp( Keyword, _T("Date_Time:")) == 0 )
+			{
+				theParser->GetLine( Token, FALSE ) ;
+				ModeStatusGC->SetAttrValue( Keyword, Token ) ;
+			}
+
+			if( stricmp( Keyword, _T("Msg:")) == 0 )
+			{
+				theParser->GetUntil(0x22, Token, FALSE ) ;
+				theParser->GetUntil(0x22, Token, FALSE ) ;
+				ModeStatusGC->SetAttrValue( Keyword, Token ) ;
+			}
+
+			if( stricmp( Keyword, _T("Resolution:")) == 0 )
+			{
+				Resolution = theParser->GetDouble() ;
+				aGC = new UGenCon( GetDataDictionary( _T("DDDouble"))) ;
+				aGC->SetDoubleValue( _T("Double"), Resolution ) ;
+				ModeStatusGC->AddChildBack( aGC ) ;
+			}
+
+			if( stricmp( Keyword, _T("State:")) == 0 )
+			{
+				theParser->GetToken( Token ) ;
+				ModeStatusGC->SetAttrValue(_T("State:"), Token ) ;
+			}
+
+			if( stricmp( Keyword, _T("Number_Jobs:")) == 0 )
+			{
+				NumberJobs = theParser->GetLong() ;
+				ModeStatusGC->SetLongValue(_T("NumberJobs:"), NumberJobs ) ;
+			}
+
+			if( stricmp( Keyword, _T("Page_Status:")) == 0 )
+			{
+				theParser->GetLine( Token, FALSE ) ;
+			}
+
+			theParser->GetToken(Keyword) ;
+		}
+
+		theParser->SetText( NULL ) ;
+		delete theParser ;
+		return( ModeStatusGC ) ;
+	}
+	return( NULL ) ;
+}
+
+int WaitForStatus( TCHAR *FileName )
+{
+	UGenCon	*aGC = new UGenCon( GetDataDictionary( _T("DDText"))) ;
+	aGC->SetAttrValue(_T("Text"), FileName ) ;
+
+//SessionLogDirect( _T("RenderEngineDlg_2.txt.WaitForStatus: FileName: \"%s\", gThread: 0x%08lX"), FileName, gThread ) ;
+
+	PostAThreadMessage( gThread, REM_RE_ADD_TO_WAIT_LIST, 0L, aGC ) ;
+
+	// gThread, because this is called from the main thread.
+	PostAThreadMessage(gThread, REM_RE_WAIT_FOR_STATUS, 0L, 0L ) ;
+
+	return( TRUE ) ;
+}
+
+UGenCon *StatusArrive()
+{
+	TCHAR	*FileName ;
+	TCHAR	 FilePath[2048] ;
+	TCHAR	*FileText ;
+	TCHAR	 StatusText[24 * 1024] ;
+	UGenCon	*RP30StatusGC = NULL ;
+	TCHAR	*ResponseFolder = NULL ;
+
+	TCHAR	*PrinterName	= gDataGC->GetStringValue(_T("PrinterList")) ;
+	UGenCon	*PrinterSetup	= GetTreeObject( PrinterName, _T("[Renderers]")) ;
+	if( PrinterSetup == NULL )	{ return( NULL ) ; }
+
+	UGenCon	*RP30SetupGC	= PrinterSetup->GetLongValue(_T("RP30Setup")) ;
+
+	if( gStatusWaitList )
+	{
+		UListIterator	*anIter = new UListIterator( gStatusWaitList ) ;
+		UGenCon			*aGC = (UGenCon *) anIter->GetFirst() ;
+		while( aGC )
+		{
+			FileName = aGC->GetStringValue(_T("Text")) ;
+			ResponseFolder = PrinterSetup->GetStringValue(_T("ResponseFolder")) ;
+			sprintf( FilePath, _T("%s\\%s"), ResponseFolder, FileName ) ;
+
+			if( gLogAmount >= 9 )
+			{
+				SessionLogDirect( _T("REDlg_2.StatusArrive: FilePath: \"%s\""), FilePath ) ;
+			}
+			if( FilePath )
+			{
+				FileText = GetFile( FilePath ) ;
+				if( FileText )
+				{
+					unlink( FilePath ) ;
+					gStatusWaitList->RemoveItem( aGC ) ;
+					delete aGC ;
+
+					if( gLogAmount >= 5 )
+					{
+						SessionLogDirect( _T("REDlg_2.StatusArrive: StatusText: \"%s\""), FileText ) ;
+					}
+
+					//	PARSE THE TEXT HERE !
+					RP30StatusGC = ParseStatus( FileText ) ;
+
+					if( RP30StatusGC )
+					{
+						CombineGCs( RP30SetupGC, RP30StatusGC ) ;
+						GetStatusText( RP30SetupGC, StatusText ) ;
+						PrinterSetup->SetAttrValue(_T("RP30SetupText"), StatusText ) ;
+						delete RP30StatusGC ;
+
+						//	UPDATE THE DIALOG ??? TBD QWERTY
+						gDataGC->SetAttrValue(_T("DetailedStatus"), StatusText ) ;
+						if( gDlg )
+						{
+							DisplayControlValues( gDlg ) ;
+						}
+					}
+
+					free( FileText ) ;
+					break ;
+				}
+			}
+			aGC = (UGenCon *) anIter->GetNext() ;
+		}
+		delete anIter ;
+	}
+
+	if( gStatusWaitList->GetNumEntries() > 0L )
+	{
+		PostAThreadMessage(gThisThread, REM_RE_WAIT_FOR_STATUS, 0L, 0L ) ;
+	}
+
+	return( RP30StatusGC ) ;
+}
+
+
+UGenCon *ParseStatus( TCHAR *StatusText )
+{
+	TCHAR		 Token[2048] ;
+	TCHAR		*String ;
+	long		 Length ;
+	long		 Value ;
+	UGenCon		*StatusGC = new UGenCon( GetDataDictionary(_T("DDPrinterStatus"))) ;
+
+	if( StatusGC )
+	{
+		UParser	*theParser = new UParser ;
+		if( theParser )
+		{
+			theParser->SetText(StatusText) ;
+
+			theParser->GetToken(Token) ;
+			while( Token[0] )
+			{
+				if( stricmp( Token, _T("Type:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("Type:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("Action:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("Action:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("Time:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("Time:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("Code:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("Code:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("IA_Version:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("IA_Version:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("P_Width_LHS:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("P_Width_LHS:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("P_Length_LHS:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("P_Length_LHS:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("P_Surface_LHS:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Value = atoi(Token) ;
+					if( Value > 0 )
+					{
+						String = GetPaperSurface(Token) ;
+						StatusGC->SetAttrValue(_T("P_Surface_LHS:"), String ) ;
+						StatusGC->SetLongValue(_T("L_Surface_LHS:"), Value ) ;
+					}
+				}
+
+				if( stricmp( Token, _T("P_Width_RHS:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("P_Width_RHS:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("P_Length_RHS:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("P_Length_RHS:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("P_Surface_RHS:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Value = atoi(Token) ;
+					if( Value > 0 )
+					{
+						String = GetPaperSurface(Token) ;
+						StatusGC->SetAttrValue(_T("P_Surface_RHS:"), String) ; 
+						StatusGC->SetLongValue(_T("L_Surface_RHS:"), Value ) ;
+					}
+				}
+
+				if( stricmp( Token, _T("Printer_Status:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Value = atoi(Token) ;
+					if( Value > 0 )
+					{
+						StatusGC->SetAttrValue(_T("Printer_Status:"), GetStatus(Token)) ;
+						StatusGC->SetLongValue(_T("L_Printer_Status:"), Value ) ;
+					}
+				}
+
+				if( stricmp( Token, _T("Printer_Name:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					StatusGC->SetAttrValue(_T("Printer_Name:"), Token) ;
+				}
+
+				theParser->GetToken(Token) ;
+			}
+
+			theParser->SetText(NULL) ;
+			delete theParser ;
+		}
+	}
+	return( StatusGC ) ;
+}
+
+
+TCHAR *GetStatus(TCHAR *Token)
+{
+	TCHAR	*Status = _T("") ;
+
+	int		IStat = atoi(Token) ;
+
+	if( IStat == 1 )	{ Status = _T("Reset") ; }
+	if( IStat == 2 )	{ Status = _T("Idle") ; }
+	if( IStat == 3 )	{ Status = _T("Busy") ; }
+	if( IStat == 4 )	{ Status = _T("Netprint Busy") ; }
+	if( IStat == 5 )	{ Status = _T("Common Busy") ; }
+	if( IStat == 6 )	{ Status = _T("Netprint Idle") ; }
+	if( IStat == 7 )	{ Status = _T("Common Idle") ; }
+	if( IStat == 8 )	{ Status = _T("Error") ; }
+	if( IStat == 99 )	{ Status = _T("Offline") ; }
+
+	return( Status ) ;
+}
+
+
+TCHAR	*GetPaperSurface( TCHAR *Token )
+{
+	TCHAR	*Status = _T("") ;
+
+	int		Surf = atoi(Token) ;
+
+	if( Surf ==  1 )	{ Status = _T("Other") ; }
+	if( Surf ==  2 )	{ Status = _T("Matte") ; }
+	if( Surf ==  3 )	{ Status = _T("Semi Matte") ; }
+	if( Surf ==  4 )	{ Status = _T("Glossy") ; }
+	if( Surf ==  5 )	{ Status = _T("Smooth/Luster") ; }
+	if( Surf ==  6 )	{ Status = _T("Ultra Smooth/Hi Luster") ; }
+	if( Surf ==  7 )	{ Status = _T("Fine Grained / Luster") ; }
+	if( Surf ==  8 )	{ Status = _T("Silk") ; }
+	if( Surf ==  9 )	{ Status = _T("Luster") ; }
+	if( Surf == 10 )	{ Status = _T("Deep Matte") ; }
+	if( Surf == 11 )	{ Status = _T("High Gloss") ; }
+
+	return( Status ) ;
+}
+
+TCHAR *GetStatusText( UGenCon *aGC, TCHAR *Text )
+{
+	TCHAR		*AttrName ;
+	TCHAR		 AttrValue[2048] ;
+	TCHAR		 Temp[2048] ;
+	long		 Order = 0L ;
+
+	Text[0] = 0 ;
+	
+	//	GET THE GENCONs DATA DICTIONARY
+	UDataDict *aDD = aGC->GetDataDict() ;
+	if( aDD )
+	{
+		//	PRINT THE GENCON's NAME
+		strcpy( Text, _T("\r\n")) ;
+		strcat( Text, aGC->GetName()) ;
+		strcat( Text, _T("\r\n")) ;
+
+		//	FOR EACH ATTRIBUTE IN THE DICTIONARY
+		UAttribute		*anAttr = aDD->GetAttributeByOrder(Order) ;
+
+		while( anAttr )
+		{
+			//	GET THE ATTRIBUTE NAME
+			AttrName = anAttr->GetName() ;
+
+			if( aGC->AttrChanged( AttrName ))
+			{
+				//	GET THE ATTRIBUTE VALUE
+				aGC->GetAttrValue( AttrName, AttrValue ) ;
+
+				//	PRINT THE ATTRIBUTE NAME AND VALUE
+				sprintf( Temp, _T("\t%-20.20s\t%s\r\n"), AttrName, AttrValue ) ;
+				strcat( Text, Temp ) ;
+			}
+
+			//	GET THE NEXT ATTRIBUTE
+			Order++ ;
+			anAttr = aDD->GetAttributeByOrder(Order) ;
+		}
+	}
+	return( Text ) ;
+}
+
+
+CombineGCs( UGenCon *Dst, UGenCon *Src )
+{
+	TCHAR		*AttrName ;
+	TCHAR		 AttrValue[2048] ;
+	long		 Order = 0L ;
+
+	//	GET THE GENCONs DATA DICTIONARY
+	UDataDict *aDD = Src->GetDataDict() ;
+	if( aDD )
+	{
+		//	PRINT THE GENCON's NAME
+		//	FOR EACH ATTRIBUTE IN THE DICTIONARY
+		UAttribute		*anAttr = aDD->GetAttributeByOrder(Order) ;
+
+		while( anAttr )
+		{
+			//	GET THE ATTRIBUTE NAME
+			AttrName = anAttr->GetName() ;
+
+			if( Src->AttrChanged( AttrName ))
+			{
+				//	GET THE ATTRIBUTE VALUE
+				Src->GetAttrValue( AttrName, AttrValue ) ;
+
+				//	COPY THE VALUE
+				Dst->SetAttrValue( AttrName, AttrValue ) ;
+			}
+
+			//	GET THE NEXT ATTRIBUTE
+			Order++ ;
+			anAttr = aDD->GetAttributeByOrder(Order) ;
+		}
+	}
+}
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+
+int ExceptionHandler()
+{
+	if( gShuttingDown )
+	{
+		return( TRUE ) ;
+	}
+
+	DumpCStack(_T("ExceptionHandler")) ;
+
+	//	CLEAN UP THE TREE
+	UGenCon *theMsgGC = PluckTreeObject(_T("CRunTimeError"), _T("[GenCons]")) ;
+	if( theMsgGC )
+	{
+		TCHAR	*theMsg = theMsgGC->GetStringValue(_T("Text")) ;
+		SessionLogDirect( _T("REThread.ExceptionHandler: The Error Message: \"%s\"."),
+							theMsg ) ;
+
+		ShowDialog( theMsg, 0L ) ;
+
+		delete theMsgGC ;
+	}
+
+}
+
+int DumpCStack(TCHAR *Where)
+{
+	UCInterpreter *ThisCInterp = THIS() ;
+	TCHAR	*StackText = ThisCInterp->GetStackText() ;
+	SessionLogDirect( _T("REBatchThread.%s: Stack:\n%s"), Where, StackText ) ;
+	free( StackText ) ;
+	return( TRUE ) ;
+}
+
+
+//=============================================================================
+//=============================================================================
+
+//	DEBUGGER2 CODE
+
+TCHAR	gScriptName[2048] ;	//	SO WE KNOW WHAT TO REMOVE LATER
+
+int HangDebugTargetGC(int IsThread)
+{
+	TCHAR			 ScriptName[2048] ;
+
+	UCInterpreter	*theCI = THIS() ;
+
+	GetScriptName( theCI, ScriptName, IsThread ) ;
+
+	TCHAR			*ScriptPath = GetDebugScriptPath( theCI ) ;
+//	UGenCon			*theDebugGC = GetDebugScriptGC() ;
+	UGenCon			*theDebugGC = new UGenCon( GetDataDictionary(_T("DDDebugScript"))) ;
+	if( theDebugGC )
+	{
+		theDebugGC->SetName( ScriptName ) ;
+		theDebugGC->SetLongValue( _T("CInterpreter"), theCI ) ;
+		theDebugGC->SetLongValue( _T("CInterpThread"), gThisThread ) ;
+	}
+
+	strcpy( gScriptName, ScriptName ) ;
+
+	HangTreeObject( theDebugGC, _T("[DebugScripts Scripts]")) ;
+
+	return( TRUE ) ;
+}
+
+TCHAR	*GetDebugScriptPath( UCInterpreter *theCI )
+{
+	TCHAR	*ScriptPath = _T(" ") ;
+	UList	*ScriptFiles = theCI->GetScriptFiles() ;
+	UListIterator	*anIter = new UListIterator( ScriptFiles ) ;
+	UScriptFile		*aFile  = (UScriptFile *) anIter->GetFirst() ;
+	delete anIter ;
+
+	if( aFile )
+	{
+		ScriptPath = aFile->GetPath() ;
+	}
+	return( ScriptPath ) ;
+}
+
+
+TCHAR	*GetScriptName( UCInterpreter *theCI, TCHAR *ScriptName, int IsThread )
+{
+	UList	*ScriptFiles = theCI->GetScriptFiles() ;
+	UListIterator	*anIter = new UListIterator( ScriptFiles ) ;
+	UScriptFile		*aFile  = (UScriptFile *) anIter->GetFirst() ;
+
+	*ScriptName = 0x00 ;
+
+	if( aFile )
+	{
+		TCHAR *ScriptPath = aFile->GetPath() ;
+		if( ScriptPath )
+		{
+			TCHAR	FileName[2048] ;
+			TCHAR	FilePath[2048] ;
+			TCHAR	FileExtn[64] ;
+
+			GetFilePathNameAndExt( ScriptPath, FilePath, FileName, FileExtn ) ;
+			if( IsThread )
+			{
+				sprintf( ScriptName, _T("%s_Thread.%s"), FileName, FileExtn ) ;
+			}
+			else
+			{
+				sprintf( ScriptName, _T("%s.%s"), FileName, FileExtn ) ;
+			}
+		}
+	}
+	delete anIter ;
+	return( ScriptName ) ;
+}
+
+int RemoveDebugTargetGC()
+{
+	UGenCon *theDebugGC = PluckTreeObject( gScriptName, _T("[DebugScripts Scripts]")) ;
+	delete theDebugGC ;
+	return(TRUE) ;
+}
+
+//=============================================================================
+//=============================================================================
+

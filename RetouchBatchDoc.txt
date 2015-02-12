@@ -1,0 +1,583 @@
+Include: ~KparsUtilities.txt~;
+
+IncludeClass( KarsDialog );
+
+KARS_ERROR		  = 0;
+KARS_COMPLETE	  = 1;
+KARS_DONGLE_ERROR = 2;
+
+VOID BatchDlg::BatchDlg()					// CONSTRUCTOR
+{
+	KarsType		= ~Batch~;
+	NextProcess		= ~Review~;
+	BeginState		= ~QueuedFor<KarsType>~;
+	InProcessState	= ~In<KarsType>~;
+	CompleteState	= ~QueuedFor<NextProcess>~;
+	Sort			= ~<KarsType>ID Desc,Priority Desc, SubmittedAt,OrderID,Roll,Frame~;
+	Key				= ~RetouchState = '<BeginState>'~;
+	BaseKey			= ~RetouchState = '<BeginState>'~;
+	Left			= 515;
+	GoButtonToolTip = Translate( ~Run the background Retouch <KarsType> process.~ );
+	Title			= Translate( ~Retouching <KarsType> operation~ );
+	Query			= ~SELECT <Fields1> FROM <MasterTable> WHERE <Key> ORDER BY <Sort>~;
+}
+
+
+VOID BatchDlg::DefineDictionary()
+{
+	if ( !DictionaryExists( DDRetouchBatchSetup ) )
+	{
+		Dictionary: ~DDRetouchBatchSetup~ 
+			Fields: Name TextureFine		type long
+			Fields: Name TextureCoarse		type long
+			Fields: Name TextureDepth		type long
+			Fields: Name TextureGrain		type long
+			Fields: Name SkinToneSmooth		type long
+			Fields: Name SkinToneContrast	type long
+			Fields: Name EyeWhitening		type long
+			Fields: Name TeethWhitening		type long
+			Fields: Name LeftEyeShaping		type long
+			Fields: Name RightEyeShaping	type long
+			Fields: Name RedEyeRemoval		type long
+			Fields: Name SingleFace			type long
+			Fields: Name SkinColorThreshold type long
+			Fields: Name DefectThreshold	type double
+			;
+	}
+
+	KarsDialog::DefineDictionary();
+}
+
+
+VOID BatchDlg::InitDictionaryData()
+{
+	if ( !Defined( RetouchSetupData ) )
+	{
+		Define: RetouchSetupData Using DDRetouchBatchSetup
+				Fields: TextureFine			2
+						TextureCoarse		2
+						TextureDepth		2
+						TextureGrain		2
+						SkinToneSmooth		0
+						SkinToneContrast	2
+						EyeWhitening		1
+						TeethWhitening		1
+						LeftEyeShaping		0
+						RightEyeShaping		0
+						RedEyeRemoval		0
+						SingleFace			0
+						SkinColorThreshold  80
+						DefectThreshold		0.26
+		;
+	}
+	Private( RetouchSetupData );
+
+	KarsDialog::InitDictionaryData();
+		
+}
+
+/*
+NUMERIC BatchDlg::DefineControls()
+{
+	Define: Select<KarsType>IDPrompt Using DDWinCtrlDef AsSymbol Select<KarsType>IDPrompt
+		Fields:	TYPENAME			StaticText
+				TEXT				~Order ID~
+				RIGHTJUSTIFIED		TRUE
+				POSITION			<hgap> <vGap> * 2 <ButtonWidth> <ButtonHeight>;
+
+	Define: <KarsType>IDComboBox Using DDWinCtrlDef AsSymbol <KarsType>IDComboBox Private
+		Fields:	TYPENAME			ComboBox
+				POSITION			Select<KarsType>IDPrompt(GetRight,Position) + <hGap> <vGap> <ButtonWidth> * 3 <ButtonHeight> * 10
+				LEFTJUSTIFIED		TRUE
+				GENCONNAME			THIS
+				GENCONFIELD			Selected<KarsType>ID
+				DropDownActionsText	ACTION EXEC ( <THIS>.OnRefreshID(<KarsType>ID) )
+				DActionsText		ACTIONS ( Save )
+				OActionsText		ACTIONS ( Save )
+				TOOLTIP				Translate( ~Select the ID for processing in the <KarsType> Queue.~ )
+				
+	return KarsDialog::DefineControls();
+}
+*/
+
+// determine if auto batch is allowed
+VOID BatchDlg::Initialize()
+{
+	AllowAutoBatch = CheckAutoBatch();
+	StoreKparsSettings();
+}
+
+VOID BatchDlg::EnableIDControl( value )
+{
+	dlg( EnableControls,<value>,<KarsType>IDComboBox );
+}
+
+
+NUMERIC BatchDlg::SetupOperation()
+{
+	result = KarsDialog::SetupOperation( TRUE );
+
+	if ( <result> == <ERROR_ON_SETUP> )
+	{
+		return ExitOnError();
+	}
+
+	if ( <result> == <WAIT_ON_SETUP> )
+	{
+		return TRUE;
+	}
+	
+	if ( ~<BatchCompleteProcessing>~ == ~REVIEW~ )
+	{
+		CompleteState = ~QueuedForReview~;
+	}
+	else if ( ~<BatchCompleteProcessing>~ == ~NO_REVIEW~ )
+	{
+		CompleteState = ~InMerge~;
+	}
+	<KarsType>PreprocessData( SetValues,Length,0,
+									 Width,0,
+									 Depth,3,
+									 FileResolution,250,
+									 RotateFromDisk,0,
+									 ArbitraryRotation,0.0,
+									 Flattened,0 );
+
+	<KarsType>PreprocessData( SetValues,Brt,0,
+									 Red,0,
+									 Grn,0,
+									 Blu,0,
+									 Con,0,
+									 Saturation,0,
+									 Gamma,0.0,
+									 GammaRed,0,
+									 GammaGreen,0,
+									 GammaBlue,0,
+									 ICCProfile,~~,
+									 DefaultProfileUsed,0,
+									 ImageSource,~~ );
+
+	<KarsType>PreprocessData( SetValues,ApplyShasta,0,
+									 PostKPTPBrt,0,
+									 PostKPTPRed,0,
+									 PostKPTPGrn,0,
+									 PostKPTPBlu,0,
+									 PostKPTPCon,0,
+									 PostKPTPGam,0.0,
+									 ShastaHighlight,0,
+									 ShastaMidTone,0,
+									 ShastaShadow,0 );
+									 
+	<KarsType>PreprocessData( SetValues,CompleteState,~<CompleteState>~,
+										CompleteNotification,~<THIS>.OnComplete(%d,%ld);~ );
+
+	
+	AutoBatch  = <KarsType>PreprocessData( GetNumeric,AutoBatch );
+	SingleFace = <KarsType>PreprocessData( GetNumeric,SingleFace );
+
+// for now, automatically turn off autobatch if not allowed
+	if ( <AutoBatch> && !<AllowAutoBatch> )
+	{
+		txtMsg = ~Auto Batch is selected, but all of the setting types have not been defined.\n Select Yes to assign each of the settings to a batch setup (DarkSkinHighBlemish, DarkSkinLowBlemish, LightSkinHighBlemish, LightSkinLowBlemish) and select a Default Setting.\n Select NO to use the current batch setup. ~;
+		if ( MessageBox( Translate( ~<txtMsg>~ ),YESNO ) == YES )
+		{
+			Action = ACTION DOC ( RetouchBatchSetupsDoc OpenOnce RetouchBatchSetupsDoc "Init();" );
+			PerformActions( Action );
+			dlg( SetControlValue,CurrentImageText,Translate( ~Cancelling operation~ ) );
+			if (!dBase( Cmd,~<UndoCmd>~ ))
+			{
+				dBase( GetErrorDescription, theErr );
+				Log( Session,Translate(~Cmd Failed <UndoCmd>. <theErr>~) );
+			}
+
+			WaitCursor( END );
+			ForgetPrivate( dBase );
+			fExitOnComplete = TRUE;
+			fStopPending = TRUE;
+			Actions = STR ( <THIS>.SetupOperation(); );
+			QueueContentsAfter( Actions,500 );
+			return FALSE;
+		}
+		else 
+		{
+			AutoBatch = 0;
+			<KarsType>PreprocessData( SetValues,AutoBatch,<AutoBatch> );
+		}
+	}
+
+	if ( !<AutoBatch> )
+	{
+		if ( !GetBatchSetupData( ~<BatchSetup>~, FALSE, <SingleFace> ) )
+		{
+			ForgetPrivate( dBase );
+			return FALSE;
+		}
+	}
+
+	ForgetPrivate( dBase );
+	if ( !RunOperation( ~<Order>~,~<Roll>~,~<Frame>~ ) )
+	{
+		Actions = STR ( <THIS>.SetupOperation(); );
+		QueueContentsAfter( Actions,2000 );
+	}
+
+	return TRUE;
+}
+
+//first, check for current name
+//next, check for a DefaultSetting
+NUMERIC BatchDlg::GetBatchSetupData( SetupName, AutoBatch, SingleFace )
+{
+	setupQuery = ~Select * from RetouchBatchSetup WHERE Name = '<SetupName>'~;
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<setupQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		if (!dBase( Cmd,~<UndoCmd>~ ))
+		{
+			dBase( GetErrorDescription, theErr );
+			Log( Session,Translate(~Cmd Failed <UndoCmd>. <theErr>~) );
+		}
+		WaitCursor( END );
+		ForgetPrivate( dBase );
+		fExitOnComplete = TRUE;
+		fStopPending = TRUE;
+
+		Warning( ~Query Failed: <setupQuery>. <theErr>~ );
+		Actions = STR ( <THIS>.SetupOperation(); );
+		QueueContentsAfter( Actions,2000 );
+
+		return FALSE;
+	}
+
+	Count = List( NumEntries );
+	Msg = ~Reading data for <SetupName>~;
+	StatusBar( 0,Translate( ~<Msg>~ ) );
+
+	if ( <Count> == 0 )
+	{
+		ForgetLocal( List );
+		setupQuery = ~Select * from RetouchBatchSetup WHERE DefaultSetting = 1~;
+		if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<setupQuery>~ ) )
+		{
+			dlg( SetControlValue,CurrentImageText,Translate( ~Skipping to next image~ ) );
+			List( GetErrorDescription,0,theErr );
+			if (!dBase( Cmd,~<UndoCmd>~ ))
+			{
+				dBase( GetErrorDescription, theErr );
+				Log( Session,Translate(~Cmd Failed <UndoCmd>. <theErr>~) );
+			}
+			WaitCursor( END );
+			ForgetPrivate( dBase );
+			fExitOnComplete = TRUE;
+			fStopPending = TRUE;
+
+			Warning( ~Query Failed: <setupQuery>. <theErr>~ );
+			Actions = STR ( <THIS>.SetupOperation(); );
+			QueueContentsAfter( Actions,2000 );
+
+			return FALSE;
+		}
+	}
+
+	Count = List( NumEntries );
+	Msg = ~Reading data for DefaultSetting~;
+	StatusBar( 0,Translate( ~<Msg>~ ) );
+
+	if ( <Count> == 0 )
+	{
+		txtMsg = ~The Batch Setup <SetupName> does not exist.\nDo you want to use the default settings?~;
+		if ( MessageBox( Translate( ~<txtMsg>~ ),YESNO ) != YES )
+		{
+			dlg( SetControlValue,CurrentImageText,Translate( ~Skipping to next image~ ) );
+			Actions = STR ( <THIS>.SetupOperation(); );
+			QueueContentsAfter( Actions,100 );
+			return FALSE;
+		}
+		else
+		{
+			RetouchSetupData( SetValues, TextureFine,2,
+					 					 TextureCoarse,2,
+										 TextureDepth,2,
+										 TextureGrain,2,
+										 SkinToneSmooth,0,
+										 SkinToneContrast,2,
+										 EyeWhitening,1,
+										 TeethWhitening,1,
+										 LeftEyeShaping,0,
+										 RightEyeShaping,0,
+										 RedEyeRemoval,0,
+										 SingleFace,0,
+										 SkinThreshold,80,
+										 DefectThreshold,0.26 );
+			return TRUE;
+		}
+	}
+
+
+	retouchSetup = List( GetFirst,item );
+
+	SingleFace = <SingleFace> || Numeric( ~<$pcon.item[SingleFace]>~ );
+
+	RetouchSetupData( SetValues, TextureFine,~<$pcon.item[TextureFine]>~,
+			 					 TextureCoarse,~<$pcon.item[TextureCoarse]>~,
+								 TextureDepth,~<$pcon.item[TextureDepth]>~,
+								 TextureGrain,~<$pcon.item[TextureGrain]>~,
+								 SkinToneSmooth,~<$pcon.item[SkinToneSmooth]>~,
+								 SkinToneContrast,~<$pcon.item[SkinToneContrast]>~,
+								 EyeWhitening,~<$pcon.item[EyeWhitening]>~,
+								 TeethWhitening,~<$pcon.item[TeethWhitening]>~,
+								 LeftEyeShaping,~<$pcon.item[LeftEyeShaping]>~,
+								 RightEyeShaping,~<$pcon.item[RightEyeShaping]>~,
+								 RedEyeRemoval,0, // ~<$pcon.item[RedEyeRemoval]>~,
+								 SingleFace,~<SingleFace>~,
+								 SkinColorThreshold,~<$pcon.item[SkinColorThreshold]>~, 
+								 DefectThreshold,~<$pcon.item[DefectThreshold]>~
+								 );
+			
+	return TRUE;
+
+}
+
+NUMERIC BatchDlg::StoreKparsSettings()
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		fExitOnComplete = TRUE;
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	setupQuery = ~Select * from RetouchBatchSetup~;
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<setupQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		if (!dBase( Cmd,~<UndoCmd>~ ))
+		{
+			dBase( GetErrorDescription, theErr );
+			Log( Session,Translate(~Cmd Failed <UndoCmd>. <theErr>~) );
+		}
+
+		return FALSE;
+	}
+
+	setupEntry = List( GetFirst,item );
+
+	while ( <setupEntry> )
+	{
+		GenCon( thisSetup,IsCopyOf,item, Temporary ); 
+		
+		SaveSettings( thisSetup );
+		ForgetLocal( thisSetup );
+
+		setupEntry = List( GetNext,item );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC BatchDlg::SaveSettings( &entryToSave )
+{
+	if (!Defined(Kpars) )
+	{
+		if ( !KparsConnect( ~Batch~ ) )
+		{
+			return FALSE;
+		}
+	}
+
+	if ( !Kpars( StoreSettings,entryToSave ) )
+	{
+		Log( Session, ~Unable to save settings to file.~ );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC BatchDlg::RunOperation( Order,Roll,Frame )
+{
+	if ( !Defined( Kpars ) )
+	{
+		KparsConnect( ~Batch~ );
+	}
+
+	StatusBar( 0,Translate( ~Processing image in <KarsType>.~ ) );
+	if ( !Kpars( Initialize,<KarsType>PreprocessData ) )
+	{
+		ErrMsg = Translate( ~Unable to initialize the retouching software interface.~ );
+		StatusBar( 0,~<ErrMsg>~ );
+		fExitOnComplete = TRUE;
+		return Warning( Translate( ~<ErrMsg>~ ) );
+	}
+
+	GenCon( Control,IsCopyOf,<KarsType>PreprocessData,PERMANENT );
+
+	if ( !Kpars( ~Run<KarsType>~,RetouchSetupData,Control ) )
+	{
+		ErrMsg = Translate( ~Unable to run the KPARS <KarsType> operation.~ );
+		StatusBar( 0,~<ErrMsg>~ );
+		return Warning( Translate( ~<ErrMsg>~ ) );
+	}
+	return TRUE;	
+}
+
+NUMERIC BatchDlg::OnComplete( Status,ControlAddr )
+{
+	GenCon( ControlInfo,Is,<ControlAddr>,TEMPORARY );
+	ControlInfo( GetValues,OrderID,Order,Roll,Roll,Frame,Frame,CompleteState,FinalState );
+
+	if ( <Status> == <KARS_COMPLETE> )
+	{
+		txtMsg = ~Completed <KarsType> processing for <Order>,<Roll>,<Frame>.~;
+		dlg( SetControlValue,CurrentImageText,Translate( ~<txtMsg>~ ) );
+		if ( ~<FinalState>~ == ~Complete~ )
+		{
+			RemakeItemsUsing(~<Order>~,~<Roll>~,~<Frame>~ );
+		}
+	}
+	else if ( <Status> == <KARS_DONGLE_ERROR> )
+	{
+		txtMsg = ~Completed <KarsType> processing for <Order>,<Roll>,<Frame>.~;
+		txtMsg = ~<txtMsg> Unable to merge retouched image due to lack of retouch credits.~;
+		dlg( SetControlValue,CurrentImageText,Translate( ~<txtMsg>~ ) );
+	}
+	else
+	{
+		if ( ~<CompleteState>~ != ~QueueForReview~ )
+		{
+			QueueForReviewMode(~<Order>~,~<Roll>~,~<Frame>~);
+		}
+		txtMsg = ~<KarsType> Retouch processing failed for <Order>,<Roll>,<Frame>.~;
+		dlg( SetControlValue,CurrentImageText,Translate( ~<txtMsg>~ ) );
+		Log( Session, ~<txtMsg>~ );
+	}
+
+	credits = 0;
+	dongleError = 0;
+	credits = CheckKparsDongle(dongleError);
+	StatusBar( 0,Translate( ~<KarsType> Complete for <Order>,<Roll>,<Frame>~ ) );
+	StatusBar( 1,Translate( ~Credits: <credits>~) );
+
+	Actions = STR ( <THIS>.SetupOperation(); );
+	QueueContentsAfter( Actions,100 );
+
+	return TRUE;
+}
+
+NUMERIC BatchDlg::QueueForReviewMode(Order,Roll,Frame)
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		fExitOnComplete = TRUE;
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	Values = ~RetouchState = 'QueuedForReview'~;
+
+	Cmd = ~Update <MasterTable> Set <Values> Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+	if (!dBase( Cmd,~<Cmd>~ ))
+	{
+		dBase( GetErrorDescription, theErr );
+		Log( Session,Translate(~Cmd Failed <Cmd>. <theErr>~) );
+		ForgetPrivate( dBase );
+		fExitOnComplete = TRUE;
+		return Warning( Translate( ~Failed to update the Retouch Images Table for <Order>,<Roll>,<Frame>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC BatchDlg::ExitOnError()
+{
+	ForgetPrivate( Kpars );
+	ForgetPrivate( RetouchSetupData );
+	ForgetPrivate( <KarsType>PreprocessData );
+	dlg(End);
+	ForgetGlobal( <THIS> );
+	return FALSE;
+}
+
+
+VOID Init( StartNow,Restricted )
+{
+	AutoStart = FALSE;
+	if ( DefinedAndNotNull( StartNow ) )
+	{
+		AutoStart = <StartNow>;
+	}
+
+	HereOnly = FALSE;
+	if ( DefinedAndNotNull( Restricted ) )
+	{
+		HereOnly = <Restricted>;
+	}
+
+	Key = ~RetouchState = 'QueuedForBatch'~;
+	Fields1 = ~*~;
+
+	if ( !Defined( KarsBatch ) )
+	{
+		Class( BatchDlg,Extends,KarsDialog,
+						Member,Order,Str,~~,
+						Member,Roll,Str,~~,
+						Member,Frame,Str,~~,
+						Member,BatchCompleteProcessing,Str,~~,
+						Member,BatchSetup,Str,~~,
+						Member,AllowAutoBatch,Numeric,0 );
+
+		BatchDlg( New,KarsBatch );
+
+		KarsBatch.DefineDictionary();
+		KarsBatch.DefineDialog();
+		KarsBatch.InitDictionaryData();
+		KarsBatch.Initialize();
+
+		if ( <HereOnly> )
+		{
+			localKey = ~<BaseKey> And (BatchID='<$App.ComputerName>.<$App.Instance>' OR BatchID='<$App.ComputerName>')~;
+		}
+		else
+		{
+			localKey = ~<BaseKey> And (BatchID='<$App.ComputerName>.<$App.Instance>' OR BatchID='<$App.ComputerName>' OR BatchID='' OR BatchID IS NULL)~;
+		}
+		Query = ~SELECT <Fields1> FROM RetouchImages WHERE <localKey> ORDER BY <Sort>~;
+		KarsBatch.Set( Key,~<localKey>~ );
+		KarsBatch.Set( Query,~<Query>~ );
+
+		Global( KarsBatch );
+
+		if ( <AutoStart> )
+		{
+			KarsBatch.OnGoButton();
+		}
+
+		return;
+	}
+
+	KarsBatch.ReOpen();
+
+	if ( <HereOnly> )
+	{
+		localKey = ~<BaseKey> And (BatchID='<$App.ComputerName>.<$App.Instance>' OR BatchID='<$App.ComputerName>')~;
+	}
+	else
+	{
+		localKey = ~<BaseKey> And (BatchID='<$App.ComputerName>.<$App.Instance>' OR BatchID='<$App.ComputerName>' OR BatchID='' OR BatchID IS NULL)~;
+	}
+	Query = ~SELECT <Fields1> FROM RetouchImages WHERE <localKey> ORDER BY  <Sort>~;
+	KarsBatch.Set( Key,~<localKey>~ );
+	KarsBatch.Set( Query,~<Query>~ );
+
+	if ( <AutoStart> )
+	{
+		if ( KarsBatch.GetStopPendingFlag() || KarsBatch.GetStoppedFlag() )
+		{
+			KarsBatch.DoStopButton();
+		}
+	}
+
+}

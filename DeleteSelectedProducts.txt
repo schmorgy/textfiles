@@ -1,0 +1,64 @@
+
+NUMERIC OrdersUsingThisProduct( Key )
+{
+	Query = ~Select * from OrderItems Where ProductID = (SELECT ID FROM Products WHERE <Key>) Order By OrderID,ID~;
+
+	if ( !PGenConList( List,Connect,Permanent,Query,~<Query>~ ) )
+		{ Error( ~Error checking for orders that are using the Product where <Key>~ ); }
+
+	if ( List( Empty ) )
+		{ return FALSE; }
+	
+	Define: OrderItemWindow CopyOf OrderItemWindow ~[UI Windows]~
+		Fields:	 
+			Title		~Order Items Using the Product <Key>~;
+
+		Contains: 
+		{
+			Define: OrderItemListView
+				Fields:
+					ViewData	List(GetObject)
+		}
+
+	Hang: OrderItemWindow ~[GENCONS]~;
+	HandleActions( ~Window(OrderItemWindow [GENCONS])~ );
+	
+	MessageBox( ~Could not delete the product where <Key>, because orders for that product exist~ );
+
+	return TRUE;
+}
+
+
+if ( !GenCon( ProductCategory,GETACTIVEVIEW ) )
+	{ Error( ~There is no active view~ ); }					// *TRANSLATE*
+
+if ( ~<$con.ProductCategory[ViewDataType]>~ != Products )
+	{ Error( ~The view does not contain Products~ ); }		// *TRANSLATE*
+
+if ( !ado( db,CONNECT ) )									// Open the database
+	{ Error( ~Could not open Database~ ); }					// *TRANSLATE*
+
+MoreProducts = ProductCategory( GETNEXT,Product );
+
+while ( $MoreProducts  )
+{
+	if ( !<$Con.Product[IsDeleted]> )				// IF NOT SELECTED FOR DELETION, THEN SKIP IT
+	{
+		MoreProducts = ProductCategory( GETNEXT,Product );
+		continue;
+	}
+
+	if ( OrdersUsingThisProduct( ~<$con.Product[Key]>~ ) )
+		continue;
+		
+	if ( !db( CMD,~Delete FROM <$con.Product[Table]> WHERE <$con.Product[Key]>~ ) )
+	{
+		db( GetErrorDescription,theErr );
+		Error( ~Error: <theErr>~ );
+	}
+
+	ProductCategory( REMOVE,Product );						// REMOVE IT FROM THE VIEW
+	MoreProducts = ProductCategory( GETFIRST,Product );
+}
+
+ProductCategory( Refresh );

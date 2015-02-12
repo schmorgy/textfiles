@@ -1,0 +1,278 @@
+
+IncludeClass( BaseMenu );
+IncludeClass( BaseGrid );
+
+VOID DSbaPrefs::DSbaPrefs( )					// CONSTRUCTOR
+{
+	TableName = ~DSbaPrefsData~;
+	Title = Translate( ~Auto Balance Preferences Tracking Data~ );
+	DocumentQuery = ~Select * from <TableName> Order By Name ~;
+	WindowTop = 0;
+	WindowWidth = 90;
+	WindowHeight = 25;
+	HelpPage = ~AutoBalance_TrackingPref.htm~;
+	InsertActiveCell = ~Frame~;
+}
+
+STR DSbaPrefs::GetKey( &Item )	
+{ 
+	// PRIMARY KEY FOR THE TABLE
+		return ~Name = '<$con.Item[Name]>'~; 
+}
+
+
+NUMERIC DSbaPrefs::ChangeRecordAudits( &Changed )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[Name]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  Order cannot be blank.~ ) ); }
+
+	return TRUE;
+}
+
+VOID DSbaPrefs::AddMenuItems()					// ADD ADDITIONAL RIGHT CLICK MENU ITEMS
+{
+	AddMenuItem( TRUE,FALSE,Translate(~Export Data~),ACTION EXEC ( <THIS>.ExportSelectedToFile() ) );
+
+}
+
+NUMERIC DSbaPrefs::DefineWindow()
+{
+	//DefineMessages();
+
+	if ( !GenCon( TableDefinition,GetFrom,<TableName>,~[DATABASE <WhichTableDefinitions>]~ ) )
+		{ return Warning( ~The <TableName> Table is not properly defined~ ); }
+
+	Private( TableDefinition );
+
+	Define: DataWindow Using DDWinDef AsSymbol DataWindow Private
+		Fields:	Title					Translate(~<Title>~)
+				Position				<WindowLeft> <WindowTop> <WindowWidth> <WindowHeight>
+				IsPositionPercent		T
+				TypeName				SplitterWnd
+				SplitterRows			~<SplitterRows>~
+				SplitterColumns			~<SplitterCols>~
+				EnableStatusBar			<WantStatusBar> ? T : F ; 
+
+				WindowDefinition();			// OVERRIDE to specify other DDWinDef parameters
+
+		Contains:	INLISTORDER
+		{
+			Define: ControlView Using DDViewDef AsSymbol ControlView Private
+				Fields:	ViewType				FormView
+						KeyboardActionsText		ACTION Exec ( <THIS>.OnKeydown() ) 
+						DropActionsText			ACTION Exec ( <THIS>.HandleDrop() )
+						HActionsText			ACTION SHOWHELPPAGE ( <HelpFile> "<HelpPage>" );
+
+						ControlViewDefinition();
+
+				Contains:
+				{
+					position = AddControls( 0 );
+				}
+
+			Define: DataView Using DDViewDef AsSymbol DataView	Private
+				Fields:	ViewType				~ListView~
+						HActionsText			ACTION SHOWHELPPAGE ( <HelpFile> "<HelpPage>" )
+						GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+						ChangeRecordActionsText ACTION Exec ( <THIS>.ChangeRecord() )
+						DeleteRecordActionsText ACTION Exec ( <THIS>.DeleteRecord() )
+						RClickUpActionsText		ACTION Exec ( <THIS>.RightClickInListView() )
+						ComboBoxActionsText		ACTION Call ( <THIS>.OnComboBox() )
+						DoubleClickActionsText	ACTION Exec ( <THIS>.DoubleClick() )
+						ButtonClickActionsText	ACTION Exec ( <THIS>.OnButtonClick() )
+						DropActionsText			ACTION Exec ( <THIS>.HandleDrop() )
+						DragAcceptFiles			<DragAcceptFiles>
+						CloseActionsText		ACTION Call ( <THIS>.OnCloseDataView() ) ;
+
+						DataViewDefinition();
+		}
+
+	return TRUE;
+}
+
+
+NUMERIC DSbaPrefs::AddControls( position )
+{
+	Define: ExportDataButton Using DDWinCtrlDef AsSymbol ExportDataButton
+		Fields:	GENCONNAME		This
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.ExportSelectedToFile() )
+				POSITION		$position + $hGap, $vGap 60 $ButtonHeight
+				TEXT			Translate( ~Export~ )
+				TOOLTIP			Translate( ~Export data to a text file~ )
+				TYPENAME		BUTTON
+
+
+	return ExportDataButton( GetRight,Position );
+}
+
+NUMERIC DSbaPrefs::PopulateTable()
+{
+	PrefsListQuery = ~Select DISTINCT PrefsFile from DSbaImages WHERE SBALevel = 0~;
+
+	if ( !Ado( dbase,Connect ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	if ( !PGenConList( PrefsList,Connection,dBase,Cursor,Keyset,Query,~<PrefsListQuery>~ ) )
+	{ 
+		PrefsList( GetErrorDescription,0,theErr );
+		return Warning( ~Error querying the database. <PrefsListQuery>  <theErr>~ );
+	}
+
+	while ( PrefsList( GetNext,Item ) )
+	{
+		TotalFlesh = 0;
+		SbaFlesh   = 0;
+		prefName = ~<$pcon.Item[PrefsFile]>~;
+
+		CountQuery = ~Select count(*) from DSbaImages WHERE PrefsFile='<prefName>' AND SBALevel = 0~;
+		if ( !dBase( GetValuesFor,~<CountQuery>~,Total ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Error querying the database. <SummaryQuery>  <theErr>~ );
+		}
+
+		SummaryQuery = ~Select AVG(SbaR) from DSbaImages WHERE PrefsFile='<prefName>' AND SBALevel = 0~;
+		if ( !dBase( GetValuesFor,~<SummaryQuery>~,SbaR ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Error querying the database. <SummaryQuery>  <theErr>~ );
+		}
+
+		SummaryQuery = ~Select AVG(SbaG) from DSbaImages WHERE PrefsFile='<prefName>' AND SBALevel = 0~;
+		if ( !dBase( GetValuesFor,~<SummaryQuery>~,SbaG ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Error querying the database. <SummaryQuery>  <theErr>~ );
+		}
+
+		SummaryQuery = ~Select AVG(SbaB) from DSbaImages WHERE PrefsFile='<prefName>' AND SBALevel = 0~;
+		if ( !dBase( GetValuesFor,~<SummaryQuery>~,SbaB ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Error querying the database. <SummaryQuery>  <theErr>~ );
+		}
+
+		SummaryQuery = ~Select AVG(EdgeAvgR) from DSbaImages WHERE PrefsFile='<prefName>' AND SBALevel = 0~;
+		if ( !dBase( GetValuesFor,~<SummaryQuery>~,EdgeAvgR ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Error querying the database. <SummaryQuery>  <theErr>~ );
+		}
+
+		SummaryQuery = ~Select AVG(EdgeAvgG) from DSbaImages WHERE PrefsFile='<prefName>' AND SBALevel = 0~;
+		if ( !dBase( GetValuesFor,~<SummaryQuery>~,EdgeAvgG ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Error querying the database. <SummaryQuery>  <theErr>~ );
+		}
+
+		SummaryQuery = ~Select AVG(EdgeAvgB) from DSbaImages WHERE PrefsFile='<prefName>' AND SBALevel = 0~;
+		if ( !dBase( GetValuesFor,~<SummaryQuery>~,EdgeAvgB ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Error querying the database. <SummaryQuery>  <theErr>~ );
+		}
+
+		SummaryQuery = ~Select AVG(EdgeAvgN) from DSbaImages WHERE PrefsFile='<prefName>' AND SBALevel = 0~;
+		if ( !dBase( GetValuesFor,~<SummaryQuery>~,EdgeAvgN ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Error querying the database. <SummaryQuery>  <theErr>~ );
+		}
+
+		SummaryQuery = ~Select count(*) from DSbaImages WHERE PrefsFile='<prefName>' AND SBALevel = 0 AND Enhanced = 1~;
+		if ( !dBase( GetValuesFor,~<SummaryQuery>~,TotalFlesh ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Error querying the database. <SummaryQuery>  <theErr>~ );
+			continue;
+		}
+		SummaryQuery = ~Select AVG(SbaFlesh) from DSbaImages WHERE PrefsFile='<prefName>' AND SBALevel = 0 AND Enhanced = 1~;
+		if ( !dBase( GetValuesFor,~<SummaryQuery>~,SbaFlesh ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Error querying the database. <SummaryQuery>  <theErr>~ );
+			continue;
+		}
+		if ( round( atof( ~<TotalFlesh>~ ) ) == 0 )
+		{
+			TotalFlesh = 0;
+			SbaFlesh   = 0;
+		}
+
+		countQuery = ~Select Count(*) from DSbaPrefsData WHERE Name='<prefName>'~;
+		if (!dBase( GetValuesFor,~<countQuery>~,count) )
+		{
+			dBase( GetErrorDescription, theErr );
+			Log( Session,Translate(~Cmd Failed <countQuery>. <theErr>~) );
+			Warning( Translate( ~Failed to update the DSbaPrefsData table for <prefName>~ ) );
+		}
+
+		if ( <count> == 0 )
+		{
+			InsertFields = ~Name, TotalImages,TotalFleshImages, SbaR,SbaG,SbaB,SbaFlesh, EdgeAvgDenR,EdgeAvgDenG,EdgeAvgDenB,EdgeAvgDenN~;
+			InsertValues = ~'<prefName>', <Total>,<TotalFlesh>, <SbaR>,<SbaG>,<SbaB>,<SbaFlesh>, <EdgeAvgR>,<EdgeAvgG>,<EdgeAvgB>,<EdgeAvgN>~;
+			InsertCmd = ~Insert into DSbaPrefsData(<InsertFields>) Values(<InsertValues>)~;
+			if (!dBase( Cmd,~<InsertCmd>~ ))
+			{
+				dBase( GetErrorDescription, theErr );
+				Log( Session,Translate(~Cmd Failed <InsertCmd>. <theErr>~) );
+				Warning( Translate( ~Failed to insert a row in the DSbaPrefsData table for <prefName>~ ) );
+			}
+		}
+		else
+		{
+			UpdateCmd = ~Update DSbaPrefsData Set TotalImages=<Total>, TotalFleshImages=<TotalFlesh>, SbaR=<SbaR>,SbaG=<SbaG>,SbaB=<SbaB>,SbaFlesh=<SbaFlesh>, EdgeAvgDenR=<EdgeAvgR>,EdgeAvgDenG=<EdgeAvgG>,EdgeAvgDenB=<EdgeAvgB>,EdgeAvgDenN=<EdgeAvgN> WHERE Name='<prefName>'~;
+			if (!dBase( Cmd,~<UpdateCmd>~ ))
+			{
+				dBase( GetErrorDescription, theErr );
+				Log( Session,Translate(~Cmd Failed <InsertCmd>. <theErr>~) );
+				Warning( Translate( ~Failed to update the DSbaPrefsData table for <prefName>~ ) );
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC DSbaPrefs::ProcessTextDrop( &Item )	{ return TRUE; }
+
+	
+	
+NUMERIC DSbaPrefs::RefreshListView( &Item )
+{
+	PopulateTable();
+	return BaseGrid::RefreshListView();
+}
+
+
+STR DSbaPrefs::OnButtonClickTitle(Row,Col)
+{
+	if ( IsColumnName(<Col>,~Name~ ) )				{ return Translate(~Preference file name.~); }
+
+	return BaseGrid::OnButtonClickTitle(<Row>,<Col>);
+}
+
+
+NUMERIC Init()
+{
+	if ( Defined(DSbaPrefsGrid) )
+	{
+		DSbaPrefsGrid.ReOpen();
+		DSbaPrefsGrid.RefreshListView();
+		return TRUE;
+	}
+
+	Class( DSbaPrefs,Extends,BaseGrid );
+
+	DSbaPrefs( New,DSbaPrefsGrid );
+
+	DSbaPrefsGrid.PopulateTable();
+	DSbaPrefsGrid.DefineWindow();
+	DSbaPrefsGrid.Init();
+
+	return Global( DSbaPrefsGrid );
+}

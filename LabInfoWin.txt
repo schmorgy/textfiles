@@ -1,0 +1,373 @@
+IncludeClass(BaseHTML);
+
+if (Authorized(~KEXDSS~))
+{
+	Include: ~KEXGetCatalog.txt~ ;
+}
+
+Class( SetupLabInfo,Extends,BaseHTML,
+		Member,fCalledFromStartup,Numeric,0 );
+
+VOID SetupLabInfo::SetupLabInfo(WantStatic)
+{
+	WindowLeft = WindowTop = 0;
+	WindowWidth = 80;
+	WindowHeight = 100;
+
+	Static(~<WantStatic>~);
+}
+
+
+VOID SetupLabInfo::DefineMessages()
+{
+	BaseHtml::DefineMessages();
+	LoadTranslationFile( Startup,AppStartup,AppStartup );
+}
+
+VOID SetupLabInfo::ViewDefinition()		
+{
+	Fields:	HTMLCloseBox	<fStatic>;
+}
+
+VOID SetupLabInfo::OnLoadComplete()
+{
+	// This sets up fHtmlView.
+	GetActiveView();
+
+	labInfoExists = FALSE;
+
+	labName = ~~;
+	contactName = ~~;
+	address1 = ~~;
+	address2 = ~~;
+	city = ~~;
+	county = ~~;
+	region = ~~;
+	country = ~~;
+	zipCode = ~~;
+	phoneNumber = ~~;
+	eMail = ~~;
+	labUniqueID = ~~;
+	KNumber = ~~;
+
+	if ( ado( dBase,Connect ) )
+	{
+		Query = ~Select * from LabInfo~;
+		if ( PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			if ( List( GetNext,Labinfo ) )
+			{
+				labName = ~<$pcon.Labinfo[LabName]>~;
+				contactName = ~<$pcon.Labinfo[ContactName]>~;
+				address1 = ~<$pcon.Labinfo[Address1]>~;
+				address2 = ~<$pcon.Labinfo[Address2]>~;
+				city = ~<$pcon.Labinfo[City]>~;
+				county = ~<$pcon.Labinfo[County]>~;
+				region = ~<$pcon.Labinfo[State]>~;
+				country = ~<$pcon.Labinfo[Country]>~;
+				zipCode = ~<$pcon.Labinfo[ZipCode]>~;
+				phoneNumber = ~<$pcon.Labinfo[Phone]>~;
+				eMail = ~<$pcon.Labinfo[EMail]>~;
+				labUniqueID = ~<$pcon.Labinfo[LabUniqueID]>~;
+				KNumber = ~<$pcon.Labinfo[KNumber]>~;
+
+				labInfoExists = TRUE;
+			}
+		}
+	}
+	
+
+	if ( !<labInfoExists> )
+	{
+		LabInfoFile = ~<$App.ShareDirectory>\LabInfo.txt~;
+		if ( Files( FileExists,~<LabInfoFile>~ ) )
+		{
+			if ( File( InfoFile,Open,~<LabInfoFile>~,Read ) )
+			{ 
+				if ( InfoFile( ReadTextFile,buffer ) )
+				{
+					labName = String( GetParameter,buffer,~LabName=~,~;~ );
+					contactName = String( GetParameter,buffer,~ContactName=~,~;~ );
+					address1 = String( GetParameter,buffer,~Address1=~,~;~ );
+					address2 = String( GetParameter,buffer,~Address2=~,~;~ );
+					city = String( GetParameter,buffer,~City=~,~;~ );
+					county = String( GetParameter,buffer,~County=~,~;~ );
+					region = String( GetParameter,buffer,~Region=~,~;~ );
+					country = String( GetParameter,buffer,~Country=~,~;~ );
+					zipCode = String( GetParameter,buffer,~ZipCode=~,~;~ );
+					phoneNumber = String( GetParameter,buffer,~PhoneNumber=~,~;~ );
+					eMail = String( GetParameter,buffer,~Email=~,~;~ );
+					labUniqueID = String( GetParameter,buffer,~LabUniqueID=~,~;~ );
+					KNumber = ~<$pcon.Labinfo[KNumber]>~;		
+
+					InfoFile( Close );
+				}
+			}
+		}
+	}
+
+	if ( SimilarStr( ~<labUniqueID>~,~~ ) )
+	{
+		theID = GenerateLabUniqueID();
+		labUniqueID = Upper( ~<theID>~ );
+	}
+
+	// Split the phone number into the country code and phone number parts.
+	substr(~<phoneNumber>~, 0, 3,phoneCountryCode);
+	substr(~<phoneNumber>~, 3, 12,phone);
+
+	fHtmlView( Set, ~LabName~, 0, value, ~<labName>~ );
+	fHtmlView( Set, ~ContactName~, 0, value, ~<contactName>~ );
+	fHtmlView( Set, ~Address1~, 0, value, ~<address1>~ );
+	fHtmlView( Set, ~Address2~, 0, value, ~<address2>~ );
+	fHtmlView( Set, ~City~, 0, value, ~<city>~ );
+	fHtmlView( Set, ~County~, 0, value, ~<county>~ );
+	fHtmlView( Set, ~ZipCode~, 0, value, ~<zipCode>~ );
+	fHtmlView( Set, ~PhoneNumberCountryCode~, 0, value, ~<phoneCountryCode>~ );
+	fHtmlView( Set, ~PhoneNumber~, 0, value, ~<phone>~ );
+	fHtmlView( Set, ~EMail~, 0, value, ~<eMail>~ );
+	fHtmlView( Set, ~LabUniqueID~, 0, value, ~<labUniqueID>~ );
+	fHtmlView( Set, ~KNumber~, 0, value, ~<KNumber>~ );
+	fHtmlView( Set, ~Country~, 0, value, ~<country>~ );
+	fHtmlView( Set, ~Region~, 0, value, ~<region>~ );
+}
+
+VOID SetupLabInfo::InitWindow(CalledFromStartup)
+{
+	fCalledFromStartup = <CalledFromStartup>;
+
+	WorkstationType = ~<$[Symbols].WorkstationType[Value]>~;
+
+	showGetCatalogButton = FALSE;
+	if ( Authorized( ~KEXDSS~ ) && !<CalledFromStartup> && (<WorkstationType> != 0) )
+	{
+		showGetCatalogButton = TRUE;
+	}
+
+	CreateAndOpen( ~<$App.HTTPServer>/Admin/SetupLabInfo.kpl?ShowGetCatalogButton=<showGetCatalogButton>~ );
+}
+
+NUMERIC SetupLabInfo::SaveLabInfo(calledFromClose)
+{
+	if ( !ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session,~Unable to connect to the shared database.  <theErr>~ );
+		Warning( TR( AppStartup, UnableToSaveLabInfo ) );
+		return FALSE;
+	}
+
+	exists = dBase( RecordCountFor,~Select Count(*) from LabInfo~ );
+
+	if ( Defined( fHtmlView ) )
+	{
+		fHtmlView( Get,~LabName~,0,value,labName );
+		fHtmlView( Get,~ContactName~,0,value,contactName );
+		fHtmlView( Get,~Address1~,0,value,address1 );
+		fHtmlView( Get,~Address2~,0,value,address2 );
+		fHtmlView( Get,~City~,0,value,city );
+		fHtmlView( Get,~County~,0,value,county );
+		fHtmlView( Get,~Region~,0,value,region );
+		fHtmlView( Get,~Country~,0,value,country );
+		fHtmlView( Get,~ZipCode~,0,value,zipCode );
+		fHtmlView( Get,~PhoneNumberCountryCode~,0,value,phoneCountryCode );
+		fHtmlView( Get,~PhoneNumber~,0,value,phone );
+		fHtmlView( Get,~Email~,0,value,email );
+		fHtmlView( Get,~KNumber~,0,value,KNumber );
+		fHtmlView( Get,~LabUniqueID~,0,value,labUniqueID );
+
+		if ( <fCalledFromStartup> )
+		{
+			if ( SimilarStr( ~<labName>~,~~ ) || SimilarStr( ~<contactName>~,~~ ) || SimilarStr( ~<address1>~,~~ ) ||
+				SimilarStr( ~<city>~,~~ ) || SimilarStr( ~<region>~,~~ ) ||	SimilarStr( ~<country>~,~~ ) ||
+				SimilarStr( ~<zipCode>~,~~ ) || SimilarStr( ~<phone>~,~~ ) || SimilarStr( ~<email>~,~~ ) )
+			{
+				Warning( TR( AppStartup, MissingLabInfo2 ) );
+				return FALSE;
+			}
+		}
+
+		len = strlen(~<labName>~);
+		if ( <len> > 31 )
+		{
+			Warning( TR( AppStartup, LabNameTooLong ) );
+			return FALSE;
+		}
+
+		phoneCountryCode = Format( ~<phoneCountryCode>~,~%03ld~ );
+
+		// Write a redundant copy of the lab info to a file in the shared directory in case
+		// the lab needs to recreate their database.
+		LabInfoFile = ~<$App.ShareDirectory>\LabInfo.txt~;
+		if ( File( InfoFile,Open,~<LabInfoFile>~,Create,Write ) )	
+		{
+			InfoFile( ~LabName=<labName>~ );
+			InfoFile( ~ContactName=<contactName>~ );
+			InfoFile( ~Address1=<address1>~ );
+			InfoFile( ~Address2=<address2>~ );
+			InfoFile( ~City=<city>~ );
+			InfoFile( ~County=<county>~ );
+			InfoFile( ~Region=<region>~ );
+			InfoFile( ~Country=<country>~ );
+			InfoFile( ~ZipCode=<zipCode>~ );
+			InfoFile( ~PhoneNumber=<phoneCountryCode><phone>~ );
+			InfoFile( ~Email=<email>~ );
+			InfoFile( ~LabUniqueID=<labUniqueID>~ );
+			InfoFile( ~KNumber=<KNumber>~ );
+			InfoFile( Close );
+		}
+
+		MakeSQLSafe( labName );
+		MakeSQLSafe( contactName );
+		MakeSQLSafe( address1 );
+		MakeSQLSafe( address2 );
+		MakeSQLSafe( city );
+		MakeSQLSafe( county );
+		MakeSQLSafe( region );
+		MakeSQLSafe( country );
+		MakeSQLSafe( zipCode );
+		MakeSQLSafe( email );
+		MakeSQLSafe( KNumber );
+
+		if ( <exists> )
+		{
+			Cmd = ~Update LabInfo~;
+			Cmd = ~<Cmd>~ + ~ Set LabName = '<labName>',ContactName = '<contactName>',Address1 = '<address1>',Address2 = '<address2>',City = '<city>',~;
+			Cmd = ~<Cmd>~ + ~County = '<county>',State = '<region>',Country = '<country>',ZipCode = '<zipCode>',Phone = '<phoneCountryCode><phone>',~;
+			Cmd = ~<Cmd>~ + ~Email = '<email>',~;
+			Cmd = ~<Cmd>~ + ~KNumber = '<KNumber>'~;
+			
+			if ( !dBase( Cmd, ~<Cmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Log( Session,~Database update failed <cmd>. <theErr>~ );
+				Warning( TR( AppStartup, UnableToSaveLabInfo ) );
+				return FALSE;
+			}
+		}
+		else
+		{
+
+			Parameters = ~LabName,ContactName,Address1,Address2,City,County,State,Country,ZipCode,Phone,Email,LabUniqueID,KNumber~;
+			Values = ~'<labName>','<contactName>','<address1>','<address2>','<city>','<county>','<region>','<country>','<zipCode>','<phoneCountryCode><phone>','<email>','<labUniqueID>','<KNumber>'~;
+
+			Cmd = ~Insert Into LabInfo(<Parameters>) Values(<Values>)~;
+			if ( !dBase( Cmd, ~<Cmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Log( Session,~Database update failed <cmd>. <theErr>~ );
+				Warning( TR( AppStartup, UnableToSaveLabInfo ) );
+				return FALSE;
+			}
+		}
+
+		// Let the user know that the lab info was saved.
+		fHtmlView( SetInnerHTML, ~InfoSection~, 0, TR( AppStartup, LabInfoSaved ) );
+	}
+
+	if ( <fCalledFromStartup> )
+	{
+		Sleep(1000);
+		Actions = ACTION DOC ( Startup OpenOnce Startup "LabInfoComplete();" );
+		PerformActions( Actions );
+
+		if ( !<calledFromClose> )
+		{
+			BaseHtml::OnCloseDataWindow();
+		}
+
+		return TRUE;
+	}
+
+	if ( !<calledFromClose> )
+	{
+		// Remove the status indicator after 3 seconds.
+		Action = ~<This>.RemoveInfo();~;	
+		QueueContentsAfter( Action,3000 );
+	}
+
+	return TRUE;
+}
+
+NUMERIC SetupLabInfo::GetLatestCatalog()
+{
+	fHtmlView( Set,SaveLabInfoButton,0,disabled,true );
+	fHtmlView( Set,GetCatalogButton,0,disabled,true );
+
+	fHtmlView( SetInnerHTML, ~InfoSection~, 0, TR( AppStartup, GettingCatalog ) );
+
+	Actions = ACTION DOC ( KEXCatalogWin OpenOnce KEXCatalogWin "GetLatestCatalog();" );
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+NUMERIC SetupLabInfo::GetLatestCatalogDone( result )
+{
+	fHtmlView( Set,SaveLabInfoButton,0,disabled,~~ );
+	fHtmlView( Set,GetCatalogButton,0,disabled,~~ );
+
+	if ( <result> )
+	{
+		fHtmlView( SetInnerHTML, ~InfoSection~, 0, TR( AppStartup, GetCatalogSuccess, ~<$Sym.AppNameSymbol>~ ) );
+	}
+	else
+	{
+		fHtmlView( SetInnerHTML, ~InfoSection~, 0, TR( AppStartup, GetCatalogFailed ) );
+	}
+
+	return TRUE;
+}
+
+VOID SetupLabInfo::RemoveInfo()
+{
+	if ( Defined( fHtmlView ) )
+	{
+		fHtmlView( SetInnerHTML, ~InfoSection~, 0, ~~ );
+	}
+}
+
+VOID SetupLabInfo::SetTitle()
+{
+	SetWindowTitle( TR( AppStartup, LabInformation ) );
+}
+
+VOID SetupLabInfo::OnCloseDataWindow()
+{
+	if ( !IsAppShuttingDown() )
+	{
+		if ( <fCalledFromStartup> )
+		{
+			if ( !SaveLabInfo(TRUE) )
+			{
+				return;
+			}
+		}
+	}
+
+	BaseHtml::OnCloseDataWindow();
+}
+
+VOID InitDoc( WantStatic,CalledFromStartup )
+{
+	if ( !ObjectAlreadyExists( SetupObj ) )
+	{
+		SetupLabInfo( New,SetupObj,~<WantStatic>~ );
+
+		SetupObj( Global );
+
+		SetupObj.InitWindow(<CalledFromStartup>);
+	}
+
+	SetupObj.SetTitle();
+}
+
+// Entry Points from other scripts
+
+VOID InitStatic( )				{ InitDoc( TRUE,FALSE ); }
+
+VOID Init( )					{ InitDoc( FALSE,FALSE ); }
+
+VOID InitFromStartupStatic( )	{ InitDoc( TRUE,TRUE ); }
+
+VOID InitFromStartup( )			{ InitDoc( FALSE,TRUE ); }

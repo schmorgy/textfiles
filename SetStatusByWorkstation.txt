@@ -1,0 +1,87 @@
+IncludeClass(BaseDialog);
+
+Class( MyDialog,Extends,BaseDialog );
+
+VOID MyDialog::MyDialog()
+{
+	Left = 200;
+	Dictionary = ~DDLogOrderStatus~;
+	Title = ~Set Order Status to <WorkstationStatus>~;
+}
+
+NUMERIC MyDialog::OnGoButton()
+{
+	if ( IsNULL( ~<$con.DlgData[OrderID]>~ ) )		// Make sure the user entered an OrderID
+	{
+		return Warning( ~You must enter an OrderID first~ );
+	}
+
+	if ( !ADO( dbase,Connect,RecordCountFor,~Select ID From Orders Where ID = '<$con.DlgData[OrderID]>'~ ) )	// Make sure the order exists
+	{
+		return Warning( ~Order <$con.DlgData[OrderID]> does not exist~ );
+	}
+
+	dBase( Cmd,~Update Orders Set Status='<WorkstationStatus>' Where ID = '<$con.DlgData[OrderID]>'~ );
+
+	return dlg( SetStatus,0,~Status of OrderID <$con.DlgData[OrderID]> set to <WorkstationStatus>~ );
+}
+
+VOID MyDialog::DefineControls()
+{
+	Define: OrderPrompt Using DDWinCtrlDef AsSymbol OrderPrompt Private
+			Fields:	TYPENAME				STATICTEXT
+						GENCONNAME			THIS
+						Position				<hgap> <vGap> 70 <ButtonHeight>
+						Text						~Order ID~;
+
+	Define: OrderField Using DDWinCtrlDef AsSymbol OrderField Private
+			Fields:	TYPENAME				MaskedEditText
+						GENCONNAME			THIS
+						GENCONFIELD			OrderID
+						IACTIONSTEXT			ACTIONS ( Get )
+						DACTIONSTEXT			ACTIONS ( Save )
+						OACTIONSTEXT			ACTIONS ( Save )
+						WantReturnKey	  ~T~
+						ReturnKeyActionsText ACTION EXEC ( <THIS>.OnGoButton() )
+						TYPENAME		     MaskedEditText
+						Mask			       RepeatStr(32,~%~)  
+						Position				OrderPrompt(GetRight,Position)+$hGap OrderPrompt(GetTop,Position) 220 <ButtonHeight>;
+
+	BaseDialog::DefineControls();
+}
+
+VOID MyDialog::DefineDictionary()
+{
+		Dictionary: ~<Dictionary>~ 
+			Fields: Name OrderID	type text			// a place to hold the entered OrderID
+}
+
+NUMERIC CheckForAWorkstationStatus()
+{
+	if ( GetWorkStationSettings( ~<$Job.Title>~,WorkstationStatus,WorkstationStatus,Enabled ) )
+	{
+		if ( <Enabled> && !IsNull(~<WorkstationStatus >~) )
+		{
+			Global( WorkstationStatus );
+			return TRUE;
+		}
+	}
+
+  // This workstation is not set up with a workstation status in the workstation settings table
+
+	SetWorkStationSettings( ~<$Job.Title>~, ~WorkstationStatus~, ~~, TRUE );	// Enter a default record with no value
+
+	return Warning(~This workstation (<$App.ComputerName>) does not have a WorkstationStatus in the WorkstationSettings Table~ );
+}
+
+
+if ( CheckForAWorkstationStatus() )
+{
+	MyDialog( New,thisDialog );
+	ThisDialog.DefineDialog();
+}
+
+
+
+
+

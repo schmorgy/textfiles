@@ -1,0 +1,823 @@
+//	C_Disk_Response.txt
+
+//	THIS FILE WILL PARSE THE RESPONSE FILE FROM DISK
+
+/*		FROM RENDER.TXT
+Dictionary: DDFSResponse
+	Fields:	Name		~ResponseFolder~		Type	Text
+	Fields:	Name		~ResponseFilePath~		Type	Text
+	Fields:	Name		~ResponseType~			Type	Text
+	Fields:	Name		~ResponsePage~			Type	Long
+	Fields:	Name		~Date~					Type	Long
+	Fields:	Name		~Time~					Type	Long
+	Fields:	Name		~ResponseCode~			Type	Long
+	Fields:	Name		~ErrorType~				Type	Long
+	Fields:	Name		~ErrorText~				Type	Text
+	Fields:	Name		~ResponseFlag~			Type	Long
+	Fields:	Name		~FoundResponse~			Type	Long
+	;
+*/
+
+ExecC() ;
+
+char	*NULL ;
+int		 FALSE = 0L ;
+int		 TRUE  = ! FALSE ;
+
+int		 gTesting = FALSE ;
+
+UGenCon	*gPrinterSetup	= NULL ;
+UGenCon	*gStatusGC		= NULL ;
+UGenCon	*gRELookAhead	= NULL ;
+int		 gLogAmount		= 0 ;
+
+//	PRINT QUEUE JOB STATES
+int			 HOLD				= 0 ;
+int			 READY				= 1 ;
+int			 RESERVED			= 2 ;
+int			 PRINTING			= 3 ;
+int			 COMPLETED			= 4 ;
+int			 SAVED				= 5 ;
+int			 ERROR				= 6 ;
+int			 CANCELLED			= 7 ;
+int			 PENDING			= 8 ;
+
+//  Set the following value to the minimum amount of disk space
+//	needed to be able to continue rendering.
+//	If you are trying to suspend rendering based upon another
+//	computer's disk space, use the following formula:
+//
+//	gDiskSpaceNeeded = FreeDiskSpaceThisMachine - (FreeDiskSpaceOtherMachine - WorkingSpace) ;
+//
+//	Note:	all values are in Gigabytes.
+//
+//	Example:	gDiskSpaceNeeded = FreeDiskSpaceThisMachine - (FreeDiskSpaceOtherMachine - WorkingSpace) ;
+//						22.6 Gb	 =		32.5 Gb				-	(	        10.0 Gb		 -   0.1 Gb ) ;
+//				This will suspend the render engine when there
+//				is less than 22.6 Gb of disk space left on this machine.  The render
+//				engine will only render 9.9 Gb of data before rendering is suspended.
+//
+//				If the gDiskSpaceNeeded value is negative, more disk space is needed on
+//				rendering machine.  Clean out old files, or add another disk drive to 
+//				the machine.
+//
+//	Rendering will continue when the FreeDiskSpaceThisMachine value gets above 22.6 Gb.
+//	This will happen when the Interface Application deletes the images that have been printed.
+//
+//	Note:	For this to work, the gDiskSpaceNeeded must be enough to hold at least 
+//			41 rendered images.  If there is not enough space, then rendering and
+//			printing will stop until someone can fix the problem.
+//
+//			Is there a way to warn the user this is the case ?
+//
+//  NO THROTTLE_PRINTING based on disk space - hard to tell what space to use because we don't know the printer
+//double	gDiskSpaceNeeded = 0.05 ;	//	0.05 gigabytes == 50 megabytes
+
+main()
+{
+	Debug(0) ;
+
+//	SessionLogDirect( _T("C_Disk_Response.txt Main: (V1.00)")) ;
+
+	gRELookAhead = GetTreeObject(_T("RELookAhead"),_T("[GenCons]")) ;
+	if( gRELookAhead )
+	{
+		gLogAmount	= gRELookAhead->GetLongValue(_T("RELogLevel")) ;
+	}
+	else
+	{
+		SessionLogDirect( _T("C_Disk_Response.main: Warning: Could not get RELookAhead GenCon.")) ;
+	}
+}
+
+int Advertize()
+{
+	SessionLogDirect( _T("C_DISK_Response.txt Main: (V1.00)")) ;
+	return( TRUE ) ;
+}
+
+//	THIS ROUTINE NEEDS TO LOOK FOR BOTH
+//	A RESPONSE FILE AND ERROR FILES.
+int Init(UGenCon *OrderGC, UGenCon *ResponseGC)
+{
+	int Result = 0 ;
+
+	gPrinterSetup	= ResponseGC->GetLongValue(_T("PrinterSetupGC")) ;
+	gStatusGC		= ResponseGC->GetLongValue(_T("StatusGC")) ;
+
+	ThrottlePrinting(ResponseGC) ;
+
+	ResponseGC->SetLongValue(_T("FoundResponse"), 0L) ;
+	Result = CheckForResponse( OrderGC, ResponseGC, _T("*.err")) ;
+
+	if( gLogAmount > 7 )
+		{ SessionLogDirect(_T("C_Disk_Response.txt: Init: After *.err. Result = %ld"), Result ) ; }
+
+	if( Result == FALSE )
+	{
+		Result = CheckForResponse( OrderGC, ResponseGC, _T("*.rsp")) ;
+	}
+
+	if( gLogAmount > 7 )
+		{ SessionLogDirect(_T("C_Disk_Response.txt: Init: After *.rsp. Result = %ld"), Result ) ; }
+
+	if( Result )
+	{
+		//	DECREMENT THE NUMBER OF JOBS AT THE PRINTER
+		long	NumPrinterJobs = gStatusGC->GetLongValue(_T("NumPrinterJobs")) - 1L ;
+		gStatusGC->SetLongValue( _T("NumPrinterJobs"), NumPrinterJobs ) ;
+		if( gLogAmount >= 2 )
+		{
+			SessionLogDirect( _T("C_Disk_Response.Init: NumPrinterJobs %ld."), NumPrinterJobs ) ;
+		}
+	}
+
+	return( Result ) ;
+}
+
+
+
+int CheckForResponse(UGenCon *OrderGC, UGenCon *ResponseGC, TCHAR *FileType)
+{
+	int		 Result = 0 ;
+	TCHAR	 FilePath[2048] ;
+	TCHAR	*ResponseFolder = NULL ;
+
+	ResponseFolder = ResponseGC->GetStringValue(_T("ResponseFolder")) ;
+
+	sprintf( FilePath, _T("%s\\%s"), ResponseFolder, FileType ) ;
+	
+	UList *theFileList = GetFileList(FilePath) ;
+//	SessionLogDirect( _T("C_Disk_Response: FilePath = %s, theFileList = %d"), FilePath, theFileList ) ;
+
+	if( theFileList == NULL )	{ return( Result ) ; }
+
+	if( theFileList->GetNumEntries() > 0L )
+	{
+		SortBy( theFileList, _T("_NAME_") ) ;
+
+		UGenCon *FileEntry = theFileList->GetAt(0L) ;
+		if( FileEntry == NULL )
+		{
+			delete theFileList ;
+			return( FALSE ) ;
+		}
+
+		ResponseGC->SetLongValue(_T("ResponseFlag"), 1L ) ;		
+		ResponseGC->SetLongValue(_T("FoundResponse"), 1L) ;
+
+		TCHAR	*FileName = FileEntry->GetStringValue(_T("FileName")) ;
+		sprintf( FilePath, _T("%s\\%s"), ResponseFolder, FileName ) ;
+
+		int ErrResult = CheckResponse( ResponseGC, FilePath ) ;
+		if( ErrResult )
+		{
+			TCHAR	*ErrorText = ResponseGC->GetStringValue(_T("ErrorText")) ;
+			SessionLogDirect( _T("C_Disk_Response: Error: %ld, %s"), ErrResult, ErrorText ) ;
+
+			ResponseGC->SetLongValue(_T("JobQueueStatus"),  ERROR ) ;
+			ResponseGC->SetLongValue(_T("OrderItemStatus"), ERROR ) ;
+		}
+
+		ResponseGC->SetAttrValue(_T("ResponseFilePath"), FilePath) ;
+
+		if( stricmp( FileType, _T("*.err")) == 0 )
+		{
+			ResponseGC->SetLongValue(_T("FoundResponse"), 2L) ;
+		}
+		Result = TRUE ;
+	}
+
+	delete theFileList ;
+	return( Result ) ;
+}
+
+
+long  CheckResponse( UGenCon *ResponseGC, TCHAR *FileName )
+{
+	long	Count = 0L ;
+	long	ErrCode = -102L ;
+
+	TCHAR	*FileText = NULL ;
+
+	while( FileText == NULL && Count < 5 )
+	{
+		FileText = GetFile(FileName) ;
+		Count++ ;
+		if( FileText == NULL )
+		{
+			Sleep( 250L ) ;
+		}
+	}
+
+	if( FileText )
+	{
+		if( gLogAmount >= 4 )
+		{
+			SessionLogDirect( _T("Response:\n\"%s\""), FileText ) ;
+		}
+
+		ErrCode = ParseJob( FileText, ResponseGC ) ;
+
+		long	PageID  = ResponseGC->GetLongValue(_T("ResponsePage")) ;
+		TCHAR	*ResponseType = ResponseGC->GetStringValue(_T("ReponseType")) ;
+
+		if( gLogAmount >= 7 )
+		{
+			SessionLogDirect(_T("C_Disk_Response.CheckResponse: FileName = \"%s\" PageID = %ld, Type = %s, ErrCode = %ld"),
+								FileName, PageID, ResponseType, ErrCode ) ;
+		}
+
+		free( FileText ) ;
+	}
+	return( ErrCode ) ;
+}
+
+
+/*		FROM RENDER.TXT
+Dictionary: DDFSResponse
+	Fields:	Name		~ResponseFolder~		Type	Text
+	Fields:	Name		~ResponseFilePath~		Type	Text
+	Fields:	Name		~ResponseType~			Type	Text
+	Fields:	Name		~ResponsePage~			Type	Long
+	Fields:	Name		~Date~					Type	Long
+	Fields:	Name		~Time~					Type	Long
+	Fields:	Name		~ResponseCode~			Type	Long
+	Fields:	Name		~ErrorType~				Type	Long
+	Fields:	Name		~ErrorText~				Type	Text
+	Fields:	Name		~ResponseFlag~			Type	Long
+	Fields:	Name		~FoundResponse~			Type	Long
+	;
+*/
+
+long  ParseJob( TCHAR *Text, UGenCon *ResponseGC )
+{
+	long	ErrCode = 0L ;
+	long	lVal ;
+	int		Negative = 0L ;
+	TCHAR	Token[2048] ;
+	TCHAR	Month[16] ;
+	TCHAR	Day[16] ;
+	TCHAR	Year[16] ;
+	TCHAR	Hours[16] ;
+	TCHAR	Minutes[16] ;
+	TCHAR	Seconds[16] ;
+	TCHAR	ErrorMsg[2048] ;
+	TCHAR	ResponseCode[64] ;
+
+	UParser	*theParser = new UParser ;
+	theParser->SetText(Text) ;
+
+	theParser->GetToken(Token) ;
+	while( *Token )
+	{
+		if( stricmp( Token, _T("Page_ID:")) == 0 || stricmp( Token, _T("Page:")) == 0)
+		{
+			theParser->GetToken(Token) ;
+			ResponseGC->SetAttrValue(_T("ResponsePage"), Token ) ;
+		}
+
+		if( stricmp( Token, _T("Order_ID:")) == 0 )
+		{
+			theParser->GetToken(Token) ;
+			ResponseGC->SetAttrValue(_T("OrderID"), Token ) ;
+		}
+
+		if( stricmp( Token, _T("Batch_ID:")) == 0 )
+		{
+			theParser->GetToken(Token) ;
+			ResponseGC->SetAttrValue(_T("BatchID"), Token ) ;
+		}
+
+		if( stricmp( Token, _T("Type:")) == 0 )
+		{
+			theParser->GetToken(Token) ;
+
+			ResponseGC->SetAttrValue(_T("ResponseType"), Token ) ;
+		}
+
+		if( stricmp( Token, _T("Error_Type:")) == 0 )
+		{
+			theParser->GetToken(Token) ;
+			ResponseGC->SetAttrValue(_T("ErrorType"), Token ) ;
+		}
+
+		if( stricmp( Token, _T("Code:")) == 0 )
+		{
+			theParser->GetToken(Token) ;
+			if( stricmp( Token, _T("-")) == 0 )
+			{
+				Negative++ ;
+				theParser->GetToken(Token) ;
+			}
+
+			ErrCode = atoi( Token ) ;
+
+			if( Negative )
+			{
+				ErrCode = -ErrCode ;
+			}
+
+			sprintf( ResponseCode, _T("%ld"), ErrCode ) ;
+			ResponseGC->SetAttrValue(_T("ResponseCode"), ResponseCode ) ;
+			ResponseGC->SetAttrValue(_T("ErrorCode"), ResponseCode ) ;
+
+			GetErrorMsg( ErrCode, ErrorMsg ) ;
+
+			ResponseGC->SetAttrValue(_T("ErrorText"), ErrorMsg ) ;
+
+		}
+
+		if( stricmp( Token, _T("Flag:")) == 0 )
+		{
+			theParser->GetToken(Token) ;
+			if( stricmp( Token, _T("TRUE")) == 0 )
+			{
+				ResponseGC->SetLongValue(_T("ResponseFlag"), 1L ) ;
+			}
+		}
+
+		if( stricmp( Token, _T("Date_Time:")) == 0 ||
+			stricmp( Token, _T("Time:")) == 0 )
+		{
+			theParser->GetToken(Month) ;	//	GET MONTH
+			theParser->GetToken(Token) ;	//	'/'
+			theParser->GetToken(Day) ;		//	GET DAY
+			theParser->GetToken(Token) ;	//	'/'
+			theParser->GetToken(Year) ;		//	GET YEAR
+			lVal = (2000 + atoi(Year)) * 10000 + atoi(Month) * 100 + atoi(Day) ;
+			sprintf( Token, _T("%ld"), lVal ) ;
+			ResponseGC->SetAttrValue(_T("Date"), Token ) ;
+
+			theParser->GetToken(Token) ;
+			lVal = ConvertTime(Token) ;
+			sprintf( Token, _T("%ld"), lVal ) ;
+			ResponseGC->SetAttrValue(_T("Time"), Token ) ;
+		}
+
+		if( stricmp( Token, _T("Msg:")) == 0 )
+		{
+//			theParser->GetToken(ErrorMsg) ;
+			GetMultiLineQuotedString( theParser, ErrorMsg ) ;
+			ResponseGC->SetAttrValue(_T("ErrorText"), ErrorMsg ) ;
+
+			if( ErrCode )
+			{
+				SessionLogDirect( _T("C_Disk_Response.cpp: Msg: \"%s\"."), ErrorMsg ) ;
+			}
+		}
+
+		theParser->GetToken(Token) ;
+	}
+
+	theParser->SetText(NULL) ;
+	delete theParser ;
+	return( ErrCode ) ;
+}
+
+int GetMultiLineQuotedString( UParser *theParser, TCHAR *Buffer )
+{
+	theParser->GetUntil(0x22, Buffer, FALSE ) ;
+	theParser->GetUntil(0x22, Buffer, FALSE ) ;
+
+	return( TRUE ) ;
+}
+
+long ConvertTime( TCHAR *TimeStr )
+{
+	TCHAR	Temp[16] ;
+	long	TSPos = 0L ;
+	long	TMPos = 0L ;
+	long	Hours ;
+	long	Minutes ;
+	long	Seconds ;
+
+	Temp[TMPos] = TimeStr[TSPos] ;
+	TSPos++ ;
+	TMPos++ ;
+	if( TimeStr[TSPos] != ':' )
+	{
+		Temp[TMPos] = TimeStr[TSPos] ;
+		TSPos++ ;
+		TMPos++ ;
+	}
+	Temp[TMPos] = 0 ;
+	TSPos++ ;
+
+	Hours = atoi( Temp ) ;
+
+	TMPos = 0L ;
+	Temp[TMPos] = TimeStr[TSPos] ;
+	TSPos++ ;
+	TMPos++ ;
+	if( TimeStr[TSPos] != ':' )
+	{
+		Temp[TMPos] = TimeStr[TSPos] ;
+		TSPos++ ;
+		TMPos++ ;
+	}
+	Temp[TMPos] = 0 ;
+
+	Minutes = atoi(Temp) ;
+
+	TMPos = 0L ;
+	Temp[TMPos] = TimeStr[TSPos] ;
+	TSPos++ ;
+	TMPos++ ;
+	if( TimeStr[TSPos] != ':' )
+	{
+		Temp[TMPos] = TimeStr[TSPos] ;
+		TSPos++ ;
+		TMPos++ ;
+	}
+	Temp[TMPos] = 0 ;
+
+	Seconds = atoi(Temp) ;
+
+	return( Hours * 10000 + Minutes * 100 + Seconds ) ;
+}
+
+
+UList *GetFileList(TCHAR *Path)
+{
+	long	*FileHandle ;
+	char	 FileData[2048] ;
+	TCHAR	 FileName[2048] ;
+	TCHAR	 FileDate[1024] ;
+	int		 Result ;
+	long	 FileAttr ;
+	long	 longHandle ;
+	UGenCon	*FileDataGC ;
+
+	UList	*theList = new UList ;
+	if( theList == NULL )
+	{
+		SessionLogDirect( _T("C_Disk_Response.GetFileList: Cannot create the file list.")) ;
+		return( theList ) ;
+	}
+
+	strcpy( FileName, Path ) ;
+	FileHandle = FindFirstFile( FileName, FileData ) ;
+	longHandle = FileHandle ;
+	if( longHandle != 0xFFFFFFFF )
+	{
+		FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+		if( FileDataGC == NULL )
+		{
+			SessionLogDirect( _T("C_Disk_Response.GetFileList: Cannot create the find File Data GC (1).")) ;
+			delete theList ;
+			return( NULL ) ;
+		}
+
+		Result = FindFileConvToGC( FileData, FileDataGC ) ;
+		FindFileConvTime( FileDataGC, _T("ACCESSED"), FileDate ) ;
+
+		theList->InsertBack(FileDataGC) ;
+
+		FileAttr = FileDataGC->GetLongValue(_T("FileAttributes")) ;
+		while( Result )
+		{
+			Result = FindNextFile( FileHandle, FileData ) ;
+			if( Result )
+			{
+				FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+				if( FileDataGC == NULL )
+				{
+					SessionLogDirect( _T("C_Disk_Response.GetFileList: Cannot create the find File Data GC (2).")) ;
+					delete theList ;
+					return( NULL ) ;
+				}
+				FindFileConvToGC( FileData, FileDataGC ) ;
+				theList->InsertBack(FileDataGC) ;
+			}
+		}
+
+		Result = FindClose( FileHandle ) ;
+	}
+	return( theList ) ;
+}
+
+
+TCHAR *GetBaseName( TCHAR *Src, TCHAR *Dst )
+{
+	strcpy( Dst, Src ) ;
+	long	loop = 0L ;
+
+	while( Dst[loop] != 0x2E && Dst[loop] != 0x00 )
+	{
+		loop++ ;
+	}
+
+	Dst[loop] = 0x00 ;
+
+	return( Dst ) ;
+}
+
+
+TCHAR *GetErrorMsg( long ErrorCode, TCHAR *ErrorMsg )
+{
+	if( ErrorCode ==  0L )	{ strcpy( ErrorMsg, _T("")) ; }
+	if( ErrorCode == -1L )	{ strcpy( ErrorMsg, _T("Wrong image size.")) ; }
+	if( ErrorCode == -2L )	{ strcpy( ErrorMsg, _T("Exeption error.")) ; }
+	if( ErrorCode == -3L )	{ strcpy( ErrorMsg, _T("Cannot delete file.")) ; }
+	if( ErrorCode == -4L )	{ strcpy( ErrorMsg, _T("Missing image file.")) ; }
+	if( ErrorCode == -5L )	{ strcpy( ErrorMsg, _T("Command file error.")) ; }
+	if( ErrorCode == -6L )	{ strcpy( ErrorMsg, _T("Action file error.")) ; }
+	if( ErrorCode == -8L )	{ strcpy( ErrorMsg, _T("Printer not found error.")) ; }
+	if( ErrorCode == -9L )	{ strcpy( ErrorMsg, _T("Printer error.")) ; }
+	if( ErrorCode == -10L )	{ strcpy( ErrorMsg, _T("Flushing page.")) ; }
+
+	return( ErrorMsg ) ;
+}
+
+
+
+
+//	CONVERT THE STRING TO A NUMBER BASED UPON THE STRING LIST ON THE TREE.
+//  ~Hold~,~Ready~,~Reserved~,~Printing~,~Completed~,~Saved~,~Error~,~Cancelled~,~Pending~ 
+int GetPrintStatusNumber( TCHAR *Status )
+{
+	int		 loop ;
+	TCHAR	*aStatus ;
+
+	if( Status )
+	{
+		UStringList	*theSL = GetTreeObject(_T("PrintStatus"), _T("[STRINGS]")) ;
+		for( loop = 0 ; loop < 8 ; loop++ )
+		{
+			aStatus = theSL->GetString( loop ) ;
+			if( aStatus )
+			{
+				if( stricmp( aStatus, Status ) == 0 )
+				{
+					return( loop ) ;
+				}
+			}
+		}
+	}
+	return( -1 ) ;
+}
+
+
+void ThrottlePrinting(UGenCon *ResponseGC)
+{
+	long	CurrentTime = Clock() ;
+	long	LastRecordCheck = 0L ;
+	int		Result = 0L ;
+	int		RE_THRT_SUSPEND = 0x08 ;
+	int		REM_SUSPEND		= 0x9120 ;
+	int		REM_RESUME		= 0x9121 ;
+
+	long	SuspendType		= ResponseGC->GetLongValue(_T("SuspendType")) ;
+
+	TCHAR	*PrinterName	= gPrinterSetup->GetStringValue(_T("PrinterName")) ;
+	TCHAR	*QueueName		= gPrinterSetup->GetStringValue(_T("QueueName")) ;
+	long	NumSavedRecords = gStatusGC->GetLongValue(_T("NumPrinterJobs")) ;
+
+	int	MaxSavedRecords		= gPrinterSetup->GetLongValue(_T("DiskThrottleQty")) ;
+	if( gPrinterSetup->GetLongValue(_T("PaperFill")) > 0 )
+		{	MaxSavedRecords = gPrinterSetup->GetLongValue(_T("DiskPFThrottleQty")) ; }	//	HIGH FOR PAPER FILLING.
+
+	if( gLogAmount >= 6 )
+	{
+		SessionLogDirect( _T("C_Disk_Response.ThrottlePrinting: NumPrinterJobs: %ld, MaxSavedRecords: %ld"),
+					NumSavedRecords, MaxSavedRecords ) ;
+	}
+
+	if( NumSavedRecords < MaxSavedRecords )
+	{
+		if( SuspendType & RE_THRT_SUSPEND )
+		{
+			CIThread *theREThread = ResponseGC->GetLongValue(_T("REThread")) ;
+			if( theREThread )
+			{
+				Result = theREThread->PostThreadMessage( REM_RESUME, 0L, RE_THRT_SUSPEND ) ;
+				SessionLogDirect(_T("C_Disk_Response.ThrottlePrinting: Rendering Continued. Post Result: %ld"), Result ) ;
+			}
+		}
+	}
+	else
+	{
+		if( (SuspendType & RE_THRT_SUSPEND) == 0 )
+		{
+			CIThread *theREThread = ResponseGC->GetLongValue(_T("REThread")) ;
+			if( theREThread )
+			{
+				Result = theREThread->PostThreadMessage( REM_SUSPEND, 0L, RE_THRT_SUSPEND ) ;
+				SessionLogDirect(_T("C_Disk_Response.ThrottlePrinting: Rendering Suspended. Post Result: %ld"), Result ) ;
+			}
+		}
+	}
+}
+
+
+int GenerateSuccessResponse( UGenCon *ResponseGC )
+{
+	TCHAR	NewFilePath[2048] ;
+	TCHAR *ResponseType = ResponseGC->GetStringValue(_T("ResponseType")) ;
+	if( ResponseType && ResponseType[0] && stricmp( ResponseType, _T("ACKNOWLEDGE")) == 0 )
+	{
+		TCHAR	 *CmdPath = ResponseGC->GetStringValue(_T("ResponseFilePath"));
+
+		GetBaseName( CmdPath, NewFilePath ) ;
+		strcat( NewFilePath, _T(".rsp")) ;
+
+		char	*fp = fopen( NewFilePath, _T("wb")) ;
+		if( fp )
+		{
+			TCHAR	IOBuff[64] ;
+			TCHAR	theDate[64] ;
+			GetTimeNow(theDate,  _T("%m/%d/%y %H:%M:%S")) ;
+			long PageID = ResponseGC->GetLongValue(_T("ResponsePage")) ;
+
+			IOBuff[0] = 0xFEFF ;
+			IOBuff[1] = 0x0000 ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+		
+			sprintf( IOBuff, _T("TYPE: RESPONSE\n")) ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+
+			sprintf( IOBuff, _T("PAGE_ID: %ld\n"), PageID ) ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+
+			sprintf( IOBuff, _T("TIME: %s"), theDate ) ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+
+			sprintf( IOBuff, _T("CODE: %04ld"), 0L ) ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+
+			fclose(fp) ;
+		}
+	}
+}
+
+
+WriteAction(long ActionNumber, UGenCon *PrinterSetup, TCHAR *Action, TCHAR *ID)
+{
+	TCHAR	*ControlFolder	= PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+	TCHAR	 ActionPath[1024] ;
+
+	sprintf( ActionPath, _T("%s\\%03ld.act"), ControlFolder, ActionNumber ) ;
+	char	*fp = fopen( ActionPath, _T("wb")) ;
+	if( fp )
+	{
+		TCHAR	IOBuff[64] ;
+		IOBuff[0] = 0xFEFF ;
+		IOBuff[1] = 0x0000 ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		sprintf( IOBuff, _T("ACTION: %s\n"), Action ) ;
+		WriteUnicodeFile( fp, IOBuff ) ;
+
+		if( ID )
+		{
+			if(Action == "DELETE_PAGE")
+			{
+				sprintf( IOBuff, _T("PAGE_ID: %s\n"), ID ) ;
+				WriteUnicodeFile( fp, IOBuff ) ;
+			}
+
+			if(Action == "DELETE_ORDER")
+			{
+				sprintf( IOBuff, _T("ORDER_ID: %s\n"), ID ) ;
+				WriteUnicodeFile( fp, IOBuff ) ;
+			}
+
+			if(Action == "DELETE_BATCH")
+			{
+				sprintf( IOBuff, _T("BATCH_ID: %s\n"), ID ) ;
+				WriteUnicodeFile( fp, IOBuff ) ;
+			}
+		}
+		fclose(fp) ;
+	}
+}
+
+
+//		if( stricmp( Response, _T("Retry")) == 0 )			{ UserAction = 1L ; }
+//		if( stricmp( Response, _T("CancelPage")) == 0 )		{ UserAction = 2L ; }
+//		if( stricmp( Response, _T("CancelOrder")) == 0 )	{ UserAction = 3L ; }
+//		if( stricmp( Response, _T("CancelBatch")) == 0 )	{ UserAction = 4L ; }
+//						CommandSent, PrintStatus, State
+
+PerformUserAction( UGenCon *PrinterSetup, long UserRequest, TCHAR *BatchID, TCHAR *OrderID, long ID )
+{
+/*	NOT USED FOR DISK PRINTING !
+	long	StartTime = Clock() ;
+
+	TCHAR	 sID[128] ;
+	long	 ActionNumber = 1L ;
+	UGenCon	*StatusGC ;
+
+//	SessionLogDirect( _T("Setup: 0x%08lX, Request: %ld, BatchID: %s, OrderID: %s, PageID: %ld"),
+//				 PrinterSetup, UserRequest, BatchID, OrderID, ID ) ;
+
+	switch( UserRequest )
+	{
+		case	2	:	//	CancelPage	DON'T NEED TO DO ANYTHING HERE BECAUSE IPS DELETES JOB
+//			sprintf( sID, _T("%ld"), ID ) ;
+//			WriteAction( ActionNumber, PrinterSetup, _T("DELETE_JOB"), sID) ;
+//			ActionNumber++ ;
+			break ;
+		case	3	:	//	CancelOrder
+			if( OrderID )
+			{
+				WriteAction( ActionNumber, PrinterSetup, _T("DELETE_ORDER"), OrderID ) ;
+				ActionNumber++ ;				
+			}
+			break ;
+		case	4	:	//	CancelBatch
+			if( BatchID )
+			{
+				WriteAction( ActionNumber, PrinterSetup, _T("DELETE_BATCH"), BatchID ) ;
+				ActionNumber++ ;				
+			}
+			break ;
+	}
+
+	long	Count ;
+	for( Count = 1L ; Count < ActionNumber ; Count++ )
+	{
+		StatusGC = WaitForStatus( PrinterSetup, Count ) ;
+		delete StatusGC ;
+	}
+
+	//	NOW THAT WE ARE DONE DELETING JOBS, LET'S RESUME.
+//	SessionLogDirect( _T("C_Disk_Response.PerformUserAction: IPS RESUME")) ;
+
+	WriteAction( ActionNumber, PrinterSetup, _T("RESUME"), NULL) ;
+	StatusGC = WaitForStatus( PrinterSetup, Count ) ;
+	delete StatusGC ;
+
+	long	EndTime = Clock() ;
+	SessionLogDirect( _T("C_Disk_Response.PerformUserAction: Time: %ld ms"), EndTime - StartTime ) ;
+*/
+}
+
+//	gTimeOutTime IS THE TIME WE WAIT FOR A STATUS RESPONSE.
+long	gTimeOutTime = 10000L ;
+
+UGenCon *WaitForStatus( UGenCon *PrinterSetupGC, long ActionNumber )
+{
+	//	ParseJob( TCHAR *Text, UGenCon *ResponseGC )
+	UGenCon	*theStatusGC = new UGenCon( GetDataDictionary( _T("DDFSResponse"))) ;
+	TCHAR	*ResponseText ;
+	TCHAR	 StatusFileName[2048] ;
+	TCHAR	*ResponseFolder = PrinterSetupGC->GetStringValue(_T("ResponseFolder")) ;
+	sprintf( StatusFileName, _T("%s\\%03ld.sta"), ResponseFolder, ActionNumber ) ;
+	
+	long	StartTime = Clock() ;
+	long	TimeOut = StartTime + gTimeOutTime ;
+	while( Clock() < TimeOut )
+	{
+		ResponseText = GetFile( StatusFileName ) ;
+		if( ResponseText )
+		{
+//			SessionLogDirect( _T("C_Disk_Response.WaitForStatus: ResponseText: \"%s\""), ResponseText ) ;
+			ParseJob( ResponseText, theStatusGC ) ;
+			DeleteThisFile( StatusFileName ) ;
+			free( ResponseText ) ;
+			break ;
+		}
+		Sleep( 100L ) ;
+	}
+	long	EndTime = Clock() ;
+
+	if( gLogAmount >= 7 )
+	{
+		SessionLogDirect( _T("C_Disk_Response.WaitForStatus: Time: %ld ms"), EndTime - StartTime ) ;
+	}
+
+	return( theStatusGC ) ;
+}
+
+int	DeleteThisFile( TCHAR *FilePath )
+{
+	int	Result = FALSE ;
+
+	if( FilePath )
+	{
+		if( *FilePath )
+		{
+			Result = unlink( FilePath ) ;
+			if( Result )
+			{
+				//	HANDLE THE ERROR
+				TCHAR	Msg[1024] ;
+				int		ErrNo = errno(Msg) ;
+				SessionLogDirect( _T("**\tC_Disk_Response.DeleteThisFile: Error %ld \"%s\" deleting \"%s\""),
+								ErrNo, Msg, FilePath ) ;
+			}
+		}
+	}
+	return( Result ) ;
+}
+
+WriteUnicodeFile( char *fp, TCHAR *Text )
+{
+	long	Length = strlen( Text ) ;
+	fwrite( Text, 2, Length, fp ) ;
+
+	long	EndOfLine = 0x000A000D ;
+	fwrite( &EndOfLine, 2, 2, fp ) ;
+}

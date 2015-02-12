@@ -1,0 +1,783 @@
+
+VOID RefreshDoc()
+{
+	RefreshListView();
+}
+
+
+VOID InformUser( msg )
+{
+	DataWindow( StatusBar,Text,~<$Date.DateTime>   <msg>~ );
+	Log( Session,~<$Date.DateTime> RemoteJobServer  <msg>~ );
+}
+
+
+VOID UserInfo( msg )
+{
+	DataWindow( StatusBar,Text,~<$Date.DateTime>   <msg>~ );
+}
+
+// ******** THE FOLLOWING ROUTINES ARE CALLED FROM THE REMOTEJOBSERVER THREAD
+
+VOID LookingForWork()
+{
+	UserInfo( Translate( ~Looking for Work~ ) );
+}
+
+VOID NotEnabled()
+{
+	InformUser( Translate( ~Not Enabled~ ) );
+}
+
+
+VOID Stopping()
+{
+	InformUser( Translate( ~Stopping~ ) );
+}
+
+VOID Stopped()
+{
+	InformUser( Translate( ~Stopped~ ) );
+}
+
+
+VOID Starting()
+{
+	InformUser( Translate( ~Stopped~ ) );
+}
+
+VOID Sleeping()
+{
+	UserInfo( Translate( ~Sleeping~ ) );
+}
+
+VOID OrdersWereQueued( num )
+{
+	InformUser( Translate( ~<num> Orders were queued~ ) );
+}
+
+VOID ParsingFile( path )
+{
+	InformUser( Translate( ~Parsing <path>~ ) );
+}
+
+VOID ParsingComplete( path )
+{
+	InformUser( Translate( ~Parsing Complete for <path>~ ) );
+}
+
+VOID ParsingFailed( path )
+{
+	InformUser( Translate( ~Parsing Failed <path>~ ) );
+}
+
+VOID NothingToRender( path )
+{
+	InformUser( Translate( ~Nothing To Render <path>~ ) );
+}
+
+VOID NothingToRun(path)
+{
+	InformUser( Translate( ~Nothing To Render <path>~ ) );
+}
+
+VOID NoOutputDevice( path )
+{
+	InformUser( Translate( ~No Output Device <path>~ ) );
+}
+
+VOID NoQueue( path )
+{
+	InformUser( Translate( ~No Queue for <path>~ ) );
+}
+
+VOID ActivityInDirectory( WhichDirectory )
+{
+	UserInfo( Translate( ~Checking <WhichDirectory>~ ) );
+}
+
+VOID WaitingForMoreInDirectory( WhichDirectory,Tries )
+{
+	UserInfo( Translate( ~<Tries>) Waiting for more files in <WhichDirectory>~ ) );
+}
+
+VOID SettingJobsReady( BatchID,Count,WhichDirectory )
+{
+	InformUser( Translate( ~Setting <Count> jobs in Batch <BatchID> to Ready for print (<WhichDirectory>)~ ) );
+}
+
+VOID ProcessingJob( WhichJob )
+{
+	InformUser( Translate( ~Processing <WhichJob>~ ) );
+}
+
+VOID JobSubmitted( QueueName,BatchID,OrderID,OrderItemID,OrderItemSequence )
+{
+	InformUser( Translate( ~Added to JobQueue: Q <QueueName>,Batch <BatchID>,Order <OrderID>,Item <OrderItemID>,Seq <OrderItemSequence>~ ) );
+}
+
+VOID LookingForOrdersNeedingProcessing()
+{
+	UserInfo( Translate( ~Looking for orders needing processing~ ) );
+}
+
+VOID ProcessingOrder( OrderID )
+{
+	InformUser( Translate( ~Processing Order <OrderID>~ ) );
+}
+
+VOID CouldNotCreateDirectory( Path )
+{
+	InformUser( Translate( ~Could Not Create Directory for <Path>~ ) );
+}
+
+VOID SQLFailed( cmd )
+{
+	InformUser( Translate( ~SQL failed: <cmd>~ ) );
+}
+
+VOID OrderItemQtyIsZero(OrderID,OrderItem,Path)
+{
+	InformUser( Translate( ~Order (<OrderID>) Item (<OrderItem>) Qty Is Zero.  <Path>~ ) );
+}
+
+VOID AddJobToJobQueue(BatchID,OrderID,OrderItemID)
+{
+	InformUser( Translate( ~Submitting Job for (<BatchID>) Order (<OrderID>) Item (<OrderItemID>)~ ) );
+}
+
+VOID OrderItemsWereQueued( num )
+{
+	InformUser( Translate( ~<num> OrderItems were queued~ ) );
+
+}
+
+VOID NoJobsToProcess()
+{
+	UserInfo( Translate( ~No Jobs To Process~ ) );
+}
+
+VOID ProcessingJobsForBatch( BatchID )
+{
+	InformUser( Translate( ~Processing Jobs For Batch <BatchID>~ ) );
+}
+
+VOID ProcessedJobsForBatch( BatchID,Num )
+{
+	InformUser( Translate( ~Processed <Num> Jobs For Batch <BatchID>~ ) );
+}
+
+
+
+// ******** END OF ROUTINES CALLED FROM THE REMOTEJOBSERVER THREAD
+
+
+NUMERIC RefreshListView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+	DataWindow( StatusBar,Text,~~ );
+
+	return TRUE;
+}
+
+NUMERIC OnButtonClick()
+{
+	DataView( GetActiveCell,Row,Col );
+
+	if ( FileDialog( DefaultFile,Translate( ~This Directory~ ),Path,Path,HideReadOnly,NoValidate,Save ) )
+	{
+		GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+		Fields( GetAt,<col> - 1,ColumnDefinition );
+
+		DataView( SetCellValue,<Row>,<Col>,~<$Str.$Path.Path>~ );
+	}
+
+	return TRUE;
+}
+
+
+STR GetKey( &Entry )
+{
+	return ~Computer = '<$con.Entry[Computer]>' AND Directory = '<$con.Entry[Directory]>'~;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,Changed,Original,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate( ~There was no changed row.~ ) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( Changed( GetNumeric,Enabled ) )
+	{
+		if ( ~<$Con.Changed[Computer]>~ == ~~ )
+			{ return Warning( Translate( ~Unable to save pending changes.  Computer cannot be blank.~ ) ); }
+
+		if ( ~<$Con.Changed[Directory]>~ == ~~ )
+			{ return Warning( Translate( ~Unable to save pending changes.  Directory cannot be blank.~ ) ); }
+
+		if ( SimilarStr(~<$Con.Changed[Directory]>~,~<$App.ShareDirectory>~ ) )
+			{ return Warning( Translate( ~Unable to save pending changes.  Directory cannot be <$App.ShareDirectory>.~ ) ); }
+
+		if ( SimilarStr(~<$Con.Changed[Directory]>~,~<$App.Directory>~ ) )
+			{ return Warning( Translate( ~Unable to save pending changes.  Directory cannot be <$App.Directory>.~ ) ); }
+
+		if ( ~<$Con.Changed[SearchCriteria]>~ == ~~ )
+			{ return Warning( Translate( ~Unable to save pending changes.  Search Criteria cannot be blank.~ ) ); }
+
+		if ( Changed( GetNumeric,AcceptImages ) != 0 )
+		{
+			if ( ~<$Con.Changed[ProductID]>~ == ~~ )
+			{
+				return Warning( Translate( ~Unable to save pending changes.  Product ID cannot be blank if you are accepting images in <$Con.Changed[Directory]>.~ ) );
+			}
+
+			if ( Changed( GetNumeric,RequiredImages ) <= 0 )
+			{
+				return Warning( Translate( ~Unable to save pending changes.  Required images must be at least 1 for <$Con.Changed[Directory]> if you are accepting images.~ ) );
+			}
+		}
+	}
+
+	if ( !Directory( Create,~<$Con.Changed[Directory]>~ ) )
+	{
+		Warning( Translate( GenErrorStrings,CouldNotCreate,~<$Func.GetLastErrorMsg()>~ ) );
+	}
+
+	Key = GetKey(Original);
+
+	Query = ~Select * From RemoteJobDirs Where <Key>~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,Changed,~~,<IsNewRow> ) )	//~<Key>~
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update Remote Job Queue record where <Key>. <theErr>~ );
+	}
+	
+	DataView( CommitChanges );
+
+	if ( Defined(BackgroundOrderProcessor) )
+	{
+		BackgroundOrderProcessor( CycleDirectoryWatching );					// READ THE DATABASE TO FIND DIRECTORIES TO WATCH
+		BackgroundOrderProcessor( CheckAllDirectories );
+	}
+	
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,RemoteJobDirToDelete ) )		
+		{ return Warning( ~There were no jobs selected to delete~ ); }
+
+	if ( MessageBox( ~Are you sure you want to delete the selected items?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( RemoteJobDirToDelete( GetNext,RemoteJobDir ) )
+	{
+		Key = GetKey(RemoteJobDir);
+
+		Cmd = ~Delete From RemoteJobDirs Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Database update failed: <Cmd>  <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,RemoteJobDirToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	if ( Defined(BackgroundOrderProcessor) )
+	{
+		BackgroundOrderProcessor( CycleDirectoryWatching );					// READ THE DATABASE TO FIND DIRECTORIES TO WATCH
+		BackgroundOrderProcessor( CheckAllDirectories );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord( Type )
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	NewRow( Set,Enabled,1 );
+	NewRow( Set,QueueStatus,1 );		// 1 is Ready
+	NewRow( Set,Computer,~<$app.ComputerName>~ );
+	
+	NewRow( Set,Priority,50 );
+
+	NewRow( Set,AcceptImages,(~<Type>~ == Image) ? 1 : 0 );
+
+	// SEE IF THE DEFAULT DIRECTORY FOR THIS QUEUE TYPE ALREAD EXISTS
+
+	DirectoryExists = FALSE;	// ASSUME IT DOES NOT EXIST
+
+	WhichDirectory = ~<$App.Directory>\Remote<Type>Queue~;
+	
+	Query = STR ( Select Directory From RemoteJobDirs Where Directory = '<WhichDirectory>' AND Computer = '<$app.ComputerName>' );
+
+	if ( PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		if ( !List( GetFirst,Entry ) )
+		{
+			NewRow( Set,Directory,~<$App.Directory>\Remote<Type>Queue~ );
+			NewRow( Set,SearchCriteria,~*.*~ );
+		}
+	}
+	else
+	{
+		List( GetErrorDescription,0,theErr );
+		Warning( ~Database query failed: <Query> <theErr>~ );
+	}
+
+
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Directory );
+
+	PopupMsg( ~You will have to restart this application after adding the desired queues~ );
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateComboBoxes()
+{
+	DataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+
+	if ( ~<ColumnName>~ == ~PRODUCTID~ )
+	{
+		Query = STR ( Select ID From Products Order By ID );
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ 
+			List( GetErrorDescription,0,theErr,ClearErrors );
+			return Warning( ~Database query failed: <Query> <theErr>~ );
+		}
+
+		if ( List( NumEntries ) > 0 )
+		{
+			List( MakeStringList,Products,ID );
+
+			ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,Products(GetCopyOf) );
+
+			DataView( SetComboBox,ColumnDefinition,<Col> );
+		}
+	}
+
+	if ( ~<ColumnName>~ == ~ICCPROFILE~ )
+	{
+		Query = STR ( Select Name From Profiles Where Type = 'Input' OR Type = 'WorkingSpace' Order By Name );
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ 
+			List( GetErrorDescription,0,theErr,ClearErrors );
+			return Warning( ~Database query failed: <Query> <theErr>~ );
+		}
+
+		if ( List( NumEntries ) > 0 )
+		{
+			List( MakeStringList,Profiles,Name );
+
+			ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,Profiles(GetCopyOf) );
+
+			DataView( SetComboBox,ColumnDefinition,<Col> );
+		}
+	}
+
+	return TRUE;
+}
+
+VOID ProcessOrders()
+{
+	if ( Defined( BackgroundOrderProcessor ) )
+	{
+		RemoteJobServer( BackgroundOrderProcessor,ProcessOrders,TRUE );
+	}
+}
+
+
+NUMERIC RightClickInListView( ShowingOptions )
+{
+	SomethingSelected = F;
+
+	if ( DataView( GetSelectedRows,SelectedJobs ) )
+	{
+		SomethingSelected = SelectedJobs( ChildCount ) ? T : F;
+	}
+
+	GenCon( ListViewMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+	GenCon( AddRecordJob,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+			Text,		Translate( ~&Add Remote Job Queue~ ),
+			IDText,		~ID~,
+			ActionsText, ACTION Exec ( AddRecord(Job) ) );
+
+	GenCon( AddRecordImage,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+			Text,		Translate( ~Add Remote &Image Queue~ ),
+			IDText,		~ID~,
+			ActionsText, ACTION Exec ( AddRecord(Image) ) );
+
+	GenCon( NULL1,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+			Text,		~~,
+			IDText,		~NULL~  );
+
+	GenCon( SaveAllChanges,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+			Text,		Translate( ~&Save Changes~ ),
+			IDText,		~ID~,
+			IsEnabled,	$SomethingSelected,
+			ActionsText, ACTION Exec ( SaveAllChanges() ) );
+
+	GenCon( ForgetAllChanges,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+			Text,		Translate( ~&Cancel Changes~ ),
+			IDText,		~ID~,
+			IsEnabled,	$SomethingSelected,
+			ActionsText, ACTION Exec ( RollBackAllChanges() ) );
+
+	GenCon( DeleteRecord,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+			Text,		Translate( ~Delete~ ),
+			IDText,		~ID~,
+			IsEnabled,	$SomethingSelected,
+			ActionsText,  ACTION Exec ( DeleteRecord() ) );
+
+	GenCon( Refresh,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+			Text,		Translate( ~Refresh (F5)~ ),
+			IDText,		~ID~,
+			ActionsText,  ACTION Exec ( RefreshListView(); ) );
+
+	GenCon( NULL2,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+			Text,		~~,
+			IDText,		~NULL~ );
+
+	GenCon( Start,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+			Text,		Defined( BackgroundOrderProcessor ) ? Translate( ~Stop~ ) : Translate( ~Start~ ),
+			IDText,		~ID~,
+			ActionsText, Defined( BackgroundOrderProcessor ) ? ACTION Exec ( StopServer() ) :  ACTION Exec ( StartServer() ) );
+
+
+	GenCon( ViewJobQueue,New,DDMenuItemDef,AddTo,ListViewMenu,SetValues,
+			Text,		Translate( ~View Job Queue~ ),
+			IDText,		~ID~,
+			ActionsText, ACTION Exec ( ViewJobQueue(); ) );
+
+	if ( <ShowingOptions> )
+	{
+		DataView( DisplayMenu,ListViewMenu,0,0 );
+	}
+	else
+	{
+		DataView( DisplayMenu,ListViewMenu );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new remote job queues that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC StartRemoteQueueWatching()
+{
+	if ( !Defined( BackgroundOrderProcessor ) )
+	{
+		RemoteJobServer( BackgroundOrderProcessor );
+		PermanentSymbol( BackgroundOrderProcessor );
+	}
+
+	BackgroundOrderProcessor( CycleDirectoryWatching );		// READ THE DATABASE TO FIND DIRECTORIES TO WATCH
+	BackgroundOrderProcessor( CheckAllDirectories );
+	
+	return TRUE;
+}
+
+
+VOID StartServer()
+{
+	if ( !Defined( BackgroundOrderProcessor ) )
+	{
+		RemoteJobServer( BackgroundOrderProcessor,SearchPath,~<$App.ShareDirectory>\RemoteJobQueue\*.*~,Start,LookForWork,TRUE );
+		PermanentSymbol( BackgroundOrderProcessor );
+	}
+
+	BackgroundOrderProcessor( ProcessOrders,TRUE );
+	BackgroundOrderProcessor( CycleDirectoryWatching );		// READ THE DATABASE TO FIND DIRECTORIES TO WATCH
+	BackgroundOrderProcessor( CheckAllDirectories );
+
+}
+
+
+VOID StopServer()
+{
+	if ( Defined( BackgroundOrderProcessor ) )
+	{
+		ForgetPermanent( BackgroundOrderProcessor );
+	}
+	else
+	{
+		Warning( ~The Remote Job Server is not running~ );
+	}
+}
+
+
+
+VOID ViewJobQueue()
+{
+	action = ACTION DOC ( JobQueueSearch OpenOnce SearchDoc "Search(JobQueue);" );
+	PerformActions( action );
+}
+
+
+NUMERIC ShowDropZone()
+{
+	action = ACTION DOC ( RJSDropTarget OpenOnce RJSDropTarget "Init();" );
+	return PerformActions( action );
+}
+
+NUMERIC OnTester()
+{
+	action = ACTION DOC ( RemoteJobGenerator OpenOnce RemoteJobGenerator" );
+	return PerformActions( action );
+}
+
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+
+NUMERIC Init( WhichSettings,DocumentQuery )
+{
+	DataWindow( Set,Title,~<WhichSettings>~ == ~~ ? ~Remote Job Queue Data~ : ~Remote Job Queue Data - <WhichSettings>~ );
+
+	Global( DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+			{ Error( ~Failed to query the RemoteJobDirs table~ ); }
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !DataWindow( CreateWindow,~RemoteJobServer~ ) )
+		{ 
+			Error( ~Failed to create the window for RemoteJobDirs~ ); 
+		}
+
+		return TRUE;
+	}
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,ListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,ListViewMenu,0,0  );
+	}
+}
+
+
+NUMERIC AllOptions()
+{
+	return RightClickInListView(TRUE);
+}
+
+Include: ~DefineStdGridButtons~;
+
+if ( !GenCon( TableDefinition,GetFrom,RemoteJobDirs,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The RemoteJobDirs Table is not properly defined~ ); }
+
+Left = 5; Top = 5;		hGap = 5; vGap = 2;
+TextHeight = 20;        TextWidth = 110;  
+ButtonHeight = 20;		ButtonWidth = 70;
+
+
+Define: DataWindow Using DDWinDef
+	Fields:		Title					~Remote Job Server~
+				Position				0 50 100 25
+				IsPositionPercent		T
+				TypeName				SplitterWnd
+				SplitterRows			~2 10 90~
+				SplitterColumns			1
+				EnableStatusBar			T;
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "RemoteJobDirs.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons(RemoteJobDirs) + 10;
+
+					LargeButtonWidth = 95;
+
+					Define: AddJobQueueButton Using DDWinCtrlDef AsSymbol AddJobQueueButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( AddRecord(Job) )
+								POSITION		$position + $hGap, $vGap $LargeButtonWidth $ButtonHeight
+								TEXT			Translate( ~Add Job Queue~ )
+								TOOLTIP			Translate( ~Add a directory to search for jobs to print~ )
+								TYPENAME		BUTTON
+
+					Define: AddImageQueueButton Using DDWinCtrlDef AsSymbol AddImageQueueButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( AddRecord(Image) )
+								POSITION		AddJobQueueButton(GetRight,Position) + $hGap, $vGap $LargeButtonWidth $ButtonHeight
+								TEXT			Translate( ~Add Image Queue~ )
+								TOOLTIP			Translate( ~Add a directory to search for images to print~ )
+								TYPENAME		BUTTON
+
+					Define: DropZoneButton Using DDWinCtrlDef AsSymbol DropZoneButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( ShowDropZone() )
+								POSITION		AddImageQueueButton(GetRight,Position) + $hGap, $vGap $LargeButtonWidth $ButtonHeight
+								TEXT			Translate( ~Drop Zone~ )
+								TOOLTIP			Translate( ~Open a dialog you can drag files to~ )
+								TYPENAME		BUTTON
+
+					if ( Keystate( Control ) )
+					{
+						Define: TesterButton Using DDWinCtrlDef AsSymbol TesterButton
+							Fields:	GENCONNAME		This
+									DACTIONSTEXT	ACTION EXEC ( OnTester() )
+									POSITION		DropZoneButton(GetRight,Position) + $hGap, $vGap $LargeButtonWidth $ButtonHeight
+									TEXT			Translate( ~Test~ )
+									TOOLTIP			Translate( ~Test submitting jobs to a remote job queue~ )
+									TYPENAME		BUTTON
+					}
+
+				}
+			
+
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				ListView
+					GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView(FALSE) )
+					RefreshActionsText		ACTION Exec ( RefreshListView() )
+					CloseActionsText		ACTION Call ( OnCloseDataView() )
+					ButtonClickActionsText	ACTION Exec ( OnButtonClick() )
+					ComboBoxActionsText		ACTION Call ( UpdateComboBoxes() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "RemoteJobDirs.htm" );
+	}
+	
+
+
+

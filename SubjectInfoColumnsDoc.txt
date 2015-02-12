@@ -1,0 +1,377 @@
+
+TableName = ~SubjectInfoColumns~;
+
+NUMERIC RefreshListView()
+{
+	if ( !DataWindow(GetWindowAddress) )
+		{ return FALSE; }
+
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( StatusBar,Text,Translate(~Querying~) );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	Count = List( NumEntries );
+
+	IF 0
+	{
+		if ( <Count> > 300 )
+		{
+			if ( MessageBox( ~Your query:\n\n   <DocumentQuery>\n\nwill retrieve <Count> records\n\nAre you sure you want to continue?~,YESNO ) != YES )
+			{
+				if ( <FirstTime> ) { Exit(); }
+				return TRUE;
+			}
+		}
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+
+	PopulateColumnNamesCombo( ~<WhichColumns>~ );
+
+	return DataWindow( StatusBar,Text,~~ );
+}
+
+
+STR GetKey( &Item )
+{
+	return ~TableName = '<$con.Item[TableName]>' AND ColumnName = '<$con.Item[ColumnName]>'~;
+}
+
+
+NUMERIC ChangeField()
+{
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,ChangedSetting,OrigSetting,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedSetting[TableName]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  TableName cannot be blank.~ ); }
+
+	if ( ~<$con.ChangedSetting[ColumnName]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  ColumnName cannot be blank.~ ); }
+		
+	StringList( TypeList, New, Is, ~<$[DATABASE FieldTypes].ProductColumnType[ChoiceList]>~ );
+	 
+	TypeList( GetStringAt,MakeNumber(~<$con.ChangedSetting[Type]>~),theType );
+
+	IsAProductQtyPair = (MakeNumber(~<$con.ChangedSetting[Type]>~) == 3) ||  (MakeNumber(~<$con.ChangedSetting[Type]>~) == 6);
+	IsABGID = (MakeNumber(~<$con.ChangedSetting[Type]>~) == 8) ||  (MakeNumber(~<$con.ChangedSetting[Type]>~) == 9);
+	
+	IsUserDefined = MakeNumber(~<$con.ChangedSetting[Type]>~) >= 11 && MakeNumber(~<$con.ChangedSetting[Type]>~) <= 20;
+	
+	NeedForColumn = <IsAProductQtyPair>;
+	
+	if ( !<IsUserDefined> )
+	{
+		if ( !<IsABGID> && (!<NeedForColumn>) && !IsNull(~<$con.ChangedSetting[ForColumn]>~) )
+		{ 
+			Warning( ~The "For Column" field is not needed for "<theType>".~ );
+		}
+
+		if ( <NeedForColumn> && IsNull(~<$con.ChangedSetting[ForColumn]>~) )
+		{ 
+			return Warning( ~You must specify the "For" column to identify which column "<theType>" relates to~ );
+		}
+	}
+
+	Key = GetKey( OrigSetting );
+	
+	Query = ~Select * From <TableName> Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,ChangedSetting,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update <TableName> record where <Key>. <theErr>~ );
+	}
+
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,ToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	if ( MessageBox( ~Are you sure you want to delete the selected items?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	StringList( RowsToDelete,New );
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	while ( ToDelete( GetNext,Setting ) )
+	{
+		Key = GetKey( Setting );
+
+		if ( !dBase( CMD,~Delete From <TableName> Where <Key>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			Warning( ~Could not delete where <Key>. <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,ToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	NewRow( Set,TableName,~<WhichTable>~ );
+	
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Setting );
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	ActiveView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( ~<what> is not implemented yet!~ );
+	return TRUE;
+}
+
+
+NUMERIC PopulateColumnNamesCombo( Columns )
+{
+	StringList( ColumnNamesList,New,ParseFrom,~<Columns>~,~,~ );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	Fields( GetByName,ColumnName,ColumnDefinition );
+
+	ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,ColumnNamesList(GetCopyOf) );
+
+	DataView( SetComboBox,ColumnDefinition,ColumnName );
+
+	Fields( GetByName,ForColumn,ColumnDefinition );
+
+	ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,ColumnNamesList(GetCopyOf) );
+
+	DataView( SetComboBox,ColumnDefinition,ForColumn );
+
+	return TRUE;
+}
+
+
+FirstTime = TRUE;
+
+NUMERIC Init( Title,WhichTable,WhichColumns )
+{
+	if ( !<FirstTime> )
+	{
+		return FALSE;
+	}
+
+	FirstTime = FALSE;
+
+	Global( WhichTable,WhichColumns );
+
+	DocumentQuery = ~Select * From SubjectInfoColumns Where TableName = '<WhichTable>' Order By ColumnName~;
+	
+	Global(DocumentQuery);
+
+	if ( !PGenConList( List,Connect,Cursor,Dynamic,QUERY,~<DocumentQuery>~ ) )
+		{ Error( ~Failed to query the <TableName> table~ ); }
+
+	SetDocumentData( List(GetObject) );
+
+	if ( !DataWindow( CreateWindow,~<TableName>~ ) )
+		{ Error( ~Failed to create the window~ ); }
+
+	DataWindow( SetWindowTitle,~Column Information for Table - <WhichTable>~ );
+
+	PopulateColumnNamesCombo( ~<WhichColumns>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new records that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+NUMERIC AllOptions()
+{
+	return DataView( DisplayMenu,ListViewMenu,0,0 );
+}
+
+if ( !GenCon( TableDefinition,GetFrom,<TableName>,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The <TableName> Table is not properly defined~ ); }
+	
+
+Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add ~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+	}
+
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+Define: DataWindow Using DDWinDef
+	Fields:	Title					Translate(~Column Info for SubjectInfo~)
+			Position				0 0 35 25
+			IsPositionPercent		T
+			TypeName				SplitterWnd
+			SplitterRows			~2 14 90~
+			SplitterColumns			1
+
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:	ViewType				FormView
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "<TableName>Data.htm" )
+			Contains:
+			{
+				position = DefineStdGridButtons(SubjectInfoColumns) + 10;
+			}
+
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "<TableName>Data.htm" )
+					CloseActionsText		ACTION Call ( OnCloseDataView() ) ;
+	}
+	
+

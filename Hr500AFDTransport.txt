@@ -1,0 +1,885 @@
+
+// HR500 LR AFD FILM DRIVE COMMANDS (GENERAL - HIGH LEVEL)
+
+FRAME_EDGE_OK        =  0;
+FRAME_LENGTH_SHORT   =  1;
+FRAME_LENGTH_LONG    =  2;
+FRAME_SPLIT          =  3;
+SPLICE_FOUND         = 14;
+NO_FRAME_EDGE_FOUND  = 15;
+
+gHR500AFD_FrameLengthError = FALSE;
+gHR500AFD_ErrorReason = 0;
+gHR500AFD_LastOrderID = ~~;
+
+NUMERIC HR500AFD_OpenFilmDrive( UpdateStatus,SkipCalCheck )
+{
+	if ( !Defined( Scanner ) )
+	{	return FALSE;	}
+
+	if ( !Scanner( GetSerialNumber,ScannerSerialNumber ) )
+	{
+		Warning( Translate( ~Could not get serial number of scanner.~ ) );
+		ScannerSerialNumber = 0;
+	}
+
+	dlg( GetInput );
+    DlgData( Get,FilmDriveSetup,FilmDriveSetup );
+
+	TensionAborted = FALSE;
+
+	if ( ~<FilmDriveSetup>~ == ~~ )
+	{
+		return Warning( Translate( ~You must select a film drive setup first~ ) );
+	}
+
+	Query = ~Select * From HR500AFDFilmDrive Where Name = '<FilmDriveSetup>' and ScannerSerialNo = '<ScannerSerialNumber>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+	}
+
+	if ( !List( GetFirst,Setup ) )
+	{
+		Query = ~Select * From HR500AFDFilmDrive Where Name = '<FilmDriveSetup>' and ScannerSerialNo = '0'~;
+		if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+		}
+		if ( !List( GetFirst,Setup ) )
+		{
+			return Warning( Translate( ~Could not find a setup named <FilmDriveSetup> for scanner serial number <ScannerSerialNumber>~ ) );
+		}
+
+		if ( !HR500AFD_UpdateSetupWithSerialNumber( ~<FilmDriveSetup>~,~<ScannerSerialNumber>~ ) )
+		{
+			Warning( Translate( ~Please update the FilmDrive Setup with the scanner serial number.~ ) );
+		}
+	}
+
+	SimulateFilmDrive = Setup( GetNumeric, Simulate );
+	gFilmMarkType = ~None~;
+	MinPunchNumber = 1;
+	MaxPunchNumber = 32767;
+
+	TXOffsetIncrementUnit = 0.001;
+	MaxXIncrements = <MaxXIncrementsInInches>/<TXOffsetIncrementUnit>;
+
+	Scanner( Simulating, <SimulateFilmDrive> );
+
+	DlgData( Get,FilmType,FilmType );
+	DlgData( Get,SFSFile,SFSFile );
+	if ( ~<SFSFile>~ == ~~ )
+	{
+		SFSFile = ~<$App.Directory>\Scan\HR500\kcdfs.satdef~;
+	}
+
+	FilmTermsFile = ~<$App.ShareDirectory>\Scan\<$con.dlgData[ScannerType]>\FilmTerms\<FilmType>.flt~;
+
+	if ( !Scanner( LoadFilmTermsFromFile,~<FilmTermsFile>~,~<FilmType>~,~<SFSFile>~ ) )
+	{
+		ErrMsg = Translate( ~Could not find or load <FilmTermsFile>~ );
+		return HandleHR500Error( ~<ErrMsg>~ );
+	}
+
+	HR500AFDFilmDrive = 3; // Default to Long Roll Auto Frame Drive Type
+
+	if ( !Scanner( InstallFilmDrive,<Hr500AFDFilmDrive> ) )
+	{
+		ErrMsg = Translate( ~Failed to setup the film drive.~ );
+		return HandleHR500Error( ~<ErrMsg>~ );
+	}
+
+	if ( !Scanner( InitializeFilmDrive,Setup ) )
+	{
+		ErrMsg = Translate( ~Failed to initialize the film drive.~ );
+		return HandleHR500Error( ~<ErrMsg>~ );
+	}
+
+	FilmDrive = Scanner( FilmDriveInitialized );
+	Global( FilmDrive );
+	FilmDriveCmdInProgress( Translate( ~Film drive enabled.~ ) );
+
+	HR500_Tension( FALSE );
+	FilmDirection = Setup( GetNumeric, Direction );
+	DlgData( SetValues,TXOffsetIncrementUnit,<TXOffsetIncrementUnit> );
+
+	gNotchNumber = 0;
+	
+	UpdateFdaSetupsCombo();
+	HR500AFD_SetupEdgeDetection();
+
+	SizzleControl( Set, FrameDetectErrorNotification, ~HR500AFD_FrameDetectError(%ld,%ld);~ );
+	SizzleControl( Set, SpliceDetectedNotification, ~HR500AFD_SpliceDetectedNotification(%ld,%ld);~ );
+	SizzleControl( Set,AutoFDAErrorHandlingEnabled,TRUE );
+	gFirstFrameAligned = FALSE;
+	gUseRollNumberOnStartup = TRUE;
+	if ( !CheckStoredCalibration( TRUE,FALSE,FALSE ) && !<SkipCalCheck> )
+	{
+			OnHR500CalibrateButton( FALSE,FALSE,TRUE );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC HR500AFD_SetupEdgeDetection()
+{
+	if ( !Defined( Scanner ) )
+	{	return FALSE;	}
+
+	dlg( GetInput );
+    DlgData( Get,Hr500FdaSetup,Hr500FdaSetup );
+
+	if ( ~<Hr500FdaSetup>~ == ~~ )
+	{
+		return Warning( Translate( ~You must select a frame detection setup first~ ) );
+	}
+
+	Query = ~Select * From HR500AFDSetup Where Name = '<Hr500FdaSetup>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+	}
+
+	if ( !List( GetFirst,Setup ) )
+	{
+		return Warning( Translate( ~Could not find a setup named <Hr500FdaSetup>~ ) );
+	}
+
+	expectedLength = Setup( GetNumeric,ExpectedLength );
+	lengthLowerBound = Setup( GetNumeric,LengthLowerBound );
+	lengthUpperBound = Setup( GetNumeric,LengthUpperBound );
+	minLength = Setup( GetNumeric,MinimumLength );
+	minGap = Setup( GetNumeric,MinimumGap );
+	stopOnBlanks = Setup( GetNumeric,StopOnBlanks );
+	stopOnSplice = Setup( GetNumeric,StopOnSplices );
+	stopOnSplit = Setup( GetNumeric,StopOnSplitFrame );
+	debounce = Setup( GetNumeric,EdgeDebounce );
+
+	if ( AfdSetupData( GetNumeric,ExpectedLength) != <expectedLength> ||
+		 AfdSetupData( GetNumeric,LengthLowerBound) != <lengthLowerBound> ||
+		 AfdSetupData( GetNumeric,LengthUpperBound) != <lengthUpperBound> ||
+		 AfdSetupData( GetNumeric,MinimumLength) != <minLength> ||
+		 AfdSetupData( GetNumeric,MinimumGap) != <minGap> ||
+		 AfdSetupData( GetNumeric,StopOnBlanks) != <stopOnBlanks> ||
+		 AfdSetupData( GetNumeric,StopOnSplitFrame) != <stopOnSplit> ||
+		 AfdSetupData( GetNumeric,EdgeDebounce) != <debounce> )
+	{
+		if ( !Scanner( SetupEdgeDetection,Setup ) )
+		{
+			ErrMsg = Translate( ~Failed to initialize the frame detection.~ );
+			return HandleHR500Error( ~<ErrMsg>~ );
+		}
+		AfdSetupData( SetValues,ExpectedLength,<expectedLength>,
+								LengthLowerBound,<lengthLowerBound>,
+								LengthUpperBound,<lengthUpperBound>,
+								MinimumLength,<minLength>,
+								MinimumGap,<minGap>,
+								StopOnBlanks,<stopOnBlanks>,
+								StopOnSplices,<stopOnSplice>,
+								StopOnSplitFrame,<stopOnSplit>,
+								EdgeDebounce,<debounce> );
+
+		expectedLength = <expectedLength> * 1000.;
+		SizzleControl( SetValues,StopOnSplices,<stopOnSplice>,
+								 ExpectedFrameLength,<expectedLength>,
+								 StopOnSplitFrames,<stopOnSplit>, 
+								 StopOnBlanks,<stopOnBlanks>);
+	}
+
+	return TRUE;
+}
+
+NUMERIC HR500AFD_FrameDetectError( evalResult,DoPunchWaitOverride )
+{
+	if ( !SizzleControl( GetNumeric,AutoFDAErrorHandlingEnabled ) )
+	{
+		EnableScanningControls(TRUE);
+		SetTransportControlsStopped();
+		return FALSE;
+	}
+
+	dlg( GetInput,GetStrings,CurrentPunchPosition,CurrentPunchPosition,Frame,Frame );
+	
+	if ( ~<CurrentPunchPosition>~ == ~~ || !IsNumeric( ~<CurrentPunchPosition>~ ) )
+	{
+		gNotchNumber = 1;
+	}
+	else if ( !<DoPunchWaitOverride> )
+	{
+		++gNotchNumber;
+	}
+
+	CurrentPunchNumber = HR500AFD_FormatPunchNumber( <gNotchNumber> );
+	SetCurrentPunchNumber( ~<CurrentPunchNumber>~,FALSE );
+
+	GetFilmDriveVendor();
+	ClearAutoFlag( FALSE );
+
+	showOverScan = DlgData( GetNumeric,AdjustFramePosition );
+
+	gFirstFrame = FALSE;
+
+	dlg( GetStrings,Frame,Frame );
+	Frame = atof( ~<Frame>~ );
+
+	gHR500AFD_ErrorReason = <evalResult>;
+
+	if ( <evalResult> == <FRAME_LENGTH_LONG> )
+	{
+		nextFrame = <Frame> + 1;
+		SizzleControl( SetValues,AdjustingNextFrame,TRUE );
+		gHR500AFD_FrameLengthError = TRUE;
+	}
+	else
+	{
+		SizzleControl( SetValues,AdjustingNextFrame,FALSE );
+		gHR500AFD_FrameLengthError = TRUE;
+	}
+
+	if ( !<showOverScan> )
+	{
+		DlgData( SetValues, AdjustFramePosition, TRUE );
+		dlg( SetCheck, TRUE, AdjustFramePositionBox );
+		dlg( Save,AdjustFramePositionBox );
+		RemoveAdjustFrameOnCompletion = TRUE;
+
+		SizzleControl( Set, OverScan, TRUE);
+		OnScanButtonSetup();
+		OnScanButton(0,FALSE);
+	}
+	return TRUE;
+}
+
+NUMERIC HR500AFD_SpliceDetectedNotification( ScanMode,FocusBeforeScan )
+{
+	gFirstFrameAligned = FALSE;
+	dlg( GetInput,GetStrings,Order,Order,Roll,Roll,Frame,Frame );
+
+	autoIncRoll = DlgData( GetNumeric,AutoIncRollNumber );
+	incFrameNum = DlgData( GetNumeric,ContinueFrameNumber );
+
+	if ( ~<gHR500AFD_LastOrderID>~ != ~<Order>~ )
+	{
+		gUseRollNumberOnStartup = TRUE;
+		gHR500AFD_LastOrderID = ~<Order>~;
+	}
+
+	if ( <autoIncRoll> && !<gUseRollNumberOnStartup> )
+	{
+		dlg( GetStrings,Roll,Roll);
+		if ( !IsNumeric( ~<Roll>~ ) )
+		{
+			Warning( Translate( ~Unable to automatically increment the Roll Number <Roll>~ ) );	
+		}
+		else
+		{
+			nextroll = atof( ~<Roll>~ ) + 1;
+			nextroll = FormatRollNumber( ~<nextroll>~ );
+			dlg( SetStrings,Roll,~<nextroll>~ );
+		}
+	}
+
+	if ( ( !<incFrameNum> && <autoIncRoll> ) || <gUseRollNumberOnStartup> )
+	{
+		Frame = 1;
+	}
+
+	gUseRollNumberOnStartup = FALSE;
+	if ( <gNotchNumber> > 1 )
+	{
+		--gNotchNumber;
+	}
+
+	SetCurrentFrameNumber( FormatFrameNumber( ~<Frame>~ ) );
+
+	if ( !AfdSetupData( GetNumeric,StopOnSplices ) )
+	{
+		if ( <ScanMode> )
+		{
+			OnFilmDriveOperationComplete = STR ( ScanAnImage( ~<$con.DlgData[Volume]>~,~<$con.DlgData[Order]>~,~<$con.DlgData[Roll]>~,~<$con.DlgData[Frame]>~,~<$con.DlgData[FileExtension]>~,FALSE,<FocusBeforeScan>,FALSE ); );
+		}
+		OnNextFrameButton( <ScanMode>,FALSE,FALSE,FALSE,<FocusBeforeScan> );
+		return TRUE;
+	}
+	else
+	{
+		Warning( Translate( ~Splice has been detected.~ ) );
+		EnableScanningControls( TRUE );
+		SetTransportControlsStopped();
+	}
+	return TRUE;
+}
+
+
+NUMERIC HR500AFD_Tension( Tension )
+{
+	HR500AFD_SetupEdgeDetection();
+	return HR500_Tension( <Tension> );
+}
+
+
+NUMERIC HR500AFD_LoadFilmFwd( XOffset )
+{
+	gFirstFrameAligned = FALSE;
+	if ( <ContinueRunning> )
+	{
+		LogMessage( ~Load First Punch with Adjust X Offset~ );
+
+		retval = Scanner( LoadAutoFrameFwd, <XOffset>, SizzleControl );
+
+		CurrentPunchNumber = HR500AFD_FormatPunchNumber( <gNotchNumber> );
+		Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~,FALSE );
+
+		if ( <retval> == <FRAME_LENGTH_LONG> )
+		{
+			Invoke( UserFrameErrorMessage,~Long Frame detected...~, TRUE, TRUE, FALSE );
+			return FALSE;
+		}
+		else if ( <retval> == <FRAME_LENGTH_SHORT> )
+		{
+			Invoke( UserFrameErrorMessage,~Short Frame detected...~, TRUE, TRUE, FALSE );
+			return FALSE;
+		}		
+		else if ( <retval> == <SPLICE_FOUND> )
+		{
+			Invoke( UserFrameErrorMessage,~Splice detected...~, TRUE, TRUE, FALSE );
+			return TRUE;
+		}		
+		else if ( <retval> == <FRAME_SPLIT> )
+		{
+			Invoke( UserFrameErrorMessage,~Split frame detected...~, TRUE, TRUE, FALSE );
+			if ( AfdSetupData( GetNumeric,StopOnSplitFrame ) )
+			{
+				Invoke( UserFrameErrorMessage,~Split frame detected...~, TRUE, TRUE, FALSE );
+				return FALSE;
+			}
+			else
+			{
+				Invoke( UserFrameErrorMessage,~Split frame detected...~, TRUE, TRUE, TRUE );
+			}
+		}		
+		else if ( <retval> != <FRAME_EDGE_OK> )
+		{
+			Invoke( UserFrameErrorMessage,~No Frame Edge Found...~, TRUE, TRUE, FALSE );
+			return FALSE;
+		}
+	}
+
+	if ( <ContinueRunning> )
+	{
+		gNotchNumber = 1;
+		gFirstFrameAligned = TRUE;
+		Invoke( LoadFilmComplete );
+		return TRUE;
+	}
+
+	Invoke( UserFrameErrorMessage,~Film Load Aborted~, TRUE, FALSE );
+	return FALSE;
+}
+
+
+NUMERIC HR500AFD_NextFrame( XOffset, YOffset, ScanMode, PunchWaitOverride, FrameToPunch, UseAdjustedFramePosition, IgnoreFdaErrors, BypassFda, AutoSkipBlankFDA, FocusBeforeScan )
+{
+	showOverScan = DlgData( GetNumeric,AdjustFramePosition );
+
+	if ( <ContinueRunning> )
+	{
+		LogMessage( ~Next Frame with Adjust X Offset~ );
+		retval = Scanner( NextAutoFrame, <XOffset>, <PunchWaitOverride>, <ScanMode>, <FocusBeforeScan>, SizzleControl );
+
+		EdgeDetectStatus = SizzleControl( GetNumeric,EdgeDetectStatus );
+		FrameEdgePosition = SizzleControl( GetNumeric,FrameEdgePosition );
+		DetectedFrameLength = SizzleControl( GetNumeric,DetectedFrameLength );
+		PrecedingGapLength = SizzleControl( GetNumeric,PrecedingGapLength );
+
+		Invoke( Log,Session,~HR500AFD_NextFrame: EdgeDetectStatus = <EdgeDetectStatus>, FrameEdgePosition = <FrameEdgePosition>, DetectedFrameLength = <DetectedFrameLength>, PrecedingGapLength = <PrecedingGapLength>~ );
+
+		if ( <retval> == <FRAME_LENGTH_LONG> )
+		{
+			Invoke( UserFrameErrorMessage,~Long Frame detected...~, TRUE, TRUE, FALSE );
+			if ( <ScanMode> && <showOverscan> ) 
+			{ 
+				Invoke( FilmDriveOperationError, ~move to next frame~ ); 
+			}
+			return FALSE;
+		}
+		else if ( <retval> == <FRAME_LENGTH_SHORT> )
+		{
+			Invoke( UserFrameErrorMessage,~Short Frame detected...~, TRUE, TRUE, FALSE );
+			if ( <ScanMode> && <showOverscan> ) 
+			{ 
+				Invoke( FilmDriveOperationError, ~move to next frame~ ); 
+			}
+			return FALSE;
+		}		
+		else if ( <retval> == <SPLICE_FOUND> )
+		{
+			Invoke( UserFrameErrorMessage,~Splice detected...~, TRUE, TRUE, FALSE );
+			return FALSE;
+		}		
+		else if ( <retval> == <FRAME_SPLIT> )
+		{
+			if ( AfdSetupData( GetNumeric,StopOnSplitFrame ) )
+			{
+				Invoke( UserFrameErrorMessage,~Split frame detected...~, TRUE, TRUE, FALSE );
+				if ( <ScanMode> && <showOverscan> ) 
+				{ 
+					Invoke( FilmDriveOperationError, ~move to next frame~ ); 
+				}
+				return FALSE;
+			}
+			else
+			{
+				Invoke( UserFrameErrorMessage,~Split frame detected...~, TRUE, TRUE, FALSE );
+			}
+		}		
+		else if ( <retval> != <FRAME_EDGE_OK> )
+		{
+			Log( Session,~****HR500AFD: SeekFrame: No Frame Edge Found, SeekFrameResult = <retval>, ScanMode = <ScanMode>, showOverscan = <showOverscan>****~ );
+			Invoke( UserFrameErrorMessage,~No Frame Edge Found...~, TRUE, TRUE, FALSE );
+			if ( <ScanMode> && <showOverscan> ) 
+			{ 
+				Invoke( FilmDriveOperationError, ~move to next frame~ ); 
+			}
+			return FALSE;
+		}
+	}
+
+	if ( !<PunchWaitOverride> )
+	{	
+		gNotchNumber = <gNotchNumber> + 1;	
+	}
+
+	CurrentPunchNumber = <gNotchNumber>;
+
+	CurrentPunchNumber = HR500AFD_FormatPunchNumber( <CurrentPunchNumber> );
+	Invoke( SetCurrentPunchNumber,~<CurrentPunchNumber>~,FALSE );
+	if ( <ContinueRunning> )
+	{
+		gUseRollNumberOnStartup = FALSE;
+		gFirstFrameAligned = TRUE;
+		Invoke( FilmDriveCmdInProgress,~Frame Movement Complete~ );
+		if ( !<ScanMode> )
+		{
+			Invoke( EnableScanningControls, TRUE );
+			Invoke( SetTransportControlsStopped );
+		}
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationComplete, ~<CurrentPunchNumber>~ ); }
+		return TRUE;
+	}
+	Invoke( UserFrameErrorMessage,~Frame Movement Aborted~, TRUE, FALSE );
+	if ( <ScanMode> ) { Invoke( FilmDriveOperationStopped ); }
+	return FALSE;
+}
+
+
+NUMERIC HR500AFD_AcceptLastFrame()
+{
+	Xoffset = ;
+	Length = ;
+
+	if ( !Scanner( AcceptLastFrame,<XOffset>,<Length> ) )
+	{
+		Invoke( UserFrameErrorMessage,~Accept last frame failed...~, TRUE, TRUE );
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationError, ~accept last frame~, FALSE ); }
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC HR500AFD_InsertFrameEdge()
+{
+	Xoffset = ;
+
+	if ( !Scanner( InsertFrameEdge,<XOffset> ) )
+	{
+		Invoke( UserFrameErrorMessage,~Insert frame edge failed...~, TRUE, TRUE );
+		if ( <ScanMode> ) { Invoke( FilmDriveOperationError, ~insert frame edge~, FALSE ); }
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC HR500AFD_FastForward()
+{
+	gFirstFrameAligned = FALSE;
+	return HR500_FastForward();
+}
+
+
+NUMERIC HR500AFD_Rewind()
+{
+	gFirstFrameAligned = FALSE;
+	return HR500_Rewind();
+}
+
+
+NUMERIC HR500AFD_UnloadFilmFwd( Msg )
+{
+	gFirstFrameAligned = FALSE;
+	return HR500_UnloadFilmFwd( ~<Msg>~ );
+}
+
+
+NUMERIC HR500AFD_UnloadFilmRev( Msg )
+{
+	gFirstFrameAligned = FALSE;
+	return HR500_UnloadFilmRev( ~<Msg>~ );
+}
+
+
+
+NUMERIC HR500AFD_MoveDeltaX( Delta, IgnoreAdjustment )
+{
+	gFirstFrameAligned = FALSE;
+	if ( <Delta> < 0 )
+	{
+		msg = ~Moving the film in reverse will interfere with frame edge detection.\n\nDo you want to move the film backwards anyway?~ ;
+		if ( MessageBox( Translate( ~<msg>~ ),YESNO ) == NO )
+		{
+			return FALSE;
+		}
+	}
+	return HR500_MoveDeltaX( <Delta>, <IgnoreAdjustment> );
+}
+
+
+NUMERIC HR500AFD_Stop( )
+{
+	return HR500_Stop( );
+}
+
+
+NUMERIC HR500AFD_GetScanHeightPercent()
+{
+	filmFormat = ~<$con.DlgData[Format]>~;
+	Index = MagNames( IndexOf,~<filmFormat>~ );
+
+	scanHeight = atof(~<$con.dlgData[ScanLength]>~);
+	overscanHeight = atof(~<$con.dlgData[OverScanLength]>~);
+
+	heightAdjustment = <scanHeight> / 100.0;
+	FrameHeight = atof(FullFrameHeights(ValueOf,$Index)) * <heightAdjustment>;
+
+	osHeightAdjustment = <overscanHeight> / 100.0;
+	OverScanFrameHeight = atof(OverScanFrameHeights(ValueOf,$Index)) * <osHeightAdjustment>;
+
+	scanHeightPercent = <FrameHeight> / <OverScanFrameHeight>;
+
+	return <scanHeightPercent>;
+}
+
+NUMERIC HR500AFD_AdjustFrameLocation( Percent, Edge, Frame )
+{
+	App( ThisApp,MessagePump,100 );
+	dlg( GetInput );
+
+	SizzleControl( Set,AutoFDAErrorHandlingEnabled,TRUE );
+	scanHeight = HR500AFD_GetScanHeightPercent();
+
+	if ( <FrameNotInDB> )
+	{	UseImageOverrides = FALSE;	}
+
+	Percent = 1.0 - <Percent>;
+
+	if ( ~<Edge>~ == ~Bottom~ )
+	{
+		Percent = <Percent> - <scanHeight>;
+	}
+
+	if ( <Percent> < 0 )
+	{
+		msg = ~Moving the film in reverse will interfere with frame edge detection.\n\nDo you want to move the film backwards anyway?~ ;
+		if ( MessageBox( Translate( ~<msg>~ ),YESNO ) != YES )
+		{
+			EnableScanningControls( TRUE );
+			SetTransportControlsStopped();
+			return FALSE;
+		}
+	}
+
+	DlgData( Get,Frame,CurrentFrame );
+
+	nextFrame = FALSE;
+	if ( (~<Frame>~ != ~~) )
+	{
+		if ( atof(~<CurrentFrame>~) < atof(~<Frame>~) )
+		{
+			HR500AFD_SaveCurrentFrame();
+			FrameNotInDB = FALSE;
+			UseImageOverrides = FALSE;
+			nextFrame = TRUE;
+		}
+	}
+
+	_LogMessage( ~Moving Percent to <Frame>~ );
+
+	SetTransportControlsRunning();
+	result = Scanner( MovePercentDeltaX,<percent>,<nextFrame>,SizzleControl );
+
+	Sleep( 50 );
+	if ( !<result> )
+	{ 
+		UserFrameErrorMessage( ~Film movement failed ~,TRUE, FALSE ); 
+		HR500AFD_Stop();
+		return FALSE; 
+	}
+
+	gFirstFrameAligned = TRUE;
+	CurrentPunchNumber = HR500AFD_FormatPunchNumber( <gNotchNumber> );
+	SetCurrentPunchNumber( ~<CurrentPunchNumber>~,FALSE );
+
+	// Perform the normal scan processing
+	OnScanButtonSetup();
+	result = OnScanButton(<nextFrame>,FALSE);
+
+	return <result>;
+}
+
+
+VOID HR500AFD_SaveCurrentFrame()
+{
+	dlg( GetInput );
+
+	if ( !DlgData( GetNumeric,AutoSaveToDisk ) )
+	{
+		return;
+	}
+
+	holdOverScan = SizzleControl( GetNumeric,OverScan );
+	SizzleControl( Set, OverScan, TRUE);
+	ReadyForSave(FALSE);
+	SizzleControl( Set, OverScan, <holdOverScan> );
+
+	return;
+}
+
+
+NUMERIC HR500AFD_UpdateNextFrameInfo()
+{
+	return HR500_UpdateNextFrameInfo();
+}
+
+// HR500 FILM DRIVES COMMANDS (CONFIGURATION - HIGH LEVEL)
+
+
+VOID HR500AFD_FilmDriveSelected( )
+{
+	// Change the UI as appropriate for the Halse film drive
+	dlg( SetCheck,FALSE,FrameToPunchCheckBox );
+	dlg( SetCheck,FALSE,SequentialPunchesCheckBox );
+	dlg( SetCheck,FALSE,ScanFromDataBaseButton );
+	dlg( SetCheck,TRUE,ScanToDataBaseButton );
+	dlg( Save,FrameToPunchCheckBox );
+	dlg( Save,SequentialPunchesCheckBox );
+	dlg( Save,ScanFromDataBaseButton );
+	dlg( Save,ScanToDataBaseButton );
+	
+	// Reset the labels
+	dlg( SetControlTitle, CurrentPunchNumberText, Translate( ~Frame~ ));
+	dlg( SetControlTitle, TensionBox, Translate( ~Tension~ ));
+	dlg( SetControlTitle, FastForwardButton, Translate( ~>>>>~ ));
+	dlg( SetControlTitle, FastRewindButton, Translate( ~<<<<~ ));
+	dlg( SetValueInCtrlDef, FastForwardButton,~Tooltip~,Translate( ~Fast Forward~ ));
+	dlg( SetValueInCtrlDef, FastRewindButton,~Tooltip~,Translate( ~Fast Rewind~ ));	
+	dlg( SetValueInCtrlDef, ContinueFrameNumCheckBox,~Tooltip~,Translate( ~If checked, the frame numbers will continue incrementing across splices.~ ));
+	dlg( SetValueInCtrlDef, AutoIncRollNumbersCheckBox,~Tooltip~,Translate( ~If checked, the roll number will automatically increment when a splice is detected.~ ));	
+	dlg( SetValueInCtrlDef, TwinCheckCheckBox,~Tooltip~,Translate( ~If checked, frame detection will ignore an area consistent with a twin check at the beginning of a roll.~ ));
+	dlg( SetValueInCtrlDef, AutoSkipBlankFrameBox,~Tooltip~,Translate( ~Automatically skip over blank frames on a roll~ ));
+
+	dlg( SetValueInCtrlDef, CurrentPunchNumberTextBox,~Tooltip~,Translate( ~Current Frame Number~ ));
+	dlg( SetValueInCtrlDef, LoadFwdButton,~Tooltip~,
+		 Translate(~Advance past the leader and find the first frame in the forward direction (left to right)~));
+
+	// Reenable the controls
+	dlg( EnableControls,TRUE,EnableFilmDriveBox );
+	dlg( EnableControls,TRUE,ViewFilmDriveControlsBox );
+	dlg( EnableControls,TRUE,EditVendorButton );
+	dlg( EnableControls,TRUE,FdaSetupStaticText,FdaSetupComboBox,EditFdaButton );
+
+	dlg( EnableControls,FALSE,EditFilmEditorsButton );
+	dlg( EnableControls,FALSE,EditorStaticText );
+	dlg( EnableControls,FALSE,EditorComboBox );
+	dlg( EnableControls,FALSE,FrameToPunchCheckBox,FrameToPunchPaddingField );
+	dlg( EnableControls,FALSE,SequentialPunchesCheckBox );
+	dlg( EnableControls,FALSE,ScanFromDataBaseButton );
+	dlg( EnableControls,FALSE,VendorYOffsetStaticText );
+	dlg( EnableControls,FALSE,VendorYOffsetTextBox );
+	dlg( EnableControls,FALSE,VendorYOffsetClearButton );
+	dlg( EnableControls,FALSE,IgnoreXAdjustmentsCheckBox );
+	dlg( EnableControls,FALSE,GoTo_Button );
+	dlg( EnableControls,FALSE,GoToPunchNumberTextBox );
+	dlg( EnableControls,FALSE,DisableFilmDriveCheckBox );
+	dlg( EnableControls,FALSE,FastRewindButton );
+	dlg( EnableControls,FALSE,FastForwardButton );
+	dlg( EnableControls,FALSE,CutNegPromptCheckBox );
+	dlg( ShowControls,  FALSE,CutNegPromptCheckBox );
+	dlg( ShowControls,  FALSE,PrevScanButton );
+	dlg( EnableControls,FALSE,OverrideFrameButton,OverrideFrameTextBox);
+	dlg( EnableControls,FALSE,EdgeSensitivityTextBox );
+	dlg( EnableControls,FALSE,GetStripSensorStateButton );
+	dlg( EnableControls,FALSE,SetFrameOverrideButton,FocusEveryFrameCheckBox );
+	dlg( EnableControls,FALSE,EdgeSensitivityStaticText );
+	dlg( EnableControls,FALSE,UseAdjustedFramesCheckBox );
+	dlg( EnableControls,FALSE,XPositionSliderIMinusButton,XPositionSliderMinusButton );
+	dlg( EnableControls,FALSE,MinGapTextBox,MinGapStaticText,MinGapLabel );
+
+	dlg( EnableControls,TRUE,VendorXOffsetStaticText );
+	dlg( EnableControls,TRUE,VendorXOffsetTextBox );
+	dlg( EnableControls,TRUE,XSliderIFactorField );
+	dlg( EnableControls,TRUE,XSliderIFactorStaticText );
+	dlg( EnableControls,TRUE,VendorXOffsetClearButton );
+	dlg( EnableControls,TRUE,VendorXOffsetZeroButton );
+	dlg( EnableControls,TRUE,VendorSetupComboBox );
+	dlg( EnableControls,TRUE,EditVendorButton );
+
+	dlg( ShowControls,  FALSE,LoadRevButton );
+	dlg( EnableControls,FALSE,LoadRevButton );
+
+	if ( DlgData(GetNumeric,FilmDriveEnabled) )
+	{
+		dlg( EnableControls,FALSE,VendorSetupComboBox );
+	}
+	else
+	{
+		dlg( EnableControls,TRUE,VendorSetupComboBox );
+		dlg( EnableControls,FALSE,FastRewindButton );
+		dlg( EnableControls,FALSE,FastForwardButton );
+		dlg( EnableControls,FALSE,DisableFrameDetectCheckbox );
+	}
+
+	filmDriveEnabled = DlgData( GetNumeric,FilmDriveEnabled );
+	dlg( GetStrings,CurrentPunchPosition,CurrentPunchPosition );
+	if ( ~<CurrentPunchPosition>~ != ~~ && IsNumeric( ~<CurrentPunchPosition>~ ) )
+	{
+		dlg( EnableControls,FALSE,LoadFwdButton );
+	}
+	else
+	{
+		dlg( EnableControls,<filmDriveEnabled>,LoadFwdButton );
+	}
+
+	dlg( SetCheck,FALSE,AutoSkipBlankFrameBox );
+	dlg( Save,AutoSkipBlankFrameBox );
+
+	//dlg( EnableControls,TRUE,IgnoreFdaErrorsCheckBox,DisableFrameDetectCheckbox,FixedAdvanceTextBox );
+	//dlg( EnableControls,TRUE,TwinCheckCheckBox,AutoSkipBlankFrameBox );
+	//dlg( EnableControls,TRUE,FixedAdvanceStaticText,FixedAdvanceLabel );
+	dlg( EnableControls,FALSE,TwinCheckCheckBox,FixedAdvanceStaticText,FixedAdvanceLabel,AutoSkipBlankFrameBox );
+	dlg( EnableControls,FALSE,IgnoreFdaErrorsCheckBox,DisableFrameDetectCheckbox,FixedAdvanceTextBox );
+	dlg( EnableControls,TRUE,AdjustFramePositionBox );
+	dlg( EnableControls,TRUE,ContinueFrameNumCheckBox,AutoIncRollNumbersCheckBox );
+
+	unitsAbbrev = <DisplayUnits>Abbrev();
+	dlg( SetControlValue,~FixedAdvanceLabel~,~<unitsAbbrev>~ );
+	dlg( SetControlValue,~MinGapLabel~,~<unitsAbbrev>~ );
+
+	// Restore the film format selections - and current selection if possible
+	CurrentFormat = ~<$con.DlgData[Format]>~;
+	StringList( OriginalFilmSizeChoices,New,InListOrder,AddStrings,~35mm~,~35mm_Unperfed~,~35mm_Camera_Card~,~46mm~,~46mm_Camera_Card~,~62mm_6x4.5~,~62mm_6x6~,~62mm_6x7~,~62mm_6x8~,~62mm_6x9~,~Split_70mm~,~Split_70mm_Camera_Card~,~70mm_Unperfed~ );
+	dlg( SetControlFromStringList, ~FilmSizeChoices~, OriginalFilmSizeChoices, Update );
+	dlg( SetControlFromStringList, ~FilmFormatComboBox~, OriginalFilmSizeChoices, Update );
+	if ( ~<CurrentFormat>~ != ~~ )
+	{
+		dlg( SelectString,FilmFormatComboBox,~<CurrentFormat>~ );
+	}
+
+    SizzleControl( Set, PreScanNotification, ~~ );
+    SizzleControl( Set, ScanCompleteNotification, ~~ );
+	SizzleControl( SetValues, OverScan, FALSE);
+	dlg( SetString,~~,StripSensorState );
+
+	ShowFilmDriveControls();
+
+	// We are going to replace the following global variables
+	ForgetGlobal( MagNames);
+	ForgetGlobal( FullFrameWidths);
+	ForgetGlobal( FullFrameHeights);
+	ForgetGlobal( OverScanFrameHeights);
+	ForgetGlobal( MinMagnifications);
+	ForgetGlobal( MaxMagnifications);
+
+	// Restore all the control strings
+	NewString( MagNames,Set,		~Undefined,35mm,35mm_Unperfed,35mm_Camera_Card,46mm,46mm_Camera_Card,62mm_6x4.5,62mm_6x6,62mm_6x7,62mm_6x8,62mm_6x9,Split_70mm,Split_70mm_Camera_Card,70mm_Unperfed~,Delimiters,~,~ );
+	NewString( FullFrameWidths, Set, ~0,26,33,33,45,45,61,61,61,61,61,69,69,69~,Delimiters,~,~ );
+	NewString( FullFrameHeights, Set, ~0,38,44,62,66,67,45,58,71,79,85,45,45,88~,Delimiters,~,~ );
+	NewString( OverScanFrameHeights, Set, ~0,45,60,62,84,84,84,85,85,85,85,88,88,88~,Delimiters,~,~ ); // overscan
+	NewString( MinMagnifications,Set,~0,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5~,Delimiters,~,~ );
+	NewString( MaxMagnifications,Set,~0,2.0,2.0,1.77,1.46,1.45,1.18,1.18,1.18,1.15,1.11,1.04,1.04,1.02~,Delimiters,~,~ );
+	
+	// Reglobalize the control string variables
+	Global( MagNames);
+	Global( FullFrameWidths);
+	Global( OverScanFrameHeights);
+	Global( FullFrameHeights);
+	Global( MinMagnifications);
+	Global( MaxMagnifications);
+
+	ChangeEnableSetOverscanArea( TRUE );
+	OnAllScanArea();
+	MaxXIncrementsInInches = 30.00000;
+	MaxXIncrementsInDisplayUnits = InchesTo<DisplayUnits>( <MaxXIncrementsInInches> );
+
+	OnFrameRollNumbering();
+
+	return;
+}
+
+
+// HR500 FILM DRIVES COMMANDS (MISCELLANEOUS - HIGH LEVEL)
+
+
+NUMERIC HR500AFD_ValidPunchNumber( PunchNumber )
+{
+	return HR500_ValidPunchNumber( ~<PunchNumber>~ );
+}
+
+
+STR HR500AFD_FormatPunchNumber( PunchNumber )
+{
+	return HR500_FormatPunchNumber( ~<PunchNumber>~ );
+}
+
+NUMERIC HR500AFD_ValidPunchRange( PunchNumber )
+{
+	return HR500_ValidPunchRange( ~<PunchNumber>~ );
+}
+
+NUMERIC HR500AFD_UpdateSetupWithSerialNumber( SetupName,SerialNumber )
+{
+	Cmd = ~Update HR500AFDFilmDrive Set ScannerSerialNo = '<SerialNumber>' Where Name = '<SetupName>' and ScannerSerialNo = '0'~;
+
+	if ( !Ado( dBase,Connect,Cmd,~<Cmd>~ ) )	
+	{ 
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not <cmd>. <theErr>~ );
+	}
+	return TRUE;
+}
+
+
+NUMERIC HR500AFD_ForgetGlobals( UpdateStatus,ClosingDialog )
+{
+	SizzleControl( Set, FrameDetectErrorNotification, ~~ );
+	SizzleControl( Set, SpliceDetectedNotification, ~~ );
+
+	TensionAborted = FALSE;
+	dlg( EnableControls,FALSE,LoadFwdButton );
+	ChangeEnableSetOverscanArea( FALSE );
+	ForgetGlobal( FilmDrive );
+	return CloseFilmDriveComplete( <UpdateStatus>,<ClosingDialog> );
+}
+
+
+
+
+

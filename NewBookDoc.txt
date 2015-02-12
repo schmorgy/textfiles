@@ -1,0 +1,1918 @@
+IncludeClass(BaseHtml);
+IncludeClass( BaseHTMLWin );
+IncludeClass( BookProduct);
+Include: ~NewAnimotoBookDoc~;
+Include: ~AuditCoats~;
+
+
+if ( !DictionaryExists( DDAddBookDialog ) )
+{
+
+Dictionary: DDAddBookDialog
+	Fields:	Name ProductID			Type	text
+	Fields:	Name ProductDescription	Type	text
+	Fields:	Name TemplateName		Type	text
+	Fields:	Name DeviceType			Type	text
+	Fields:	Name Banner				Type	text
+	Fields:	Name Bleed				Type	text
+	Fields:	Name DontOverrideTemplateBleed	Type Long
+	Fields:	Name DontRenderBleed			Type Long
+	Fields:	Name Inkname			Type	text
+	Fields:	Name Category			Type	text ;
+}
+
+Define: AddPackageData Using DDAddBookDialog 
+	Fields: ProductID			~~
+	Fields: ProductDescription	~~
+	Fields:	TemplateName		~~
+	Fields:	Banner				~~
+	Fields:	Bleed				~~
+	Fields:	Inkname				~~
+	Fields:	DeviceType			~~
+	Fields: DontOverrideTemplateBleed ~0~
+	Fields: DontRenderBleed		~0~
+	Fields: Category			~~ ;
+	
+if ( !DictionaryExists( DDUpdateBookProductsFor ) )
+	{
+		Dictionary:		DDUpdateBookProductsFor
+			Fields:		Name ProductID		Type Text
+			Fields:		Name TemplateName	Type Text
+			Fields:		Name InkName		Type Text
+			Fields:		Name Bleed			Type Double
+			Fields:		Name DontOverrideTemplateBleed	Type Long
+			Fields:		Name DontRenderBleed			Type Long
+			Fields:		Name Banner			Type Text
+			
+	}
+	
+
+
+
+NUMERIC TemplateDlg::AddABook(&AddPackageData, &SelectedItems)
+{
+
+	ProductID = ~<$con.AddPackageData[ProductID]>~;
+	ProductDescription = ~<$con.AddPackageData[ProductDescription]>~;
+	Category = ~<$con.AddPackageData[Category]>~;
+	TemplateName = ~<$con.AddPackageData[TemplateName]>~;
+	DeviceType = ~<$con.AddPackageData[DeviceType]>~;
+	Bleed = ~<$con.AddPackageData[Bleed].numeric>~;
+	DontOverrideTemplateBleed = ~<$con.AddPackageData[DontOverrideTemplateBleed].numeric>~;
+	DontRenderBleed = ~<$con.AddPackageData[DontRenderBleed].numeric>~;
+
+	Query = ~Select * from Products Where ID = '<ProductID>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <Query>. <theErr>~ ) );
+	}
+
+	if ( List( GetFirst,Product ) )
+	{
+		return Warning( Translate( ~A product already exists with ID = <ProductID>~ ) );
+	}
+
+	if (SimilarStr(~<DeviceType>~,Animoto))
+	{
+		GetUsersAnimotoValues();// save into AnimotoBookRec
+		UpdateAnimotoAttributes();// Converts the Animoto overrides to Attributes inside of fBookProd, but does not update the database
+	}
+	else
+	{
+		UpdateAttributes();	// Converts the Nexpress overrides to Attributes inside of fBookProd, but does not update the database
+	}
+
+	if (!fBookProd.AddBook(~<ProductID>~,~<ProductDescription>~, ~<Category>~, AddPackageData,~<DeviceType>~,SelectedItems))
+	{
+		return Warning(fBookProd.GetError());	
+	}
+
+
+	return TRUE;
+
+}
+
+
+NUMERIC DefineEditDialog()
+{
+	if ( !GenCon( ProductCategory,GETACTIVEVIEW,GETNAME,InitialProductCategory ) )
+		{ return Warning( Translate(UIMessages,NoActiveView) ); }			
+
+	if ( !ProductCategory( GetSelected,SelectedItems ) )	{ return Warning( ~<$TR.NewPackage(NoneSelected)>~ ); }
+
+	count = SelectedItems( ChildCount );
+	if (<count> != 1)
+	{
+		return Warning( ~<$TR.NewPackage(NoneSelected)>~); 
+	}
+
+	ForgetGlobal( Obj);
+	EditTemplateDlg( New,Obj );
+	Global( Obj );
+	Obj.SetProductCategory(~<InitialProductCategory>~);
+
+	Obj.CreateModalDialog(~/Products/GroupProducts.kpl~);		// Create an HTML Window that behaves like a modal dialog
+	return TRUE;
+}
+
+
+
+NUMERIC DefineDialog()
+{
+	if ( !GenCon( ProductCategory,GETACTIVEVIEW,GETNAME,InitialProductCategory ) )
+		{ return Warning( Translate(UIMessages,NoActiveView) ); }			
+
+	if ( !ProductCategory( GetSelected,SelectedItems ) )	{ return Warning( ~<$TR.NewPackage(NoneSelected)>~ ); }
+
+	count = SelectedItems( ChildCount );
+	if (!<count>)
+	{
+		return Warning( ~<$TR.NewPackage(NoneSelected)>~); 
+	}
+
+	ForgetGlobal( Obj);
+	TemplateDlg( New,Obj );
+	Global( Obj );
+	Obj.SetProductCategory(~<InitialProductCategory>~);
+
+	Obj.CreateModalDialog(~/Products/GroupProducts.kpl~);		// Create an HTML Window that behaves like a modal dialog
+	return TRUE;
+}
+
+
+Class( TemplateDlg,Extends,BaseHTMLWin,	
+	  Member,fInitialProductCategory,Str,~~,
+	  Member,fNumOverrides,Numeric,0,
+	  Member,fNJPenabled,Numeric,0,
+	  Member,OldProductID,Str,~~
+ );
+
+Class( EditTemplateDlg,Extends,TemplateDlg	
+ );
+
+VOID HelpRoutine()
+{
+
+	Obj.HelpRoutine();
+}
+
+NUMERIC TemplateDlg::HelpRoutine()
+{
+	TheAction = ACTION ShowHelpPage ( KPISHelpFile "Products.htm#books" );
+	return PerformActions( TheAction );	
+}
+VOID TemplateDlg::SetupTemplates()	
+{  
+	NoPrintingTemplateMsgActive = 0;
+	NexPressWithTemplates = 0;
+	numTemplates = GetNumberOfPrintingTemplates();
+	SavedDeviceType = ~<$Tr.OrderItem(DeviceTypeOther)>~;
+	fHtmlView( Get,DeviceTypeListID, 0, value,SavedDeviceType);
+	if (SimilarStr(~<SavedDeviceType>~,NexPress))
+	{
+		if (<numTemplates> != 0)
+		{
+			fLoadedTemplates = true;
+			Private(fLoadedTemplates);
+			AddOverrides();
+			UpdateCategoryList(~<SavedDeviceType>~);		// inserts the html code for the categories and displays the empty template box
+			SelectInitialCategory();
+			OnSelectTemplateCategory();
+			SelectInitialTemplate();		
+			fHtmlView(SetStyle,NexPressDivID,0,display,block);
+			if (<fNJPenabled> == 1)
+			{
+				fHtmlView( SetStyle,~BannerDivID~,0,~display~,~block~);
+				fHtmlView(SetStyle,DimOverrideDivID,0,display,none);
+			}
+
+			fHtmlView( SetStyle,~OverridesID~,0,~display~,~none~);
+			NexPressWithTemplates = 1;
+			fHtmlView(Set,okBtn,0,disabled,~~);
+		}
+		else
+		{
+			NoPrintingTemplateMsgActive = 1;
+			fHtmlView(SetStyle,NoPrintingTemplatesID,0,visibility,~visible~);
+			fHtmlView(Set,okBtn,0,disabled,true);
+		}
+	}
+	else if (SimilarStr(~<SavedDeviceType>~,~C8000/Creo~))
+	{
+		if (<numTemplates> != 0)
+		{
+			fLoadedTemplates = true;
+			Private(fLoadedTemplates);
+			AddOverrides();				// inserts the html code for the override check boxes
+			UpdateCategoryList(~<SavedDeviceType>~);		// inserts the html code for the categories and displays the empty template box
+			SelectInitialCategory();	// Selects the category in the category box to match the selected template
+			OnSelectTemplateCategory(); // Updates the templates for the selected category
+			SelectInitialTemplate();
+			//fHtmlView(SetStyle,NexPressDivID,0,display,none);
+			fHtmlView(SetStyle,BleedDivID,0,display,none);
+			fHtmlView(SetStyle,AllInkDivID,0,display,none);
+			fHtmlView(Set,okBtn,0,disabled,~~);
+			NexPressWithTemplates = 1;
+		}
+		else
+		{
+			NoPrintingTemplateMsgActive = 1;
+			fHtmlView(SetStyle,NoPrintingTemplatesID,0,visibility,~visible~);
+			fHtmlView(Set,okBtn,0,disabled,true);
+		}
+	}
+	else
+	{
+		fHtmlView(SetStyle,ConfigDivID,0,display,none);
+	}
+
+	if (<NexPressWithTemplates> == 0)
+	{
+		ForgetPrivate(fLoadedTemplates);
+		fHtmlView(SetStyle,NexPressDivID,0,display,none);
+
+	}
+	if (<NoPrintingTemplateMsgActive> == 0)
+	{
+		fHtmlView(SetStyle,NoPrintingTemplatesID,0,visibility,~hidden~);
+		fHtmlView(Set,okBtn,0,disabled,~~);
+	}
+
+};		// Override as needed
+
+VOID	TemplateDlg::OnLoadComplete()	
+{  
+	DFESetupFile = ~<$App.ShareDirectory>\NexPressDFESetup.txt~;
+	if ( Files( FileExists,~<DFESetupFile>~ ) )
+	{	
+		fNJPenabled = 0;
+	}
+	else
+	{
+		fNJPenabled = 1;
+	}
+	GetBookRec();				// finds the database record associated with the book product (edit only)
+	GetProductID();				// get the product ID into the html view
+	UpdateProductCategoryList();
+	GetDeviceType();			// sets the device type from the user settings (create only)
+	GetDescription();			// gets the product description into the book product
+	SetDescription();			// sets the product description into the html view (edit only)
+	SelectDeviceType();
+	SetupTemplates();
+	UpdateNumberSelected();
+	UpdateInkList();
+	SetBookData();				// Sets the banner, inkname and bleed in the html page
+	PGenConList( List,Create );	// Creates a PGenConList object
+	if (!fBookProd.GetAttributes(List))	// database call to get the list of attributes
+	{
+		return Warning (fBookProd.GetError());
+	}
+
+	CheckAdvancedBox(List);		// checks the advance box if there are book attributes
+	//OnAdvancedCheckBox();		// sets the appropriate window size and makes attribute check boxes div visible, substrate popups visible
+	CheckOverrideBox(List);		// checks the appropriate substrate check boxes and makes the associated select lists visible
+	SelectSubstr(List);			// selects the proper substrate in the select list
+	SetTitle1();				// sets the title of the page
+	UpdateDimCoat(List);		//set up the list choices for the 3 list under dimensional coat
+	InitAnimotoRecord(List);	// set the defaults in the AnimotoBookRec
+	OnSelectDeviceType();
+
+};		// Override as needed
+
+NUMERIC EditTemplateDlg::GetProductID()
+{
+	ID = fBookProd.GetProductID();
+	fHtmlView( SetValue, ~ProductIDID~,0, ~<ID>~);
+	OldProductID = ~<ID>~;
+	return 1;
+}
+
+VOID TemplateDlg::DontORTemplateBleed()
+{
+}
+
+VOID TemplateDlg::DontRenderBleed()
+{
+}
+
+NUMERIC TemplateDlg::GetProductID()
+{
+	return 1;
+}
+
+VOID TemplateDlg::SetProductCategory(Category)
+{
+	fInitialProductCategory = ~<Category>~;
+}
+
+NUMERIC TemplateDlg::SetWindowSize()
+{	
+	WindowWidth = 1000;
+	WindowHeight = 730;
+	return TRUE;
+}
+
+VOID TemplateDlg::TemplateDlg()
+{
+	if ( !( GenCon(View,GETACTIVEVIEW ) && GenCon(Window,GETACTIVEWINDOW) ) )
+		{ return ; }
+
+	if ( !View( GetSelected,SelectedItems ) )		
+		{  return; }
+
+	count = SelectedItems( ChildCount );
+	result = SelectedItems(GetFirst,Item);
+	BaseHtml::LoadTranslationFile(Products,NewPackage,BookProduct);  // Directory,Category,Filename
+	BaseHtml::LoadTranslationFile(OrderItems,OrderItem,OrderItem);
+	BaseHtml::LoadTranslationFile(Products,BookProductMessages,BookProduct);
+
+	fTitle = ~<$TR.NewPackage(CreateBook1)>~;
+	WindowTop = 20;
+	WindowLeft = 20;
+	
+	SetWindowSize();
+	fWindowStyle = ~WS_SIZEBOX~;
+	BookProduct( New,fBookProd );
+	Private( fBookProd );
+	InitAnimotoObject();
+
+}
+
+VOID TemplateDlg::UpdateNumberSelected()
+{
+	if ( !( GenCon(View,GETACTIVEVIEW ) && GenCon(Window,GETACTIVEWINDOW) ) )
+		{ return ; }
+
+	if ( !View( GetSelected,SelectedItems ) )		
+		{  return; }
+
+	count = SelectedItems( ChildCount );
+	result = SelectedItems(GetFirst,Item);
+	if (<count> == 1)
+	{
+		
+		fHtmlView(SetInnerHtml,HowManySelectedID,0,~<$TR.NewPackage(OneSelected,<count>)>~);
+
+	}
+	else
+	{
+		fHtmlView(SetInnerHtml,HowManySelectedID,0,~<$TR.NewPackage(MoreThanOneSelected,<count>)>~);
+	}
+}
+
+VOID EditTemplateDlg::UpdateNumberSelected()
+{
+}
+
+VOID	TemplateDlg::SelectInitialCategory()	
+{  
+	fHtmlView(Execute,~SelectByIndex(CategoryListID,0)~);
+}
+
+
+VOID TemplateDlg::OnProdIDKeypress()
+{
+	fHtmlView( Get ,ProductIDID,0,Value,ProductID);
+	fHtmlView( Get,ProductNameID,0,Value,ProductName);
+	if (~<ProductName>~ == ~<OldProductID>~)
+	{
+		fHtmlView( SetValue,ProductNameID,0, ~<ProductID>~);
+	} 
+	OldProductID = ~<ProductID>~;
+	
+}
+
+VOID	EditTemplateDlg::SelectInitialCategory()	
+{  
+	// get the template name from the record in the books table for this product ID
+	// select the category in CategoryListID
+	i = 0;
+	TemplateName = fBookProd.GetTemplateName();
+	TemplatesCategory = GetCategoryForTemplate(~<TemplateName>~);
+	selectLength = fHtmlView(GetSelectOptionsLength,CategoryListID,0);
+	while (<i> < <selectLength>)
+	{
+		fHtmlView( GetSelectOption,CategoryListID, 0, <i>, CategoryText,CategoryVal);
+		if (SimilarStr(~<CategoryText>~, ~<TemplatesCategory>~))
+		{
+			fHTMLView( SetSelectedOptionByIndex,CategoryListID,0,<i>);
+			return;
+		}
+		++i;
+	}
+	fHTMLView( SetSelectedOptionByIndex,CategoryListID,0,0);
+
+}
+STR	TemplateDlg::GetCategoryForTemplate(TemplateName)
+{
+	Category = ~~;
+	Query = ~Select Category From Templates Where TemplateName = '<TemplateName>'~;
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+	Description = ~~;
+	if (List(GetFirst,Item))
+	{
+		Item(GetValue,Category,Category);
+	}
+	return ~<Category>~;
+}
+
+VOID	TemplateDlg::SelectInitialTemplate()	
+{  
+	fHtmlView(Execute,~SelectByIndex(TemplateListID,0)~);
+	fHtmlView( Get,CategoryListID, 0, value, Category);
+	fHtmlView( Get,TemplateListID, 0, value, TemplateName);
+	Description = ~~;
+	GetDescriptionFor(~<Category>~,~<TemplateName>~,Description);
+	fHtmlView(SetInnerHtml,TemplateDescriptionID,0,~<$TR.OrderItem(TemplateDescriptionIs,`<Description>`)>~);
+
+}
+
+VOID	EditTemplateDlg::SelectInitialTemplate()	
+{  
+	// get the template name from the book product
+	// find the template name in TemplateListID
+	// select the template name in TemplatesListID
+	fHtmlView(Execute,~SelectByIndex(TemplateListID,0)~); 
+
+	fHtmlView( Get,CategoryListID, 0, value, Category);
+	fHtmlView( Get,TemplateListID, 0, value, TemplateName);
+	selectLength = fHtmlView(GetSelectOptionsLength,TemplateListID,0);
+
+	i = 0;
+	TemplateName=fBookProd.GetTemplateName();
+
+	while (<i> < <selectLength>)
+	{
+		fHtmlView( GetSelectOption,TemplateListID, 0, <i>, TemplateText,TemplateVal);
+		if (SimilarStr(~<TemplateVal>~, ~<TemplateName>~))
+		{
+			fHTMLView( SetSelectedOptionByIndex,TemplateListID,0,<i>);
+			return;
+		}
+		++i;
+	}
+	fHTMLView( SetSelectedOptionByIndex,TemplateListID,0,0);
+	
+	Description = ~~;
+	GetDescriptionFor(~<Category>~,~<TemplateName>~,Description);
+	fHtmlView(SetInnerHtml,TemplateDescriptionID,0,~<$Tr.OrderItem(TemplateDescriptionIs,`<Description>`)>~);
+
+};
+
+NUMERIC TemplateDlg::GetBookRec()
+{
+	return 1;
+}
+NUMERIC EditTemplateDlg::GetBookRec()
+{
+	if ( !( GenCon(View,GETACTIVEVIEW ) && GenCon(Window,GETACTIVEWINDOW) ) )
+		{ return Warning(~No selected products~); }
+
+	if ( !View( GetSelected,SelectedItems ) )		
+		{ return Warning(~No selected products~); }
+
+	result = 0;
+	while (SelectedItems(GetNext,Item))
+	{
+		ProductID = ~<$con.Item[ID]>~;
+		if (!IsNull(~<ProductID>~))
+		{
+			if (fBookProd.GetBookRecord(~<ProductID>~))
+			{
+				result = 1;
+				break;
+			}
+			else
+			{
+				return Warning(fBookProd.GetError());
+			}
+		}
+	}
+	return <result>;
+}
+
+VOID EditTemplateDlg::SetDescription()
+{
+	fHtmlView(Set,ProductNameID,0,value,fBookProd.GetLayoutName());
+}
+VOID TemplateDlg::SetDescription()
+{
+}
+
+VOID EditTemplateDlg::GetDescription()
+{
+	ID = fBookProd.GetProductID();
+	Query = ~Select LayoutName From Products Where ID = '<ID>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+	if (List(GetFirst,Product))
+	{
+		fBookProd.SetLayoutName(~<$pcon.Product[LayoutName]>~);
+	}
+}
+
+VOID TemplateDlg::GetDescription()
+{
+}
+
+VOID TemplateDlg::GetDeviceType()
+{
+	if (GetUserSettings( ~BookProducts~,~DeviceType~,SavedDeviceType, Enabled ))
+	{
+		fBookProd.Set(fDeviceType,~<SavedDeviceType>~);
+	}
+	else
+	{
+		fBookProd.Set(fDeviceType,~~);
+	}
+}
+
+VOID EditTemplateDlg::GetDeviceType()
+{
+}
+
+
+VOID TemplateDlg::SelectDeviceType()
+{
+	DeviceType = fBookProd.GetDeviceType();
+	if (SimilarStr(~<DeviceType>~,NexPress))
+	{
+		DeviceType = NexPress;// handle case issues
+	}
+	if (!IsNull(~<DeviceType>~))
+	{
+		fHtmlView( SetValue,DeviceTypeListID, 0, ~<DeviceType>~);
+	}
+	else
+	{
+		fHtmlView( SetValue,DeviceTypeListID, 0, ~<$TR.OrderItem(DeviceTypeOther)>~);
+	}
+}
+
+VOID TemplateDlg::GetDescriptionFor(Category,Template,&Description)
+{
+	Query = ~Select * From Templates Where Category = '<Category>' And TemplateName = '<Template>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+	Description = ~~;
+	if (List(GetFirst,Item))
+	{
+		Item(GetValue,Description,Description);
+	}	
+}
+
+
+
+
+NUMERIC TemplateDlg::OnSelectDeviceType()
+{
+	fHtmlView( Get,DeviceTypeListID, 0, value, DeviceType);
+	numTemplates = GetNumberOfPrintingTemplates();
+	if (SimilarStr(~<DeviceType>~,NexPress))
+	{
+		if (<numTemplates>)
+		{
+			fHtmlView(SetStyle,NoPrintingTemplatesID,0,visibility,~hidden~);
+			fHtmlView(Set,okBtn,0,disabled,~~);
+			UpdateCategoryList(~<DeviceType>~);
+			SelectInitialCategory();
+			OnSelectTemplateCategory();
+			SelectInitialTemplate();
+			if (!Defined(fLoadedTemplates))
+			{
+				AddOverrides();			// inserts the html code for the override check boxes
+				fLoadedTemplates = true;
+				Private(fLoadedTemplates);
+			}
+			fHtmlView(SetStyle,ConfigDivID,0,display,block);
+			fHtmlView(SetStyle,NexPressDivID,0,display,block);
+			OnAdvancedCheckBox();
+		}
+		else
+		{
+			fHtmlView(SetStyle,ConfigDivID,0,display,block);
+			fHtmlView(SetStyle,DimOverrideDivID,0,display,block);
+			fHtmlView(SetStyle,NoPrintingTemplatesID,0,visibility,~visible~);
+			fHtmlView(Set,okBtn,0,disabled,true);
+		}
+		fHtmlView(SetStyle,BleedDivID,0,display,block);
+		if (<fNJPenabled> == 1)
+		{
+			fHtmlView( SetStyle,~BannerDivID~,0,display,block);
+			fHtmlView(SetStyle,DimOverrideDivID,0,display,none);
+		}
+		fHtmlView(SetStyle,AllInkDivID,0,display,block);
+		fHtmlView(SetStyle,animotoRequiredID,0,display,none);
+		GetUsersAnimotoValues();
+	}
+	else if (SimilarStr(~<DeviceType>~,~C8000/Creo~))
+	{
+		if (<numTemplates>)
+		{
+			fHtmlView(SetStyle,NoPrintingTemplatesID,0,visibility,~hidden~);
+			fHtmlView(Set,okBtn,0,disabled,~~);
+			UpdateCategoryList(~<DeviceType>~);
+			SelectInitialCategory();
+			OnSelectTemplateCategory();
+			SelectInitialTemplate();
+			if (!Defined(fLoadedTemplates))
+			{
+				fLoadedTemplates = true;
+				Private(fLoadedTemplates);
+			}
+			fHtmlView(SetStyle,ConfigDivID,0,display,block);
+			fHtmlView(SetStyle,NexPressDivID,0,display,block);
+			fHtmlView(SetStyle,BleedDivID,0,display,none);
+			fHtmlView(SetStyle,BannerDivID,0,display,none);
+			fHtmlView(SetStyle,AllInkDivID,0,display,none);
+			OnAdvancedCheckBox();
+		}
+		else
+		{
+			fHtmlView(SetStyle,ConfigDivID,0,display,block);
+			fHtmlView(SetStyle,DimOverrideDivID,0,display,block);
+			fHtmlView(SetStyle,NoPrintingTemplatesID,0,visibility,~visible~);
+			fHtmlView(Set,okBtn,0,disabled,true);
+		}
+		fHtmlView(SetStyle,DimOvercoatID,0,display,none);
+		fHtmlView(SetStyle,animotoRequiredID,0,display,none);
+		GetUsersAnimotoValues();  // save into AnimotoBookRec
+	}
+	else if (SimilarStr(~<DeviceType>~,~Animoto~))
+	{
+		if (!MemberDefined(AnimotoBookRec))		// in case we get here before OnLoadComplete
+		{
+			PGenConList( List,Create );			// Creates a PGenConList object
+			if (!fBookProd.GetAttributes(List))	// database call to get the list of attributes
+			{
+				return Warning (fBookProd.GetError());
+			}
+			InitAnimotoRecord(List);	// set the defaults in the AnimotoBookRec
+		}
+		InitAnimotoDiv();		// with the whatever is in AnimotoBookRec
+		fHtmlView(SetStyle,NoPrintingTemplatesID,0,visibility,~hidden~);
+		fHtmlView(Set,okBtn,0,disabled,~~);
+		fHtmlView(SetStyle,ConfigDivID,0,display,none);
+		fHtmlView(SetStyle,NexPressDivID,0,display,none);
+		fHtmlView(SetStyle,BleedDivID,0,display,none);
+		fHtmlView(SetStyle,BannerDivID,0,display,none);
+		fHtmlView(SetStyle,AllInkDivID,0,display,none);
+		OnAdvancedCheckBox();
+			
+		fHtmlView(SetStyle,DimOverrideDivID,0,display,none);
+		fHtmlView(SetStyle,NoPrintingTemplatesID,0,visibility,~hidden~);
+		
+		fHtmlView(SetStyle,DimOvercoatID,0,display,none);
+		fHtmlView(SetStyle,animotoRequiredID,0,display,block);
+		
+	}
+	else
+	{
+		SetSize(~<WindowWidth>~,~<WindowHeight>~);
+		fHtmlView(SetStyle,NexPressDivID,0,display,none);
+		fHtmlView(SetStyle,ConfigDivID,0,display,none);
+		fHtmlView(SetStyle,DimOverrideDivID,0,display,none);
+		fHtmlView(SetStyle,NoPrintingTemplatesID,0,visibility,~hidden~);
+		fHtmlView(Set,okBtn,0,disabled,~~);
+		fHtmlView(SetStyle,DimOvercoatID,0,display,none);
+		fHtmlView(SetStyle,animotoRequiredID,0,display,none);
+		GetUsersAnimotoValues();// save into AnimotoBookRec
+	}
+	return TRUE;
+}
+
+
+NUMERIC TemplateDlg::OnSelectTemplate()
+{
+	fHtmlView( Get,TemplateListID, 0, value, TemplateName);
+	fHtmlView( Get,CategoryListID, 0, value, Category);
+
+	Query = ~Select * From Templates Where Category = '<Category>' And TemplateName = '<TemplateName>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+	Description = ~~;
+	if (List(GetFirst,Item))
+	{
+		Item(GetValue,Description,Description);
+	}
+
+	fHtmlView(SetStyle,OverrideDivID,0,visibility,visible);
+	fHtmlView(SetInnerHtml,TemplateDescriptionID,0,~<$TR.OrderItem(TemplateDescriptionIs,`<Description>`)>~);
+	OnAdvancedCheckBox();
+	ShowSubstrates();
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnSelectTemplateCategory()
+{
+	fHtmlView( Get,DeviceTypeListID, 0, value, DeviceType);
+	fHtmlView( Get,CategoryListID, 0, value, selectedCategory);
+	UpdateTemplatesList(~<DeviceType>~,~<selectedCategory>~);
+	OnSelectTemplate();
+	return 1;
+}
+
+VOID TemplateDlg::OnHotOffset()
+{
+
+}
+VOID TemplateDlg::OnApplyCoat()
+{
+
+}
+
+VOID TemplateDlg::OnCoatDensity()
+{
+
+}
+
+NUMERIC TemplateDlg::OnSelectInk()
+{
+	GetCurrentInk(Ink);
+
+	if (!<fNJPenabled>)
+	{					
+		if ( SimilarStr(~<Ink>~,~NexPress DryInk raised clear~) || SimilarStr(~<Ink>~,~NexPress DryInk dimensional clear~) )
+		{ 
+			fHtmlView( SetStyle,~DimOvercoatID~,0,~display~,~block~);
+			fHtmlView( SetStyle,~HotOffsetDivID~,0,~display~,~block~);
+			fHtmlView(SetStyle,DimOverrideDivID,0,display,block);	
+			//fHtmlView( Set, ~DimOvercoatCheckbox~, 0, checked, ~~ );
+
+			//fHtmlView( SetStyle,~ApplyCoatDivID~,0,~display~,~none~);
+			//fHtmlView( SetStyle,~CoatDensityDivID~,0,~display~,~none~);
+			OnDimOvercoatCheckBox();
+		}
+		else
+		{	
+			fHtmlView( SetStyle,~DimOvercoatID~,0,~display~,~none~);
+			fHtmlView( SetStyle,~HotOffsetDivID~,0,~display~,~none~);			
+			fHtmlView(SetStyle,DimOverrideDivID,0,display,none);
+			//fHtmlView( Set, ~DimOvercoatCheckbox~, 0, checked, ~~ );
+
+			fHtmlView( SetStyle,~ApplyCoatDivID~,0,~display~,~none~);
+			fHtmlView( SetStyle,~CoatDensityDivID~,0,~display~,~none~);
+			OnDimOvercoatCheckBox();
+		}
+	}	
+	return 1;
+}
+
+VOID OnNewInkCheckBox()
+{
+	Obj.OnNewInkCheckBox();
+}
+VOID TemplateDlg::OnNewInkCheckBox()
+{
+	fHtmlView( Get, ~NewInkCheckboxID~, 0, checked, ~isEnabled~ );
+	if (
+			SimilarStr(~<isEnabled>~, ~True~) 
+			|| SimilarStr(~<isEnabled>~, ~on~)
+		)
+	{
+		fHtmlView( SetStyle,NewInkID,0,display,inline);
+		fHtmlView( Set,NewInkID,0,value,~<$TR.OrderItem(EnterNewInk)>~);
+		fHtmlView( Set,InkListID,0,disabled,true);	
+	}
+	else
+	{
+		fHtmlView( SetStyle,NewInkID,0,display,none);
+		fHtmlView( Set,InkListID,0,disabled,~~);	
+	}
+}
+
+VOID TemplateDlg::GetCurrentInk(&InkName)
+{
+	fHtmlView( Get, ~NewInkCheckboxID~, 0, checked, ~isEnabled~ );
+	if (
+			SimilarStr(~<isEnabled>~, ~True~) 
+			|| SimilarStr(~<isEnabled>~, ~on~)
+		)
+	{
+		fHtmlView( Get,NewInkID,0,value,InkName);
+	}
+	else
+	{
+		fHtmlView( Get,InkListID,0,value,InkName);
+	}
+
+}
+
+VOID TemplateDlg::OnClickNewInk()
+{
+	fHtmlView( Get,NewInkID,0,value,TheText);
+	if (SimilarStr(~<TheText>~,~<$TR.OrderItem(EnterNewInk)>~))
+	{
+		fHtmlView( Set,NewInkID,0,value,~~);
+	}
+}
+VOID TemplateDlg::UpdateInkList()
+{
+	Query = ~Select Distinct InkName From Inks Order By InkName~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	fHtmlView(Execute,~ResetList(InkListID)~ );
+	
+	i = 0;
+	while ( List( GetNext,Item ) )
+	{
+		if (~<$pcon.Item[InkName]>~ != ~~)
+		{
+			value = ~<$pcon.Item[InkName]>~;
+			++i;
+			fHtmlView( Execute,~AddListOption( InkListID,'<value>','<value>')~);
+			if (<i> == 1)
+			{
+				SelectedInk = ~<value>~;
+			}
+		}
+	}
+
+	if (<i> > 0)
+	{
+		fHtmlView( Execute,~SelectByValue( InkListID,'<SelectedInk>')~);
+
+		if ( !<fNJPenabled> )
+		{	
+			if ( SimilarStr(~<SelectedInk>~,~NexPress DryInk raised clear~) || SimilarStr(~<SelectedInk>~,~NexPress DryInk dimensional clear~) )
+			{ 
+				fHtmlView(SetStyle,DimOverrideDivID,0,display,block);	
+			}
+			else
+			{				
+				fHtmlView(SetStyle,DimOverrideDivID,0,display,none);
+			}
+		}			
+	}
+
+}
+VOID EditTemplateDlg::UpdateInkList()
+{
+	Query = ~Select Distinct InkName From Inks Order By InkName~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	fHtmlView(Execute,~ResetList(InkListID)~ );
+	
+	i = 0;
+	while ( List( GetNext,Item ) )
+	{
+		if (~<$pcon.Item[InkName]>~ != ~~)
+		{
+			value = ~<$pcon.Item[InkName]>~;
+			++i;
+			fHtmlView( Execute,~AddListOption( InkListID,'<value>','<value>')~);
+			if (<i> == 1 )
+			{
+				SelectedInk = ~<value>~;
+			}
+			else if (SimilarStr(fBookProd.GetInkName(), ~<value>~))
+			{
+				SelectedInk = ~<value>~;
+			}
+		}
+	}
+
+	if (<i> > 0)
+	{
+		fHtmlView( Execute,~SelectByValue( InkListID,'<SelectedInk>')~);
+		if ( !<fNJPenabled> )
+		{	
+			if ( SimilarStr(~<SelectedInk>~,~NexPress DryInk raised clear~) || SimilarStr(~<SelectedInk>~,~NexPress DryInk dimensional clear~) )
+			{ 
+				fHtmlView(SetStyle,DimOverrideDivID,0,display,block);	
+			}
+			else
+			{				
+				fHtmlView(SetStyle,DimOverrideDivID,0,display,none);
+			}
+		}
+	}
+
+}
+VOID OnNewCategoryCheckBox()
+{
+	Obj.OnNewCategoryCheckBox();
+}
+VOID TemplateDlg::OnNewCategoryCheckBox()
+{
+	fHtmlView( Get, ~NewCategoryCheckboxID~, 0, checked, ~isEnabled~ );
+	if (
+			SimilarStr(~<isEnabled>~, ~True~) 
+			|| SimilarStr(~<isEnabled>~, ~on~)
+		)
+	{
+		fHtmlView( SetStyle,NewCategoryID,0,display,inline);
+		fHtmlView( Set,NewCategoryID,0,value,~<$TR.NewPackage(EnterNewCategory)>~);
+		fHtmlView( Set,ProductCategoryListID,0,disabled,true);	
+	}
+	else
+	{
+		fHtmlView( SetStyle,NewCategoryID,0,display,none);
+		fHtmlView( Set,ProductCategoryListID,0,disabled,~~);	
+	}
+}
+
+VOID TemplateDlg::OnClickNewCategory()
+{
+	fHtmlView( Get,NewCategoryID,0,value,TheText);
+	if (SimilarStr(~<TheText>~,~<$TR.NewPackage(EnterNewCategory)>~))
+	{
+		fHtmlView( Set,NewCategoryID,0,value,~~);
+	}
+
+}
+
+NUMERIC TemplateDlg::OnSelectProductCategory()
+{
+	return 1;
+}
+VOID TemplateDlg::UpdateTemplatesList(DeviceType,Category)
+{
+	Query = ~Select Sequence,TemplateName From Templates Where DeviceType = '<DeviceType>' And Category = '<Category>' Order By Category,Sequence~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	fHtmlView( SetInnerHtml,TemplateListID,0,~~);
+
+	// faster alternative to Execute,AddListOption
+	fHtmlView( CreateOptionsFromGenConList, ~TemplateListID~, 0, List,TemplateName);
+	fHtmlView(Execute,~SelectByIndex(TemplateListID,0)~);
+}
+
+NUMERIC TemplateDlg::ConfigNexpress()
+{
+	action = STR ( NexPressConfig_1c OpenOnce NexPressConfig_1c );
+	PerformDocActions(action);
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnOKGroup()
+{
+	if ( !( GenCon(View,GETACTIVEVIEW ) && GenCon(Window,GETACTIVEWINDOW) ) )
+		{ return Warning(~No selected products~); }
+
+	if ( !View( GetSelected,SelectedItems ) )		
+		{ return Warning(~No selected products~); }
+
+	fHtmlView( Get,TemplateListID, 0, value, TemplateName);
+	fHtmlView( Get,ProductIDID, 0, value, ProductID);
+	fHtmlView( Get,DeviceTypeListID, 0, value, DeviceType);
+	if (IsNull(~<TemplateName>~) && SimilarStr(~<DeviceType>~,NexPress))
+	{
+		MessageBox( ~Please select a template.~);
+		return FALSE;
+	}
+	fHtmlView( Get,ProductNameID, 0, value, ProductName);
+	fHtmlView( Get, ~NewCategoryCheckboxID~, 0, checked, ~isEnabled~ );
+
+	if (SimilarStr(~<DeviceType>~, ~<$TR.OrderItem(DeviceTypeOther)>~))
+	{
+		DeviceType = ~~;
+	}
+	GetProductCategory(ProductCategory);
+
+	if ( IsNull(~<ProductID>~) || IsNull(~<ProductName>~) || IsNull(~<ProductCategory>~) )
+	{
+		Warning( ~<$TR.OrderItem(NoProductID)>~ );
+		return FALSE; 
+	}
+	if ( SimilarStr( ~<ProductCategory>~,~Proof~ ) )
+	{
+		Warning( ~<$TR.OrderItem(CantProofBook)>~ );
+	}
+
+	Ink = ~~;
+	DontOverrideTemplateBleed = 0;
+	DontRenderBleed = 0;
+	if (SimilarStr(~<DeviceType>~,NexPress))
+	{
+		fHtmlView( Get,BannerTextID, 0, value, Banner);
+		fHtmlView( Get,BleedID, 0, value, Bleed);
+		Bleed = Numeric(~<Bleed>~);
+		isChecked = 0;
+		fHtmlView( Get, ~DontOverrideTemplateBleedID~,0, checked, isChecked );
+		if (SimilarStr(~<isChecked>~,~True~))
+		{
+			DontOverrideTemplateBleed = 1;
+		}
+		isChecked = 0;
+		fHtmlView( Get, ~DontRenderBleedID~,0, checked, isChecked );
+		if (SimilarStr(~<isChecked>~,~True~))
+		{
+			DontRenderBleed = 1;
+		}
+
+		// this updates the database with potentially a new ink
+		GetCurrentInk(Ink);
+		if (SimilarStr(~<$TR.OrderItem(EnterNewInk)>~,~<Ink>~))
+		{
+			Ink = ~~;
+		}
+		
+		fHtmlView( Get, ~DimOvercoatCheckbox~, 0, checked, dimCoat );
+		if (!AuditCoats())
+		{
+			//ForgetGlobal(Obj);
+			return FALSE;
+		}		
+	}
+		
+	AddPackageData(SetValue,TemplateName,~<TemplateName>~);
+	AddPackageData(SetValue,ProductID,~<ProductID>~);
+	AddPackageData(SetValue,Category,~<ProductCategory>~);
+	AddPackageData(SetValue,ProductDescription,~<ProductName>~);
+	AddPackageData(SetValue,DeviceType,~<DeviceType>~);
+	AddPackageData(SetValue,DontRenderBleed,~<DontRenderBleed>~);
+	AddPackageData(SetValue,DontOverrideTemplateBleed,~<DontOverrideTemplateBleed>~);
+	
+	if (SimilarStr(~<DeviceType>~,NexPress))
+	{
+		AddPackageData(SetValue,Inkname,~<Ink>~);
+		AddPackageData(SetValue,Banner,~<Banner>~);
+		AddPackageData(SetValue,Bleed,~<Bleed>~);
+	}
+
+	if (!AddABook(AddPackageData,SelectedItems))
+	{ 
+		ForgetGlobal(Obj);
+		return FALSE; 
+	}
+
+
+
+	// show the new book, allowing the user to edit the book
+	Query = ~Select * From Packages Where PackageID = '<$con.AddPackageData[ProductID]>' Order By Sequence~;
+	action = ACTION DOC ( Packages Open PackagesDoc "Init( ~Book <$con.AddPackageData[ProductID]>~, ~<Query>~ );" );
+	PerformActions( action );
+
+/*
+	removed 3/29/2012 Paul Forleo
+	// open the book product attributes table if there are some to display
+	if (fBookProd.CountTemplateAttributes(~<$con.AddPackageData[ProductID]>~))
+	{
+		Query = ~Select * From BookProductAttributes Where ProductID = '<$con.AddPackageData[ProductID]>' Order By Sequence~;
+		action = ACTION DOC ( EditTemplateAttributes Open EditTemplateAttributes "Init( ~Book Product Attributes for Product <$con.AddPackageData[ProductID]>~, ~<Query>~ );" );
+		PerformActions( action );
+	}
+*/
+
+	fHtmlView( Get,DeviceTypeListID, 0, value, DeviceType);
+	SetUserSettings(BookProducts,DeviceType,~<DeviceType>~,1);
+	ForceClose();
+	OnWindowClose();
+
+	// refresh the products window
+	NotifyAffectedDocuments(ProductLayoutPath );
+
+	ForgetGlobal(Obj);
+	return TRUE;
+
+}
+
+NUMERIC EditTemplateDlg::OnOKGroup()
+{
+	fHtmlView( Get,TemplateListID, 0, value, TemplateName);
+	fHtmlView( Get,ProductIDID, 0, value, NewProductID);
+	fHtmlView( Get,DeviceTypeListID, 0, value, DeviceType);
+	if (IsNull(~<TemplateName>~) && SimilarStr(~<DeviceType>~,NexPress))
+	{
+		MessageBox( ~Please select a template.~);
+		ForgetGlobal(Obj);
+		return FALSE;
+	}
+	fHtmlView( Get,ProductNameID, 0, value, ProductName);
+	//fHtmlView( Get,ProductCategoryListID, 0, value, ProductCategory);
+	fHtmlView( Get, ~NewCategoryCheckboxID~, 0, checked, ~isEnabled~ );
+	fHtmlView( Get,BannerTextID, 0, value, Banner);
+	fHtmlView( Get,BleedID, 0, value, Bleed);
+
+	if (SimilarStr(~<DeviceType>~, ~<$TR.OrderItem(DeviceTypeOther)>~))
+	{
+		DeviceType = ~~;
+	}
+	
+	GetProductCategory(ProductCategory);
+
+	if ( IsNull(~<ProductCategory>~))
+	{
+		Warning( ~<$TR.NewPackage(NoCategory)>~ );
+		ForgetGlobal(Obj);
+		return  FALSE;
+	}
+
+	if ( IsNull(~<NewProductID>~) || IsNull(~<ProductName>~))
+	{
+		Warning( ~<$TR.OrderItem(NoProductID)>~ );
+		ForgetGlobal(Obj);
+		return FALSE;
+	}
+	if ( SimilarStr( ~<ProductCategory>~,~Proof~ ) )
+	{
+		Warning( ~<$TR.OrderItem(CantProofBook)>~ );
+	}
+	dimCoat = ~~;
+	DontOverrideTemplateBleed = 0;
+	DontRenderBleed = 0;
+	if (SimilarStr(~<DeviceType>~,NexPress))
+	{
+
+		isChecked = 0;
+		fHtmlView( Get, ~DontOverrideTemplateBleedID~,0, checked, isChecked );
+		if (SimilarStr(~<isChecked>~,~True~))
+		{
+			DontOverrideTemplateBleed = 1;
+		}
+		isChecked = 0;
+		fHtmlView( Get, ~DontRenderBleedID~,0, checked, isChecked );
+		if (SimilarStr(~<isChecked>~,~True~))
+		{
+			DontRenderBleed = 1;
+		}
+		// this updates the database with potentially a new ink
+		GetCurrentInk(Ink);
+		if (SimilarStr(~<$TR.OrderItem(EnterNewInk)>~,~<Ink>~))
+		{
+			Ink = ~~;
+		}
+
+		fHtmlView( Get, ~DimOvercoatCheckbox~, 0, checked, dimCoat );
+		if (!AuditCoats())
+		{ 
+			return FALSE; 	
+		}	
+	}
+	
+	fBookProd.SetLayoutName(~<ProductName>~);
+	fBookProd.SetProductCategory(~<ProductCategory>~);
+	fBookProd.SetDeviceType(~<DeviceType>~);
+	
+	GenCon(Container,New,DDUpdateBookProductsFor);
+	Container(SetValue,ProductID,~<NewProductID>~);
+	Container(SetValue,TemplateName,~<TemplateName>~);
+	Container(SetValue,InkName,~<Ink>~);
+	Container(SetValue,Bleed,~<Bleed>~);
+	Container(SetValue,Banner,~<Banner>~);
+	Container(SetValue,DontOverrideTemplateBleed,~<DontOverrideTemplateBleed>~);
+	Container(SetValue,DontRenderBleed,~<DontRenderBleed>~);
+		
+	if (SimilarStr(~<DeviceType>~,Animoto))
+	{
+		GetUsersAnimotoValues();// save into AnimotoBookRec
+		UpdateAnimotoAttributes();// Converts the Animoto overrides to Attributes inside of fBookProd, but does not update the database
+	}
+	else
+	{
+		AddAttributes(~<dimCoat>~);	
+	}
+	if (!fBookProd.UpdateBookProd(~<NewProductID>~,Container))
+	{
+		WaitCursor( End );
+		Warning( fBookProd.GetError() );
+		return FALSE;
+	}
+	
+	// show the new book, allowing the user to edit the book
+	Query = ~Select * From Packages Where PackageID = '<NewProductID>' Order By Sequence~;
+	action = ACTION DOC ( Packages Open PackagesDoc "Init( ~Book <NewProductID>~, ~<Query>~ );" );
+	PerformActions( action );
+
+	//UpdateInksTable(~<Ink>~);
+	fHtmlView( Get,DeviceTypeListID, 0, value, DeviceType);
+	SetUserSettings(BookProducts,DeviceType,~<DeviceType>~,1);
+	ForceClose();
+	OnWindowClose();
+
+	// refresh the products window
+	NotifyAffectedDocuments(ProductLayoutPath );
+	ForgetGlobal(Obj);
+	return TRUE;
+
+}
+
+
+
+NUMERIC TemplateDlg::AddAttributes( dimCoat )
+{
+	Sequence = -1;
+	ProductID = fBookProd.GetProductID();
+	if (<fNumOverrides> > 0)
+	{
+		c = 0;
+		fBookProd.ForgetMaster();
+		// Update the books attributes table
+		while (<c> < <fNumOverrides>)
+		{
+			// fAttribute<c> is the attribute
+			Attribute = ~<fAttribute<c>>~;
+			if (!MemberDefined(fAttribute<c>))
+			{
+				break;
+			}
+			++c;
+			fHtmlView( Get,AttrInput<c>,0,value,val);
+			fHtmlView( Get,OverrideCheckBox<c>,0,checked,isChecked);
+			if (SimilarStr(~<isChecked>~,~True~))
+			{
+				fBookProd.AddAttribute(~<Attribute>~,~<val>~);
+			}
+		}
+
+		//always add hotoffset if ink is dimensional
+		fHtmlView( Get,InkListID,0,value,InkName);
+		if ( SimilarStr(~<InkName>~,~NexPress DryInk raised clear~) || SimilarStr(~<InkName>~,~NexPress DryInk dimensional clear~) )
+		{			
+			fHtmlView( Get,~hotOffsetListID~,0,value,hotOffset);  
+			fBookProd.AddAttribute(~NXP:HotOffsetCompensation~,~<hotOffset>~);
+		}
+						
+		if ( SimilarStr(~<dimCoat>~,~True~) )
+		{
+			fBookProd.AddAttribute(~DimOvercoatCheckbox~,~True~);
+
+			fHtmlView( Get,~ApplyCoatListID~,0, value, applyCoat);
+			fBookProd.AddAttribute(~NXP:DMCLThresholdApplication~,~<applyCoat>~);
+
+			fHtmlView( Get,~CoatDensityListID~,0, value, coatDensity);
+			coatDensity = Numeric(~<coatDensity>~);	
+			fBookProd.AddAttribute(~NXP:DMCLProcessColorantThreshold~,~<coatDensity>~);	
+		}
+		
+	}
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::GetProductCategory(&Category)
+{
+	fHtmlView( Get, ~NewCategoryCheckboxID~, 0, checked, ~isEnabled~ );
+	if (
+			SimilarStr(~<isEnabled>~, ~True~) 
+			|| SimilarStr(~<isEnabled>~, ~on~)
+		)
+	{
+		fHtmlView( Get,NewCategoryID, 0, value, Category);
+		if (SimilarStr(~<$TR.NewPackage(EnterNewCategory)>~,~<Category>~))
+		{
+			Category = ~~;
+		}
+		else
+		{
+			fHtmlView( Get,NewCategoryID, 0, value, Category);
+		}
+	}
+	else
+	{
+		fHtmlView(Get ,ProductCategoryListID,0,Value,Category);
+	}
+	return TRUE;
+}
+
+
+// Update the Attributes inside of fBookProd, but does not update the database
+NUMERIC TemplateDlg::UpdateAttributes()
+{
+	Sequence = -1;
+	isChecked = 0;
+	if (<fNumOverrides> > 0)
+	{
+		fHtmlView( Get,AdvancedCheckBox,0,checked,isChecked);
+		if (SimilarStr(~<isChecked>~,~True~))
+		{
+			c = 0;
+			// Update the books attributes table
+			while (<c> < <fNumOverrides>)
+			{
+				if (!MemberDefined(fAttribute<c>))
+				{
+				break;
+				}
+				// fAttribute<c> is the attribute
+				Attribute = ~<fAttribute<c>>~;
+				++c;
+				fHtmlView( Get,AttrInput<c>,0,value,val);
+				fHtmlView( Get,OverrideCheckBox<c>,0,checked,isChecked);
+				if (SimilarStr(~<isChecked>~,~True~))
+				{
+					if (!fBookProd.AddAttribute(~<Attribute>~,~<val>~))
+					{
+						return Warning(fBookProd.GetError());
+					}
+				}
+			}
+		}
+		
+		fHtmlView( Get, ~DimOvercoatCheckbox~, 0, checked, dimCoat );	
+		if ( SimilarStr(~<dimCoat>~,~True~) )
+		{
+			fBookProd.AddAttribute(~DimOvercoatCheckbox~,~True~);
+
+			fHtmlView( Get,~hotOffsetListID~,0, value, hotOffset);
+			fBookProd.AddAttribute(~NXP:HotOffsetCompensation~,~<hotOffset>~);
+
+			fHtmlView( Get,~ApplyCoatListID~,0, value, applyCoat);
+			fBookProd.AddAttribute(~NXP:DMCLThresholdApplication~,~<applyCoat>~);
+
+			fHtmlView( Get,~CoatDensityListID~,0, value, coatDensity);
+			coatDensity = Numeric(~<coatDensity>~);	
+			fBookProd.AddAttribute(~NXP:DMCLProcessColorantThreshold~,~<coatDensity>~);	
+		}
+	}
+	return TRUE;
+}
+
+
+VOID TemplateDlg::OnCancelOBS()
+{
+	if ( OkayToCancel() )
+	{
+		ForceClose();
+		OnWindowClose();
+	}
+	ForgetGlobal(Obj);
+}
+
+VOID TemplateDlg::CheckAdvancedBox(&List)
+{	
+	if (List(GetFirst,Item))
+	{	
+		// set the advanced check box
+		fHtmlView( Set, ~AdvancedCheckBox~,0, checked, 1 );	
+	}
+	else
+	{
+		fHtmlView( Set, ~AdvancedCheckBox~,0, checked, ~~ );
+	}
+
+}
+
+NUMERIC TemplateDlg::SetBookData()
+{
+	// display book information
+	fHtmlView( Set,BannerTextID, 0, value, fBookProd.GetBanner());
+	fHtmlView( Set,NewInkID, 0, value, fBookProd.GetInkName());
+	fHtmlView( Set,BleedId, 0, value, fBookProd.GetBleed());
+	fHtmlView( Set,DontOverrideTemplateBleedID, 0, checked, fBookProd.GetDontORTemplatBleed() ? ~1~ : ~~);
+	fHtmlView( Set,DontRenderBleedID, 0, checked, fBookProd.GetDontRenderBleed() ? ~1~ : ~~);
+
+	return 1;
+}
+
+NUMERIC TemplateDlg::GetNumberOfPrintingTemplates()
+{
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~TemplateDlg::GetNumberOfPrintingTemplates Database Connection Failed. <theErr>~) );
+	}
+	Cmd = ~Select Count(*) From Templates Where Category IS NOT NULL And Category <> ''~;
+	numRecs = dBase( RecordCountFor,~<Cmd>~ );
+	return <numRecs>;
+
+}
+
+VOID TemplateDlg::UpdateCategoryList(DeviceType)
+{
+	Query = ~Select Distinct Category From Templates Where DeviceType = '<DeviceType>' Order By Category~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	//faster alternative to fHtmlView(Execute,~ResetList(CategoryListID)~ );
+	fHtmlView(SetSelectOptionsLength,CategoryListID,0,0);
+
+	fHtmlView( CreateOptionsFromGenConList, ~CategoryListID~, 0, List,Category);
+	i = List(NumEntries);
+
+	fHtmlView( SetStyle,~TemplateBlockID~,0,~display~, <i> ? ~block~ :~none~);
+	fHtmlView( SetStyle,~MessageID~,0,~display~, <i> ? ~block~ :~none~);
+	
+}
+
+VOID TemplateDlg::UpdateProductCategoryList()
+{
+	Query = ~Select Distinct Category From Products Order By Category~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	fHtmlView(Execute,~ResetList(ProductCategoryListID)~ );
+	
+	i = 0;
+	while ( List( GetNext,Item ) )
+	{
+		if (~<$pcon.Item[Category]>~ != ~~)
+		{
+			value = ~<$pcon.Item[Category]>~;
+			++i;
+			fHtmlView( Execute,~AddListOption( ProductCategoryListID,'<value>','<value>')~);
+		}
+	}
+
+	fHtmlView( Execute,~SelectByValue( ProductCategoryListID,'<fInitialProductCategory>')~);
+
+}
+
+VOID Init()
+{
+	GenCon( AddPackageData,New,DDAddBookDialog);
+	Global(AddPackageData);
+	DefineDialog();
+}
+
+VOID EditProduct(PackageID)
+{
+	DefineEditDialog();
+}
+
+NUMERIC TemplateDlg::AddOverrides()
+{
+	// get the number of overrides from the database
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~TemplateDlg::AddOverrides Database Connection Failed. <theErr>~) );
+	}
+
+	Cmd = ~Select Count(*) From TemplateOverrides Where PrinterType = 'NexPress'~;
+	fNumOverrides = dBase( RecordCountFor,~<Cmd>~ );
+
+	Cmd = ~Select * From TemplateOverrides Where PrinterType = 'NexPress' Order by Sequence~;
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Cmd>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Log(Session, ~Unable to query database. Query: <Cmd>; <theErr>~ );
+		return FALSE;
+	}
+
+	c = 1;
+	while ( List( GetNext, Override ) )
+	{
+		Override(GetValue,OverrideType,Substrate);
+		Override(GetValue,DisplayName,DisplayName);
+		
+		if ( ((<fNJPenabled> == 0) && (SimilarStr(~<Substrate>~,schedule_mode) || SimilarStr(~<Substrate>~,target_device))) ||
+		     ((<fNJPenabled> == 1) && (SimilarStr(~<Substrate>~,body_gloss_back) || SimilarStr(~<Substrate>~,body_gloss_front))) )
+		{ //don't show these cases
+		}
+		else
+		{
+			if (IsNull(~<DisplayName>~))
+			{
+				DisplayName = ~<Substrate>~;
+			}
+			i = <c> - 1;
+			fAttribute<i> = ~<Substrate>~;
+			Private(fAttribute<i>);
+			if (<c> == 1)
+			{
+				where = afterBegin;
+			}
+			else
+			{
+				where = beforeEnd;
+			}
+			fHtmlView( InsertHTML, AttributeBlockID, 0, ~<where>~,~
+				<input type=checkbox id="OverrideCheckBox<c>" style="vertical-align:top;height:22px" onclick="KPL( 'Obj.OnOverrideCheckBox(<c>)')"> </input>  	
+				<label style= "font:  10pt" for="AttrInput<c>"> <DisplayName></label>
+				<br />
+				~ );
+			Query =  ~Select * From TemplateOverridesSetup Where OverrideType = '<Substrate>' Order By Sequence~;
+			if ( !PGenConList( SubstratesList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+			{ 
+				SubstratesList( GetErrorDescription,0,theErr );
+				Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+				return TRUE;
+			}
+			SelectString = ~~;
+			fHtmlView( InsertHTML, AttributeBlockID2, 0, ~<where>~,~
+				<select id="AttrInput<c>" style="visibility:hidden;width:272">
+				</select>  <br>
+				~ ); 
+			while ( SubstratesList( GetNext, Subs ) )
+			{
+				Subs(GetValue,OverrideName,SubstrName1);
+				Subs(GetValue,OverrideType,SubstrType1);
+				Subs(GetValue,Enabled,Enabl);
+				Subs(GetValue,Sequence,Seqq1);
+
+				if (Numeric(~<Enabl>~))
+				{
+					SelectString = ~<option value="<SubstrName1>"><SubstrName1></option>~;
+				}
+			
+				fHtmlView( Execute,~AddListOption( AttrInput<c>,'<SubstrName1>','<SubstrName1>')~);
+			}
+			if ( SimilarStr(~<Substrate>~,body_gloss_back) || SimilarStr(~<Substrate>~,body_gloss_front) )
+			{
+				Query =  ~Select * From Textures Order By Sequence~;
+				if ( !PGenConList( TexturesList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+				{ 
+					TexturesList( GetErrorDescription,0,theErr );
+					Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+					return TRUE;
+				}
+
+				while ( TexturesList( GetNext, Textures ) )
+				{
+					Textures(GetValue,TextureName,SubstrName1);
+					Textures(GetValue,Enabled,Enabl);
+					if ( !SimilarStr(~<SubstrName1>~,~No Texture~))
+					{
+						if (Numeric(~<Enabl>~))
+						{
+							SelectString = ~<option value="<SubstrName1>"><SubstrName1></option>~;
+						}
+					
+						fHtmlView( Execute,~AddListOption( AttrInput<c>,'<SubstrName1>','<SubstrName1>')~);
+					}
+				}
+			}
+			++c;
+		}
+	}
+	return TRUE;
+}
+
+
+
+
+VOID TemplateDlg::SetTitle1()
+{
+	fHtmlView(SetInnerHtml,compTitle,0,~<$TR.NewPackage(CreateBook1)>~);
+}
+VOID EditTemplateDlg::SetTitle1()
+{
+	fHtmlView(SetInnerHtml,compTitle,0,~<$TR.NewPackage(EditBook1)>~);
+}
+
+
+VOID TemplateDlg::SelectSubstr(&List)
+{
+	count = 0;
+	result = List(GetFirst,Item);
+	while (<result>)
+	{
+		Attr = ~<$pcon.Item[Attribute]>~;
+		Value = ~<$pcon.Item[Value]>~;
+		i = 0;
+		while (<i> < <fNumOverrides>)
+		{
+			c = <i> + 1;
+			if (SimilarStr(~<fAttribute<i>>~,~<Attr>~))
+			{
+				fHtmlView( Set,~AttrInput<c>~,0,~value~,~<Value>~);  // makes visible the select list
+				break;
+			}
+			++i;
+		}
+		result = List(GetNext,Item);
+	}
+}
+
+VOID TemplateDlg::CheckOverrideBox(&List)
+{
+	count = 0;
+	result = List(GetFirst,Item);
+	while (<result>)
+	{
+		Attr = ~<$pcon.Item[Attribute]>~;
+		Value = ~<$pcon.Item[Value]>~;
+
+		i = 0;
+		while (<i> < <fNumOverrides>)
+		{
+			c = <i> + 1;
+			if (SimilarStr(~<fAttribute<i>>~,~<Attr>~))
+			{
+				fHtmlView( Set, OverrideCheckBox<c>, 0, checked, 1 );
+				display = visible;
+				fHtmlView( SetStyle,~AttrInput<c>~,0,~visibility~,~<display>~);  // makes visible the select list
+			}
+			++i;
+		}
+		result = List(GetNext,Item);
+	}
+}
+VOID TemplateDlg::OnAdvancedCheckBox()
+{
+	isChecked = 0;
+	fHtmlView( Get, ~AdvancedCheckBox~,0, checked, isChecked );
+	fHtmlView( Get, ~DeviceTypeListID~,0, value, DeviceType );
+	if (SimilarStr(~<isChecked>~,~True~))
+	{
+		if (SimilarStr(~<DeviceType>~,~NexPress~))
+		{
+			fHtmlView( SetStyle,~SubstratesDivID~,0,~display~,~block~);
+			fHtmlView( SetStyle,~OverridesID~,0,~display~,~block~);
+			display = visible;
+			OnSelectInk();
+		}
+		else if (SimilarStr(~<DeviceType>~,~C8000/Creo~))
+		{
+			fHtmlView( SetStyle,~SubstratesDivID~,0,~display~,~none~);
+			fHtmlView( SetStyle,~OverridesID~,0,~display~,~none~);
+			display = visible;
+			fHtmlView( SetStyle,~DimOvercoatID~,0,~display~,~none~);
+		}
+		else if (SimilarStr(~<DeviceType>~,~Animoto~))
+		{
+			fHtmlView( SetStyle,~SubstratesDivID~,0,~display~,~none~);
+			fHtmlView( SetStyle,~OverridesID~,0,~display~,~none~);
+			display = hidden;
+			fHtmlView( SetStyle,~DimOvercoatID~,0,~display~,~none~);
+		}
+		else
+		{
+			fHtmlView( SetStyle,~SubstratesDivID~,0,~display~,~none~);
+			fHtmlView( SetStyle,~OverridesID~,0,~display~,~none~);
+			display = hidden;
+			fHtmlView( SetStyle,~DimOvercoatID~,0,~display~,~none~);
+		}
+	}
+	else
+	{
+		if (SimilarStr(~<DeviceType>~,~NexPress~))
+		{
+			fHtmlView( SetStyle,~SubstratesDivID~,0,~display~,~block~);
+			fHtmlView( SetStyle,~OverridesID~,0,~display~,~block~);
+			display = hidden;
+			OnSelectInk();
+		}
+		else if (SimilarStr(~<DeviceType>~,~C8000/Creo~))
+		{
+			fHtmlView( SetStyle,~SubstratesDivID~,0,~display~,~none~);
+			fHtmlView( SetStyle,~OverridesID~,0,~display~,~none~);
+			display = hidden;
+			fHtmlView( SetStyle,~DimOvercoatID~,0,~display~,~none~);
+		}
+		else if (SimilarStr(~<DeviceType>~,~Animoto~))
+		{
+			fHtmlView( SetStyle,~SubstratesDivID~,0,~display~,~none~);
+			fHtmlView( SetStyle,~OverridesID~,0,~display~,~none~);
+			display = hidden;
+			fHtmlView( SetStyle,~DimOvercoatID~,0,~display~,~none~);
+		}
+		else
+		{
+			fHtmlView( SetStyle,~SubstratesDivID~,0,~display~,~none~);
+			fHtmlView( SetStyle,~OverridesID~,0,~display~,~none~);
+			display = hidden;
+			fHtmlView( SetStyle,~DimOvercoatID~,0,~display~,~none~);
+		}
+	}
+	fHtmlView( SetStyle,~AttributeBlockID~,0,~visibility~,~<display>~);
+	fHtmlView( SetStyle,~AttributeBlockID2~,0,~visibility~,~<display>~);
+	ShowSubstrates();
+}
+
+VOID TemplateDlg::OnDimOvercoatCheckBox()
+{
+	GetCurrentInk(Ink);
+	isChecked = 0;
+	fHtmlView( Get, ~DimOvercoatCheckbox~,0, checked, isChecked );
+	fHtmlView( Get, ~DeviceTypeListID~,0, value, DeviceType );
+	if (SimilarStr(~<isChecked>~,~True~))
+	{
+		if (SimilarStr(~<DeviceType>~,~NexPress~) &&  ( SimilarStr(~<Ink>~,~NexPress DryInk raised clear~) || SimilarStr(~<Ink>~,~NexPress DryInk dimensional clear~) ))
+		{
+			fHtmlView( SetStyle,~ApplyCoatDivID~,0,~display~,~block~);
+			fHtmlView( SetStyle,~CoatDensityDivID~,0,~display~,~block~);
+		}
+		else
+		{
+			fHtmlView( SetStyle,~ApplyCoatDivID~,0,~display~,~none~);
+			fHtmlView( SetStyle,~CoatDensityDivID~,0,~display~,~none~);
+		}
+	}
+	else
+	{
+		if (SimilarStr(~<DeviceType>~,~NexPress~))
+		{
+			fHtmlView( SetStyle,~ApplyCoatDivID~,0,~display~,~none~);
+			fHtmlView( SetStyle,~CoatDensityDivID~,0,~display~,~none~);
+		}
+		else
+		{
+			fHtmlView( SetStyle,~ApplyCoatDivID~,0,~display~,~none~);
+			fHtmlView( SetStyle,~CoatDensityDivID~,0,~display~,~none~);
+		}
+	}
+}
+
+VOID TemplateDlg::UpdateDimCoat(&List)
+{
+	i=0;
+	while ( <i> < 256 )
+	{
+		value = ~<i>~;
+		++i;
+		fHtmlView( Execute,~AddListOption( CoatDensityListID,'<value>','<value>')~);
+	}			
+	fHtmlView( Execute,~SelectByValue( CoatDensityListID,'125')~);
+	
+	fHtmlView( Execute,~AddListOption( ApplyCoatListID,'greater than','greater than')~);
+	fHtmlView( Execute,~AddListOption( ApplyCoatListID,'less than','less than')~);
+	fHtmlView( Execute,~SelectByValue( ApplyCoatListID,'0')~);
+	
+	fHtmlView( Execute,~AddListOption( hotOffsetListID,'none','none')~);			
+	fHtmlView( Execute,~AddListOption( hotOffsetListID,'low','low')~);			
+	fHtmlView( Execute,~AddListOption( hotOffsetListID,'medium','medium')~);			
+	fHtmlView( Execute,~AddListOption( hotOffsetListID,'high','high')~);			
+	fHtmlView( Execute,~SelectByValue( hotOffsetListID,'0')~);
+
+	fHtmlView( Get,InkListID, 0, value, Ink);
+	if ( SimilarStr(~<Ink>~,~NexPress DryInk raised clear~) || SimilarStr(~<Ink>~,~NexPress DryInk dimensional clear~) )
+	{ 
+		fHtmlView( SetStyle,~HotOffsetDivID~,0,~display~,~block~);
+	}
+
+	//now set values if in book attributes
+	fHtmlView( Set,~DimOvercoatCheckbox~,0,~checked~,~~);  //set unchecked unless in book attributes table			
+	result = List(GetFirst,Item);
+	while (<result>)
+	{
+		Attr = ~<$pcon.Item[Attribute]>~;
+		Value = ~<$pcon.Item[Value]>~;
+		if (SimilarStr(~DimOvercoatCheckbox~,~<Attr>~))
+		{
+			if ( SimilarStr(~<Value>~,~True~) )
+			{
+				fHtmlView( Set,~DimOvercoatCheckbox~,0,~checked~,1);  
+			}
+			else
+			{
+					fHtmlView( Set,~DimOvercoatCheckbox~,0,~checked~,~~);  		
+			}					
+			fHtmlView(SetStyle,DimOverrideDivID,0,display,block);	
+			fHtmlView( SetStyle,~HotOffsetDivID~,0,~display~,~block~);
+			fHtmlView( SetStyle,~ApplyCoatDivID~,0,~display~,~block~);
+			fHtmlView( SetStyle,~CoatDensityDivID~,0,~display~,~block~);
+			break;
+		}
+		result = List(GetNext,Item);
+	}
+
+	result = List(GetFirst,Item);
+	while (<result>)
+	{
+		Attr = ~<$pcon.Item[Attribute]>~;
+		Value = ~<$pcon.Item[Value]>~;
+		if (SimilarStr(~NXP:HotOffsetCompensation~,~<Attr>~))
+		{
+			fHtmlView( Set,~hotOffsetListID~,0,~value~,~<Value>~);  // makes visible the select list
+		}
+		else if (SimilarStr(~NXP:DMCLThresholdApplication~,~<Attr>~))
+		{
+			fHtmlView( Set,~ApplyCoatListID~,0,~value~,~<Value>~);  // makes visible the select list
+		}
+		else if (SimilarStr(~NXP:DMCLProcessColorantThreshold~,~<Attr>~))
+		{
+			fHtmlView( Set,~CoatDensityListID~,0,~value~,~<Value>~);  // makes visible the select list
+		}		
+		result = List(GetNext,Item);
+	}
+}
+	
+
+VOID TemplateDlg::OnOverrideCheckBox(whichBox)
+{
+	isChecked = 0;
+	fHtmlView( Get, ~OverrideCheckBox<whichBox>~,0, checked, isChecked );
+	if (SimilarStr(~<isChecked>~,~True~))
+	{
+		display = visible;
+	}
+	else
+	{
+		display = hidden;
+	}
+	fHtmlView( SetStyle,~AttrInput<whichBox>~,0,~visibility~,~<display>~);
+	ShowSubstrates();
+
+}
+
+NUMERIC TemplateDlg::UpdateInksTable(Ink)
+{
+	if (IsNull(~<Ink>~))
+	{
+		return TRUE;
+	}
+	Fields = STR ( Inkname,DeviceType,Enabled );
+	Values = STR ( '<Ink>','NexPress',1 );
+
+	Cmd = STR ( Insert Into Inks(<Fields>) Values(<Values>) );
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~TemplateDlg::UpdateInksTable Database Connection Failed. <theErr>~) );
+	}
+	Query = ~Select Count(*) From Inks Where Inkname = '<Ink>' AND DeviceType = 'NexPress'~;
+	numRecs = dBase( RecordCountFor,~<Query>~ );
+	if (<numRecs> > 0)
+	{
+		return TRUE;
+	}
+
+	if ( !dbase( CMD,~<Cmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		WaitCursor( End );
+		return Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+	}
+	return TRUE;
+}
+
+// shows or hides the substrate pop up box.  This was necessary because the
+// visibility style cannot be nested - form items such as select items
+// are unaffected by setting the style visibility of the parent div
+VOID TemplateDlg::ShowSubstrates()
+{
+	whichBox = 1;
+	visibleState = ~~;
+
+	fHtmlView(GetStyle,AttributeBlockID,0,visibility,0,blockVisibleState);
+	while ( <whichBox> <= <fNumOverrides>)
+	{
+		fHtmlView( Get, OverrideCheckBox<whichBox>, 0, checked, isChecked );
+		if (SimilarStr(~<isChecked>~,~True~) && SimilarStr(~<blockVisibleState>~,visible )  )
+		{
+			visibility = visible;
+		}
+		else
+		{
+			visibility = hidden;
+		}
+
+		fHtmlView( SetStyle,~AttrInput<whichBox>~,0,~visibility~,~<visibility>~);
+		++whichBox;
+
+	}
+}
+
+// Update the Attributes inside of fBookProd, but does not update the database
+NUMERIC TemplateDlg::UpdateAnimotoAttributes()
+{
+	index = 0;
+	while (AnimotoBookRec(Attribute,<index>,AttrName))
+	{
+		AnimotoBookRec(GetValue,~<AttrName>~,AttrValue);
+		if (!IsNull(~<AttrValue>~) && !SimilarStr(~<AttrName>~,PublishToWeb) && !SimilarStr(~<AttrName>~,SongGenre))
+		{
+			if (!fBookProd.AddAttribute(~<AttrName>~,~<AttrValue>~))
+			{
+				return Warning(fBookProd.GetError());
+			}
+		}
+		++index;
+	}
+	return TRUE;
+}
+
+

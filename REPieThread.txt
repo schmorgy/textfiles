@@ -1,0 +1,529 @@
+//	REPieThread.txt
+
+ExecC() ;
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+
+
+// GLOBALS
+UGenCon	*gPage ;	//	THE PAGE TO RENDER
+
+int		 gDebug = FALSE ;
+
+UGenCon	*gRELookAhead	= NULL ;
+long	 gLogAmount		= 0L ;
+
+main()
+{
+	gRELookAhead = GetTreeObject(_T("RELookAhead"),_T("[GenCons]")) ;
+	gLogAmount	= gRELookAhead->GetLongValue(_T("RELogLevel")) ;
+
+//	UCInterpreter	*thisCI = THIS() ;
+//	thisCI->SetProfiling( TRUE ) ;
+
+	return( TRUE ) ;
+}
+
+
+int Advertize()
+{
+	SessionLogDirect( _T("REPieThread.Advertize: (V1.00)")) ;
+	return( TRUE ) ;
+}
+
+//	THREADING CODE
+
+
+CIThread	*gThisThread ;
+int			WM_QUIT  = 0x0012 ;
+int			WM_TIMER = 0x0113 ;
+
+//	9000 SERIES FOR THE RENDER ENGINE DIALOG THREAD
+//	9100 SERIES FOR THE RENDER ENGINE MAIN THREAD
+//	9200 SERIES FOR THE RENDER ENGINE BATCH THREAD
+//	9300 SERIES FOR THE RENDER ENGINE RENDERING THREAD
+//	9400 SERIES FOR THE RENDER ENGINE RESPONSE THREAD
+//	9500 SERIES FOR THE RENDER ENGINE SCRIPT THREAD ?
+
+//	UNITS SERIES FOR SENDING DATA
+//	TENS SERIES FOR STARTUP AND SHUTDOWN
+//	TWENTY SERIES FOR SUSPEND AND RESUME
+//	THIRTY TO SIXTY SERIES FOR WORK COMMANDS
+//	SEVENTY SERIES FOR COMPLETE MESSAGES
+//	EIGHTY SERIES FOR CANCEL MESSAGES
+//	NINETY SERIES FOR ERROR MESSAGES
+
+//	THE RENDER ENGINE DIALOG THREAD
+int			 REM_DIALOG					= 0x9000 ;
+int			 REM_DATAGC					= 0x9001 ;
+int			 REM_RE_START				= 0x9010 ;
+int			 REM_RE_SHUTDOWN			= 0x9011 ;
+int			 REM_RE_HAS_SHUTDOWN		= 0x9012 ;
+int			 REM_RE_SUSPEND				= 0x9020 ;
+int			 REM_RE_RESUME				= 0x9021 ;
+
+//	THE RENDER ENGINE MAIN THREAD
+int			 REM_PRINTERSETUP			= 0x9102 ;
+int			 REM_STATUS_GC				= 0x9103 ;
+int			 REM_SHUTDOWN				= 0x9111 ;
+int			 REM_SUSPEND				= 0x9120 ;
+int			 REM_RESUME					= 0x9121 ;
+int			 REM_STATUS_REQUEST			= 0x9130 ;
+int			 REM_RESERVE_NEXT_BATCH		= 0x9131 ;
+int			 REM_GET_PAGE_LIST			= 0x9132 ;
+int			 REM_START_BATCH			= 0x9133 ;
+int			 REM_RESPONSESCRIPT			= 0x9134 ;
+int			 REM_DB_SQL					= 0x9135 ;
+int			 REM_ORDER_COMPLETE			= 0x9170 ;
+int			 REM_BATCH_COMPLETE			= 0x9171 ;
+int			 REM_CANCEL_BATCH			= 0x9180 ;
+
+
+//	THE RENDER ENGINE BATCH THREAD
+int			 REM_BATCH_PRINTERSETUP		= 0x9202 ;
+int			 REM_BATCH_STATUS_GC		= 0x9203 ;
+int			 REM_BATCH_BATCH_GC			= 0x9204 ;
+int			 REM_BATCH_START_RENDER		= 0x9205 ;
+int			 REM_BATCH_SHUTDOWN			= 0x9211 ;
+int			 REM_BATCH_SUSPEND			= 0x9220 ;
+int			 REM_BATCH_RESUME			= 0x9221 ;
+
+int			 REM_BATCH_STATUS_REQ		= 0x9230 ;
+int			 REM_BATCH_PARSE_JOB		= 0x9234 ;
+int			 REM_BATCH_PRGRM_JOB		= 0x9235 ;
+int			 REM_BATCH_RENDER_JOB		= 0x9236 ;
+
+int			 REM_BATCH_ORDERCOMP		= 0x9250 ;
+int			 REM_BATCH_BATCHCOMP		= 0x9251 ;
+int			 REM_SCRIPT_COMPLETE		= 0x9252 ;
+
+int			 REM_BATCH_CANCEL_BATCH		= 0x9260 ;
+int			 REM_BATCH_CANCEL_ORDER		= 0x9261 ;
+int			 REM_BATCH_CANCEL_PAGE		= 0x9262 ;
+
+int			 REM_BATCH_RNDR_SUCCESS		= 0x9270 ;
+int			 REM_BATCH_RNDR_ERROR		= 0x9271 ;
+int			 REM_BATCH_RNDR_CANCEL		= 0x9272 ;
+
+int			 REM_BATCH_PRINT_SUCCESS	= 0x9280 ;
+int			 REM_BATCH_PRINT_ERROR		= 0x9281 ;
+int			 REM_BATCH_PRINT_CANCEL		= 0x9282 ;
+
+//	THE RENDER ENGINE PIE THREAD
+int			 REM_PIE_SET_PAGE			= 0x9300 ;
+int			 REM_PIE_START_RENDER		= 0x9301 ;
+int			 REM_PIE_ADVERTIZE			= 0x9302 ;
+int			 REM_PIE_STATUS				= 0x9330 ;
+
+//	THE RENDER ENGINE RESPONSE THREAD
+
+//	THE RENDER ENGINE SCRIPT THREAD
+
+
+
+
+int InitInstance(CIThread *ThisThread)
+{
+	//	START THE THREAD HERE !
+//	SessionLogDirect( _T("******\tREPieThread.InitInstance: ThisThread: %08lX"), ThisThread ) ;
+	gThisThread = ThisThread ;
+
+	return( TRUE ) ;
+}
+
+int OnIdle( long Count )
+{
+	return( Count ) ;
+}
+
+long	gResendMsg ;
+
+int ExitInstance()
+{
+	//	TBD
+//	SessionLogDirect( _T("******\tREPieThread.ExitInstance: ThisThread: %08lX"), gThisThread ) ;
+//	PostAThreadMessage( gREBatchThread, gResendMsg, 0L, gPage ) ;
+//	gPage->SetLongValue( _T("RERenderCompleteTime"), Clock()) ;
+}
+
+
+//	TBD:	DESIGN DECISION
+//
+//	SHOULD THIS THREAD STAY AROUND AND WE JUST PASS IN
+//	NEW PAGES TO RENDER, OR SHOULD IT COME AND GO ????
+//
+//
+int PreTranslateMessage( UGenCon *pMsg)
+{
+	long		MessageHandled = FALSE ;
+	long		Value ;
+
+	long		Message = pMsg->GetLongValue(_T("Message")) ;
+	long		wParam  = pMsg->GetLongValue(_T("wParam"))  ;
+	long		lParam  = pMsg->GetLongValue(_T("lParam"))  ;
+
+//	SessionLogDirect( _T("******\tREPieThread.PreTranslateMessage: Msg: 0x%08lX, wParam: 0x%08lX, lParam: 0x%08lX"),
+//								Message, wParam, lParam ) ;
+	switch( Message )
+	{
+		case		WM_TIMER			:	//	HANDLE TIMER CODE
+			break ;
+
+		case		REM_PIE_SET_PAGE	:	//	SET PAGE TO RENDER
+			gPage = lParam ;
+			MessageHandled = TRUE ;
+			break ;
+
+		case		REM_PIE_ADVERTIZE	:	//	ADVERTIZE THIS SCRIPT
+			Advertize() ;
+			MessageHandled = TRUE ;
+			break ;
+
+		case		REM_PIE_START_RENDER :	//	RENDER THE PAGE
+			RenderPage() ;
+			PostAThreadMessage( gThisThread, WM_QUIT, 0L, 0L ) ;
+			MessageHandled = TRUE ;
+			break ;
+
+		case		REM_PIE_STATUS	:		//	GET THE CURRENT STATUS
+	//		GetRenderStatus( lParam ) ;		//	lParam = the Status GC
+			MessageHandled = TRUE ;
+			break ;
+	}
+
+	return( MessageHandled ) ;
+}
+
+CIThread	*gREBatchThread = NULL ;
+
+int	RenderPage()
+{
+	CIThread	*AlgThread = NULL ;
+	int		Result = -1 ;
+
+//	SessionLogDirect( _T("******\tREPieThread.RenderPage: Page: %08lX"), gPage ) ;
+
+	if( gPage )
+	{
+		PIE	*thePie = gPage->GetLongValue(_T("Pie")) ;
+		gREBatchThread = gPage->GetLongValue(_T("BatchThread")) ;
+
+//		SessionLogDirect( _T("******\tREPieThread.RenderPage: ERROR: Page: P%09ld, thePie: %08lX"),
+//				gPage->GetLongValue(_T("JobID")), thePie ) ;
+
+		if( thePie )
+		{
+			UGenCon *PieDefaults = (UGenCon *) GetTreeObject( _T("PIEDefaultsGC"), _T("[GenCons]")) ;
+			if( PieDefaults )
+			{
+				long	SplitAlgorithms = PieDefaults->GetLongValue(_T("SplitAlgorithms")) ;
+				long	NumProcessors = GetNumProcessors() ;
+				if( NumProcessors > 1 && SplitAlgorithms )
+				{
+					UGenCon *PieAlgGC = new UGenCon( GetDataDictionary( _T("DDPieApplyAlgorithm"))) ;
+					if( PieAlgGC )
+					{
+						AlgThread = StartPieAlgThread(gPage) ;
+						PieAlgGC->SetLongValue(_T("AlgThread"), AlgThread ) ;
+						thePie->SetAlgThreadGC( PieAlgGC ) ;	//	DELETED BY PIE !
+						if( gLogAmount >= 2 )
+						{
+							SessionLogDirect( _T("******\tREPieThread.RenderPage: Using Multiple CPU Optimization.") ) ;
+						}
+					}
+				}
+				else
+				{
+					if( gLogAmount >= 2 )
+					{
+						SessionLogDirect( _T("******\tREPieThread.RenderPage: Not Using Multiple CPU Optimization.") ) ;
+					}
+				}
+			}
+
+
+			if( gLogAmount >= 2 )
+			{
+				SessionLogDirect( _T("******\tREPieThread.RenderPage: Start Rendering: \"%s\""), gPage->GetName()) ;
+			}
+//=============================================================================
+			Result = thePie->DoIt() ;
+//=============================================================================
+			if( gLogAmount >= 2 )
+			{
+				SessionLogDirect( _T("******\tREPieThread.RenderPage: Done  Rendering: \"%s\", Result = %ld"),
+													gPage->GetName(), Result) ;
+			}
+
+			if( AlgThread )
+			{
+				AlgThread->PostThreadMessage( WM_QUIT, 0L, 0L ) ;
+			}
+
+			LogErrors( thePie ) ;
+
+			switch( Result )
+			{
+				case	0	:	//	IDLE ???
+					if( gREBatchThread )
+					{
+						gResendMsg = REM_BATCH_RNDR_ERROR ;
+						PostAThreadMessage( gREBatchThread, REM_BATCH_RNDR_ERROR, 0L, gPage ) ;
+					}
+					break ;
+
+				case	1	:	//	STILL RENDERING ???
+					if( gREBatchThread )
+					{
+						gResendMsg = REM_BATCH_RNDR_ERROR ;
+						PostAThreadMessage( gREBatchThread, REM_BATCH_RNDR_ERROR, 0L, gPage ) ;
+					}
+					break ;
+
+				case	2	:	//	CANCELLING ???
+					if( gREBatchThread )
+					{
+						gResendMsg = REM_BATCH_RNDR_ERROR ;
+						PostAThreadMessage( gREBatchThread, REM_BATCH_RNDR_ERROR, 0L, gPage ) ;
+					}
+					break ;
+
+				case	3	:	//	CANCELLED
+					if( gREBatchThread )
+					{
+						gResendMsg = REM_BATCH_RNDR_CANCEL ;
+						PostAThreadMessage( gREBatchThread, REM_BATCH_RNDR_CANCEL, 0L, gPage ) ;
+					}
+					break ;
+
+				case	4	:	//	COMPLETED SUCCESSFULLY
+					if( gREBatchThread )
+					{
+						gResendMsg = REM_BATCH_RNDR_SUCCESS ;
+						PostAThreadMessage( gREBatchThread, REM_BATCH_RNDR_SUCCESS, 0L, gPage ) ;
+					}
+					break ;
+
+				case	5	:	//	HAD AN ERROR
+					if( gREBatchThread )
+					{
+						gResendMsg = REM_BATCH_RNDR_ERROR ;
+						PostAThreadMessage( gREBatchThread, REM_BATCH_RNDR_ERROR, 0L, gPage ) ;
+					}
+					break ;
+			}
+		}
+		else
+		{
+			SessionLogDirect( _T("******\tREPieThread.RenderPage: ERROR: Page: P%09ld, thePie: %08lX"),
+					gPage->GetLongValue(_T("JobID")), thePie ) ;
+		}
+	}
+	else
+	{
+		SessionLogDirect( _T("******\tREPieThread.RenderPage: ERROR: PageID: P%09ld"),
+			gPage->GetLongValue(_T("JobID")) ) ;
+	}
+
+	if( Result == -1 )
+	{
+		if( gREBatchThread )
+		{
+			PostAThreadMessage( gREBatchThread, REM_BATCH_RNDR_ERROR, 0L, gPage ) ;
+		}
+	}
+
+	return( Result ) ;
+}
+
+int PostAThreadMessage( CIThread *theThread, long MsgNum, long wParam, long lParam )
+{
+	int		Result = 0 ;
+	int		Count  = 0 ;
+	long	LastError = 0L ;
+	long	ThreadID = theThread->GetThreadID() ;
+
+//	SessionLogDirect( _T("******\tREPieThread.PostAThreadMessage: Msg: 0x%08lX, wP: %ld, lP: %ld, theThread: 0x%08lX, ThreadID: 0x%08lX"), 
+//		MsgNum, wParam, lParam, theThread, ThreadID ) ;
+
+//	DumpCStack(_T("******\tREPIE.PostAThreadMessage:")) ;
+
+	while( Result == 0 )
+	{
+		Result = theThread->PostThreadMessage( MsgNum, wParam, lParam ) ;
+		if( Result == 0 )
+		{
+			LastError = GetLastError() ;
+			SessionLogDirect( _T("******\tREPieThread.PostAThreadMessage(0x%08lX, %ld, %ld): Failed: Thread: 0x%08lX, ThreadID: 0x%08lX, Error: %d"),
+					MsgNum, wParam, lParam, theThread, ThreadID, LastError ) ;
+			Sleep( 1000 ) ;
+		}
+
+		Count++ ;
+
+		if( Count > 5 )
+		{
+			break ;
+		}
+	}
+
+	return( Result ) ;
+}
+
+
+int	GetRenderStatus( UGenCon *StatusGC )
+{
+//	SessionLogDirect( _T("PIEThread.GetRenderStatus: Entering")) ;
+
+	PIE	*thePie = gPage->GetLongValue(_T("Pie")) ;
+	if( thePie )
+	{
+		TCHAR	*Op = thePie->GetCurrentOp() ;
+		long	 NodeID = thePie->GetCurrentNodeID() ;
+
+		TCHAR	 Msg[256] ;
+		sprintf( Msg, _T("Node: %ld\tOperation: %s"), NodeID, Op ) ;
+		StatusGC->SetAttrValue(_T("RenderStatus"), Msg ) ;
+
+//		SessionLogDirect( _T("PIEThread.GetRenderStatus: \"%s\""), Msg ) ;
+
+//		StatusGC->Dump( _T("REPieThread.GetRenderStatus:") ) ;		//	TBD
+	}
+	return( TRUE ) ;
+}
+
+
+
+void LogErrors( PIE *thePie )
+{
+	// Log any errors
+	long	ErrorCount = thePie->GetErrorCount() ;
+
+	if( gLogAmount >= 4 )
+	{
+		SessionLogDirect( _T("********\tREPie.LogErrors: ErrorCount: %ld"), ErrorCount ) ;
+	}
+
+	if( ErrorCount )
+	{
+		TCHAR	*ErrMsg ;
+		UGenCon	*MsgGC ;
+		int		 loop ;
+
+
+		UList	*RenderErrorList = gPage->GetLongValue( _T("RenderErrorList") ) ;
+		if( RenderErrorList == NULL )
+		{
+			RenderErrorList = new UList ;
+		}
+
+		for( loop = 0; loop < ErrorCount ; loop++ )
+		{
+			MsgGC = new UGenCon(GetDataDictionary(_T("DDText"))) ;
+			if( MsgGC )
+			{
+				ErrMsg = thePie->GetErrorMsg( loop ) ;
+				MsgGC->SetAttrValue( _T("Text"), ErrMsg ) ;
+				RenderErrorList->InsertBack( MsgGC ) ;
+
+				SessionLogDirect( _T("********\tREPie.LogErrors: Error: %ld, Msg: \"%s\""), loop, ErrMsg ) ;
+
+			}
+		}
+
+		gPage->SetLongValue( _T("RenderErrorList"), RenderErrorList ) ;
+	}
+}
+
+
+long	GetNumProcessors()
+{
+	TCHAR	buffer[256] ;
+	int Result = GetEnvironmentVariable(_T("NUMBER_OF_PROCESSORS"), buffer, 256 ) ;
+	long NumProcessors = atoi( buffer ) ;
+	return( NumProcessors ) ;
+}
+
+CIThread *StartPieAlgThread(UGenCon *thePage)
+{
+	TCHAR		 FileName[2048] ;
+//	TCHAR		 ExeDirectory[1024] ;
+//	GetStartupDirectory(ExeDirectory) ;
+	TCHAR		*ExeDirectory = GetExeDirectory() ;
+	long		 gCheckTextLibFirst = TRUE ;
+
+	sprintf( FileName, _T("%s\\Common\\REPieAlgorithmThread.txt"), ExeDirectory) ;
+
+	CIThread	*theThread = new CIThread ;
+	if( theThread )
+	{
+		int AllowDebugging = FALSE ;
+		theThread->SetRegisterName(_T("REPieAlgRenderThread")) ;
+		int Result = theThread->Setup(FileName, NULL, -2L, 1000L, thePage, gCheckTextLibFirst, AllowDebugging ) ;
+
+		if( Result == FALSE )
+		{
+			SessionLogDirect(_T("****\tREBatchThread.RenderAJob: Could not start Render Thread")) ;
+			//AddError( thePage, _T("****\tREBatchThread.RenderAJob: Could not start Render Thread")) ;
+			delete theThread ;
+			return( NULL ) ;
+		}
+	}
+	else
+	{
+		SessionLogDirect(_T("****\tREBatchThread.RenderAJob: Could not create a Render Thread")) ;
+		//AddError( thePage, _T("****\tREBatchThread.RenderAJob: Could not create a Render Thread")) ;
+	}
+
+	return( theThread ) ;
+}
+
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+
+//	FOR THIS EXCEPTION HANDLER TO WORK, THERE SHOULD BE A DDTEXT GENCON ON THE
+//	DATA TREE DESCRIBING WHERE THE SCRIPT CRASHED.  WE SHOULD OUTPUT THE MESSAGE
+//	TO THE SESSION LOG, CLEAN UP THE TREE, AND POST MESSAGES TO THE APPROPRIATE
+//	THREADS TO KEEP THEM MOVING.
+
+int ExceptionHandler()
+{
+	SessionLogDirect( _T("******\tREPieThread.ExceptionHandler: Inside: BatchThread: 0x%08lX, Page: 0x%08lX"),
+			gREBatchThread, gPage ) ;
+
+	UGenCon *theMsgGC = PluckTreeObject(_T("CRunTimeError"), _T("[GenCons]")) ;
+	if( theMsgGC )
+	{
+		TCHAR	*theMsg = theMsgGC->GetStringValue(_T("Text")) ;
+		SessionLogDirect( _T("******\tREPieThread.ExceptionHandler: The Error Message: \"%s\"."),
+							theMsg ) ;
+
+		delete theMsgGC ;
+	}
+
+	DumpCStack(_T("******REPie.ExceptionHandler")) ;
+
+	if( gREBatchThread )
+	{
+		PostAThreadMessage( gREBatchThread, REM_BATCH_RNDR_ERROR, 0L, gPage ) ;
+		PostAThreadMessage( gThisThread, WM_QUIT, 0L, 0L ) ;
+	}
+	return( TRUE ) ;
+}
+
+int DumpCStack(TCHAR *Where)
+{
+	UCInterpreter *ThisCInterp = THIS() ;
+	TCHAR	*StackText = ThisCInterp->GetStackText() ;
+	SessionLogDirect( _T("******\tREPieThread.%s: Stack:\n%s"), Where, StackText ) ;
+	free( StackText ) ;
+	return( TRUE ) ;
+}
+
+

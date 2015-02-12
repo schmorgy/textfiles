@@ -1,0 +1,505 @@
+
+
+
+NUMERIC RefreshListView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	Count = List( NumEntries );
+	
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+	DataWindow( StatusBar,Text,~<Count> Records~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,ChangedItem,OrigItem,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate( ~There was no changed row.~ ) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedItem[Name]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Name cannot be blank.~ ) ); }
+
+	Key = ~Name = '<$con.OrigItem[Name]>'~;
+
+	mesg = ~~;
+	if ( !RecordAuditOK( ChangedItem, mesg ) )
+		{ return Warning( Translate( ~Unable to save pending changes.\n\n<mesg>~ ) ); }
+
+	Query = ~Select * From HicksFilmDrive Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,ChangedItem,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update record where <Key>. <theErr>~ );
+	}
+
+	DataView( CommitChanges );	
+
+	PopupMsg( Translate( ~If you already have this film drive setup enabled in the 3570 Scanning Control, you will need to disable and reenable the film drive setup in the 3570 Scanning Control to have these changes take effect.~ ) );
+
+	return TRUE;
+}
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,ItemsToDelete ) )		
+		{ return Warning( Translate( ~There were no items selected to delete~ ) ); }
+
+	Count = ItemsToDelete( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( ~There were rows selected to delete~ ) ); }
+
+	if ( MessageBox( Translate( ~Are you sure you want to delete the <Count> selected rows?~ ),YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( ItemsToDelete( GetNext,ItemToDelete ) )
+	{
+		Key = ~Name = '<$con.ItemToDelete[Name]>'~;
+
+		Cmd = ~Delete From HicksFilmDrive Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Could not delete item where <Key>. <theErr>~ );
+		}
+
+		RowsToDelete( AddString,RowsToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	NewRow( Set,Simulate,0 );
+	// REM - Parity   0 1 2 3 4 = none, odd, even, mark, space
+	// REM - StopBits 0 1 2     = 1 1.5 2
+	NewRow( SetValues,Port,1,BaudRate,9600,ByteSize,8,Parity,0,StopBits,0 );
+	NewRow( SetValues,PunchedFilm,1,SettleTime,0,AdvanceDistance,0 );
+	NewRow( SetValues,SetupXOffset,0,MinIndex,55,MaxIndex,70,DataBitWindow,38 );
+	NewRow( SetValues,SampleLength,15,InitialOffset,38,FilmDriveSpeed,48 );
+	
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate( ~You are too low on memory to add any more rows~ ) ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC RightClickInListView()
+{
+	DataView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,ListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,ListViewMenu,0,0  );
+	}
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate( ~Would you like to save your pending changes?~ ),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	return DataWindow( ForceCloseWindow );
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new items that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RecordAuditOK( &ChangedItem, &mesg )
+{
+
+	// SettleTime
+	// AdvanceDistance
+	// Port
+	// BaudRate - audit not needed - static combo box
+	// ByteSize
+	// Parity - audit not needed - static combo box
+	// StopBits - audit not needed - static combo box
+	// SetupXOffset
+	// MinIndex
+	// MaxIndex
+	// DataBitWindow
+	// SampleLength
+	// InitialOffset
+	// FilmDriveSpeed
+
+	SetupTableName = ~HicksFilmDrive~;
+
+	setFieldName = ~SettleTime~;		// Actual Field Name in Setup Table
+	typFieldName = ~FilmSettleTime~;	// Field type definition name
+
+	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+		{ return FALSE;	}
+
+	setFieldName = ~AdvanceDistance~;	// Actual Field Name in Setup Table
+	typFieldName = ~AdvanceDistance~;	// Field type definition name
+
+	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+		{ return FALSE;	}
+
+	setFieldName = ~Port~;			// Actual Field Name in Setup Table
+	typFieldName = ~SerialPort~;	// Field type definition name
+
+	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+		{ return FALSE;	}
+
+//	setFieldName = ~BaudRate~;		// Actual Field Name in Setup Table
+//	typFieldName = ~SerialBaud~;	// Field type definition name
+//
+//	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+//		{ return FALSE;	}
+
+	setFieldName = ~ByteSize~;			// Actual Field Name in Setup Table
+	typFieldName = ~SerialByteSize~;	// Field type definition name
+
+	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+		{ return FALSE;	}
+
+//	setFieldName = ~Parity~;		// Actual Field Name in Setup Table
+//	typFieldName = ~SerialParity~;	// Field type definition name
+//
+//	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+//		{ return FALSE;	}
+//
+//	setFieldName = ~StopBits~;			// Actual Field Name in Setup Table
+//	typFieldName = ~SerialStopBits~;	// Field type definition name
+//
+//	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+//		{ return FALSE;	}
+
+	setFieldName = ~SetupXOffset~;		// Actual Field Name in Setup Table
+	typFieldName = ~HicksSetupXOffset~;	// Field type definition name
+
+	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+		{ return FALSE;	}
+
+	setFieldName = ~MinIndex~;			// Actual Field Name in Setup Table
+	typFieldName = ~HicksMinIndex~;		// Field type definition name
+
+	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+		{ return FALSE;	}
+
+	setFieldName = ~MaxIndex~;			// Actual Field Name in Setup Table
+	typFieldName = ~HicksMaxIndex~;		// Field type definition name
+
+	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+		{ return FALSE;	}
+
+	setFieldName = ~DataBitWindow~;			// Actual Field Name in Setup Table
+	typFieldName = ~HicksDataBitWindow~;	// Field type definition name
+
+	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+		{ return FALSE;	}
+
+	setFieldName = ~SampleLength~;			// Actual Field Name in Setup Table
+	typFieldName = ~HicksSampleLength~;		// Field type definition name
+
+	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+		{ return FALSE;	}
+
+	setFieldName = ~InitialOffset~;			// Actual Field Name in Setup Table
+	typFieldName = ~HicksInitialOffset~;	// Field type definition name
+
+	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+		{ return FALSE;	}
+
+	setFieldName = ~FilmDriveSpeed~;		// Actual Field Name in Setup Table
+	typFieldName = ~HicksFilmDriveSpeed~;	// Field type definition name
+
+	if ( !FieldAuditOK( ChangedItem, ~<SetupTableName>~, ~<setFieldName>~, ~<typFieldName>~, mesg ) )
+		{ return FALSE;	}
+
+	return TRUE;
+
+}
+
+NUMERIC FieldAuditOK( &ChangedItem, SetupTableName, setFieldName, typFieldName, &mesg )
+{
+	if ( ~<SetupTableName>~ == ~~ )
+	{
+		mesg = ~Audit failed. The setup table name is not specified.~;
+		return FALSE;
+	}
+
+	ChangedItem( GetValues, Name, Name );
+
+	if ( ( ~<setFieldName>~ == ~~ ) || ( ~<typFieldName>~ == ~~ ) )
+	{
+		mesg = ~Audit failed for the setup record with the name "<Name>".\n\n~;
+		mesg = ~<mesg>The field name/type to audit is not specified.~;
+		return FALSE;
+	}
+
+	DisplayName = ~<$[DATABASE FieldTypes <SetupTableName>].<typFieldName>[DisplayName]>~;
+	uiFieldName = ~<setFieldName>~;
+	if ( ~<DisplayName>~ != ~~ )
+	{
+		uiFieldName = ~<DisplayName>~;
+	}
+
+	if ( !ChangedItem( GetValues, ~<setFieldName>~, sNewValue ) )
+	{
+		mesg = ~Audit failed for the setup record with the name "<Name>".\n\n~;
+		mesg = ~<mesg>The field to audit (<setFieldName>) is not found in the record.~;
+		return FALSE;
+	}
+
+	sMinValue = ~<$[DATABASE FieldTypes <SetupTableName>].<typFieldName>[MinValue]>~;
+	sMaxValue = ~<$[DATABASE FieldTypes <SetupTableName>].<typFieldName>[MaxValue]>~;
+
+	// No Audit required
+	if ( ( ~<sMinValue>~ == ~~ ) && ( ~<sMaxValue>~ == ~~ ) )
+	{
+		mesg = ~Audit failed for the setup record with the name "<Name>".\n\n~;
+		mesg = ~<mesg>The field "<uiFieldName>" is either not assigned or has a value that is out of range.\n\n~;
+		mesg = ~<mesg>This field should contain a value between <sMinValue> and <sMaxValue>.~;
+		return FALSE;
+	}
+
+	// Un-assigned or overflow
+	if ( ~<sNewValue>~ == ~~ )
+	{
+		mesg = ~Audit failed for the setup record with the name "<Name>".\n\n~;
+		mesg = ~<mesg>The field "<uiFieldName>" is either not assigned or has a value that is out of range.\n\n~;
+		mesg = ~<mesg>This field should contain a value between <sMinValue> and <sMaxValue>.~;
+		return FALSE;
+	}
+
+	// Check min range
+	if ( ~<sMinValue>~ != ~~ )
+	{
+		if ( Numeric( <sNewValue> ) < Numeric( <sMinValue> ) )
+		{
+			mesg = ~Audit failed for the setup record with the name "<Name>".\n\n~;
+			mesg = ~<mesg>The field "<uiFieldName>" contains the value <sNewValue> and should be between <sMinValue> and <sMaxValue>.~;
+			return FALSE;
+		}
+	}
+
+	// Check max range
+	if ( ~<sMaxValue>~ != ~~ )
+	{
+		if ( Numeric( <sNewValue> ) > Numeric( <sMaxValue> ) )
+		{
+			mesg = ~Audit failed for the setup record with the name "<Name>".\n\n~;
+			mesg = ~<mesg>The field "<uiFieldName>" contains the value <sNewValue> and should be between <sMinValue> and <sMaxValue>.~;
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+NUMERIC Init( Title,DocumentQuery )
+{
+	DataWindow( Set,Title,~<Title>~ );
+
+	Global( DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{
+			dBase( GetErrorDescription,0,theErr );
+			Error( ~Database Query Failed: <DocumentQuery>. <theErr>~ );
+		}
+		SetDocumentData( List(GetObject) );
+
+		if ( !DataWindow( CreateWindow,Translate( ~Hicks Film Drive Setups~ ) ) )
+		{ 
+			Error( ~Failed to create the window for Hicks Film Drive Setups~ ); 
+		}
+
+		return TRUE;
+	}
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+if ( !GenCon( TableDefinition,GetFrom,HicksFilmDrive,~[DATABASE TableDefinitions]~ ) )
+	{ Error( Translate( ~The HicksFilmDrive Table is not properly defined~ ) ); }
+
+Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+	}
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+Define: DataWindow Using DDWinDef
+	Fields:		Position				0 50 90 30
+				IsPositionPercent		T
+				EnableStatusBar			F
+				TypeName				SplitterWnd
+				SplitterRows			~2 1 90~
+				SplitterColumns			1
+
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "HicksFilmDrive.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons(~FilmDrive Setup~) + 10;
+				}
+
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				ListView
+					GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					//ButtonClickActionsText ACTION Exec ( OnButtonClick() )
+					//DoubleClickActionsText ACTION Exec ( OpenJobs() )
+					CloseActionsText		ACTION Call ( OnCloseDataView() )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "HicksFilmDrive.htm" );
+	}
+	
+

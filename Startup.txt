@@ -1,0 +1,565 @@
+IncludeClass(BaseStartup);
+	
+Class( DP2Startup,Extends,BaseStartup,
+		Member,isBeta,Numeric,FALSE );
+
+VOID DP2Startup::LabInfoComplete()
+{
+	DefineTheApp();
+	Include: ~HelpMenu.txt~ ;
+
+	StartupComplete();
+	Exit();
+}
+
+VOID DP2Startup::StartupComplete()
+{
+	// Check the license for this user.  If everything is OK it will eventually finish
+	// the logon and startup the app.
+	if ( CheckLicense(~Admin~,TRUE,TRUE) )
+	{
+		StartupReportSpooler();
+		StartBackgroundProcessing();
+		StartupImportCommands();
+		StartupRImageDrivers();
+		StartupImageRestore();
+
+		BibbleServer(Start);
+
+
+		RunInstallationScripts();		// run installation scripts after getting the license.	
+		RunUserDefinedStartupScripts();	// run startup scripts after getting the license.		
+
+		StartupRendering();
+		HangTextures();
+		ShowJobToolBar();
+		StartupIF36Pix();
+		Action = ACTION DOC ( TaskBarDoc Open TaskBarDoc );
+		PerformActions( Action );
+
+		UpdateStatus( TR( AppStartupStrings, StartupComplete ) );
+		ShowMainMenu();
+
+		UpdateStatus( TR( AppStartupStrings, Ready ) );
+	}
+}
+
+NUMERIC DP2Startup::CheckLabInfo()
+{
+	UpdateStatus( TR( AppStartupStrings,CheckingLabInfo ) );
+
+	// Get the Lab unique ID that will be used to populate the lab info screen.  It will
+	// only be used at startup if we determine that the lab info has not yet been provided
+	// by the lab.
+	theID = GenerateLabUniqueID();
+	fLabUniqueID = Upper( ~<theID>~ );
+
+	// Check the database first to see if the information exists.
+	if ( ado( dBase,Connect ) )
+	{
+		Query = ~Select * from LabInfo~;
+		if ( PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			if ( List( GetNext,LabInfo ) )
+			{
+				// Get the lab unique ID and hang it on the tree to be displayed in the
+				// about box.
+				fLabUniqueID = ~<$pcon.LabInfo[LabUniqueID]>~;
+				Tree( Name,~LabID~,Value,~<fLabUniqueID>~,DefineSymbol );
+
+				labName = ~<$pcon.LabInfo[LabName]>~;
+				if ( SimilarStr( ~<LabName>~,~~ ) )
+				{
+					UpdateStatus(~<$TR.AppStartupStrings(MissingLabInfoBasic)>~);
+					return FALSE;
+				}
+
+				Log( Session,~Lab unique id: <fLabUniqueID>~ );
+				return TRUE;
+			}
+		}
+	}
+	
+	// Didn't find it in the database.  Check to see if there is a file in the shared
+	// directory that contains this information.  This file gets written when we get
+	// the lab information the first time during startup or whenever the lab info is
+	// changed by the administrator.  We did this so that we'd have a redundant copy
+	// of the data in case the lab has to recreate their database.
+	LabInfoFile = ~<$App.ShareDirectory>\LabInfo.txt~;
+	if ( !Files( FileExists,~<LabInfoFile>~ ) )
+	{
+		return FALSE;
+	}
+	
+	if ( File( InfoFile,Open,~<LabInfoFile>~,Read ) )
+	{ 
+		if ( InfoFile( ReadTextFile,buffer ) )
+		{
+			labName = ~~;
+			contactName = ~~;
+			address1 = ~~;
+			address2 = ~~;
+			city = ~~;
+			county = ~~;
+			region = ~~;
+			country = ~~;
+			zipCode = ~~;
+			phoneNumber = ~~;
+			eMail = ~~;
+			fLabUniqueID = ~~;
+
+			labName = String( GetParameter,buffer,~LabName=~,~;~ );
+			contactName = String( GetParameter,buffer,~ContactName=~,~;~ );
+			address1 = String( GetParameter,buffer,~Address1=~,~;~ );
+			address2 = String( GetParameter,buffer,~Address2=~,~;~ );
+			city = String( GetParameter,buffer,~City=~,~;~ );
+			county = String( GetParameter,buffer,~County=~,~;~ );
+			region = String( GetParameter,buffer,~Region=~,~;~ );
+			country = String( GetParameter,buffer,~Country=~,~;~ );
+			zipCode = String( GetParameter,buffer,~ZipCode=~,~;~ );
+			phoneNumber = String( GetParameter,buffer,~PhoneNumber=~,~;~ );
+			eMail = String( GetParameter,buffer,~Email=~,~;~ );
+			fLabUniqueID = String( GetParameter,buffer,~LabUniqueID=~,~;~ );
+
+			InfoFile( Close );
+
+			// If any of the required information is missing, then we need to ask the lab
+			// for this information again.
+			if ( SimilarStr( ~<labName>~,~~ ) || SimilarStr( ~<contactName>~,~~ ) || SimilarStr( ~<address1>~,~~ ) ||
+				SimilarStr( ~<city>~,~~ ) || SimilarStr( ~<region>~,~~ ) ||	SimilarStr( ~<country>~,~~ ) ||
+				SimilarStr( ~<zipCode>~,~~ ) || SimilarStr( ~<phoneNumber>~,~~ ) ||	SimilarStr( ~<eMail>~,~~ ) ||
+				SimilarStr( ~<fLabUniqueID>~,~~ ) )
+			{
+				return FALSE;
+			}
+			
+			// If we got here, then we need to add the lab info back into the database.
+			MakeSQLSafe( labName );
+			MakeSQLSafe( contactName );
+			MakeSQLSafe( address1 );
+			MakeSQLSafe( address2 );
+			MakeSQLSafe( city );
+			MakeSQLSafe( county );
+			MakeSQLSafe( region );
+			MakeSQLSafe( country );
+			MakeSQLSafe( zipCode );
+			MakeSQLSafe( email );
+			
+			Parameters = ~LabName,ContactName,Address1,Address2,City,County,State,Country,ZipCode,Phone,Email,LabUniqueID~;
+			Values = ~'<labName>','<contactName>','<address1>','<address2>','<city>','<county>','<region>','<country>','<zipCode>','<phoneNumber>','<email>','<fLabUniqueID>'~;
+
+			Cmd = ~Insert Into LabInfo(<Parameters>) Values(<Values>)~;
+			if ( !dBase( Cmd, ~<Cmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Log( Session,~Database update failed <cmd>. <theErr>~ );
+
+				UpdateStatus( ~<$TR.AppStartupStrings(UnableToUpdateLabInfo)>~ );
+				return FALSE;
+			}
+		}
+	}
+
+	// Hang the lab unique ID on the tree to be displayed in the about box.
+	Tree( Name,~LabID~,Value,~<fLabUniqueID>~,DefineSymbol );
+	Log( Session,~Lab unique id: <fLabUniqueID>~ );
+
+	return TRUE;
+}
+	
+VOID DP2Startup::DoStartup()
+{
+	OptionalInclude( ~<$App.Directory>\AppOverrides.txt~ );
+		
+	if ( <isBeta> )
+	{
+		//SetSymbolValue( ScriptsRunLocal,1 );
+		//SetSymbolValue( HTTPServerRunLocal,1 );
+	}
+
+	Tree( Name,~UseNewLicensing~,Value,~1~,DefineSymbol );
+
+	OptionallyEnableDebugger();
+
+	SetMainWindowTitle();
+	
+	InstallCharacterSets();
+
+	DataLocationFile = ~<$App.Directory>\<$App.ExeName>_DataLocation.txt~;
+
+	FindNewDataSource = KeyState( LSHIFT ) && KeyState( RSHIFT );
+
+	DataDataSourceExists = GetDataLocationFile();
+	
+	result = DefDatabaseConnections( FALSE,TRUE );
+	if ( <result> )
+	{
+		if ( <DataDataSourceExists> && !<FindNewDataSource> )
+		{ 
+			result = Startup();
+			if ( <result> == 1 )
+			{
+				Exit();
+			}
+			else if ( <result> == -1 )
+			{
+				return;
+			}
+			else
+			{
+				ShowStartupUI();
+			}
+		}
+		else
+		{
+			ShowStartupUI();
+		}
+	}
+	else
+	{
+		ShowStartupUI();
+	}
+	
+}
+
+NUMERIC DP2Startup::Startup()
+{
+	isSiteLicense = KspISL();
+	if ( <isSiteLicense> )
+	{
+		Files( Delete,~<$App.ShareDirectory>\Scripts\Startup\DoStartup.txt~ );	
+	}
+	else	
+	{
+		MixedVersionCheck();
+	}
+
+	LogAppStartupSettings();
+
+	if ( !CheckDatabaseConnections() )
+	{
+		return FALSE;
+	}
+
+	if ( !ado( dBase,CreateConnectionPool ) )
+	{
+		Log( Session,~Failed to create ADO session pool.~ );
+	}
+
+	if ( !ADOVersionCheck() )
+	{
+		return FALSE;
+	}
+
+	DefineDatabaseFields( -1 );
+
+	ForceArchiving = FALSE;
+	CreateSharedDBTables = SharedDBTablesExist(FALSE);
+
+	NeedToCreateDataBase = FALSE;
+	NeedToCreateDataBase = !<CreateSharedDBTables> || !SharedDatabaseVersionCheck(CreateSharedDBTables);
+
+	// Check the workstation database to see if it has been created, the workstation
+	// database tables exist, and the workstation database version number hasn't changed.
+	wsDBExists = CheckWorkstationDatabase();
+	wsDBTablesExist = WorkstationDBTablesExist(FALSE);
+
+	wsDBVerChanged = FALSE;
+	if ( <wsDBExists> && <wsDBTablesExist> )
+	{
+		wsDBVerChanged = CheckWksDBVer();
+	}
+
+	if (!<wsDBExists> || !<wsDBTablesExist> || <wsDBVerChanged>)
+	{
+		if ( !CreateWorkstationDB(<wsDBVerChanged>) )
+		{
+			return FALSE;
+		}
+	}
+
+	DefineTheApp();
+	
+	UpdateStatus( TR( AppStartupStrings, CheckForAutoRetouchingDongle ) );
+
+	Enabled = FALSE;
+	Value = ~0~;
+	if ( GetSystemSettings( ~AutoRetouching~,~KPARS~,Value,Enabled ) )
+	{
+		if ( ~<Enabled>~ == ~1~ && ~<Value>~ == ~1~ )
+		{
+			if ( !GetWorkstationSettings( ~AutoRetouching_<$App.Instance>~,~KPARS~,Value,Enabled ) )
+			{
+				msg = ~Do you want to enable Auto-Retouching for this instance of DP2 on this workstation?~;
+				if ( MessageBox( Translate( ~<msg>~ ),YESNO ) == YES )
+				{
+					SetWorkstationSettings( ~AutoRetouching_<$App.Instance>~,~KPARS~,1,TRUE );
+				}
+				else
+				{
+					SetWorkstationSettings( ~AutoRetouching_<$App.Instance>~,~KPARS~,0,TRUE );
+				}
+				
+			}
+			
+			Enabled = FALSE;
+			Value = ~0~;
+			GetWorkstationSettings( ~AutoRetouching_<$App.Instance>~,~KPARS~,Value,Enabled );
+			if ( ~<Enabled>~ == ~1~ && ~<Value>~ == ~1~ )
+			{
+				dongleError = 0;
+				kparsCredits = CheckKparsDongle(dongleError);
+				if ( <dongleError> == 81 || <dongleError> == 82 )
+				{
+					msg = ~The Auto Retouching dongle was not found.\nDo you want to keep KPARS enabled for this instance of DP2 on this workstation?~;
+					if ( MessageBox( Translate( ~<msg>~ ),YESNO ) == NO )
+					{
+						SetWorkstationSettings( ~AutoRetouching_<$App.Instance>~,~KPARS~,~0~,TRUE );
+						Log( Session,~Search for KPARS dongle has been disabled on this workstation.~ );
+					}
+				}
+				else if ( <dongleError> == 87 )
+				{
+					msg = ~Auto Retouching is not supported when running in large memory mode.\nRestart DP2 with both shift keys held down and disable large memory mode to run Auto Retouching.~;
+					MessageBox( Translate( ~<msg>~ ),OK );
+
+					SetWorkstationSettings( ~AutoRetouching_<$App.Instance>~,~KPARS~,~0~,TRUE );
+					Log( Session,~Search for KPARS dongle. Auto Retouching not supported when running in large memory mode.~ );
+				}
+				else
+				{
+					Log( Session,~KPARS at startup <kparsCredits>~ );
+				}
+			}
+		}
+	}
+
+	UpdateStatus( TR( AppStartupStrings, CheckingDatabase ) );
+
+	if ( <NeedToCreateDataBase> )
+	{
+		UpdateStatus( TR( AppStartupStrings, NeedToCreateDatabase ) );
+		CreateTheDatabase( <CreateSharedDBTables>,TRUE,<ForceArchiving> );
+	}
+	else
+	{		
+		UpdateStatus( TR( AppStartupStrings, UpdatingDatabase ) );
+
+		CheckServerVersion();
+
+		FixupDatabaseTables();
+
+		SeeIfUserExists();
+		SetupViewingProfiles();
+		LoadSystemSettings();
+		LoadUserSettings();
+		
+		Include: ~HelpMenu.txt~ ;
+
+		InitializeResolutions();
+		SetupColorBalanceScale();
+		SetupAdjustInNativeSpace();
+		SetupEnableReadEmbeddedProfiles();
+		Setup12BitContrast();
+		SetupThumbnailSharpening();
+		ShutdownPrinting();
+
+		UpdateStatus( TR( AppStartupStrings, CheckForAccunet ) );
+		IsAccunetInstalled(FALSE);
+
+		StartupReportServerCommands();
+
+		AgeTheSessionLogs();
+
+		RegisterOCXControls();
+		RegisterMSXML4();
+		RegisterIMAPI2();
+		
+		Tree( Name,~WorkstationType~,Value,~<WorkstationType>~,DefineSymbol );
+		if ( !CheckLabInfo() )
+		{
+			// Remove the main menu so it's not accessible after they close the license manager screen.
+			App(myApp, MainMenu, RemoveMenuDefinitions);
+
+			Actions = ACTION DOC ( LabInfoWin OpenOnce LabInfoWin "InitFromStartup();" );
+			PerformActions( Actions );
+			return -1;
+		}
+
+		StartupComplete();
+	}
+
+	return TRUE;
+}
+
+VOID DP2Startup::InstallCharacterSets()
+{
+	// Create a string list that contains the English preference names.
+	StringList( CharSets,New,NoDuplicateValues,InAlphaOrder );
+	StringList( TranslatedCharSets,New );
+	CharSets( AddString,~ANSI_CHARSET~ );
+	CharSets( AddString,~SHIFTJIS_CHARSET~ );
+	CharSets( AddString,~SYMBOL_CHARSET~ );
+//	CharSets( AddString,~CHINESEBIG5_CHARSET~ );
+//	CharSets( AddString,~GB2312_CHARSET~ );
+	
+	// TranslatedCharSets has no entries.  After returning from InsertCharSetsIntoStringList, it will
+	// have the character sets in the user's native language, ready to be displayed in dialog boxes, etc.
+	InsertCharSetsIntoStringList(CharSets,TranslatedCharSets);
+	TranslatedCharSets( Hang, CharacterSets,~Strings~);
+
+}
+		
+VOID DP2Startup::ShowStartupUI()
+{
+	DefineDialog();
+}
+
+VOID DP2Startup::SetMainWindowTitle()
+{
+	MainWindow( GetTitle,TheTitle );
+
+	Version = ~<$[Symbols].Version[Value]>~;
+	substr( ~<$[Symbols].RunVersion[Value]>~,0,3,VersionSubstr );
+
+	if ( <isBeta> )
+	{
+		MainWindow( SetTitle,~<TheTitle>     [<$App.Directory.Filename>]       Beta <Version>~ );
+	}
+	else if ( MakeNumber(~<VersionSubstr>~) > 15.0 )
+	{
+		MainWindow( SetTitle,~<TheTitle>     [<$App.Directory.Filename>]       Pre-release <Version>~ );
+	}
+	else
+	{
+		MainWindow( SetTitle,~<TheTitle>     [<$App.Directory.Filename>]       <Version>~ );
+	}
+}
+
+VOID DP2Startup::MixedVersionCheck()
+{
+	if ( SimilarStr(~<$App.ShareDirectory>~,~~) )
+	{
+		return;
+	}
+	
+	GetFileVersionInfo(~<$App.Directory>\<$App.Name>~,FileVersion,LocalVersion);
+	LocalMajor = ~0~;
+	LocalMinor = ~0~;
+	LocalBuild = ~0~;
+	GetTokens( ~<LocalVersion>~,~.~,LocalMajor,LocalMinor,LocalBuild );
+
+	CheckResult = CheckStartupScript( <LocalMajor>,<LocalMinor> );
+
+	if ( GetFileVersionInfo(~<$App.ShareDirectory>\<$App.Name>~,FileVersion,ServerVersion) )
+	{
+		ServerMajor = ~0~;
+		ServerMinor = ~0~;
+		ServerBuild = ~0~;
+		GetTokens( ~<ServerVersion>~,~.~,ServerMajor,ServerMinor,ServerBuild );
+
+		ServerMajor = Numeric(~<ServerMajor>~);
+		ServerMinor = Numeric(~<ServerMinor>~);
+		CheckVerResult = CheckVersion( <LocalMajor>,<LocalMinor>,<ServerMajor>,<ServerMinor> );
+		if ( <CheckVerResult> == 1 )
+		{
+			return;
+		}
+			
+		Abort(1);
+	}
+}
+
+NUMERIC DP2Startup::CheckStartupScript( LocalMajor,LocalMinor )
+{
+	if ( <isBeta> )
+	{
+		Files( Delete,~<$App.ShareDirectory>\Scripts\Startup\DoStartup.txt~ );	
+	}
+	else
+	{
+		WriteNewFile = TRUE;
+		
+		if ( File( VerCheckFile, OPEN,~<$App.ShareDirectory>\Scripts\Startup\DoStartup.txt~,READ ) )
+		{ 
+			if ( VerCheckFile( ReadTextFile,buffer ) )
+			{
+				ScriptVersion = ~~;
+				ScriptVersion = String( GetParameter,buffer,~ScriptVersion = ~,~;~ );
+				
+				LastScriptVersion = 2; // Change if ScriptVersion in DoStartup changes.
+				if ( Numeric( ~<ScriptVersion>~ ) >= <LastScriptVersion> )
+				{
+					WriteNewFile = FALSE;
+				}
+			}
+			
+			VerCheckFile( Close );
+		}
+
+		if ( !<WriteNewFile> )
+		{
+			return 1;
+		}
+
+		Sleep(50);
+
+		Directory( DeleteRecursive,~<$App.Directory>\DP2Temp~,~*.*~ );	
+		Directory( Create,~<$App.Directory>\DP2Temp~ );
+
+		Directory( SetCurrentDirectory, ~<$App.Directory>\DP2Temp~ );
+		ScriptLibrary( Extract,~DoStartup.txt~ );
+		Directory( SetCurrentDirectory, ~<$App.Directory>~ );
+
+		Files( Delete,~<$App.ShareDirectory>\Scripts\Startup\DoStartup.txt~ );	
+		Sleep(50);
+		Files( Copy,~<$App.Directory>\DP2Temp\DoStartup.txt~,~<$App.ShareDirectory>\Scripts\Startup\DoStartup.txt~ );
+		Sleep(50);
+
+		Directory( DeleteRecursive,~<$App.Directory>\DP2Temp~,~*.*~ );	
+		Directory( Remove,~<$App.Directory>\DP2Temp~ );
+
+		if ( !Files( FileExists,~<$App.ShareDirectory>\Scripts\Startup\DoStartup.txt~ ) )
+		{
+			Warning( ~Missing required startup file. Unable to continue.~ );
+			Abort(1);
+			return FALSE;
+		}
+	}
+
+	return 1;
+}
+
+NUMERIC DP2Startup::CheckVersion( LocalMajor,LocalMinor,ServerMajor,ServerMinor )
+{
+	if ( <ServerMajor> < 12 ) || ( <ServerMajor> == 12 && <ServerMinor> == 0 )
+	{
+		Msg = ~The shared directory contains version <ServerMajor>.<ServerMinor> of DP2 while this\n~;
+		Msg = ~<Msg>~ + ~system is running version <LocalMajor>.<LocalMinor>. You cannot run a mix of these\n~;
+		Msg = ~<Msg>~ + ~versions of DP2. You must install version 14.0 or later of DP2\n~;
+		Msg = ~<Msg>~ + ~on the DP2 server. DP2 will shut down after you hit the OK button.~;
+		Warning( ~<Msg>~ );
+
+		return 0;
+	}
+	
+	return 1;
+}
+
+VOID Init()
+{
+	DP2Startup( New,AppStartupObj );
+	AppStartupObj( Global );
+	AppStartupObj.DoStartup();
+}
+
+VOID LabInfoComplete()
+{
+	if ( Defined(AppStartupObj) )
+	{
+		AppStartupObj.LabInfoComplete();
+	}
+}
+
+Init();
+

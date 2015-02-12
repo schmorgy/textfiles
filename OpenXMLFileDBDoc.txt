@@ -1,0 +1,210 @@
+
+
+if ( !DataDict( TheDictionary,Get,DDOpenTextDB ) )
+{
+	Dictionary: DDOpenTextDB
+	Fields: Name Path Type Text
+}
+
+Define: DlgData Using DDOpenTextDB ;
+
+VOID DefineDialog()
+{
+    Left = 5; Top = 5; hGap = 5; vGap = 2;
+    TextHeight = 20;        TextWidth = 110;  
+	ButtonHeight = 20;		ButtonWidth = 70;
+	StaticTextWidth = 40;	StaticTextHeight = 20;
+    EditTextWidth = 250;	EditTextHeight = 20;
+	x = $Left;				y = $Top;
+
+    Define: DlgDefinition Using DDWinDef
+            Fields: Position 180 50 $DialogWidth $DialogHeight
+                    Title Translate( ~Open XML File as a Database~ )
+                    TypeName ~Dialog~
+					DropActionsText ACTION EXEC ( HandleDrop() )
+                    OACTIONSTEXT ACTION EXEC ( CloseDialog() ) ;
+
+    Contains: InListOrder
+    {
+    Define: thePrompt Using DDWinCtrlDef AsSymbol thePrompt 
+            Fields: TypeName StaticText
+                    Text Translate( ~File~ )
+					RightJustified TRUE
+                    Position $x,$y,$StaticTextWidth,$StaticTextHeight
+
+        Define: ItemField Using DDWinCtrlDef AsSymbol ItemField 
+            Fields: TypeName EditText  
+                    Position thePrompt(GetRight,Position) + $hGap,thePrompt(GetTop,Position),<EditTextWidth> ,<EditTextHeight> 
+					IActionsText ACTIONS ( Get )
+					DActionsText ACTIONS ( Save )
+					OActionsText ACTIONS ( Save )
+                    GenConName       THIS
+                    GenConField		~Path~
+                    Tooltip         ~Select a File~
+
+		Define: FindButton Using DDWinCtrlDef AsSymbol FindButton 
+					Fields: TypeName Button
+							Text Translate( ~?~ )
+							Position ItemField(GetRight,Position)+$hGap,ItemField(GetTop,Position),20,20
+							DActionsText ACTION EXEC ( OnBrowseButton() ) 
+							Tooltip Translate( ~Find the file~ );
+
+		DialogWidth = FindButton(GetRight,Position) + ($hGap * 3);
+
+
+		Define: ExploreButton Using DDWinCtrlDef AsSymbol ExploreButton 
+					Fields: TypeName Button
+							Text Translate( ~Explorer~ )
+							Position $DialogWidth/2 - $ButtonWidth+$hGap/2,FindButton(GetBottom,Position) + 30,$ButtonWidth, $ButtonHeight
+							DActionsText ACTION EXEC ( OnExplorerButton() ) 
+							IsEnabled T
+							Tooltip Translate( ~Open the text file database~ );
+
+		Define: GoButton Using DDWinCtrlDef AsSymbol GoButton 
+					Fields: TypeName DefaultButton
+							Text Translate( ~Open~ )
+							Position ExploreButton(GetRight,Position)+$hGap,ExploreButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+							DActionsText ACTION EXEC ( OnGoButton() ) 
+							IsEnabled T
+							Tooltip Translate( ~Open the text file database~ );
+    };
+
+	DialogHeight = GoButton(GetBottom,Position) + $vGap + 40;
+
+	ScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+	x = $ScreenWidth / 2;
+	y = 40;
+
+	RightEdge = <x> + <DialogWidth>;
+
+	if ( <RightEdge> > <ScreenWidth> )
+	{
+		x = <ScreenWidth> - <DialogWidth> - 10;
+	}
+
+    DlgDefinition( Set,Position,~<x> <y> <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,DlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    Global( dlg );
+}
+
+
+
+
+NUMERIC HandleDrop()
+{
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+	{ 
+		return FALSE;
+	}
+
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck ); // REMOVE THE DRAG INFO FROM THE TREE
+
+	dlg( EnableControls,TRUE,StopButton );
+
+	ExternalDrop(DragDropInfo); 
+
+	dlg( EnableControls,FALSE,StopButton ); 
+
+	return TRUE;
+}
+
+
+NUMERIC ExternalDrop( &DragDropInfo )
+{
+	if ( !DragDropInfo( GetDraggedFiles,DraggedFileList ) )
+	{ 
+		return ~There were no files in the object you dragged~;
+	}
+
+	count = DraggedFileList( ChildCount );
+
+	if ( $count <= 0 )
+	{ 
+		return Warning( ~There were no files in the object you dragged~; )
+	}
+
+	count = ProcessDraggedFiles( DraggedFileList );
+
+	return TRUE;
+}
+
+
+NUMERIC ProcessDraggedFiles( &DraggedFileList )
+{
+	more = DraggedFileList( GetFirst,Item );
+
+	if ( <more> )
+	{
+		dlg( SetString,~<$Con.Item[Text]>~,Path,0 );
+	}
+
+	return TRUE;
+}
+
+
+VOID OnBrowseButton()
+{
+	Title = Translate( ~Select the file you wish to open~ );
+
+	if ( FileDialog( Title,~<Title>~,PATH,theFile,Open ) ) // ASK THE USER TO FIND THE FILE(s)
+	{
+		dlg( SetString,~<theFile>~,Path,0 ); 
+	} 
+}
+
+
+VOID CloseDialog()
+{
+    dlg( END );
+    Exit();
+}
+
+
+NUMERIC OpenItem( Path,TableName )
+{
+	Provider = ~Microsoft.Jet.OLEDB.4.0~;
+
+	Query = ~Select * From <TableName>~;
+
+	Action = ACTION DOC ( EditAnyRecset Open EditAnyRecsetDoc "ConnectExcel( ~<Path>~,<TableName>,~<Query>~ );" );
+
+	return PerformActions( Action );
+}
+
+
+NUMERIC OnGoButton()
+{
+	dlg( GetInput );
+
+	if ( ~<$con.dlgData[Path]>~ == ~~ )
+	{
+		return Warning( Translate( ~You must specify the path to the file~ ) );
+	}
+
+	OpenItem( ~<$con.dlgData[Path]>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OnExplorerButton()
+{
+	Actions = ACTION DOC ( Explorer Open ExplorerDoc "Init(~Explore~,~~);" );
+	return PerformActions( Actions );
+}
+
+
+VOID Init( Path )
+{
+	DefineDialog(); 
+
+	if ( ~<Path>~ != ~~ )
+	{
+		dlg( SetString,~<Path>~,Path,0 ); 
+	}
+}
+
+Init();
+

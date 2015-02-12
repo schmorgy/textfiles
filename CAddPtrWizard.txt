@@ -1,0 +1,1462 @@
+//	CAddPtrWizard.cpp
+
+ExecC() ;
+
+//	THIS FILE CONTAINS THE CODE TO CONTROL THE RENDER ENGINE
+
+//	THIS SCRIPT AND CAddPtrWizardActions.TXT USE A FINITE STATE MACHINE
+
+//	PRINTER TYPE->	CRT		LFCRT	KPDM	KPDM2	LED		RP30	DISK	WINDOWS
+//		  STATE ___________________________________________________________________
+//	ALL		1	|	2		2		2		2		2		2		2		2
+//	ALL		2	|	3		3		3		3		3		3		3		3
+//	ALL		3	|	8		8		8		8		8		12		8		8
+//	DSK		4	|	-		-		-		-		-		-		100		-
+//	CRT		5	|	100		100		7		7		-		-		-		-
+//	WIN		6	|	-		-		-		-		-		-		-		100
+//	KPDM	7	|	-		-		100		100		-		-		-		-
+//	ALL		8	|	5		5		5		5		9		-		4		6
+//	LED		9	|	-		-		-		-		100		-		-		-
+//	DEL		10	|	(DELETE SCREEN)
+//	RP30	11	|	-		-		-		-		-		100		-		-
+//	RP30	12	|	-		-		-		-		-		11		-		-
+//	FINISH	100	|	110		110		110		110		110		110		110		110
+//	DONE	110	|	110		110		110		110		110		110		110		110
+
+//	SOME USEFUL GLOBALS
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+
+UGenCon	*gPrinterSetup ;	//	THE DIALOG DATA GENCON
+UGenCon	*gDlgDef ;			//	THE DIALOG DEFINITION GC
+char	*gDlg ;				//	THE POINTER TO THE DIALOG OBJECT
+
+//	THE FOLLOWING VALUES HELP DEFINE THE DIALOG
+//	THE DIALOG DIMENSIONS
+long	gDlgLeft	= 500 ;
+long	gDlgTop		=  20 ;
+long	gDlgRight	= 300 ;
+long	gDlgBottom	= 350 ;
+
+//	THE BUTTON DIMENSIONS
+long	gBtnWidth	=  80 ;
+long	gBtnHeight	=  20 ;
+long	gBtnHGap	=  10 ;
+long	gBtnVGap	=  10 ;
+
+//	THE LEFT AND CENTER MARGINS
+long	gLeftStart	=  20 ;
+long	gLeftCenter	= 150 ;
+
+//	THE CONTROL DIMENSIONS
+long	gVertStart	=  50 ;
+long	gVertGap	=  20 ;
+long	gCtrlWidth	= 100 ;
+long	gCtrlHeight =  20 ;
+
+//	THE TAB SIZE
+long	gTabWidth	= 275 ;
+long	gTabHeight	= 300 ;
+
+
+UGenCon		*DataGC ;
+double		 gVersion = 2.0 ;
+
+main()
+{
+//	Debug(1) ;
+
+	UGenCon	*WizardExists = GetTreeObject(_T("AddPtrWizardExists"), _T("[GenCons]")) ;
+	if( WizardExists )
+	{
+		MessageBox(
+			Translate(_T("The Printer Wizard is already active.")),
+			_T("MB_OK")) ;
+		return ;
+	}
+
+	if( GetUserPermissions( _T("Admin")) == FALSE )
+	{
+		MessageBox(
+			Translate(_T("You must have administrator priviledges for this function.")),
+			_T("MB_OK")) ;
+	}
+	else
+	{
+		UGenCon	*VerGC = GetTreeObject(_T("RunVersion"), _T("[SYMBOLS]")) ;
+		if( VerGC )	{ gVersion = VerGC->GetDoubleValue( _T("Value")) ; }
+		DisplayDialog() ;
+
+		WizardExists = new UGenCon( GetDataDictionary( _T("DDText"))) ;
+		WizardExists->SetName(_T("AddPtrWizardExists")) ;
+		HangTreeObject( WizardExists, _T("[GenCons]") ) ;
+	}
+}
+
+
+DisplayDialog()
+{
+	Debug(0) ;
+	UDataDict *theDDPtrWizard = AddDDPtrWizard() ;
+
+	DataGC = new UGenCon( theDDPtrWizard ) ;
+
+	SetupDefaults( DataGC ) ;
+
+	gDlgDef = GetDialogDefinition(DataGC) ;
+
+	gDlg = Dialog( gDlgDef, 2, DataGC, _T("CAddPtrWizardActions.txt") ) ;
+
+	gDlgDef = delete gDlgDef ;
+}
+
+void SetupDefaults( UGenCon *DataGC )
+{
+	long	 Size = 260 ;
+	TCHAR	 ComputerName[260] ;
+
+	GetComputerName( ComputerName, &Size ) ;
+
+	DataGC->SetLongValue(_T("Screen"), 1L ) ;
+
+	DataGC->SetLongValue(_T("Debug"), 0L ) ;		//	SET DEBUG FLAG !!!!!
+
+	DataGC->SetLongValue(_T("Screen"), 1L ) ;
+	DataGC->SetAttrValue(_T("PrinterStatus"), _T("Shutdown")) ;
+	DataGC->SetLongValue(_T("Attended"), 1L ) ;
+	DataGC->SetAttrValue(_T("ComputerName"), ComputerName ) ;
+	DataGC->SetAttrValue(_T("PaperWidth"), _T("10") ) ;
+	DataGC->SetAttrValue(_T("PaperAdvance"), _T("15") ) ;
+	DataGC->SetAttrValue(_T("PaperType"), _T("Photographic") ) ;
+	DataGC->SetAttrValue(_T("PaperOpacity"), _T("Reflective") ) ;
+	DataGC->SetAttrValue(_T("SaveFileType"), _T("TIFF")) ;
+	DataGC->SetAttrValue(_T("Units"), _T("INCH")) ;
+	DataGC->SetLongValue(_T("DeletePrinter"), 0L ) ;
+	DataGC->SetDoubleValue(_T("SpillOverAmt"), 1.02 ) ;
+}
+
+
+GetDialogDefinition(UGenCon *DataGC)
+{
+	long		 BtnLeft, BtnTop ;
+	long		 YPos ;
+	TCHAR		 PositionBuf[32] ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+	UDataDict	*ddWinCtrlDef = GetDataDictionary( _T("DDWinCtrlDef")) ;
+
+	GetDialogLists() ;
+
+	UGenCon	*DlgDef = new UGenCon( GetDataDictionary(_T("DDWinDef"))) ;
+	if( DlgDef )
+	{
+		DlgDef->SetName(_T("PrinterWizard")) ;
+		sprintf( PositionBuf, PosFormat, gDlgLeft, gDlgTop, gDlgRight, gDlgBottom ) ;
+		DlgDef->SetAttrValue( _T("Position"), PositionBuf ) ;
+		DlgDef->SetAttrValue( _T("Title"), _T("Printer Wizard")) ;
+		DlgDef->SetAttrValue( _T("TypeName"), _T("Dialog")) ;
+		DlgDef->SetLongValue( _T("WantsMinimizeBox"), 1L ) ;
+	}
+
+	AddScreenButtons( DlgDef, ddWinCtrlDef ) ;
+
+	AddScreen1( DlgDef, ddWinCtrlDef ) ;	//	GENERAL SCREEN
+	AddScreen2( DlgDef, ddWinCtrlDef ) ;	//	COLOR MANAGEMENT
+	AddScreen3( DlgDef, ddWinCtrlDef ) ;	//	PAPER INFORMATION
+	AddScreen4( DlgDef, ddWinCtrlDef ) ;	//	DISK & OEM INFO
+	AddScreen5( DlgDef, ddWinCtrlDef ) ;	//	CRT RESOLUTIONS
+	AddScreen6( DlgDef, ddWinCtrlDef ) ;	//	NT INFO
+	AddScreen7( DlgDef, ddWinCtrlDef ) ;	//	KPDM SPECIFICS
+	AddScreen8( DlgDef, ddWinCtrlDef ) ;	//	PAPER INFORMATION
+	AddScreen9( DlgDef, ddWinCtrlDef ) ;	//	LED SPECIFICS
+	AddScreen10( DlgDef, ddWinCtrlDef ) ;	//	DELETE SCREEN
+	AddScreen11( DlgDef, ddWinCtrlDef ) ;	//	RP30 SCREEN
+	AddScreen12( DlgDef, ddWinCtrlDef ) ;	//	RP30 OUTPUT SCREEN
+	AddScreen99( DlgDef, ddWinCtrlDef ) ;	//	DEBUG FLAGS
+	AddScreen100( DlgDef, ddWinCtrlDef ) ;	//	FINAL SCREEN
+	AddScreen110( DlgDef, ddWinCtrlDef ) ;	//	CONGRATULATIONS SCREEN
+
+	return( DlgDef ) ;
+}
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+
+void AddScreenButtons( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	TCHAR		 Position[1024] ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+	long		 BtnLeft, BtnTop ;
+	
+	BtnTop  = gDlgBottom - 25 - (gBtnVGap + gBtnHeight) + 5000L ;
+
+	BtnLeft = gBtnHGap ;
+	sprintf( Position, PosFormat, BtnLeft, BtnTop, gBtnWidth, gBtnHeight ) ;
+	UGenCon *CloseGC = GetButtonCtrl( ddWinCtrlDef, Position, Translate(_T("Close")),
+						_T("[CCallBack(Close();)]"), Translate(_T("Quit Printer Wizard"))) ;
+	DlgDef->AddChildBack( CloseGC ) ;
+
+	BtnLeft += gBtnHGap + gBtnWidth ;
+	sprintf( Position, PosFormat, BtnLeft, BtnTop, gBtnWidth, gBtnHeight ) ;
+	UGenCon *PreviousGC = GetButtonCtrl( ddWinCtrlDef, Position, Translate(_T("Prev")),
+					_T("[CCallBack(PrevScreen();)]"), Translate(_T("Go To Previous Screen."))) ;
+	DlgDef->AddChildBack( PreviousGC ) ;
+
+	BtnLeft += gBtnHGap + gBtnWidth ;
+	sprintf( Position, PosFormat, BtnLeft, BtnTop, gBtnWidth, gBtnHeight ) ;
+	UGenCon *NextGC = GetButtonCtrl( ddWinCtrlDef, Position, Translate(_T("Next")),
+						_T("[CCallBack(NextScreen();)]"), Translate(_T("Go To Next Screen."))) ;
+	DlgDef->AddChildBack( NextGC ) ;
+
+	sprintf( Position, PosFormat, BtnLeft, BtnTop, gBtnWidth, gBtnHeight ) ;
+	UGenCon *FinishGC = GetButtonCtrl( ddWinCtrlDef, Position, Translate(_T("Finish")),
+						_T("[CCallBack(Finish();)]"), Translate(_T("Add the Printer Data to DP2."))) ;
+	DlgDef->AddChildBack( FinishGC ) ;
+
+	//	THE HELP BUTTON
+	BtnLeft = gBtnHGap ;
+	BtnTop  = gDlgBottom - 20 - ((gBtnVGap + gBtnHeight) * 2) + 5000L ;
+	sprintf( Position, PosFormat, BtnLeft, BtnTop, gBtnWidth, gBtnHeight ) ;
+	UGenCon *DebugGC = GetButtonCtrl( ddWinCtrlDef, Position, _T("Help"),
+					_T("[CCallBack(Help();)]"), _T("Help") ) ;
+	DlgDef->AddChildBack( DebugGC ) ;
+	
+
+	if( DataGC->GetLongValue(_T("Debug")))
+	{
+		BtnTop  = gDlgBottom - 20 - ((gBtnVGap + gBtnHeight) * 2) + 5000L ;
+		BtnLeft += gBtnHGap + gBtnWidth ;
+		sprintf( Position, PosFormat, BtnLeft, BtnTop, gBtnWidth, gBtnHeight ) ;
+		DebugGC = GetButtonCtrl( ddWinCtrlDef, Position, _T("Debug"),
+						_T("[CCallBack(DebugThis();)]"), _T("Debug.") ) ;
+		DlgDef->AddChildBack( DebugGC ) ;
+	}
+}
+
+
+//	GENERAL SCREEN
+void AddScreen1( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long		 YPos = gVertStart + 10000 ;
+	TCHAR		 Position[1042] ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR		*HeaderText = Translate(_T(" [1] This Wizard will lead you through\n\
+adding a printer and its first queue to DP2.")) ;
+	AddStaticOutputCtrl( DlgDef, 60L, 10010, 200L, 30L, ddWinCtrlDef,  _T("Header1"), HeaderText ) ;
+
+//	YPos += gVertGap ;
+	TCHAR	*MsgText = Translate(_T("Model, Name and Queue entries are required.")) ;
+	AddStaticOutputCtrl( DlgDef, 60L, YPos, 200L, 30L, ddWinCtrlDef,  _T("MsgText"), MsgText ) ;
+
+	YPos += gVertGap ;
+	YPos += gVertGap ;
+	AddComboBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Model:")), _T("PrinterModel"), _T("PrinterModel")) ;
+
+	YPos += gVertGap * 1.5 ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Name:")), _T("PrinterName") ) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Queue:")), _T("QueueName")) ;
+
+	YPos += gVertGap * 1.5 ;
+	AddCheckBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Auto Startup:")), _T("OEMDevice") ) ;
+
+	YPos += gVertGap ;
+	sprintf( Position, PosFormat, gLeftStart, YPos, 200, 70 ) ;
+	UGenCon *Status = GetOutputCtrl( ddWinCtrlDef, Position, _T("Status") ) ;
+	DlgDef->AddChildBack( Status ) ;
+
+}
+
+//	COLOR MANAGEMENT
+void AddScreen2( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long	 YPos = gVertStart + 20000 ;
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*Msg = Translate(_T("[2] Color Management Information.")) ;
+	AddStaticOutputCtrl( DlgDef, 30L, 20010, 200L, 30L, ddWinCtrlDef,  _T("Header2"), Msg ) ;
+
+
+//	YPos += 10 ;
+//	AddComboBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("ICC Profile:")), _T("ICCProfile"), _T("ICCProfile")) ;
+
+	sprintf( Position, PosFormat, gLeftStart, YPos, 100, gCtrlHeight ) ;
+	UGenCon *sProfile = GetStaticCtrl( ddWinCtrlDef, Position, _T("ICCProfile:"), Translate(_T("ICCProfile:")) ) ;
+	DlgDef->AddChildBack( sProfile ) ;
+
+	YPos += gVertGap ; // + gVertGap / 2 ;
+	sprintf( Position, PosFormat, gLeftStart, YPos, 255, gCtrlHeight * 8 ) ;
+	UGenCon *Profile = GetComboBoxCtrl( ddWinCtrlDef, Position, _T("ICCProfile"), _T("ICCProfile") ) ;
+	DlgDef->AddChildBack( Profile ) ;
+
+
+	Msg = Translate(_T("Required for Color Mgmt.")) ;
+	AddStaticOutputCtrl( DlgDef, 100L, YPos - 20L, 200L, 20L, ddWinCtrlDef,  _T("ProfileMsg"), Msg ) ;
+
+	YPos += gVertGap * 2 ;
+	AddButtonLEditCtrlLine(DlgDef, YPos, ddWinCtrlDef, Translate(_T("Gamma Table")), _T("GammaTable"),
+						_T("[CCallBack(GetGammaTablePath();)]"), Translate(_T("Select the Gamma Table for this device."))) ;
+
+	Msg = Translate(_T("Optional.")) ;
+	AddStaticOutputCtrl( DlgDef, 130L, YPos, 200L, 20L, ddWinCtrlDef,  _T("GammaMsg"), Msg ) ;
+
+	YPos += gVertGap * 3 + 5000L ;
+	AddButtonLEditCtrlLine(DlgDef, YPos, ddWinCtrlDef, Translate(_T("Paper Pack")), _T("PaperPack"),
+						_T("[CCallBack(GetPaperPackPath();)]"), Translate(_T("Select the Paper Pack for this device."))) ;
+
+	Msg = Translate(_T("Required for CRT Printers.")) ;
+	AddStaticOutputCtrl( DlgDef, 130L, YPos, 200L, 20L, ddWinCtrlDef,  _T("PrintLutMsg"), Msg ) ;
+
+	YPos += gVertGap * 2.5 ;
+	AddButtonLEditCtrlLine(DlgDef, YPos, ddWinCtrlDef, Translate(_T("Print LUT")), _T("PrintLut"),
+						_T("[CCallBack(GetPrintLutPath();)]"), Translate(_T("Select the Print Lut for this device."))) ;
+
+	Msg = Translate(_T("Required for CRT Printers.")) ;
+	AddStaticOutputCtrl( DlgDef, 130L, YPos, 200L, 20L, ddWinCtrlDef,  _T("PaperPackMsg"), Msg ) ;
+
+}
+
+//	PAPER AND PAPER FILL INFORMATION (SEE SCREEN 8 FOR MORE
+void AddScreen3( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long	 YPos = gVertStart + 30000 ;
+
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*Msg = Translate(_T("[3] Enter Paper Information.")) ;
+	AddStaticOutputCtrl( DlgDef, 60L, 30010, 200L, 30L, ddWinCtrlDef, _T("Msg300"), Msg ) ;
+
+	YPos -= 5 ;
+	Msg = Translate(_T("Paper Width Required for Paper Fill, otherwise optional.")) ;
+	AddStaticOutputCtrl( DlgDef, 20L, YPos, 300L, 20L, ddWinCtrlDef, _T("Msg301"), Msg ) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Paper Width:")), _T("PaperWidth")) ;
+
+	YPos += gVertGap * 1.5 ;
+	Msg = Translate(_T("Paper Surface is optional.")) ;
+	AddStaticOutputCtrl( DlgDef, 20L, YPos, 300L, 20L, ddWinCtrlDef, _T("Msg302"), Msg ) ;
+
+	YPos += gVertGap ;
+	AddComboBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Paper Surface:")), _T("PaperSurface"), _T("PaperSurface")) ;
+
+	YPos += gVertGap * 1.5 + 5000 ;
+	Msg = Translate(_T("If you wish to mark your packages for automatic cutting,\nselect the marker for your printer.")) ;
+	AddStaticOutputCtrl( DlgDef, 20L, YPos, 300L, 30L, ddWinCtrlDef, _T("Msg303"), Msg ) ;
+
+	YPos += gVertGap + 10 ;
+	AddComboBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Package Cut:")), _T("PackageCut"), _T("PackageCut")) ;
+
+	YPos += gVertGap + 15 ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Avg Paper Adv:")), _T("AvgPaperAdv")) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Avg Print Time:")), _T("AvgPrintSpeed")) ;
+}
+
+
+//	OUTPUT TO DISK AND OEM SCREEN
+void AddScreen4( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long	 YPos = gVertStart + 40000L ;
+
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*HeaderText = Translate(_T("[4] Enter Disk and OEM Printer Information.")) ;
+
+	sprintf( Position, PosFormat, 60, 40010, 280, 25 ) ;
+	UGenCon *Header = GetStaticCtrl( ddWinCtrlDef, Position, _T("Header4"), HeaderText ) ;
+	DlgDef->AddChildBack( Header ) ;
+
+	YPos -= 5 ;
+	AddComboBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("File Type:")), _T("SaveFileType"), _T("SaveFileType")) ;
+
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Output Path")), _T("OutputPath"),
+						_T("[CCallBack(GetOutputPath();)]"), Translate(_T("Select the Output Path for this file."))) ;
+
+	YPos += gVertGap * 1.5 ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Resolution:")), _T("Resolution1")) ;
+
+
+	YPos += gVertGap * 2 ;
+	TCHAR	*OEMText = Translate(_T("Use the following to set up an OEM Printer.")) ;
+	sprintf( Position, PosFormat, 40, YPos, 280, 25 ) ;
+	UGenCon *OEMMsg = GetStaticCtrl( ddWinCtrlDef, Position, _T("OEMText"), OEMText ) ;
+	DlgDef->AddChildBack( OEMMsg ) ;
+
+
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Startup Script:")), _T("StartupScript"),
+						_T("[CCallBack(GetStartupScript();)]"), Translate(_T("Select the Startup Script."))) ;
+
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Start Print Scrpt:")), _T("StartPrntScrpt"),
+						_T("[CCallBack(GetStartPrintScript();)]"), Translate(_T("Select the Start Print Script."))) ;
+
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Print Comp Scrpt:")), _T("PrintCmplScrpt"),
+						_T("[CCallBack(GetPrintCompleteScript();)]"), Translate(_T("Select the Print Complete Script."))) ;
+
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Order Comp Scrpt:")), _T("OrderCmplScrpt"),
+						_T("[CCallBack(GetOrderCompleteScript();)]"), Translate(_T("Select the Order Complete Script."))) ;
+
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, _T("Control Folder:"), _T("ControlFolder"),
+						_T("[CCallBack(GetControlFolder();)]"), _T("Select the Control Folder for this device.")) ;
+}
+
+
+//	CRT RESOLUTION SCREEN
+void AddScreen5( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long	 YPos = gVertStart + 50000 ;
+
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*HeaderText = Translate(_T("[5] Enter CRT Paper Widths.")) ;
+
+	sprintf( Position, PosFormat, 60, 50010, 280, 25 ) ;
+	UGenCon *Header = GetStaticCtrl( ddWinCtrlDef, Position, _T("Header5"), HeaderText ) ;
+	DlgDef->AddChildBack( Header ) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Paper Width 1:")), _T("Resolution1")) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Paper Width 2:")), _T("Resolution2")) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Paper Width 3:")), _T("Resolution3")) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Paper Width 4:")), _T("Resolution4")) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Paper Width 5:")), _T("Resolution5")) ;
+
+//	YPos += gVertGap ;
+//	AddComboBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Units:")), _T("UnitList"), _T("UnitList")) ;
+
+}
+
+
+//	NT PRINTER SCREEN
+void AddScreen6( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long	 YPos = gVertStart + 60000 ;
+
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*HeaderText = Translate(_T("[6] Enter NT Printer Information.")) ;
+
+	sprintf( Position, PosFormat, 60, 60010, 280, 25 ) ;
+	UGenCon *Header = GetStaticCtrl( ddWinCtrlDef, Position, _T("Header6"), HeaderText ) ;
+	DlgDef->AddChildBack( Header ) ;
+
+	sprintf( Position, PosFormat, gLeftStart, YPos, 100, gCtrlHeight ) ;
+	UGenCon *sDevices = GetStaticCtrl( ddWinCtrlDef, Position, _T("Devices"), Translate(_T("Devices:")) ) ;
+	DlgDef->AddChildBack( sDevices ) ;
+
+	YPos += gVertGap ; // + gVertGap / 2 ;
+	sprintf( Position, PosFormat, gLeftStart, YPos, 255, gCtrlHeight * 8 ) ;
+	UGenCon *Devices = GetComboBoxCtrl( ddWinCtrlDef, Position, _T("Devices"), _T("Devices") ) ;
+	DlgDef->AddChildBack( Devices ) ;
+
+
+
+	YPos += gVertGap + gVertGap / 2 ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Gamma:")), _T("NTXGamma")) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("1. Pixels Per Unit:")), _T("Resolution1")) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("2. Pixels Per Unit:")), _T("Resolution2")) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("3. Pixels Per Unit:")), _T("Resolution3")) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("4. Pixels Per Unit:")), _T("Resolution4")) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("5. Pixels Per Unit:")), _T("Resolution5")) ;
+
+	YPos += gVertGap ;
+	AddComboBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Units:")), _T("UnitList"), _T("UnitList")) ;
+
+}
+
+
+//	KPDM PRINTER SCREEN
+void AddScreen7( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long	 YPos = gVertStart + 70000 ;
+
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*HeaderText = Translate(_T("[7] KPDM Specific Information.")) ;
+
+	sprintf( Position, PosFormat, 60, 70010, 280, 25 ) ;
+	UGenCon *Header = GetStaticCtrl( ddWinCtrlDef, Position, _T("Header7"), HeaderText ) ;
+	DlgDef->AddChildBack( Header ) ;
+
+	TCHAR *Msg = Translate(_T("Does your KPDM have a backprinter?")) ;
+	AddStaticOutputCtrl( DlgDef, 30L, YPos, 200L, 20L, ddWinCtrlDef,  _T("BackPrinterMsg"), Msg ) ;
+
+	YPos += gVertGap * 2 ;
+	AddCheckBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Back Printer:")), _T("BackPrinter") ) ;
+
+}
+
+
+//	PAPER AND PAPER FILL INFORMATION (CONTINUED)
+void AddScreen8( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long	 YPos = gVertStart + 80000 ;
+
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*Msg = Translate(_T("[8] Enter Paper Fill Information.")) ;
+	AddStaticOutputCtrl( DlgDef, 60L, 80010, 200L, 30L, ddWinCtrlDef, _T("Msg300"), Msg ) ;
+
+	YPos -= 25 ;
+
+	YPos += gVertGap * 1.5 ;
+	AddComboBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Paper Fill:")), _T("PaperFill"), _T("PaperFillChoices")) ;
+
+	YPos += gVertGap * 2 ;
+	Msg = Translate(_T("Paper Advance is required for Paper Fill.")) ;
+	AddStaticOutputCtrl( DlgDef, 20L, YPos, 300L, 20L, ddWinCtrlDef, _T("Msg304"), Msg ) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Paper Advance:")), _T("PaperAdvance")) ;
+
+	YPos += gVertGap * 2 ;
+	Msg = Translate(_T("Create a new page for each image.")) ;
+	AddStaticOutputCtrl( DlgDef, 20L, YPos, 300L, 20L, ddWinCtrlDef, _T("Msg305"), Msg ) ;
+
+	YPos += gVertGap ;
+	AddCheckBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Image Break")), _T("ImageBreak") ) ;
+
+	YPos += gVertGap * 1.5 ;
+	AddComboBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Spillover Type:")), _T("SpillOverType"), _T("SpillOverTypeList") ) ;
+
+	YPos += gVertGap ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Spillover Amount:")), _T("SpillOverAmt")) ;
+}
+
+//	LED PRINTER SCREEN
+void AddScreen9( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long	 YPos = gVertStart + 90000 ;
+
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*HeaderText = Translate(_T("[9] LED Specific Information.")) ;
+
+	sprintf( Position, PosFormat, 60, 90010, 280, 25 ) ;
+	UGenCon *Header = GetStaticCtrl( ddWinCtrlDef, Position, _T("Header9"), HeaderText ) ;
+	DlgDef->AddChildBack( Header ) ;
+
+	TCHAR *Msg = Translate(_T("Is your Kodak LED Printer Roll to Roll?")) ;
+	AddStaticOutputCtrl( DlgDef, 30L, YPos, 200L, 20L, ddWinCtrlDef,  _T("Roll2RollMsg"), Msg ) ;
+
+	YPos += gVertGap * 2 ;
+	AddCheckBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Roll to Roll:")), _T("LEDRoll2Roll") ) ;
+
+}
+
+//	DELETE SCREEN
+void AddScreen10( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long	 YPos = gVertStart + 100000 ;
+
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*HeaderText = Translate(_T("[10] Delete Printer.")) ;
+	TCHAR	*DeleteNotes = Translate(_T("Only the Printer Data will be deleted.\nThe Printer Queues will not be deleted.\n\
+To delete the printer queues, go to the\nprinter queue data table and\ndelete the queues as needed.")) ;
+
+	sprintf( Position, PosFormat, 60, 100010, 280, 25 ) ;
+	UGenCon *Header = GetStaticCtrl( ddWinCtrlDef, Position, _T("Header10"), HeaderText ) ;
+	DlgDef->AddChildBack( Header ) ;
+
+	TCHAR *Msg = Translate(_T("The printer exists.  Delete the printer?")) ;
+	AddStaticOutputCtrl( DlgDef, 30L, YPos, 200L, 20L, ddWinCtrlDef,  _T("DeletePrinterMsg"), Msg ) ;
+
+	YPos += gVertGap * 2 ;
+	AddCheckBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Delete Printer:")), _T("DeletePrinter") ) ;
+
+	YPos += gVertGap * 2 ;
+	sprintf( Position, PosFormat, gLeftStart + 20, YPos, 280, 100 ) ;
+	UGenCon *DeleteNote = GetStaticCtrl( ddWinCtrlDef, Position, _T("DeleteNotes"), DeleteNotes ) ;
+	DlgDef->AddChildBack( DeleteNote ) ;
+
+}
+
+void AddScreen11( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+//	long	 YPos = gVertStart + 110000 ;
+	long	 YPos = 35 + 110000 ;
+
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*HeaderText = Translate(_T("[11] Set up RP30.")) ;
+
+	sprintf( Position, PosFormat, 60, 110010, 280, 25 ) ;
+	UGenCon *Header = GetStaticCtrl( ddWinCtrlDef, Position, _T("Header11"), HeaderText ) ;
+	DlgDef->AddChildBack( Header ) ;
+
+	TCHAR	*MsgText = Translate(_T("You must find the Interface Application, the Control Folder, and the Response Folder.")) ;
+	AddStaticOutputCtrl( DlgDef, 60L, YPos, 200L, 40L, ddWinCtrlDef,  _T("MsgText"), MsgText ) ;
+
+	YPos += gVertGap * 1.5 ;
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("App Path:")), _T("ApplicationPath"),
+						_T("[CCallBack(GetApplicationPath();)]"), Translate(_T("Select the Application to start."))) ;
+
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, _T("Control Folder:"), _T("ControlFolder"),
+						_T("[CCallBack(GetControlFolder();)]"), _T("Select the Control Folder for this device.")) ;
+
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Response Folder:")), _T("ResponseFolder"),
+						_T("[CCallBack(GetResponseFolder();)]"), Translate(_T("Select the Application's Response Folder."))) ;
+
+	YPos += gVertGap ;
+	YPos += gVertGap ;
+	MsgText = Translate(_T("The following entries are already setup.")) ;
+	AddStaticOutputCtrl( DlgDef, 60L, YPos, 200L, 30L, ddWinCtrlDef,  _T("MsgText"), MsgText ) ;
+
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Startup Script:")), _T("StartupScript"),
+						_T("[CCallBack(GetStartupScript();)]"), Translate(_T("Select the Startup Script."))) ;
+
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Print Complete:")), _T("PrintCmplScrpt"),
+						_T("[CCallBack(GetPrintCompleteScript();)]"), Translate(_T("Select the Print Complete Script."))) ;
+
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Response Script:")), _T("ResponseScript"),
+						_T("[CCallBack(GetResponseScript();)]"), Translate(_T("Select the Response Script."))) ;
+
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Shutdown Script:")), _T("ShutdownScript"),
+						_T("[CCallBack(GetShutdownScript();)]"), Translate(_T("Select the Shutdown Script."))) ;
+
+}
+
+//	OUTPUT TO RP30 SCREEN
+void AddScreen12( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long	 YPos = gVertStart + 120000L ;
+
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*HeaderText = Translate(_T("[12] RP30 Printer Information.")) ;
+
+	sprintf( Position, PosFormat, 60, 120010, 280, 25 ) ;
+	UGenCon *Header = GetStaticCtrl( ddWinCtrlDef, Position, _T("Header4"), HeaderText ) ;
+	DlgDef->AddChildBack( Header ) ;
+
+	YPos -= 5 ;
+	AddComboBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("File Type:")), _T("SaveFileType"), _T("SaveFileType")) ;
+
+	YPos += gVertGap ;
+	AddButtonEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Output Path")), _T("OutputPath"),
+						_T("[CCallBack(GetOutputPath();)]"), Translate(_T("Select the Output Path for this file."))) ;
+
+	YPos += gVertGap * 1.5 ;
+	AddStaticEditCtrlLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Resolution:")), _T("Resolution1")) ;
+
+}
+
+void AddScreen99( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long	 YPos = gVertStart + 990000 ;
+
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*HeaderText = Translate(_T("[99] Set up debug flags.")) ;
+
+	sprintf( Position, PosFormat, 60, 990010, 280, 25 ) ;
+	UGenCon *Header = GetStaticCtrl( ddWinCtrlDef, Position, _T("Header99"), HeaderText ) ;
+	DlgDef->AddChildBack( Header ) ;
+
+	YPos += gVertGap ;
+	YPos += gVertGap / 2 ;
+	AddCheckBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("Log Hop Attributes")), _T("LogAttributes") ) ;
+
+	YPos += gVertGap ;
+	AddCheckBoxLine( DlgDef, YPos, ddWinCtrlDef, Translate(_T("No Print")), _T("NoPrint") ) ;
+}
+
+
+//	THE FINAL SCREEN
+void AddScreen100( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long	 YPos = gVertStart + 1000000 ;
+
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*HeaderText = Translate(_T("[100] Last chance to reset any values\n\
+before creating the printer.")) ;
+
+	sprintf( Position, PosFormat, 60, 1000010, 280, 25 ) ;
+	UGenCon *Header = GetStaticCtrl( ddWinCtrlDef, Position, _T("Header100"), HeaderText ) ;
+	DlgDef->AddChildBack( Header ) ;
+
+	YPos += gVertGap ;
+	YPos += gVertGap / 2 ;
+	sprintf( Position, PosFormat, gLeftStart, YPos, 250, 100 ) ;
+	UGenCon *Status = GetOutputCtrl( ddWinCtrlDef, Position, _T("Status") ) ;
+	DlgDef->AddChildBack( Status ) ;
+}
+
+//	THE CONGRATULATIONS SCREEN
+void AddScreen110( UGenCon *DlgDef, UDataDict *ddWinCtrlDef )
+{
+	long	 YPos = gVertStart + 1100000 ;
+
+	TCHAR	 Position[1024] ;
+	TCHAR	*PosFormat	= _T("%ld %ld %ld %ld") ;
+
+	TCHAR	*HeaderText = Translate(_T("[110]  Adding Printer Completed.")) ;
+
+	sprintf( Position, PosFormat, 60, 1100010, 280, 25 ) ;
+	UGenCon *Header = GetStaticCtrl( ddWinCtrlDef, Position, _T("Header110"), HeaderText ) ;
+	DlgDef->AddChildBack( Header ) ;
+
+	YPos += gVertGap ;
+	YPos += gVertGap / 2 ;
+	sprintf( Position, PosFormat, gLeftStart, YPos, 250, 100 ) ;
+	UGenCon *Status = GetOutputCtrl( ddWinCtrlDef, Position, _T("Status") ) ;
+	DlgDef->AddChildBack( Status ) ;
+}
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+
+
+UDataDict *AddDDPtrWizard()
+{
+	UDataDict	*theDataDict ;
+	TCHAR		*DataDictText ;
+
+	theDataDict = GetDataDictionary(_T("DDPtrWizard")) ;
+
+	if( theDataDict )
+	{
+		UList	*theDicts = GetDictList() ;
+		theDicts->RemoveItem( theDataDict ) ;
+		delete theDataDict ;
+		theDataDict = NULL ;
+	}
+
+	if( theDataDict == NULL )
+	{
+		DataDictText = "Screen			Long	0	0	0	0	0\
+						Status			Text	0	0	0	0	0\
+						PrinterName		Text	0	0	0	0	0\
+						PrinterStatus	Text	0	0	0	0	0\
+						PrinterModel	Text	0	0	0	0	0\
+						LPrinterModel	Long	0	0	0	0	0\
+						DeletePrinter	Long	0	0	0	0	0\
+						PrinterExists	Long	0	0	0	0	0\
+						MaxPaperWidth	Double	0	0	0	0	0\
+						MaxPaperAdvance	Double	0	0	0	0	0\
+						Attended		Long	0	0	0	0	0\
+						ComputerName	Text	0	0	0	0	0\
+						QueueName		Text	0	0	0	0	0\
+						BackPrinter		Long	0	0	0	0	0\
+						LEDRoll2Roll	Long	0	0	0	0	0\
+						OEMDevice		Long	0	0	0	0	0\
+						PaperType		Text	0	0	0	0	0\
+						PaperSurface	Text	0	0	0	0	0\
+						PaperOpacity	Text	0	0	0	0	0\
+						ICCProfile		Text	0	0	0	0	0\
+						PackageCut		Text	0	0	0	0	0\
+						PaperWidth		Double	0	0	0	0	0\
+						PaperAdvance	Double	0	0	0	0	0\
+						Resolution1		Double	0	0	0	0	0\
+						Resolution2		Double	0	0	0	0	0\
+						Resolution3		Double	0	0	0	0	0\
+						Resolution4		Double	0	0	0	0	0\
+						Resolution5		Double	0	0	0	0	0\
+						Units			Text	0	0	0	0	0\
+						PaperFill		Text	0	0	0	0	0\
+						ImageBreak		Long	0	0	0	0	0\
+						SpillOverType	Text	0	0	0	0	0\
+						SpillOverAmt	Double	0	0	0	0	0\
+						GammaTable		Text	0	0	0	0	0\
+						PaperPack		Text	0	0	0	0	0\
+						PrintLut		Text	0	0	0	0	0\
+						SaveFileType	Text	0	0	0	0	0\
+						OutputPath		Text	0	0	0	0	0\
+						StartupScript	Text	0	0	0	0	0\
+						ApplicationPath	Text	0	0	0	0	0\
+						StartPrntScrpt	Text	0	0	0	0	0\
+						PrintCmplScrpt	Text	0	0	0	0	0\
+						OrderCmplScrpt	Text	0	0	0	0	0\
+						ResponseScript	Text	0	0	0	0	0\
+						ShutdownScript	Text	0	0	0	0	0\
+						ControlFolder	Text	0	0	0	0	0\
+						ResponseFolder	Text	0	0	0	0	0\
+						AvgPaperAdv		Double	0	0	0	0	0\
+						AvgPrintSpeed	Long	0	0	0	0	0\
+						NTXGamma		Double	0	0	0	0	0\
+						NTResolution	Double	0	0	0	0	0\
+						Devices			Text	0	0	0	0	0\
+						LogAttributes	Long	0	0	0	0	0\
+						NoPrint			Long	0	0	0	0	0\
+						Debug			Long	0	0	0	0	0\
+						HopAddress		Text	0	0	0	0	0\
+						HopModel		Text	0	0	0	0	0\
+						HopAddressType	Long	0	0	0	0	0\
+						DeviceList		Reference	0	0	0	0	0" ;
+
+		theDataDict = CreateDataDict( DataDictText, 0 ) ;
+
+		if( theDataDict )
+		{
+			SetName( theDataDict, "DDPtrWizard" ) ;
+			AddDataDictToApp( theDataDict ) ;
+		}
+	}
+	return( theDataDict ) ;
+}
+
+
+void GetDialogLists()
+{
+	UStringList *aSL = (UStringList *) GetTreeObject( _T("PrinterModel"), _T("STRINGS")) ;
+	if( aSL == NULL )
+	{
+		aSL = new UStringList ;
+		aSL->SetName(_T("PrinterModel")) ;
+		aSL->AddString( _T("Kodak CRT"), FALSE) ;
+		aSL->AddString( _T("Kodak LFCRT"), FALSE) ;
+		aSL->AddString( _T("KPDM"), FALSE) ;
+		aSL->AddString( _T("KPDM II"), FALSE) ;
+		aSL->AddString( _T("Kodak LED"), FALSE) ;
+		aSL->AddString( _T("Kodak RP30"), FALSE ) ;
+		aSL->AddString( _T("Disk"), FALSE) ;
+		aSL->AddString( _T("NT Printer"), FALSE) ;
+		HangTreeObject( aSL, _T("STRINGS")) ;
+	}
+
+	aSL = (UStringList *) GetTreeObject( _T("PaperType"), _T("STRINGS")) ;
+	if( aSL == NULL )
+	{
+		aSL = new UStringList ;
+		aSL->SetName(_T("PaperType")) ;
+		aSL->AddString( _T("Photographic"), FALSE) ;
+		aSL->AddString( _T("Plain"), FALSE) ;
+		HangTreeObject( aSL, _T("STRINGS")) ;
+	}
+
+	aSL = (UStringList *) GetTreeObject( _T("PaperSurface"), _T("STRINGS")) ;
+	if( aSL == NULL )
+	{
+		aSL = new UStringList ;
+		aSL->SetName(_T("PaperSurface")) ;
+		aSL->AddString( _T("E"), FALSE) ;
+		aSL->AddString( _T("F"), FALSE) ;
+		aSL->AddString( _T("N"), FALSE) ;
+		aSL->AddString( _T("Y"), FALSE) ;
+		HangTreeObject( aSL, _T("STRINGS")) ;
+	}
+
+	aSL = (UStringList *) GetTreeObject( _T("PaperOpacity"), _T("STRINGS")) ;
+	if( aSL == NULL )
+	{
+		aSL = new UStringList ;
+		aSL->SetName(_T("PaperOpacity")) ;
+		aSL->AddString( _T("Reflective"), FALSE) ;
+		aSL->AddString( _T("Transmissive"), FALSE) ;
+		HangTreeObject( aSL, _T("STRINGS")) ;
+	}
+
+	aSL = (UStringList *) GetTreeObject( _T("PackageCut"), _T("STRINGS")) ;
+	if( aSL == NULL )
+	{
+		aSL = new UStringList ;
+		aSL->SetName(_T("PackageCut")) ;
+		aSL->AddString( _T("None"), FALSE) ;
+		aSL->AddString( _T("Barcode"), FALSE) ;
+		aSL->AddString( _T("Punch"), FALSE) ;
+		HangTreeObject( aSL, _T("STRINGS")) ;
+	}
+
+	aSL = (UStringList *) GetTreeObject( _T("PackageBCCut"), _T("STRINGS")) ;
+	if( aSL == NULL )
+	{
+		aSL = new UStringList ;
+		aSL->SetName(_T("PackageBCCut")) ;
+		aSL->AddString( _T("None"), FALSE) ;
+		aSL->AddString( _T("Barcode"), FALSE) ;
+	//	aSL->AddString( _T("Punch"), FALSE) ;
+		HangTreeObject( aSL, _T("STRINGS")) ;
+	}
+
+	aSL = (UStringList *) GetTreeObject( _T("SpillOverTypeList"), _T("STRINGS")) ;
+	if( aSL == NULL )
+	{
+		aSL = new UStringList ;
+		aSL->SetName(_T("SpillOverTypeList")) ;
+		aSL->AddString( _T("None"), FALSE) ;
+		aSL->AddString( _T("Percent"), FALSE) ;
+		aSL->AddString( _T("Fixed"), FALSE) ;
+		HangTreeObject( aSL, _T("STRINGS")) ;
+	}
+
+/*	aSL = (UStringList *) GetTreeObject( _T("SaveFileType"), _T("STRINGS")) ;
+	if( aSL == NULL )
+	{
+		aSL = new UStringList ;
+		aSL->SetName(_T("SaveFileType")) ;		This is now done in Render.txt
+		aSL->AddString( _T("TIFF"), FALSE) ;
+		aSL->AddString( _T("JPEG"), FALSE) ;
+		HangTreeObject( aSL, _T("STRINGS")) ;
+	}
+*/	
+	aSL = (UStringList *) GetTreeObject( _T("UnitList"), _T("STRINGS")) ;
+	if( aSL == NULL )
+	{
+		aSL = new UStringList ;
+		aSL->SetName(_T("UnitList")) ;
+		aSL->AddString( _T("INCH"), FALSE) ;
+		aSL->AddString( _T("CM"), FALSE) ;
+		HangTreeObject( aSL, _T("STRINGS")) ;
+	}
+
+	GetProfileList() ;
+	GetPrinterAttributeFiles() ;
+	GetDeviceList() ;
+}
+
+
+void GetDeviceList()
+{
+//	Debug(1) ;
+
+	UDP2HopSetup	*DHS		= new UDP2HopSetup ;
+
+	TCHAR	*theExeName = GetExeDirectory() ;
+	TCHAR			 ConfigLocation[2048] ;
+	sprintf( ConfigLocation, _T("%s\\HopConfig"), theExeName ) ;
+
+	DHS->SetConfigLocation( ConfigLocation ) ;
+
+	UList	*DeviceList	= DHS->GetDeviceList(_T("NT Printer")) ;
+	
+	DataGC->SetLongValue( _T("DeviceList"), DeviceList ) ;
+
+	//	CREATE THE USTRINGLIST
+	TCHAR			*Addr ;
+	UStringList		*Devices = new UStringList ;
+	Devices->SetName(_T("Devices")) ;
+	UListIterator	*anIter = new UListIterator( DeviceList ) ;
+	UGenCon			*aDevice = (UGenCon *) anIter->GetFirst() ;
+	while( aDevice )
+	{
+		Addr = aDevice->GetStringValue(_T("Address")) ;
+		if( Addr ) { Devices->AddString( Addr, FALSE ) ; }
+		aDevice = (UGenCon *) anIter->GetNext() ;
+	}
+	delete anIter ;
+	delete DHS ;
+
+	HangTreeObject( Devices, _T("STRINGS")) ;
+}
+
+void GetPrinterAttributeFiles()
+{
+//	Debug(1) ;
+	UGenCon	*theFiles = GetTreeObject( _T("PrinterAttributeFiles"), _T("[GenCons]")) ;
+	if( theFiles == NULL )
+	{
+		theFiles = new UGenCon( GetDataDictionary(_T("DDText"))) ;
+		theFiles->SetName( _T("PrinterAttributeFiles") ) ;
+
+		UGenCon	*anAttFile = new UGenCon( GetDataDictionary(_T("DDText"))) ;
+		anAttFile->SetName( _T("Kodak CRT")) ;
+		anAttFile->SetAttrValue( _T("Text"), _T("CRT DigitalColor - 4 Inch.ATT")) ;
+		theFiles->AddChildBack( anAttFile ) ;
+
+		anAttFile = new UGenCon( GetDataDictionary(_T("DDText"))) ;
+		anAttFile->SetName( _T("Kodak LFCRT")) ;
+		anAttFile->SetAttrValue( _T("Text"), _T("CRT DigitalColor - 7 inch.ATT")) ;
+		theFiles->AddChildBack( anAttFile ) ;
+
+		anAttFile = new UGenCon( GetDataDictionary(_T("DDText"))) ;
+		anAttFile->SetName( _T("KPDM")) ;
+		anAttFile->SetAttrValue( _T("Text"), _T("Digital Multiprinter.ATT")) ;
+		theFiles->AddChildBack( anAttFile ) ;
+
+		anAttFile = new UGenCon( GetDataDictionary(_T("DDText"))) ;
+		anAttFile->SetName( _T("KPDM II")) ;
+		anAttFile->SetAttrValue( _T("Text"), _T("KPDM II.ATT")) ;
+		theFiles->AddChildBack( anAttFile ) ;
+
+		anAttFile = new UGenCon( GetDataDictionary(_T("DDText"))) ;
+		anAttFile->SetName( _T("Kodak LEDP")) ;
+		anAttFile->SetAttrValue( _T("Text"), _T("Digital LED 20P.ATT")) ;
+		theFiles->AddChildBack( anAttFile ) ;
+
+		anAttFile = new UGenCon( GetDataDictionary(_T("DDText"))) ;
+		anAttFile->SetName( _T("Kodak LEDR")) ;
+		anAttFile->SetAttrValue( _T("Text"), _T("Digital LED 20R.ATT")) ;
+		theFiles->AddChildBack( anAttFile ) ;
+
+		anAttFile = new UGenCon( GetDataDictionary(_T("DDText"))) ;
+		anAttFile->SetName( _T("NT Printer")) ;
+		anAttFile->SetAttrValue( _T("Text"), _T("HP LaserJet.ATT")) ;
+		theFiles->AddChildBack( anAttFile ) ;
+
+		HangTreeObject( theFiles, _T("[GenCons]") ) ;
+	}
+}
+
+void GetProfileList()
+{
+	int		 Result = 0 ;
+	int		 FirstTime = 1 ;
+	TCHAR	*Name ;
+	TCHAR	 FirstName[100] ;
+
+	//	REMOVE ANY EXISTING "ADD PRINTER WIZARD PROFILES"
+	UObject *TreeObject = GetTreeObject( _T("ICCProfile"), _T("[Strings]") ) ;
+	if( TreeObject )
+	{
+		PluckTreeObject(_T("ICCProfile"), _T("[Strings]") ) ;
+		delete TreeObject ;
+	}
+
+	UStringList *ProfileList = new UStringList ;
+	ProfileList->SetName(_T("ICCProfile")) ;
+	ProfileList->AddString(Translate(_T("None")),FALSE) ;
+	HangTreeObject( ProfileList, _T("Strings") ) ;
+
+	UADO *theADO = DBConnect() ;
+	if( theADO == NULL )	{ return ; }
+
+	UPGenConList	*thePGL = new UPGenConList( theADO ) ;
+	if( thePGL == NULL )	{ delete theADO ; return ; }
+
+	TCHAR	*theQuery = _T("Select * From Profiles Where Type = 'Output' OR Type = 'WorkingSpace'") ;
+
+	Result = thePGL->Query( theQuery, _T("ReadOnly"),_T("Forward")) ;
+
+	if( Result == 0 )
+	{
+		HandleDBError( theADO ) ;
+		delete thePGL ;
+		delete theADO ;
+		return ;
+	}
+
+	UGenCon *anEntry = (UGenCon *) thePGL->GetFirst() ;
+	while( anEntry )
+	{
+		Name = anEntry->GetStringValue(_T("Name")) ;
+		ProfileList->AddString( Name, FALSE ) ;
+		if( FirstTime )
+		{
+			strcpy( FirstName, Name ) ;
+			FirstTime = 0 ;
+		}
+		anEntry = (UGenCon *) thePGL->GetNext() ;
+	}
+
+//	gDataGC->SetAttrValue(_T("ICCProfile"), FirstName ) ;
+
+	delete thePGL ;
+	delete theADO ;
+}
+
+
+
+TCHAR *Translate( TCHAR *Msg )
+{
+	return( Msg ) ;
+}
+
+
+//===================================================================================
+//===================================================================================
+//===================================================================================
+//===================================================================================
+//===================================================================================
+//===================================================================================
+
+void AddSliderLine(UGenCon *Tab, long YPos, UDataDict *ddWinCtrlDef, TCHAR *label, TCHAR *Field, TCHAR *ValueName, TCHAR *SliderName)
+{
+	long		 Col1 = gLeftStart ;
+	long		 Col2 = Col1 + 100 ;
+	long		 Col3 = Col2 +  50 ;
+	long		 StaticWidth = 100 ;
+	long		 ValueWidth  =  50 ;
+	long		 SliderWidth = 100 ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+	TCHAR		 Position[128] ;
+
+	Debug(0) ;
+
+	sprintf( Position, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+	UGenCon *Static = GetStaticCtrl( ddWinCtrlDef, Position, label, label ) ;
+	Tab->AddChildBack( Static ) ;
+
+	sprintf( Position, PosFormat, Col2, YPos, ValueWidth, gCtrlHeight ) ;
+	UGenCon *Value = GetValueCtrl( ddWinCtrlDef, Position, Field, ValueName, SliderName ) ;
+	Tab->AddChildBack( Value ) ;
+
+	sprintf( Position, PosFormat, Col3, YPos, SliderWidth, gCtrlHeight ) ;
+	UGenCon *Slider = GetSliderCtrl( ddWinCtrlDef, Position, Field, SliderName, ValueName ) ;
+	Tab->AddChildBack( Slider ) ;
+
+}
+
+void AddButtonEditCtrlLine(UGenCon *Tab, long YPos, UDataDict *ddWinCtrlDef, TCHAR *Label, TCHAR *FieldName, TCHAR *Action, TCHAR *ToolTip )
+{
+	long		 Col1 = gLeftStart ;
+	long		 Col2 = Col1 + 100 ;
+	long		 Col3 = Col2 +  50 ;
+	long		 StaticWidth = 100 ;
+	long		 ValueWidth  = 125 ;
+	long		 SliderWidth = 100 ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+	TCHAR		 Position[128] ;
+
+	sprintf( Position, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+	UGenCon *SrcButton = GetButtonCtrl( ddWinCtrlDef, Position, Label, Action, ToolTip ) ;
+	Tab->AddChildBack( SrcButton ) ;
+	
+	sprintf( Position, PosFormat, gLeftCenter, YPos, ValueWidth, gCtrlHeight ) ;
+	UGenCon *SrcPathGC = GetEditTextCtrl( ddWinCtrlDef, Position, FieldName ) ;
+	Tab->AddChildBack( SrcPathGC ) ;
+}
+
+void AddButtonLEditCtrlLine(UGenCon *Tab, long YPos, UDataDict *ddWinCtrlDef, TCHAR *Label, TCHAR *FieldName, TCHAR *Action, TCHAR *ToolTip )
+{
+	long		 Col1 = gLeftStart ;
+	long		 Col2 = Col1 + 100 ;
+	long		 Col3 = Col2 +  50 ;
+	long		 StaticWidth = 100 ;
+	long		 ValueWidth  = 125 ;
+	long		 SliderWidth = 100 ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+	TCHAR		 Position[128] ;
+
+	sprintf( Position, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+	UGenCon *SrcButton = GetButtonCtrl( ddWinCtrlDef, Position, Label, Action, ToolTip ) ;
+	Tab->AddChildBack( SrcButton ) ;
+	
+	sprintf( Position, PosFormat, gLeftStart, YPos + gVertGap, 250, gCtrlHeight ) ;
+	UGenCon *SrcPathGC = GetEditTextCtrl( ddWinCtrlDef, Position, FieldName ) ;
+	Tab->AddChildBack( SrcPathGC ) ;
+}
+
+void AddStaticEditCtrlLine(UGenCon *Tab, long YPos, UDataDict *ddWinCtrlDef, TCHAR *Label, TCHAR *FieldName )
+{
+	long		 Col1 = gLeftStart ;
+	long		 Col2 = Col1 + 100 ;
+	long		 Col3 = Col2 +  50 ;
+	long		 StaticWidth = 125 ;
+	long		 ValueWidth  = 125 ;
+	long		 SliderWidth = 100 ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+	TCHAR		 Position[128] ;
+
+	sprintf( Position, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+	UGenCon *Static = GetStaticCtrl( ddWinCtrlDef, Position, FieldName, Label ) ;
+	Tab->AddChildBack( Static ) ;
+	
+	sprintf( Position, PosFormat, gLeftCenter, YPos, ValueWidth, gCtrlHeight ) ;
+	UGenCon *SrcPathGC = GetEditTextCtrl( ddWinCtrlDef, Position, FieldName ) ;
+	Tab->AddChildBack( SrcPathGC ) ;
+}
+
+
+void AddCheckBoxLine(UGenCon *Tab, long YPos, UDataDict *ddWinCtrlDef, TCHAR *Label, TCHAR *FieldName )
+{
+	long		 Col1 = gLeftStart ;
+	long		 Col2 = Col1 + 100 ;
+	long		 Col3 = Col2 +  50 ;
+	long		 StaticWidth = 100 ;
+	long		 ValueWidth  = 125 ;
+	long		 SliderWidth = 100 ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+	TCHAR		 Position[128] ;
+
+	sprintf( Position, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+	UGenCon *Static = GetStaticCtrl( ddWinCtrlDef, Position, FieldName, Label ) ;
+	Tab->AddChildBack( Static ) ;
+	
+	sprintf( Position, PosFormat, gLeftCenter, YPos, ValueWidth, gCtrlHeight ) ;
+	UGenCon *CheckBoxGC = GetCheckBoxCtrl( ddWinCtrlDef, Position, FieldName, NULL ) ;
+	Tab->AddChildBack( CheckBoxGC ) ;
+}
+
+
+void AddComboBoxLine(UGenCon *Tab, long YPos, UDataDict *ddWinCtrlDef, TCHAR *Label, TCHAR *FieldName, TCHAR *ListName )
+{
+	long		 Col1 = gLeftStart ;
+	long		 Col2 = Col1 + 100 ;
+	long		 Col3 = Col2 +  50 ;
+	long		 StaticWidth = 100 ;
+	long		 ValueWidth  = 125 ;
+	long		 SliderWidth = 100 ;
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+	TCHAR		 Position[128] ;
+
+	sprintf( Position, PosFormat, Col1, YPos, StaticWidth, gCtrlHeight ) ;
+	UGenCon *aGC = GetStaticCtrl( ddWinCtrlDef, Position, FieldName, Label ) ;
+	Tab->AddChildBack( aGC ) ;
+
+	sprintf( Position, PosFormat, gLeftCenter, YPos, ValueWidth, gCtrlHeight * 8 ) ;
+	aGC = GetComboBoxCtrl( ddWinCtrlDef, Position, FieldName, ListName ) ;
+	Tab->AddChildBack( aGC ) ;
+}
+
+
+void AddStaticOutputCtrl(UGenCon *Tab, long XPos, long YPos, long Width, long Height,
+						 UDataDict *ddWinCtrlDef, TCHAR *FieldName, TCHAR *Text )
+{
+	TCHAR		*PosFormat	= _T("%ld %ld %ld %ld") ;
+	TCHAR		 Position[128] ;
+
+	sprintf( Position, PosFormat, XPos, YPos, Width, Height ) ;
+	UGenCon *aGC = GetStaticCtrl( ddWinCtrlDef, Position, FieldName, Text ) ;
+	Tab->AddChildBack( aGC ) ;
+}
+
+
+//===================================================================================
+//===================================================================================
+//===================================================================================
+//===================================================================================
+//===================================================================================
+//===================================================================================
+
+UGenCon *GetButtonCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *Label, TCHAR *DAction, TCHAR *ToolTip )
+{
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName( Label ) ;
+		theGC->SetAttrValue( _T("Position"),		 Position ) ;
+		theGC->SetAttrValue( _T("TypeName"),		_T("Button") ) ;
+		theGC->SetAttrValue( _T("Text"),			 Label ) ;
+		theGC->SetAttrValue( _T("DActionsText"),	 DAction ) ;
+		theGC->SetAttrValue( _T("ToolTip"),			 ToolTip ) ;
+	}
+	return( theGC ) ;
+}
+
+UGenCon	*GetEditTextCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *Name )
+{
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName( Name ) ;
+		theGC->SetAttrValue( _T("Position"), Position ) ;
+		theGC->SetAttrValue( _T("TypeName"), _T("EditText")) ;
+		theGC->SetAttrValue( _T("GenConName"), _T("THIS")) ;
+		theGC->SetAttrValue( _T("GenConField"), Name ) ;
+		theGC->SetAttrValue( _T("IActionsText"), _T("[Get]")) ;
+		theGC->SetAttrValue( _T("DActionsText"), _T("[Save]")) ;
+		theGC->SetAttrValue( _T("OActionsText"), _T("[Save]")) ;
+	}
+	return( theGC ) ;
+}
+
+UGenCon *GetCheckBoxCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *Name, TCHAR *Text )
+{
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName( Name ) ;
+		theGC->SetAttrValue( _T("Position"), Position ) ;
+		theGC->SetAttrValue( _T("TypeName"), _T("CheckBox")) ;
+		theGC->SetAttrValue( _T("GenConName"), _T("THIS")) ;
+		theGC->SetAttrValue( _T("GenConField"), Name ) ;
+		theGC->SetAttrValue( _T("Text"), Text ) ;
+		theGC->SetAttrValue( _T("IActionsText"), _T("[Get]")) ;
+		theGC->SetAttrValue( _T("DActionsText"), _T("[Save]")) ;
+		theGC->SetAttrValue( _T("OActionsText"), _T("[Save]")) ;
+		theGC->SetLongValue( _T("IsTabStop"), 1L ) ;
+	}
+	return( theGC ) ;
+}
+
+
+UGenCon *GetStaticCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *Name, TCHAR *Text )
+{
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	TCHAR	 StaticName[64] ;
+	if( theGC )
+	{
+		sprintf( StaticName, _T("s%s"), Name ) ;
+		theGC->SetName( StaticName ) ;
+		theGC->SetAttrValue( _T("Position"),	Position ) ;
+		theGC->SetAttrValue( _T("TypeName"),	_T("StaticText")) ;
+		theGC->SetAttrValue( _T("Text"),		Text) ;
+	}
+	return( theGC ) ;
+}
+
+
+UGenCon *GetOutputCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *FieldName )
+{
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName( FieldName ) ;
+		theGC->SetAttrValue( _T("Position"),		 Position ) ;
+		theGC->SetAttrValue( _T("TypeName"),		_T("StaticText")) ;
+		theGC->SetAttrValue( _T("GenConName"),		_T("THIS") ) ;
+		theGC->SetAttrValue( _T("GenConField"),		 FieldName) ;
+		theGC->SetAttrValue( _T("IActionsText"),	_T("[Get]")) ;
+		theGC->SetAttrValue( _T("DActionsText"),	_T("[Get]")) ;
+	}
+	return( theGC ) ;
+}
+
+
+UGenCon *GetValueCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *FieldName, TCHAR *Name, TCHAR *SliderName )
+{
+	TCHAR	 DActions[1024] ;
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		sprintf( DActions, _T("[Save Update(%s) DialogTimer(0 1000)]"), SliderName ) ;
+		theGC->SetName(Name) ;
+		theGC->SetAttrValue( _T("Position"),		 Position ) ;
+		theGC->SetAttrValue( _T("TypeName"),		_T("StaticText")) ;
+		theGC->SetAttrValue( _T("GenConName"),		_T("THIS") ) ;
+		theGC->SetAttrValue( _T("GenConField"),		 FieldName) ;
+		theGC->SetAttrValue( _T("IActionsText"),	_T("[Get]")) ;
+		theGC->SetAttrValue( _T("DActionsText"),	 DActions ) ;
+		theGC->SetAttrValue( _T("OActionsText"),	_T("[Save]")) ;
+	}
+	return( theGC ) ;
+}
+
+
+UGenCon *GetSliderCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *FieldName, TCHAR *Name, TCHAR *ValueName )
+{
+	TCHAR	 DActions[1024] ;
+	UGenCon *theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		sprintf( DActions, _T("[Save Update(%s) DialogTimer(0 250)]"), ValueName ) ;
+		theGC->SetName(Name) ;
+		theGC->SetAttrValue( _T("Position"),		 Position ) ;
+		theGC->SetAttrValue( _T("TypeName"),		_T("Slider")) ;
+		theGC->SetAttrValue( _T("GenConName"),		_T("THIS") ) ;
+		theGC->SetAttrValue( _T("GenConField"),		 FieldName) ;
+		theGC->SetAttrValue( _T("IActionsText"),	_T("[Get]")) ;
+		theGC->SetAttrValue( _T("DActionsText"),	 DActions) ;
+		theGC->SetAttrValue( _T("OActionsText"),	_T("[Save]")) ;
+		theGC->SetAttrValue( _T("Units"),			_T("1") ) ;
+	}
+	return( theGC ) ;
+}
+
+UGenCon *GetComboBoxCtrl( UDataDict *ddWinCtrlDef, TCHAR *Position, TCHAR *FieldName, TCHAR *ListName )
+{
+	TCHAR	IActionsText[1024] ;
+	TCHAR	DActionsText[1024] ;
+
+	UGenCon	*theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName( FieldName ) ;
+		theGC->SetAttrValue( _T("Position"),		 Position ) ;
+		theGC->SetAttrValue( _T("TypeName"),		_T("SComboBox")) ;
+
+		sprintf( IActionsText, _T("[GetList(%s) Get]"), ListName ) ;
+		theGC->SetAttrValue( _T("IActionsText"),	 IActionsText) ;
+
+		theGC->SetAttrValue( _T("DActionsText"),	_T("[Save]")) ;
+		
+		theGC->SetAttrValue( _T("OActionsText"),	_T("[Save]")) ;
+		theGC->SetAttrValue( _T("GenConName"),		_T("THIS") ) ;
+		theGC->SetAttrValue( _T("GenConField"),		 FieldName) ;
+	}
+	return( theGC ) ;
+}
+
+
+//===================================================================================
+//===================================================================================
+//===================================================================================
+//===================================================================================
+//===================================================================================
+//===================================================================================
+
+
+UADO *DBConnect()
+{
+	UADO *theADO = new UADO ;
+	if( theADO == NULL )
+	{
+		return(theADO) ;
+	}
+
+	int Result = theADO->ConnectKPIS() ;
+	if( Result )
+	{
+		sprintf( msg, "Could not get Connection. Error = %d", Result ) ;
+		MessageBox( msg, "MB_OK" ) ;
+		theADO = delete  theADO   ;
+	}
+	return( theADO ) ;
+}
+
+
+HandleDBError(UADO *theADO)
+{
+	long	ErrorCount, ErrorIndex ;
+	TCHAR	ADOErrDesc[2048] ;
+	TCHAR	theMsg[4096] ;
+	long	StopHere = 1 ;
+
+	ErrorCount = GetErrorCount( theADO ) ;
+	for( ErrorIndex = 0L ; ErrorIndex < ErrorCount ; ErrorIndex++ )
+	{
+		GetErrorDescription( theADO, ErrorIndex, ADOErrDesc ) ;
+		printf( _T("Database Error: %s"), ADOErrDesc ) ;
+		Debug(StopHere) ;
+	}
+}
+
+

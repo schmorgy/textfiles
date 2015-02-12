@@ -1,0 +1,518 @@
+// OrderDlvrblChoicesDoc.txt
+
+Define:	DlvrblChoicesMessages Using DDSymbol
+	Fields:	Value	~These strings are DlvrblChoices related strings used by the user interface.~
+	Contains:
+	{
+		Define: Title				using DDText	Fields: Text ~OrderDlvrblChoices Data~
+		Define: ReadingRecords		using DDText	Fields: Text ~Reading %1 OrderDlvrblChoices~
+		Define: ReadRecords			using DDText	Fields: Text ~Read %1 OrderDlvrblChoices in %2 seconds~
+		Define: DeletingRecord		using DDText	Fields: Text ~Deleting record %1~
+		Define: RemovingAllFor		using DDText	Fields:	Text ~Are you sure you want to delete the %1 selected OrderDlvrblChoices(s)?~
+		Define: MenuChangeField		using DDText	Fields:	Text ~Change Field~
+		Define: FieldsAreBlank		using DDText	Fields: Text ~Unable to save pending changes. Name and Choice cannot be blank.~
+	}
+
+// Hang:	DlvrblChoicesMessages	~[STRINGS]~ ; No need to hang these
+
+
+Include: ~FormattingRoutines~;
+
+//** [Refresh], "Refresh", Refresh Action, F5
+NUMERIC RefreshListView()
+{
+	if ( DlvrblChoicesDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	Start = Ticks();
+
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	Count = List( NumEntries );
+
+	if ( FALSE )
+	{
+		if ( MessageBox( Translate(DBMessages,LargeQuery,~<DocumentQuery>~,~<Count>~),YESNO ) != YES )
+		{
+			return TRUE;
+		}
+	}
+
+	DlvrblChoicesDataWindow( StatusBar,Text,Translate( DlvrblChoicesMessages,ReadingRecords,<Count> ) );
+
+	SetDocumentData( List(GetObject) );	
+	DlvrblChoicesDataWindow( RefreshWindow );
+
+	Duration = (Ticks() - <Start>) / 1000;
+
+	return DlvrblChoicesDataWindow( StatusBar,Text,Translate(DlvrblChoicesMessages,ReadRecords,~<Count>~,~<Duration>~) );
+}
+
+
+// Select field that is a Combo Box
+NUMERIC RefreshComboBox()
+{
+	DlvrblChoicesDataView( GetActiveCell,row,col );
+
+	DlvrblChoicesDataView( GetColumnName,<col>,ColumnName );
+
+	if ( ~<ColumnName>~ == ~CHOICE~ )  // name must be capitalized
+	{	GetChoicesList();	}
+
+	return TRUE;
+
+}
+
+
+//** [Options]
+NUMERIC AllOptions()
+{
+	return DlvrblChoicesDataView( DisplayMenu,DlvrblChoicesListViewMenu,0,0 );
+
+}
+
+
+//** [New], "New"
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+	theName = ~~;
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	if ( DlvrblChoicesDataView( GetSelectedRows,SelectedRows ) )		
+	{
+		SelectedRows( GetFirst,theRecord );
+		theName = ~<$con.theRecord[Name]>~;
+	}
+
+	NewRow( Set,Name,~<theName>~ );
+
+	RowBeingAdded = DlvrblChoicesDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate(UIMessages,AddRowFailed) ); }
+
+	DlvrblChoicesDataView( SetActiveCell,<RowBeingAdded>,~Name~ );
+
+	return TRUE;
+}
+
+
+
+//** [Find], "Find"
+NUMERIC Search()
+{
+	Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( OrderDlvrblChoices );" ) );
+	return PerformActions( Actions );
+}
+
+
+//** [Save], "Save Changes"
+NUMERIC SaveAllChanges()
+{
+	while ( DlvrblChoicesDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+//** [Cancel], "Cancel Changes"
+NUMERIC RollBackAllChanges()
+{
+	if ( !DlvrblChoicesDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( Translate(UIMessages,CancelChanges),YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DlvrblChoicesDataView( PendingChanges ) )
+	{
+		DlvrblChoicesDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+//** [Delete], "Delete", DeleteRecords Action
+NUMERIC DeleteRecord()
+{
+
+	if ( !DlvrblChoicesDataView( GetSelectedRows,RecordsToDelete ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	count = RecordsToDelete( ChildCount );
+
+	if ( MessageBox( Translate(DlvrblChoicesMessages,RemovingAllFor,~<count>~),YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	num = 1;
+	while ( RecordsToDelete( GetNext,theRecord ) )
+	{
+		DlvrblChoicesDataWindow( StatusBar,Text,Translate(DlvrblChoicesMessages,DeletingRecord,~<$con.Customer[ID]>~) );
+		Cmd = ~Delete From OrderDlvrblChoices Where Name = '<$con.theRecord[Name]>' AND Choice = '<$con.theRecord[Choice]>'~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate( DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+		}
+
+		RowsToDelete( AddString,RecordsToDelete(GetCurrentPosition) );
+
+		dBase( LogActivity,Msg,~Deleted OrderDlvrblChoices <$con.theRecord[OrderID]> - <$con.theRecord[Choice]~,Type,Info );
+
+		++num;
+	}
+
+	DlvrblChoicesDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+
+Include: ~ChgFldDlg~;
+NUMERIC SeeChangeField()
+{
+	return DisplayChangeFieldDlg(DlvrblChoicesDataView);
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,DlvrblChoicesListViewMenu,~<KeyString>~ ) )
+	{
+		DlvrblChoicesDataView( DisplayMenu,DlvrblChoicesListViewMenu,0,0  );
+	}
+}
+
+
+//** ChangeRecord Action, (and result of Save)
+// Following 3 routines are all only used as result of changing the record
+//     ChangeRecord(), AddNew(), UpdateExisting()
+NUMERIC ChangeRecord()
+{
+	if ( !DlvrblChoicesDataView( GetChangedRow,ChangedDlvrblChoices,OrigDlvrblChoices,ChangedRow,IsNewRow ) )
+		{ return Warning(  Translate(UIMessages,NoRowsSelected) ); }
+
+	if ( ( ~<$con.ChangedDlvrblChoices[Name]>~ == ~~ ) || ( ~<$con.ChangedDlvrblChoices[Choice]>~ == ~~ ) )
+		{ return Warning( Translate(DlvrblChoicesMessages,FieldsAreBlank) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	Key = STR ( Name = '<$con.OrigDlvrblChoices[Name]>' AND Choice = '<$con.OrigDlvrblChoices[Choice]>');
+	Query = ~Select * From OrderDlvrblChoices Where <Key>~;
+
+	if ( <IsNewRow> )
+	{
+		if (!AddNew( ChangedDlvrblChoices,OrigDlvrblChoices,Query,Key ))
+			{ return FALSE; }
+	}
+	else
+	{
+		if (!UpdateExisting( ChangedDlvrblChoices,OrigDlvrblChoices,Query,Key ))
+			{ return FALSE; }
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddNew( &ChangedDlvrblChoices,&OrigDlvrblChoices,&Query,&Key )
+{
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( UpdateFrom,ChangedDlvrblChoices,~<Key>~,TRUE ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+	}
+
+	DlvrblChoicesDataView( CommitChanges );
+
+	return TRUE;
+}
+
+
+
+NUMERIC UpdateExisting( &ChangedDlvrblChoices,&OrigDlvrblChoices,&Query,&Key )
+{
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( UpdateFrom,ChangedDlvrblChoices,~<Key>~,FALSE ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+	}
+
+	DlvrblChoicesDataView( CommitChanges );
+
+	return TRUE;
+}
+
+
+//** Close Action
+NUMERIC OnCloseDlvrblChoicesDataView()
+{
+	if ( DlvrblChoicesDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DlvrblChoicesDataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+//** RightClick Action
+NUMERIC RightClickInListView()
+{
+	return DlvrblChoicesDataView( DisplayMenu,DlvrblChoicesListViewMenu );
+}
+
+
+// Get list of all available products
+NUMERIC GetChoicesList()
+{
+	theQuery = ~Select ID From Products Where Multiple <>1 And Style <>1 Order By Sequence~;	
+	
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	count = List(NumEntries);
+
+	if (<count> > 0)
+	{
+		List( MakeStringList,ProdChoicesList,ID );
+		GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+		Fields( GetByName,Choice,ColumnDefinition );
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,ProdChoicesList(GetCopyOf) );
+		DlvrblChoicesDataView( SetComboBox,ColumnDefinition,Choice);
+	}
+
+	else
+	{
+	}
+
+	return TRUE;
+}
+
+
+
+
+
+FirstTime = TRUE;
+
+NUMERIC Init(WhichTitle,DocumentQuery)
+{
+
+	theTitle = Translate(DlvrblChoicesMessages,Title);
+	theTitle = ~<WhichTitle>~ == ~~ ? ~<theTitle>~ : ~<theTitle> - <WhichTitle>~;
+
+	DlvrblChoicesDataWindow( Set,Title,~<theTitle>~ );
+	Global( WhichTitle,DocumentQuery);
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,CursorLocation,Client,Lock,ReadOnly,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{ 
+			List(GetErrorDescription,0,theErr);
+			Error( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+		}
+
+		Count = List( NumEntries );
+
+		StatusBarText( Translate(DlvrblChoicesMessages,ReadingRecords,<Count>) );
+
+		Start = Ticks();
+
+		SetDocumentData( List(GetObject) );
+
+		WindowLocation = ~<$User.WindowLocation[List]>~;
+
+		if ( ~<WindowLocation>~ != ~~ )
+			{ DlvrblChoicesDataWindow( Set,Position,~<WindowLocation>~ ); }
+
+		DefineMenu( );
+
+		if ( !DlvrblChoicesDataWindow( CreateWindow,~DlvrblChoices~ ) )
+			{ Error( Translate(UIMessages,CreateWindowFailed,~DlvrblChoices~) ); }
+
+		Duration = (Ticks() - <Start>) / 1000;
+
+		return DlvrblChoicesDataWindow( StatusBar,Text,Translate(DlvrblChoicesMessages,ReadRecords,~<Count>~,~<Duration>~) );
+	}
+
+	Document( Doc,This,SetTitle,~<theTitle>~ );
+	return RefreshListView();
+}
+
+
+
+Include: ~ExportSelectedToFile~;
+
+
+VOID DefineMenu()
+{
+	Define:	DlvrblChoicesListViewMenu Using DDMenuDef AsSymbol DlvrblChoicesListViewMenu
+		Fields:		Position	(-1)		
+		Contains:	INLISTORDER
+		{
+			Define:	AddRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuAdd )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( AddRecord() )
+						AcceleratorKey	~N~
+
+			Define:	Search	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuFind )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( Search() )
+						//AcceleratorKey	~S~
+
+			Define:	NULL1 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	SaveAllChanges	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuSaveChanges )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SaveAllChanges() )
+
+			Define:	ForgetAllChanges	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuCancelChanges )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+			Define:	DeleteRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuDelete )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DeleteRecord() )
+
+			Define:	Refresh	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuRefresh )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RefreshListView() )
+
+			Define:	NULL2 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	SeeChangeField	using	DDMenuItemDef
+				Fields:	Text		Translate( DlvrblChoicesMessages,MenuChangeField )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeChangeField() )
+
+			Define:	NULL4 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	Export	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuExport )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( ExportSelectedToFile(DlvrblChoicesDataView,OrderDlvrblChoices) )
+
+		}
+
+	Global( DlvrblChoicesListViewMenu );
+}
+
+
+
+
+Include: ~DefineStdGridButtons~;
+
+	if ( !GenCon( TableDefinition,GetFrom,OrderDlvrblChoices,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The Subject Info Description (OrderDlvrblChoices) Table is not properly defined~ ); }
+
+	ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+	Define: DlvrblChoicesDataWindow Using DDWinDef
+		Fields:	Title					Translate(DlvrblChoicesMessages,Title)
+				Position				0 0 50 35
+				IsPositionPercent		T
+				EnableStatusBar			F
+				TypeName				SplitterWnd
+				SplitterRows			~2 10 90~
+				SplitterColumns			1
+
+		Contains:	INLISTORDER
+		{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "DlvrblChoicesData.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons(OrderDlvrblChoice) + 10;
+
+
+				}
+			
+		Define: DlvrblChoicesDataView Using DDViewDef AsSymbol DlvrblChoicesDataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition( GetReferenceTo,Fields )
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView() )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					ComboBoxActionsText		ACTION Call ( RefreshComboBox() )
+					CloseActionsText		ACTION Call ( OnCloseDlvrblChoicesDataView() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "DlvrblChoicesData.htm" )
+					ViewDataType			Text
+
+		}
+

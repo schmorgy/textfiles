@@ -1,0 +1,481 @@
+
+VOID RefreshDoc()
+{
+	RefreshListView();
+}
+
+
+NUMERIC RefreshListView()
+{
+	KillTimer( 0 );
+
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+	DataWindow( StatusBar,Text,~~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,Changed,Original,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate( ~There was no changed row.~ ) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$Con.Changed[Sequence]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Sequence cannot be blank.~ ) ); }
+
+	Key = STR ( PrinterModel = '<PrinterModel>' AND PrinterName = '<PrinterName>' AND Sequence = <$Con.Original[Sequence]> );
+
+	Query = ~Select * From PrinterRes Where <Key>~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,Changed,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update Printer Model record where <Key>. <theErr>~ );
+	}
+	
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	Count = SelectedRows( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( ~There were no rows selected~ ) ); }
+
+	if ( MessageBox( Translate( ~Are you sure you want to delete the <Count> selected rows?~ ),YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( SelectedRows( GetNext,Item ) )
+	{
+		Key = STR ( PrinterModel = '<PrinterModel>' AND PrinterName = '<PrinterName>' AND Sequence = <$Con.Item[Sequence]> );
+		 
+		Cmd = ~Delete From PrinterRes Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Database update failed: <Cmd>  <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,SelectedRows(GetCurrentPosition) );
+	}
+		
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	//NewRow( SetValues,ComputerName,~<$app.ComputerName>~,Status,~Shutdown~,QueueName,~Default~,
+	//					PrinterName,~KLED~,PrinterModel,~Kodak LED~,AutoRun,TRUE,RunAttended,TRUE );
+	
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Model );
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	DataView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new printer models that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC InsertPrinterRes( &dBase,device,name,index,resolution )
+{
+	cmd = ~Insert Into PrinterRes( PrinterModel,PrinterName,Sequence,Resolution ) Values( '<device>','<name>',<index>,<resolution> )~;
+
+	if ( !dBase( IgnoreErrors,Cmd,~<cmd>~ )  )
+	{
+		dBase( ReportErrors,GetErrorDescription,theErr,GetErrorNumber,errNumber );
+
+		if ( !dBase(ErrorIs,<errNumber>,Duplicate) )
+		{
+			return Warning( Translate( ~Database update failed: <cmd>. <theErr>~ ) );
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC AddDefaultDLSResolutions( &dBase,Name)
+{
+	Index = 0;
+
+	InsertPrinterRes( dBase,~Kodak DLS~,~<Name>~,<++Index>,300 );
+
+	return TRUE;
+}
+
+
+/*
+Standard Resolutions for Kodak CRT Printer
+To compute resolutions, use the formula:
+	resolution = raster width / (paper width * 1.02)
+
+				Pixel
+				Raster 
+				Width	4 inch		5 inch		6 inch		8 inch		10 inch		11 inch		12 inch
+CRT Model		
+
+4 inch CRT		1024	250.980		200.784		NA			NA			NA			NA			NA
+
+LF CRT			2048	501.961		401.569		334.641		250.980		200.784		182.531		NA
+
+KPDM			2048	501.961		401.569		334.641		250.980		200.784		182.531		167.320
+
+KPDM II			2810	688.725		550.980		459.150		344.363		275.490		250.446		229.575
+*/
+
+
+NUMERIC AddDefaultCRTResolutions( &dBase,Name)
+{
+	Index = 0;
+
+	InsertPrinterRes( dBase,~Kodak CRT~,~<Name>~,<++Index>,200.784 );
+	InsertPrinterRes( dBase,~Kodak CRT~,~<Name>~,<++Index>,250.980 );
+
+	return TRUE;
+}
+
+NUMERIC AddDefaultLFCRTResolutions( &dBase,Name )
+{
+	Index = 0;
+
+	InsertPrinterRes( dBase,~Kodak LFCRT~,~<Name>~,<++Index>,182.531 );
+	InsertPrinterRes( dBase,~Kodak LFCRT~,~<Name>~,<++Index>,200.784 );
+	InsertPrinterRes( dBase,~Kodak LFCRT~,~<Name>~,<++Index>,250.980 );
+	InsertPrinterRes( dBase,~Kodak LFCRT~,~<Name>~,<++Index>,334.641 );
+	InsertPrinterRes( dBase,~Kodak LFCRT~,~<Name>~,<++Index>,401.569 );
+
+	return TRUE;
+}
+
+
+NUMERIC AddDefaultKPDMResolutions( &dBase,Name )
+{
+	Index = 0;
+
+	InsertPrinterRes( dBase,~KPDM~,~<Name>~,<++Index>,167.320 );
+	InsertPrinterRes( dBase,~KPDM~,~<Name>~,<++Index>,182.531 );
+	InsertPrinterRes( dBase,~KPDM~,~<Name>~,<++Index>,200.784 );
+	InsertPrinterRes( dBase,~KPDM~,~<Name>~,<++Index>,250.980 );
+	InsertPrinterRes( dBase,~KPDM~,~<Name>~,<++Index>,401.569 );
+
+	return TRUE;
+}
+
+NUMERIC AddDefaultKPDM2Resolutions( &dBase,Name )
+{
+	if ( RunningVersion( 2.2 ))
+	{
+		Index = 0;
+
+		InsertPrinterRes( dBase,~KPDM II~,~<Name>~,<++Index>,229.610 );
+		InsertPrinterRes( dBase,~KPDM II~,~<Name>~,<++Index>,250.480 );
+		InsertPrinterRes( dBase,~KPDM II~,~<Name>~,<++Index>,275.530 );
+//		InsertPrinterRes( dBase,~KPDM II~,~<Name>~,<++Index>,306.100 );
+//		InsertPrinterRes( dBase,~KPDM II~,~<Name>~,<++Index>,333.925 );
+		InsertPrinterRes( dBase,~KPDM II~,~<Name>~,<++Index>,344.415 );
+//		InsertPrinterRes( dBase,~KPDM II~,~<Name>~,<++Index>,393.615 );
+//		InsertPrinterRes( dBase,~KPDM II~,~<Name>~,<++Index>,459.215 );
+		InsertPrinterRes( dBase,~KPDM II~,~<Name>~,<++Index>,551.060 );
+	}
+	return TRUE;
+}
+
+
+NUMERIC AddDefaultLEDResolutions( &dBase,Name )
+{
+	Index = 0;
+
+//	Note that 250 must be at index 0, 125 at index 1 to be keyword consistent
+	InsertPrinterRes( dBase,~Kodak LED~,~<Name>~,<++Index>,250 );
+	InsertPrinterRes( dBase,~Kodak LED~,~<Name>~,<++Index>,125 );
+
+	return TRUE;
+}
+
+
+NUMERIC AddDefaultResolutions( &dBase )
+{
+	if		( ~<PrinterModel>~ == ~Kodak CRT~ )		{ return AddDefaultCRTResolutions( dBase,~<PrinterName>~ ); }
+	else if ( ~<PrinterModel>~ == ~Kodak LFCRT~ )	{ return AddDefaultLFCRTResolutions( dBase,~<PrinterName>~ ); }
+	else if ( ~<PrinterModel>~ == ~KPDM~ )			{ return AddDefaultKPDMResolutions( dBase,~<PrinterName>~ ); }
+	else if ( ~<PrinterModel>~ == ~KPDM II~ )		{ return AddDefaultKPDM2Resolutions( dBase,~<PrinterName>~ ); }
+	else if ( ~<PrinterModel>~ == ~Kodak LED~ )		{ return AddDefaultLEDResolutions( dBase,~<PrinterName>~ ); }
+	else if ( ~<PrinterModel>~ == ~Kodak DLS~ )		{ return AddDefaultDLSResolutions( dBase,~<PrinterName>~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC ResetResolutions()
+{
+	if ( MessageBox( Translate( ~Are you sure you want to reset to the default resolutions?~ ),YESNO ) != YES )
+	{
+		return TRUE;
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	Key = STR ( PrinterModel = '<PrinterModel>' AND PrinterName = '<PrinterName>' );
+
+	Cmd = ~Delete From PrinterRes Where <Key>~;
+
+	if ( !dBase( Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	AddDefaultResolutions( dBase );
+
+	return SetTimer( 0,50,~RefreshListView()~ );
+}
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+
+NUMERIC Init( PrinterModel,PrinterName,DocumentQuery )
+{
+	DataWindow( Set,Title,~Printer Resolution Data - Model <PrinterModel>    Name <PrinterName>~ );
+
+	Global( PrinterModel,PrinterName,DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( ~<PrinterModel>~ == ~~ || ~<PrinterName>~ == ~~ )
+		{ 
+			Warning( Translate( ~PrinterModel and PrinterName cannot be blank.~ ) );
+			Exit();
+		}
+
+		if ( !Ado( dBase,Connect ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+		}
+
+		AddDefaultResolutions( dBase );
+
+		if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			Error( Translate( ~Database Query Failed: <DocumentQuery>. <theErr>~ ) );
+		}
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !DataWindow( CreateWindow,~PrinterRes~ ) )
+		{ 
+			Error( Translate( ~Failed to create the window for PrinterRes~ ) ); 
+		}
+
+		return TRUE;
+	}
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+
+
+Define:			PrinterResFields Using DDLong
+	Contains:	InListOrder
+	{
+		Define:		Sequence			using DDCtrlStaticDef	
+			Fields:	Definition			~<SQLInteger>~
+					Displayname			~Sequence~
+						
+		Define:	Resolution				CopyOf PrinterResolution	~[Database FieldTypes]~			
+	}
+
+
+AllowAddsAndDeletes = FALSE;
+
+Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		IF ( <AllowAddsAndDeletes> )
+		{
+			Define:	AddRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Add Printer Resolution~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( AddRecord(); )
+		}
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		IF ( <AllowAddsAndDeletes> )
+		{
+			Define:	DeleteRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Delete~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DeleteRecord(); )
+		}
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	NULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	ResetRes	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Reset to Default~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ResetResolutions(); )
+	}
+
+
+Define: DataWindow Using DDWinDef
+	Fields:		Title					~Printer Resolutions~
+				Position				0 70 40 25
+				IsPositionPercent		T
+				EnableStatusBar			F;
+
+	Contains:	INLISTORDER
+	{
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		PrinterResFields(GetObject) 
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord(); )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord(); )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView(); )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "PrinterRes.htm" )
+					CloseActionsText		ACTION Call ( OnCloseDataView() ) ;
+	}
+	
+

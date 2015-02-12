@@ -1,0 +1,116 @@
+VOID SetupDialog( void )
+{
+	y = 5;		// starting X position
+	h = 20;		// height of each control
+
+	hGap = 10;
+	vGap = 10;
+
+	ButtonWidth = 100;
+	ButtonHeight = 20;
+
+	DialogWidth = 0;
+
+	Define: RenderShutDownDialog Using DDWinDef
+		Fields:	POSITION		25, 25, 600, 600
+				TITLE			~Render Shutdown~
+				TYPENAME		~Dialog~
+				OActionsText	ACTION EXEC ( ShutdownNow() )
+				HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "RenderShutdown.htm" );
+
+		Contains: INLISTORDER
+		{
+			Define: PromptField Using DDWinCtrlDef AsSymbol PromptField
+				Fields:	POSITION		$hGap $vGap 300 40
+						TEXT			~Waiting for the current order to complete printing...~
+						TYPENAME		StaticText ;
+
+			DialogWidth = (PromptField(GetRight,Position) > $DialogWidth) ? PromptField(GetRight,Position) : <DialogWidth>;
+
+			Define: QuitNowButton Using DDWinCtrlDef AsSymbol QuitNowButton
+				Fields:	DACTIONSTEXT	ACTION EXEC ( ShutdownNow() )
+						OACTIONSTEXT 	~[PERFORMOACTIONS]~
+						POSITION		($DialogWidth / 2) - ($ButtonWidth / 2), PromptField(GetBottom,Position)+$vGap, 
+										$ButtonWidth, $ButtonHeight
+						TEXT			~Shutdown Now~
+						TOOLTIP			~Terminate this application now!~
+						TYPENAME		~BUTTON~
+						HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "RenderShutdown.htm" ) ;
+
+			DialogWidth = (QuitNowButton(GetRight,Position) > <DialogWidth>) ? PromptField(GetRight,Position) : <DialogWidth>;
+		}
+
+	DialogHeight = QuitNowButton(GetBottom,Position) +  $vGap + 20;
+
+	RenderShutDownDialog( Set,Position,~0  0  <DialogWidth>  <DialogHeight>~ );	
+
+	GenDlg( dlg,Definition,RenderShutDownDialog,Data,DialogData,Document,$Doc.This,New,Temporary );
+
+	Global( dlg );
+
+}
+
+
+
+VOID ShutdownNow()
+{
+	KillTimer( 0 );
+
+	if ( GenCon( Renderers,GetGenCon,Renderers ) )
+	{ 
+		while ( Renderers( GetNext,Renderer ) )
+		{
+			PostThreadMessage( ~<$con.Renderer[ThreadID]>~,~<$con.Renderer[ThreadMsg]>~ );
+		}
+
+		SetTimer( 0,5000 );
+	}
+	else
+	{		
+		ShutDown();	
+	}
+}
+
+
+
+
+VOID CheckForShutDownComplete()
+{
+	KillTimer( 0 );
+
+	if ( !GenCon( Renderers,GetGenCon,Renderers ) )
+	{
+		ShutDown();	
+	}
+
+	if ( Renderers( ChildCount ) == 0 )
+	{
+		ShutDown();	
+	}
+
+	SetTimer( 0,5000 );
+}
+
+
+VOID ShutDown()
+{
+	dlg( End );
+	Abort()
+	Exit();
+}
+
+
+VOID ReOpen()
+{
+	dlg( SetFocus );
+}
+
+Define: DialogData Using DDLong
+
+SetupDialog();
+
+Timer0_Action = STR ( CheckForShutDownComplete(); );
+
+SetTimer(0,5000 );
+
+

@@ -1,0 +1,1757 @@
+// RenderEngineDlg_1.txt
+
+ExecC() ;
+
+char	*NULL ;
+int	 FALSE = 0 ;
+int	 TRUE  = ! FALSE ;
+
+
+// GLOBALS
+UGenCon	*gDataGC ;	//	DIALOG DATA
+UGenCon	*gDlgDef ;	//	DIALOG DEFINITION
+char	*gDlg ;		//	THE ACTUAL DIALOG
+
+main()
+{
+	Debug(0) ;
+	SessionLogDirect( _T("RenderEngineDlg_1.main: Version 1.0.1")) ;
+
+	UList	*theDictionaries = GetDictList() ;
+	UDataDict	*aDD = GetDataDictionary(_T("DDRender_Engine_Control")) ;
+	if( aDD )
+	{
+		theDictionaries->RemoveItem(aDD) ;
+		delete aDD ;
+	}
+
+/*	aDD = GetDataDictionary(_T("DDModeStatus")) ;
+	if( aDD )
+	{
+		theDictionaries->RemoveItem(aDD) ;
+	}
+*/
+	DisplayDialog() ;
+}
+
+void DisplayDialog()
+{
+	TCHAR		 FileName[1024] ;
+	TCHAR		*ExeDirectory = GetExeDirectory() ;
+
+	sprintf( FileName, _T("%s\\CommonText\\RenderEngineDlg_2.txt"), ExeDirectory ) ;
+
+	gDataGC = GetDlgDataGC() ;
+
+	gDataGC->SetName(_T("REDialogData")) ;
+	HangTreeObject( gDataGC, _T("[GenCons]") ) ;
+
+
+//	DefineModeStatusDD() ;
+
+	SetDefaults() ;
+
+	GetDialogLists() ;
+
+	gDlgDef = GetDialogDefinition() ;
+
+	gDlg = Dialog( gDlgDef, 2, gDataGC, FileName ) ;
+	gDlgDef = delete gDlgDef ;
+	
+
+	//	DO NOT DELETE THE gDataGC GENCON IT IS NEEDED BY THE DIALOG
+}
+
+void SetDefaults()
+{
+
+//	TBD: SETUP THE DIALOG DEFAULT VALUES HERE.
+
+//	Example:
+//	gDataGC->SetAttrValue(_T("AttributeName"), _T("AttributeValue")) ;
+
+	int	ADD_DEFAULTS_AFTER ;
+
+//	gDataGC->SetLongValue(_T("RELogValue"), 0L ) ;
+//	gDataGC->SetLongValue(_T("LogAmount"),  0L ) ;
+
+	
+	//	READ IN THE RenderPerformance.txt file
+	UGenCon *PieDefaults = (UGenCon *) GetTreeObject( _T("PIEDefaultsGC"), _T("[GenCons]")) ;
+	TCHAR	 FilePath[1024] ;
+	TCHAR	*ExeDirectory = GetExeDirectory() ;
+	sprintf( FilePath, _T("%s\\RenderPerformance.txt"), ExeDirectory ) ;
+	TCHAR	*Text = GetFile( FilePath, FALSE ) ;
+	if( Text )
+	{
+		SessionLogDirect( Text ) ;
+		
+		TCHAR	Keyword[64] ;
+		long	Value ;
+
+		UParser	*theParser = new UParser ;
+		theParser->SetText( Text ) ;
+
+		theParser->GetToken( Keyword ) ;
+		while( *Keyword )
+		{
+			Value = theParser->GetLong() ;
+			PieDefaults->SetLongValue( Keyword, Value ) ;
+			theParser->GetToken( Keyword ) ;
+		}
+
+		//theParser->SetText( NULL ) ;
+		delete theParser ;
+	}
+
+	LoadErrorReportData() ;
+
+	int	ADD_DEFAULTS_BEFORE ;
+
+}
+
+int LoadErrorReportData()
+{
+	TCHAR		 SrcImageName[2048] ;
+	TCHAR		*ExeDirectory = GetExeDirectory() ;
+	TCHAR		 Value[1024] ;
+	long		 ErrorKeywords = 0L ;
+
+	UGenCon *RELookAhead	= GetTreeObject( _T("RELookAhead"), _T("[GenCons]")) ;
+
+	//	INITIALIZE THE DEFAULTS
+
+	sprintf( SrcImageName, _T("%s\\Scripts\\C_RP30_Setup.txt"), ExeDirectory ) ;
+
+	SessionLogDirect( _T("Loading RP30 Error Reporting Setup file: \"%s\""), SrcImageName ) ;
+
+	if( SrcImageName[0] )
+	{
+		TCHAR	*SetupText = GetFile( SrcImageName ) ;
+		if( SetupText )
+		{
+			SessionLogDirect( SetupText ) ;
+
+			UParser	*aParser = new UParser ;
+			aParser->SetText(SetupText) ;
+
+			TCHAR	Keyword[256] ;
+
+			aParser->GetToken(Keyword) ;
+			while( Keyword[0] )
+			{
+				aParser->GetToken(Value) ;
+
+				RELookAhead->SetAttrValue(Keyword, Value ) ;
+
+				aParser->GetToken(Keyword) ;
+			}
+
+			aParser->SetText(NULL) ;
+			delete aParser ;
+
+			free( SetupText ) ;
+		}
+	}
+}
+
+
+void GetDialogLists()
+{
+
+//	TBD: SETUP ANY LISTS SPECIFIC TO THIS DIALOG HERE.
+
+	int	ADD_LISTS_AFTER ;
+   
+	UStringList	*aSL = (UStringList *) GetTreeObject(_T("PrinterList"),_T("Strings")) ;
+	if( aSL )
+	{
+		PluckTreeObject( _T("PrinterList"), _T("Strings")) ;
+		delete aSL ;
+		aSL = NULL ;
+	}
+
+	if( aSL == NULL )
+	{
+		aSL = GetPrinterList() ;
+		if( aSL )
+		{
+			HangTreeObject( aSL, _T("STRINGS")) ;
+		}
+	}
+
+	aSL = (UStringList *) GetTreeObject(_T("QueueList"),_T("Strings")) ;
+	if( aSL )
+	{
+		PluckTreeObject( _T("QueueList"), _T("Strings")) ;
+		delete aSL ;
+		aSL = NULL ;
+	}
+
+	if( aSL == NULL )
+	{
+		aSL = new UStringList ;
+		aSL->SetName(_T("QueueList")) ;
+		aSL->AddString(_T("None"), FALSE) ;
+		HangTreeObject( aSL, _T("STRINGS")) ;
+	}
+
+	int	ADD_LISTS_BEFORE ;
+
+}
+
+UGenCon *GetDlgDataGC()
+{
+	UGenCon	*aGC = NULL ;
+	UDataDict	*aDD = GetDataDictionary(_T("DDRender_Engine_Control")) ;
+	if( aDD == NULL )
+	{
+//	TBD: Update the Attribute Names, Types, Length, Precision, Scale, and Low & High Values.
+//	TBD: Don't forget to update the attribute names in the dialog definition below.
+									//ATTRIBNAME	        TYPE   LEN PRC SCL LOW HIGH
+		TCHAR *DataDictText = _T("\
+									StaticText_001      	Text	0	0	0	0	0\
+									PrinterList         	Text	0	0	0	0	0\
+									StaticText_003      	Text	0	0	0	0	0\
+									QueueList           	Text	0	0	0	0	0\
+									Shutdown_Now        	Long	0	0	0	0	0\
+									StaticText_010      	Text	0	0	0	0	0\
+									StatusMsg		      	Text	0	0	0	0	0\
+									DetailedStatus      	Text	0	0	0	0	0\
+									Setup					Text	0	0	0	0	0\
+									PageID				 	Text	0	0	0	0	0\
+									LogAmount           	Long	0	0	0	0  10\
+									RELogValue            	Long	0	0	0	0  10\
+									DlgThread            	Long	0	0	0	0   0\
+								") ;
+
+		aDD = CreateDataDict( DataDictText, 0 ) ;
+		aDD->SetName(_T("DDRender_Engine_Control")) ;
+		AddDataDictToApp( aDD ) ;
+	}
+	aGC = new UGenCon( aDD ) ;
+	return( aGC ) ;
+}
+
+void DefineModeStatusDD()
+{
+	UGenCon	*aGC = NULL ;
+	UDataDict	*aDD = GetDataDictionary(_T("DDModeStatus")) ;
+	if( aDD == NULL )
+	{
+//	TBD: Update the Attribute Names, Types, Length, Precision, Scale, and Low & High Values.
+//	TBD: Don't forget to update the attribute names in the dialog definition below.
+									//ATTRIBNAME	        TYPE   LEN PRC SCL LOW HIGH
+		TCHAR *DataDictText = _T("\
+									Type:			      	Text	0	0	0	0	0\
+									Action:		         	Text	0	0	0	0	0\
+									Code:			      	Long	0	0	0	0	0\
+									NumberJobs:		      	Long	0	0	0	0	0\
+									Resolution:				Double	0	0	0	0	0\
+									State:					Text	0	0	0	0	0\
+									Date_Time:           	Text	0	0	0	0	0\
+									Msg:		        	Text	0	0	0	0	0\
+								") ;
+
+		aDD = CreateDataDict( DataDictText, 0 ) ;
+		aDD->SetName(_T("DDModeStatus")) ;
+		AddDataDictToApp( aDD ) ;
+	}
+}
+
+
+UGenCon *GetDialogDefinition()
+{
+
+	Debug(0) ;
+
+	UDataDict	*ddWinCtrlDef = GetDataDictionary( _T("DDWinCtrlDef")) ;
+	// DEFINE DIALOG WINDOW
+	UGenCon		*DlgDef = new UGenCon( GetDataDictionary(_T("DDWinDef"))) ;
+	if( DlgDef )
+	{
+		DlgDef->SetName(_T("RenderEngineDlg")) ;
+		DlgDef->SetAttrValue(_T("Position"), _T("750 163 335 523")) ;
+//		DlgDef->SetAttrValue(_T("Position"), _T("300 163 335 523")) ;
+		DlgDef->SetAttrValue(_T("Title"), _T("Render Engine Control")) ;
+		DlgDef->SetAttrValue(_T("TypeName"), _T("DIALOG")) ;
+		DlgDef->SetLongValue(_T("Style"), -2134245248 ) ;
+		DlgDef->SetLongValue(_T("WantsMinimizeBox"), 1L ) ;
+		DlgDef->SetAttrValue(_T("HActionsText"), _T("[ACTION SHOWHELPPAGE ( KPISHelpFile \"RenderEngine_IntroDialog.htm\" )]")) ;
+		DlgDef->SetAttrValue(_T("OActionsText"), _T("[CCallBack(SaveErrorReportData();)]")) ;
+	}
+
+	// DEFINE DIALOG CONTROLS
+	UGenCon *theGC ;
+	theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName(_T("StaticText_001")) ;
+		theGC->SetAttrValue(_T("Position"), _T("10 10 90 16")) ;
+		theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+		theGC->SetAttrValue(_T("Text"), _T("Printer:")) ;
+		theGC->SetLongValue(_T("Style"), 0 ) ;
+		DlgDef->AddChildBack(theGC) ;
+	}
+
+	theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName(_T("PrinterList")) ;
+		theGC->SetAttrValue(_T("Position"), _T("60 10 150 100")) ;
+		theGC->SetAttrValue(_T("TypeName"), _T("SComboBox")) ;
+		theGC->SetAttrValue(_T("GenConName"), _T("THIS")) ;
+		theGC->SetAttrValue(_T("GenConField"), _T("PrinterList")) ;
+
+//		TBD: SETUP THE "GetList" FUNCTION WITH THE LIST TO DISPLAY.
+		theGC->SetAttrValue(_T("IActionsText"), _T("[GetList(PrinterList) Get]")) ;
+		theGC->SetAttrValue(_T("DActionsText"), _T("[Save CCallBack(GetQueueList();)]")) ;
+		theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+		theGC->SetLongValue(_T("Style"), -1 ) ;
+		DlgDef->AddChildBack(theGC) ;
+	}
+
+	theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName(_T("StaticText_003")) ;
+		theGC->SetAttrValue(_T("Position"), _T("10 35 69 15")) ;
+		theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+		theGC->SetAttrValue(_T("Text"), _T("Queue:")) ;
+		theGC->SetLongValue(_T("Style"), 0 ) ;
+		DlgDef->AddChildBack(theGC) ;
+	}
+
+	theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName(_T("QueueList")) ;
+		theGC->SetAttrValue(_T("Position"), _T("60 35 150 100")) ;
+		theGC->SetAttrValue(_T("TypeName"), _T("SComboBox")) ;
+		theGC->SetAttrValue(_T("GenConName"), _T("THIS")) ;
+		theGC->SetAttrValue(_T("GenConField"), _T("QueueList")) ;
+
+//		TBD: SETUP THE "GetList" FUNCTION WITH THE LIST TO DISPLAY.
+		theGC->SetAttrValue(_T("IActionsText"), _T("[GetList(QueueList) Get]")) ;
+		theGC->SetAttrValue(_T("DActionsText"), _T("[Save]")) ;
+		theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+		theGC->SetLongValue(_T("Style"), -1 ) ;
+		DlgDef->AddChildBack(theGC) ;
+	}
+
+	theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName(_T("Update Queue")) ;
+		theGC->SetAttrValue(_T("Text"), _T("Update Setup")) ;
+		theGC->SetAttrValue(_T("Position"), _T("220 10 100 20")) ;
+		theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+		theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Show_Setup(1);)]")) ;
+		theGC->SetLongValue(_T("Style"), -1 ) ;
+		DlgDef->AddChildBack(theGC) ;
+	}
+
+	theGC = new UGenCon( ddWinCtrlDef ) ;
+	if( theGC )
+	{
+		theGC->SetName(_T("Show Queue")) ;
+		theGC->SetAttrValue(_T("Text"), _T("Show Queue")) ;
+		theGC->SetAttrValue(_T("Position"), _T("220 35 100 20")) ;
+		theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+		theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Show_Queue();)]")) ;
+		theGC->SetLongValue(_T("Style"), -1 ) ;
+		DlgDef->AddChildBack(theGC) ;
+	}
+
+	UGenCon *theTabCtrl = new UGenCon( ddWinCtrlDef ) ;
+	if( theTabCtrl )
+	{
+		theTabCtrl->SetName(_T("TabCtrl")) ;
+		theTabCtrl->SetAttrValue(_T("Position"), _T("11 65 308 425")) ;
+		theTabCtrl->SetAttrValue(_T("TypeName"), _T("TabCtrl")) ;
+		theTabCtrl->SetAttrValue(_T("Text"), _T("TCS_HOTTRACK | TCS_MULTILINE | TCS_TOOLTIPS")) ;
+		DlgDef->AddChildBack(theTabCtrl) ;
+
+
+		//	MAIN CONTROLS
+		UGenCon	*aTab = CreateTab1(ddWinCtrlDef) ;
+		if( aTab )
+		{
+			theTabCtrl->AddChildBack( aTab ) ;
+		}
+
+		//	MODE CONTROLS
+		aTab = CreateTab4(ddWinCtrlDef) ;
+		if( aTab )
+		{
+			theTabCtrl->AddChildBack( aTab ) ;
+		}
+
+		//	PERFORMANCE CONTROLS
+		aTab = CreateTab5(ddWinCtrlDef) ;
+		if( aTab )
+		{
+			theTabCtrl->AddChildBack( aTab ) ;
+		}
+
+		//	SETUP CONTROLS
+		aTab = CreateTab2(ddWinCtrlDef) ;
+		if( aTab )
+		{
+			theTabCtrl->AddChildBack( aTab ) ;
+		}
+
+		//	LOGGING CONTROLS
+		aTab = CreateTab3(ddWinCtrlDef) ;
+		if( aTab )
+		{
+			theTabCtrl->AddChildBack( aTab ) ;
+		}
+
+	}
+
+	return( DlgDef ) ;
+
+}
+
+
+
+int		MODIFY_AFTER_THIS = TRUE ;
+
+
+
+//	PLACE OTHER DIALOG DEFINITIONS HERE FOR TAB CONTROLS
+
+UGenCon *CreateTab1(UDataDict *ddWinCtrlDef)
+{
+
+	UGenCon *DlgDef = new UGenCon( ddWinCtrlDef ) ;
+	if( DlgDef )
+	{
+
+//	TBD: REPLACE THE TAB NAME IN THE FOLLOWING INSTRUCTION
+		DlgDef->SetAttrValue(_T("Text"), _T("Operations")) ;
+		DlgDef->SetAttrValue(_T("TypeName"), _T("TabCtrl")) ;
+		DlgDef->SetAttrValue(_T("HActionsText"), _T("[ACTION SHOWHELPPAGE ( KPISHelpFile \"RenderEngine_Operations.htm\" )]")) ;
+
+//	TBD: ADD ANOTHER DIALOG DEFINITION HERE.
+		UGenCon *theGC ;
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Start")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Start")) ;
+			theGC->SetAttrValue(_T("Position"), _T("33 380 113 20")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Start();)]")) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("Start selected printer.")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Tab1Shutdown")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Shutdown")) ;
+			theGC->SetAttrValue(_T("Position"), _T("171 380 113 20")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Shutdown();)]")) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("Shutdown selected printer after current batch.")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Tab1Suspend")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Suspend")) ;
+			theGC->SetAttrValue(_T("Position"), _T("35 455 113 20")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Suspend();)]")) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("Suspend selected printer.")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Tab1Resume")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Resume")) ;
+			theGC->SetAttrValue(_T("Position"), _T("170 455 113 20")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Resume();)]")) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("Resume selected printer.")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Shutdown_Now")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Shutdown Now")) ;
+			theGC->SetAttrValue(_T("Position"), _T("182 405 110 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("CheckBox")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("THIS")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("Shutdown_Now")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save]")) ;
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("IsTabStop"), 1L) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("Shutdown selected printer after current render.")) ;
+			theGC->SetLongValue(_T("Style"), 65539 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("StaticText_010")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 100 84 15")) ;	//	107
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Render Status:")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("StatusMsg")) ;
+			theGC->SetAttrValue(_T("Position"), _T("110 100 188 25")) ;	//	16
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Not Running")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("THIS")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("StatusMsg")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("DetailedStatus")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 133 285 220")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("EditText")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("THIS")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("DetailedStatus")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save]")) ;
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Style"), 3147972 ) ;
+//			theGC->SetLongValue(_T("Style"), 2244 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("GroupBox_013")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 435 285 45")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("GroupBox")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Pause / Resume Rendering")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("GroupBox_014")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 363 285 63")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("GroupBox")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Start / Shutdown Rendering")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		return( DlgDef ) ;
+	}
+	return( NULL ) ;
+}
+
+
+UGenCon *CreateTab2(UDataDict *ddWinCtrlDef)
+{
+
+	UGenCon *DlgDef = new UGenCon( ddWinCtrlDef ) ;
+	if( DlgDef )
+	{
+
+//	TBD: REPLACE THE TAB NAME IN THE FOLLOWING INSTRUCTION
+		DlgDef->SetAttrValue(_T("Text"), _T("Setup")) ;
+		DlgDef->SetAttrValue(_T("TypeName"), _T("TabCtrl")) ;
+		DlgDef->SetAttrValue(_T("HActionsText"), _T("[ACTION SHOWHELPPAGE ( KPISHelpFile \"RenderEngine_Setup.htm\" )]")) ;
+
+//	TBD: ADD ANOTHER DIALOG DEFINITION HERE.
+		// DEFINE DIALOG CONTROLS
+		UGenCon *theGC ;
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Setup")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 155 278 320")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("EditText")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("THIS")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("Setup")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save]")) ;
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Style"), 3147972 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("GroupBox_006")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 101 281 41")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("GroupBox")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Display Setup")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Open Tables")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Open Tables")) ;
+			theGC->SetAttrValue(_T("Position"), _T("35 117 113 20")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(OpenTables();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Show Setup")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Show Setup")) ;
+			theGC->SetAttrValue(_T("Position"), _T("167 117 113 20")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Show_Setup(0);)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		return( DlgDef ) ;
+	}
+	return( NULL ) ;
+}
+
+
+
+
+UGenCon *CreateTab3(UDataDict *ddWinCtrlDef)
+{
+
+	UGenCon *DlgDef = new UGenCon( ddWinCtrlDef ) ;
+	if( DlgDef )
+	{
+
+//	TBD: REPLACE THE TAB NAME IN THE FOLLOWING INSTRUCTION
+		DlgDef->SetAttrValue(_T("Text"), _T("Diag")) ;
+		DlgDef->SetAttrValue(_T("TypeName"), _T("TabCtrl")) ;
+		DlgDef->SetAttrValue(_T("HActionsText"), _T("[ACTION SHOWHELPPAGE ( KPISHelpFile \"RenderEngine_Logging.htm\" )]")) ;
+
+//	TBD: ADD ANOTHER DIALOG DEFINITION HERE.
+		// DEFINE DIALOG CONTROLS
+		UGenCon *theGC ;
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("GroupBox_016")) ;
+			theGC->SetAttrValue(_T("Position"), _T("15 100 300 200")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("GroupBox")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Logging Amounts")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LogAmount")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 120 56 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Render Log")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("RELogValue")) ;
+			theGC->SetAttrValue(_T("Position"), _T("83 120 30 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("0")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("THIS")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("LogAmount")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(RELogSlider) DialogTimer(0 1000)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("RELogSlider")) ;
+			theGC->SetAttrValue(_T("Position"), _T("110 120 185 17")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Slider")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("THIS")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("LogAmount")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(RELogValue) DialogTimer(0 250)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Units"),1 ) ;
+			theGC->SetLongValue(_T("Style"), 8454153 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+//+++++++++++++++++++++++++
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("PieLogAmt")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 150 56 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Pie Log")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LogPIE")) ;
+			theGC->SetAttrValue(_T("Position"), _T("83 150 30 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("0")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("PIEDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("LogPIE")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(PieLogSlider) DialogTimer(0 1000)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("PieLogSlider")) ;
+			theGC->SetAttrValue(_T("Position"), _T("110 150 185 17")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Slider")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("PIEDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("LogPIE")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(LogPIE) DialogTimer(0 250)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Units"),1 ) ;
+			theGC->SetLongValue(_T("Style"), 8454153 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+//++++++++++++++++++++++++++++++++++++
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("PieTextLogAmt")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 180 56 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Pie Text Log")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LogPIEText")) ;
+			theGC->SetAttrValue(_T("Position"), _T("83 180 30 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("0")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("PIEDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("LogPIEText")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(LogTextSlider) DialogTimer(0 1000)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LogTextSlider")) ;
+			theGC->SetAttrValue(_T("Position"), _T("110 180 185 17")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Slider")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("PIEDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("LogPIEText")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(LogPIEText) DialogTimer(0 250)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Units"),1 ) ;
+			theGC->SetLongValue(_T("Style"), 8454153 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+//++++++++++++++++++++++
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LogImgMem")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 210 56 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Image Log")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LogImage")) ;
+			theGC->SetAttrValue(_T("Position"), _T("83 210 30 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("0")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("ImgMemDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("LogImageMem")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(LogImageSlider) DialogTimer(0 1000)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LogImageSlider")) ;
+			theGC->SetAttrValue(_T("Position"), _T("110 210 185 17")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Slider")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("ImgMemDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("LogImageMem")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(LogImage) DialogTimer(0 250)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Units"),1 ) ;
+			theGC->SetLongValue(_T("Style"), 8454153 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+//++++++++++++++++++++++
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LogVMeM")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 240 56 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("VMM Log")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LogVMM")) ;
+			theGC->SetAttrValue(_T("Position"), _T("83 240 30 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("0")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("VMMDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("LogVMM")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(LogVMMSlider) DialogTimer(0 1000)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LogVMMSlider")) ;
+			theGC->SetAttrValue(_T("Position"), _T("110 240 185 17")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Slider")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("VMMDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("LogVMM")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(LogVMM) DialogTimer(0 250)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Units"),1 ) ;
+			theGC->SetLongValue(_T("Style"), 8454153 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+
+//++++++++++++++++++++++
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("CILogValue")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 270 56 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("CI Log")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LogCI")) ;
+			theGC->SetAttrValue(_T("Position"), _T("83 270 30 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("0")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("CInterpLogValue")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("CInterpLogValue")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(LogCISlider) DialogTimer(0 1000)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LogCISlider")) ;
+			theGC->SetAttrValue(_T("Position"), _T("110 270 185 17")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Slider")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("CInterpLogValue")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("CInterpLogValue")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(LogCI) DialogTimer(0 250)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Units"),1 ) ;
+			theGC->SetLongValue(_T("Style"), 8454153 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+//++++++++++++++++++++++
+
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("ShowSessionLog")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Session Log")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 330 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(ShowSessionLog();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("IPSLog")) ;
+			theGC->SetAttrValue(_T("Text"), _T("IPS Log")) ;
+			theGC->SetAttrValue(_T("Position"), _T("150 330 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(ShowIPSLog();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("StopRE")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Stop RE")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 360 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(StopRE();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LogSearch")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Log Search")) ;
+			theGC->SetAttrValue(_T("Position"), _T("150 360 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(SearchLogs();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("MemMonitor")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Memory Monitor")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 390 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(LaunchMemMonitor();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("LaunchSpy")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Launch Spy")) ;
+			theGC->SetAttrValue(_T("Position"), _T("150 390 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(LaunchSpy();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+
+/*		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("UpdateTextLib")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Update Text Lib")) ;
+			theGC->SetAttrValue(_T("Position"), _T("150 330 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(UpdateTextLib();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Help")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Help")) ;
+			theGC->SetAttrValue(_T("Position"), _T("150 360 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Help();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+*/
+//++++++++++++++++++++++
+
+		return( DlgDef ) ;
+	}
+	return( NULL ) ;
+}
+
+//	MODE CONTROLS
+UGenCon *CreateTab4(UDataDict *ddWinCtrlDef)
+{
+	UGenCon *DlgDef = new UGenCon( ddWinCtrlDef ) ;
+	if( DlgDef )
+	{
+		DlgDef->SetAttrValue(_T("Text"), _T("Printer Controls")) ;
+		DlgDef->SetAttrValue(_T("TypeName"), _T("TabCtrl")) ;
+		DlgDef->SetAttrValue(_T("HActionsText"), _T("[ACTION SHOWHELPPAGE ( KPISHelpFile \"RenderEngine_PrinterControls.htm\" )]")) ;
+
+		// DEFINE DIALOG CONTROLS
+		UGenCon *theGC ;
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Launch")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Launch")) ;
+			theGC->SetAttrValue(_T("Position"), _T("50 112 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(LaunchPrinter();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Tab4Shutdown")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Shutdown")) ;
+			theGC->SetAttrValue(_T("Position"), _T("175 112 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(ShutdownPrinter();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Tab4Suspend")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Suspend")) ;
+			theGC->SetAttrValue(_T("Position"), _T("50 140 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(SuspendPrinter();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Tab4Resume")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Resume")) ;
+			theGC->SetAttrValue(_T("Position"), _T("175 140 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(ResumePrinter();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Get Status")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Get Status")) ;
+			theGC->SetAttrValue(_T("Position"), _T("50 168 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Get_Status();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Clean Folders")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Clean Folders")) ;
+			theGC->SetAttrValue(_T("Position"), _T("175 168 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Clean_Folders();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("GroupBox_017")) ;
+			theGC->SetAttrValue(_T("Position"), _T("30  94 260 106")) ;
+//			theGC->SetAttrValue(_T("Position"), _T("30 104 260 124")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("GroupBox")) ;
+			theGC->SetAttrValue(_T("Text"), _T("General:")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+//=============================================================================
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Delete Page")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Delete Page")) ;
+			theGC->SetAttrValue(_T("Position"), _T("50 225 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Delete_Page();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Delete All Pages")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Delete All Pages")) ;
+			theGC->SetAttrValue(_T("Position"), _T("50 253 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Delete_All_Pages();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("PageID")) ;
+			theGC->SetAttrValue(_T("Position"), _T("175 225 69 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("EditText")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("THIS")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("PageID")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save]")) ;
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Style"), 128 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Get Resolutions")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Get Resolutions")) ;
+			theGC->SetAttrValue(_T("Position"), _T("175 253 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Get_Resolutions();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("GroupBox_016")) ;
+			theGC->SetAttrValue(_T("Position"), _T("30 205 260 80")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("GroupBox")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Image Print Server Specific:")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+//=============================================================================
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Restore NJP Jobs")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Restore NJP Jobs")) ;
+			theGC->SetAttrValue(_T("Position"), _T("50 308 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(RestoreNJPJobs();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("GroupBox_017")) ;
+			theGC->SetAttrValue(_T("Position"), _T("30 290 260 50")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("GroupBox")) ;
+			theGC->SetAttrValue(_T("Text"), _T("NexPress Specific:")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+//=============================================================================
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Net Print Mode")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Net Print Mode")) ;
+			theGC->SetAttrValue(_T("Position"), _T("50 370 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Net_Print_Mode();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Stop NetPrint")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Stop NetPrint")) ;
+			theGC->SetAttrValue(_T("Position"), _T("50 405 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Stop_NetPrint();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Restart NetPrint")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Restart NetPrint")) ;
+			theGC->SetAttrValue(_T("Position"), _T("175 405 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Restart_NetPrint();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Force End Order")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Force End Order")) ;
+			theGC->SetAttrValue(_T("Position"), _T("175 370 100 23")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(Force_End_Order();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+//=============================================================================
+
+	theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("ReportPaperOut")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Paper Out Errors")) ;
+			theGC->SetAttrValue(_T("Position"), _T("35 435 120 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("CheckBox")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("RELookAhead")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("ReportPaperOut")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save]")) ;
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("IsTabStop"), 1L) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("Allow Paper Out Messages to be reported in DP2.")) ;
+			theGC->SetLongValue(_T("Style"), 65539 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("ReportPaperJams")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Paper Jam Errors")) ;
+			theGC->SetAttrValue(_T("Position"), _T("175 435 100 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("CheckBox")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("RELookAhead")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("ReportPaperJams")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save]")) ;
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("IsTabStop"), 1L) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("Allow Paper Jam Messages to be reported in DP2.")) ;
+			theGC->SetLongValue(_T("Style"), 65539 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("ReportComErrors")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Communication Errors")) ;
+			theGC->SetAttrValue(_T("Position"), _T("35 455 120 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("CheckBox")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("RELookAhead")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("ReportComErrors")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save]")) ;
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("IsTabStop"), 1L) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("Allow Communication errors to be reported in DP2.")) ;
+			theGC->SetLongValue(_T("Style"), 65539 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("ReportChemErrors")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Chemical Errors")) ;
+			theGC->SetAttrValue(_T("Position"), _T("175 455 100 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("CheckBox")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("RELookAhead")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("ReportChemErrors")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save]")) ;
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("IsTabStop"), 1L) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("Allow Chemical errors to be reported in DP2.")) ;
+			theGC->SetLongValue(_T("Style"), 65539 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("GroupBox_015")) ;
+			theGC->SetAttrValue(_T("Position"), _T("30 350 260 125")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("GroupBox")) ;
+			theGC->SetAttrValue(_T("Text"), _T("RP30 Specific:")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+//=============================================================================
+
+		return( DlgDef ) ;
+	}
+
+	return( NULL ) ;
+}
+
+UGenCon *CreateTab5(UDataDict *ddWinCtrlDef)
+{
+
+	UGenCon *DlgDef = new UGenCon( ddWinCtrlDef ) ;
+	if( DlgDef )
+	{
+
+//	TBD: REPLACE THE TAB NAME IN THE FOLLOWING INSTRUCTION
+		DlgDef->SetAttrValue(_T("Text"), _T("Perform")) ;
+		DlgDef->SetAttrValue(_T("TypeName"), _T("TabCtrl")) ;
+		DlgDef->SetAttrValue(_T("HActionsText"), _T("[ACTION SHOWHELPPAGE ( KPISHelpFile \"RenderEngine_Perf.htm\" )]")) ;
+
+//	TBD: ADD ANOTHER DIALOG DEFINITION HERE.
+		UGenCon *theGC ;
+
+
+//++++++++++++++++++++++++++++++++++++
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("RendersAmt")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 150 56 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Concurrent Renders")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("The number of simultaneous renders to perform.")) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("ConcurrentRenders")) ;
+			theGC->SetAttrValue(_T("Position"), _T("83 150 30 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("0")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("PIEDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("ConcurrentRenders")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(ConcurrentRenders) DialogTimer(0 1000)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("The number of simultaneous renders to perform.")) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("RendersSlider")) ;
+			theGC->SetAttrValue(_T("Position"), _T("110 150 185 17")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Slider")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("PIEDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("ConcurrentRenders")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(ConcurrentRenders) DialogTimer(0 250)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Units"),1 ) ;
+			theGC->SetLongValue(_T("Style"), 8454153 ) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("The number of simultaneous renders to perform.")) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+//++++++++++++++++++++++++++++++++++++
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Split_Algorithms")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Multiple CPU Optimization")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 176 200 15")) ;
+//			theGC->SetAttrValue(_T("Position"), _T("182 176 110 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("CheckBox")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("PIEDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("SplitAlgorithms")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save]")) ;
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("IsTabStop"), 1L) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("For details on when to use this, press F1 for help.")) ;
+			theGC->SetLongValue(_T("Style"), 65539 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("AllowResizeOnRead")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Allow Image Resize during Read")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 196 200 15")) ;
+//			theGC->SetAttrValue(_T("Position"), _T("182 176 110 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("CheckBox")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("PIEDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("AllowResizeOnRead")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save]")) ;
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("IsTabStop"), 1L) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("For details on when to use this, press F1 for help.")) ;
+			theGC->SetLongValue(_T("Style"), 65539 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+
+//++++++++++++++++++++++++++++++++++++
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("NewWorkDelayText")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 220 62 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Work Delay")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("Delay time in seconds before looking for more work in the job queue.")) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("NewWorkDelay")) ;
+			theGC->SetAttrValue(_T("Position"), _T("83 220 30 15")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("StaticText")) ;
+			theGC->SetAttrValue(_T("Text"), _T("0")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("PIEDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("NewWorkDelayTime")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(NewWorkDelay) DialogTimer(0 1000)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Style"), 0 ) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("Delay time in seconds before looking for more work in the job queue.")) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("NewWorkDelaySlider")) ;
+			theGC->SetAttrValue(_T("Position"), _T("110 220 185 17")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Slider")) ;
+			theGC->SetAttrValue(_T("GenConName"), _T("PIEDefaultsGC")) ;
+			theGC->SetAttrValue(_T("GenConField"), _T("NewWorkDelayTime")) ;
+			theGC->SetAttrValue(_T("IActionsText"), _T("[Get]")) ;
+
+	//		TBD: SETUP THE "Update" FUNCTION WITH THE CONTROL TO UPDATE.
+			theGC->SetAttrValue(_T("DActionsText"), _T("[Save Update(NewWorkDelay) DialogTimer(0 250)]")) ;
+
+			theGC->SetAttrValue(_T("OActionsText"), _T("[Save]")) ;
+			theGC->SetLongValue(_T("Units"),1 ) ;
+			theGC->SetLongValue(_T("Style"), 8454153 ) ;
+			theGC->SetAttrValue(_T("ToolTip"), _T("Delay time in seconds before looking for more work in the job queue.")) ;
+
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+//++++++++++++++++++++++++++++++++++++
+
+		theGC = new UGenCon( ddWinCtrlDef ) ;
+		if( theGC )
+		{
+			theGC->SetName(_T("Save")) ;
+			theGC->SetAttrValue(_T("Text"), _T("Save")) ;
+			theGC->SetAttrValue(_T("Position"), _T("20 260 100 20")) ;
+			theGC->SetAttrValue(_T("TypeName"), _T("Button")) ;
+			theGC->SetAttrValue(_T("DActionsText"), _T("[CCallBack(SavePerformance();)]")) ;
+			theGC->SetLongValue(_T("Style"), -1 ) ;
+			DlgDef->AddChildBack(theGC) ;
+		}
+
+		return( DlgDef ) ;
+	}
+	return( NULL ) ;
+}
+
+
+
+UList *GetPrinterList()
+{
+	TCHAR	 ComputerName[260] ;
+	long	 Size = 260L ;
+
+	GetThisComputerName(ComputerName, Size) ;
+	if( ComputerName[0] == 0 )	{ return( NULL ) ; }
+
+//	SessionLogDirect( _T("RenderEngineDlg_1: GetPrinterList: Computer Name: \"%s\"."), ComputerName ) ;
+
+	UADO			*theADO ;
+	UPGenConList	*thePGCList ;
+
+	theADO = ConnectToADO() ;
+	if( theADO == NULL )
+	{ 
+		return( HandleFatalError( _T("RenderEngine Error: Cannot connect to database."))) ;
+	}
+
+	thePGCList = new UPGenConList(theADO) ;
+	if( thePGCList == NULL )
+	{
+		delete theADO ;
+		return( HandleFatalError( _T("RenderEngine Error: Cannot create record set."))) ;
+	}
+
+	TCHAR	theQuery[1024] ;
+	sprintf( theQuery, _T("SELECT * from Printers WHERE ComputerName = '%s'"), ComputerName ) ;
+
+	int Result = Query( thePGCList, theQuery, _T("ReadOnly"), _T("Static") ) ;
+
+	if( Result != 1 )
+	{
+		delete thePGCList ;
+		delete theADO ;
+		return(HandleFatalError( _T("RenderEngine Error: Printer query failed."))) ;
+	}
+
+	UPGenCon	*thePGC = GetFirst(thePGCList) ;
+	if( thePGC == NULL )
+	{
+		delete thePGCList ;
+		delete theADO ;
+		return(HandleFatalError( _T("RenderEngine Error: No Printers found."))) ;
+	}
+
+	UStringList	*PrinterNameList = new UStringList ;
+	if( PrinterNameList == NULL )
+	{
+		delete thePGCList ;
+		delete theADO ;
+		return(HandleFatalError( _T("RenderEngine Error: Could not create printer name list."))) ;
+	}
+
+	UStringList	*PrinterModelList = new UStringList ;
+	if( PrinterModelList == NULL )
+	{
+		delete thePGCList ;
+		delete theADO ;
+		delete PrinterNameList ;
+		return(HandleFatalError( _T("RenderEngine Error: Could not create printer model list."))) ;
+	}
+
+	PrinterNameList->SetName(_T("PrinterList")) ;
+	PrinterModelList->SetName( _T("PrinterListModels") ) ;
+
+	PrinterNameList->AddString( _T("None"), FALSE ) ;
+	PrinterModelList->AddString( _T("None"), FALSE ) ;
+
+	TCHAR	PrinterName[1024] ;
+	do
+	{
+		thePGC->GetAttrValue( _T("PrinterName"), PrinterName ) ;
+		PrinterNameList->AddString( PrinterName, FALSE ) ;
+
+		thePGC->GetAttrValue( _T("PrinterModel"), PrinterName ) ;
+		PrinterModelList->AddString( PrinterName, FALSE ) ;
+
+		thePGC = GetNext(thePGCList) ;
+	} while( thePGC ) ;
+
+	UStringList	*OldPrinterModels = GetTreeObject( _T("PrinterListModels"), _T("Strings")) ;
+	if( OldPrinterModels )
+	{
+		PluckTreeObject( _T("PrinterListModels"), _T("Strings")) ;
+		delete OldPrinterModels ;
+	}
+
+	HangTreeObject( PrinterModelList, _T("STRINGS")) ;
+
+	delete thePGCList ;
+	delete theADO ;
+	return( PrinterNameList ) ;
+}
+ 
+TCHAR *GetThisComputerName(TCHAR *ThisComputerName)
+{
+	TCHAR	 ErrMsg[512] ;
+	int		 result ;
+	int		 error ;
+
+	result = GetComputerName( ThisComputerName, &Size ) ;
+	if( result == 0 )
+	{
+		error = GetLastError() ;
+		sprintf( ErrMsg, "Could not get computer name. Error = %ld", error ) ;
+		SessionLogDirect( ErrMsg ) ;
+		ReportError( ErrMsg, 0, 0 ) ;
+		return( NULL ) ;
+	}
+	return( ThisComputerName ) ;
+}
+
+TCHAR *HandleFatalError( TCHAR *ErrMsg )
+{
+	SessionLogDirect( ErrMsg ) ;
+	ReportError( ErrMsg, 0, 0 ) ;
+	return( NULL ) ;
+}
+
+
+UADO *ConnectToADO()
+{
+	int		 result ;
+
+	UADO	*theADO = new UADO ;
+
+	if( theADO == NULL )
+	{
+		return(NULL) ;
+	}
+
+	result = ConnectKPIS( theADO ) ;
+	if( result )
+	{
+		delete theADO ;
+		return(NULL) ;
+	}
+
+	return( theADO ) ;
+}
+
+
+
+
+
+
+

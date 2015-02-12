@@ -1,0 +1,152 @@
+
+Include: ~Utilities2~;
+Include: ~MergeSubjectInfo~;
+
+// Functions are thread safe.  If being called from Thread, assumes function
+// UserWarning() is defined so can... Invoke(UserWarning,~a msg~)
+
+// Returns TRUE Orders data or SubjectInfo was modified
+//         FALSE if no changes made, or db error occurred
+// Changes are reflected in Session Log - Warning message informs user of this
+
+NUMERIC FixOrdersAndSubjectInfo()
+{
+	ChangesMade = FALSE;
+
+	// check if need to be done.
+//	if ( FixedOrdersData() )
+//	{	return TRUE;	}
+
+	Log(Session,~FIXING Orders table.  Unarchiving from Pre V4.1 data~);
+
+	Query = ~Select * from Orders Order by ImagesOrderID,ID~;
+	if ( !PGenConList( List,Connect,Cursor,Keyset,BeginTransaction,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return doWarning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+	List( GetConnection,dBase );
+
+	While ( List(GetNext,OrderRec) )
+	{
+
+		OrderID = ~<$pcon.OrderRec[ID]>~;
+		ImagesOrderID = ~<$pcon.OrderRec[ImagesOrderID]>~;
+		ShootDescID = ~<$pcon.OrderRec[ShootDescID]>~;
+
+		Key = ~ID = '<OrderID>'~;
+
+		if ( IsNull(~<ImagesOrderID>~) )  // Original Order
+		{
+			if ( IsNull(~<ShootDescID>~) )  // no ShootDescID
+			{
+				if (  doNewWay()  && ShootDescExists( ~<OrderID>~,ShootType) )
+				{
+					Log(Session,~Adding matching ShootDescID/ShootDescType to Order <OrderID>~);
+
+					OrderRec( Set,ShootDescID,~<OrderID>~ );
+					OrderRec( Set,ShootDescType,~<ShootType>~ );
+
+					if ( !List( Update ) )
+					{
+						List( GetErrorDescription,0,theErr,RollBackTransaction );
+						return doWarning( Translate(DBMessages,UpdateFailed, ~<Key>~,~<theErr>~) );
+					}
+
+					ChangesMade = TRUE;
+				}
+			}
+			else
+			{
+				if ( doNewWay() )
+				{
+					// If OrderID = ShootDescID then all ok
+					if ( ~<OrderID>~ != ~<ShootDescID>~ )
+					{
+						// Check if Order has SubjectInfo under OrderID then need to move
+						if ( !MergeSubjectInfo(dBase,~<OrderID>~,~<ShootDescID>~,~<$pcon.OrderRec[InfoType]>~) )
+						{	return FALSE;	}
+						ChangesMade = TRUE;
+					}
+				}
+			}
+		}
+
+		else  // is a Reorder
+		{
+			Cmd = ~Select ShootDescID,ShootDescType From Orders Where ID = '<ImagesOrderID>'~;
+			if ( dBase(GetValuesFor,~<Cmd>~,OrdersShootID,ShootType) )
+			{
+				if ( !IsNull(~<OrdersShootID>~) )
+				{
+					// if this records value doesn't match, inform changing.
+					if (~<OrdersShootID>~ != ~<$pcon.OrderRec[ShootDescID]>~)
+					{
+						Log(Session,~ShootDescID of Reorder <OrderID> changed to match Original Order <ImagesOrderID>~);
+
+						OrderRec( Set,ShootDescID,~<OrdersShootID>~ );
+						OrderRec( Set,ShootDescType,~<ShootType>~ );
+
+						if ( !List( Update ) )
+						{
+							List( GetErrorDescription,0,theErr,RollBackTransaction );
+							return doWarning( Translate(DBMessages,UpdateFailed, ~<Key>~,~<theErr>~) );
+						}
+
+						ChangesMade = TRUE;
+					}
+				}
+			}
+		}
+		
+
+	}
+
+	if ( !dBase( CommitTransaction ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return doWarning( Translate( DBMessages,CommitFailed,~<theErr>~ ) );
+	}
+
+	Log(Session,~Fixing Orders table COMPLETE. If this line right after "FIXING Orders..", no changes made.~);
+
+	return <ChangesMade>;
+}
+
+
+
+NUMERIC FixedOrdersData()
+{
+	if ( File( VerFile, OPEN,~<CurrentDirectory>\ArchiveVersion.txt~,READ ) )
+	{ 
+		if ( VerFile( ReadTextFile,buffer ) )
+		{
+			dbVersion = ~~;
+			dbVersion = String( GetParameter,buffer,~DatabaseVersion=~,~;~ );
+
+		}
+		return TRUE;
+	}
+
+	if ( GetSystemSettings( ~FixDB~,~ShootIsSubject~,Setting,Enabled ) )
+	{
+		if ( !IsNULL( ~<Setting>~ ) && <Enabled> )
+		{	return TRUE;	}
+	}
+
+	return FALSE;
+}
+
+
+
+
+NUMERIC doWarning(WarningMsg)
+{
+	if ( FunctionDefined(UserWarning) ) // Thread's function
+	{	Invoke(UserWarning,~<WarningMsg>~);	}
+	else
+	{	Warning( ~<WarningMsg>~ );	}
+
+	return FALSE;
+}
+

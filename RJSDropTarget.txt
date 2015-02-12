@@ -1,0 +1,391 @@
+
+Include: UtilityRoutines;
+
+VOID ReOpen()
+{
+}
+
+		
+VOID DefineDialog()
+{
+	if ( !DataDict( TheDictionary,Get,DDRemoteServerDrop ) )
+	{
+		Dictionary: DDRemoteServerDrop
+			Fields:	Name Path			Type Text
+
+		StringList: Name RJSDirList
+		Hang:	RJSDirList ~[STRINGS]~ ;
+	}
+
+	Define: DlgData Using DDRemoteServerDrop ;
+	Global( DlgData );
+
+    Left = 5; Top = 5;		hGap = 5; vGap = 2;
+    TextHeight = 20;        TextWidth = 110;  
+	ButtonHeight = 20;		ButtonWidth = 70;
+	StaticTextWidth = 33;	StaticTextHeight = 20;
+    EditTextWidth = 350;	EditTextHeight = 20;
+    ComboBoxWidth = 100;	ComboBoxHeight = 120;
+	x = $Left;				y = $Top;
+
+    Define: DlgDefinition Using DDWinDef
+            Fields: Position		180 50 $DialogWidth $DialogHeight
+                    Title			Translate( ~Remote Queue Drop~ )
+                    TypeName		~Dialog~
+					StatusBar		~1 100~
+					WantsMinimizeBox TRUE
+
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "RemoteServerDrop.htm" ) 
+					DropActionsText	ACTION EXEC ( HandleDrop() )
+                    OACTIONSTEXT	ACTION EXEC ( CloseDialog() ) ;
+
+    Contains: InListOrder
+    {
+	    Define: Prompt Using DDWinCtrlDef AsSymbol Prompt 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Queue~ )
+					RightJustified	TRUE
+                    Position		$x,$y,$StaticTextWidth,$StaticTextHeight
+
+        Define: DirectoryComboBox Using DDWinCtrlDef AsSymbol DirectoryComboBox 
+            Fields: TypeName		SComboBox  
+                    Position		Prompt(GetRight,Position) + $hGap,Prompt(GetTop,Position)-2,$EditTextWidth,200
+					IActionsText	ACTIONS ( GetList(RJSDirList) Get )
+					DActionsText	ACTION EXEC ( OnChangeDirectory() )
+					OActionsText	ACTIONS ( Save )
+					IsTabStop		0
+					DropDownActionsText ACTION CALL ( UpdateDirectoryCombo()  )
+					Mask			~<$[DATABASE FieldTypes].Path[Mask]>~
+					PromptChar		~<$[DATABASE FieldTypes].Path[PromptChar]>~
+					AllowedChars	~<$[DATABASE FieldTypes].Path[AllowedChars]>~
+					DisallowedChars ~<$[DATABASE FieldTypes].Path[DisallowedChars]>~
+                    GenConName       THIS
+                    GenConField		~Path~
+					IsTabStop		F
+                    Tooltip         ~Select a Queue~;
+
+	    Define: CountButton Using DDWinCtrlDef AsSymbol CountButton 
+            Fields: TypeName		Button
+					DActionsText	ACTION EXEC ( ViewDirectoryButton() )
+                    Text			Translate( ~?~ )
+                    Position		DirectoryComboBox(GetRight,Position) + $hGap,DirectoryComboBox(GetTop,Position),20,$StaticTextHeight
+
+
+		Define:DragAreaText Using DDWinCtrlDef AsSymbol DragAreaText 
+            Fields: TypeName	StaticText
+					FontWeight	400
+					FontSize	22
+					Text		~Drag Jobs Here (Not Images)~
+					Tooltip		~Drag files here and you will be prompted as to how to sort them~
+					Position	$X+100 Prompt(GetBottom,Position)+$vGap*3+20 250 30;
+
+		Define:DragArea Using DDWinCtrlDef AsSymbol DragArea 
+            Fields: TypeName	GroupBox
+					FontWeight	800
+					//Text		~Drag files into this box to add to the selected queue~
+					Tooltip		~Drag files here and you will be prompted as to how to sort them~
+					Position	$X Prompt(GetBottom,Position)+$vGap*3 CountButton(GetRight,Position)-$X 60;
+
+     };
+
+	DialogWidth = CountButton(GetRight,Position) + $hGap * 2;
+	DialogHeight = DragArea(GetBottom,Position) + $vGap + 25;
+
+    DlgDefinition( Set,Position,~180 180 <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,DlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    Global( dlg );
+}
+
+VOID OnChangeDirectory()
+{
+	dlg( SetControlTitle,DragAreaText,~~ );
+
+	dlg( GetInput );
+
+	dlg( GetStrings,Path,Path );
+	
+	if ( IsNULL( ~<Path>~ ) )
+	{
+		return;
+	}
+
+	Query = ~Select AcceptImages From RemoteJobDirs Where Directory = '<Path>'~;
+
+	if ( !ADO( dbase,Connect,GetValuesFor,~<Query>~,AcceptImages ) )
+	{
+		dlg( SetControlTitle,DragAreaText,~Directory Not Found~ );
+		return;
+	}
+
+	if ( <AcceptImages> )
+	{
+		dlg( SetControlTitle,DragAreaText,~Drag Images Here  (Not Jobs)~ );
+	}
+	else
+	{
+		dlg( SetControlTitle,DragAreaText,~Drag Jobs Here  (Not Images)~ );
+	}
+}
+
+
+NUMERIC UpdateDirectoryCombo()
+{
+	Query = ~Select * From RemoteJobDirs Where Enabled <> 0 Order By AcceptImages,Directory Desc~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the RemoteJobDirs table.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	List( MakeStringList,DirectoryList,Directory );
+
+	return dlg( SetControlFromStringList,DirectoryComboBox,DirectoryList,~NoSelection~ );
+}
+
+
+NUMERIC ViewDirectoryButton()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.dlgdata[Path]>~ ) )
+	{
+		return Warning( ~You must select a directory to queue these files to~ );
+	}
+
+	return OpenExplorer( ~<$con.dlgdata[Path]>~ );
+}
+
+NUMERIC HandleDrop()
+{
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+	{ 
+		return FALSE;
+	}
+	
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );	// REMOVE THE DRAG INFO FROM THE TREE
+
+	ExternalDrop(DragDropInfo);	
+	
+	dlg( EnableControls,FALSE,StopButton );	
+
+	return TRUE;
+}
+
+
+NUMERIC ExternalDrop( &DragDropInfo )
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.dlgdata[Path]>~ ) )
+	{
+		return Warning( ~You must select a directory to queue these files to~ );
+	}
+
+	if ( !DragDropInfo( GetCopyOfDraggedFiles,DraggedFileList ) )
+	{ 
+		return Warning( Translate(~There were no files in the object you dragged~) );
+	}
+
+	count = DraggedFileList( ChildCount );
+		
+	if ( $count <= 0 )
+	{ 
+		return Warning( ~There were no files in the object you dragged~; )
+	}
+
+	if ( <count> > 1 )
+	{
+		SortOrder = CustomMessageBox( Title,~Import Images~,Message,~Sort files by ...~,
+										Button1,~File Name~,
+										Button2,~Creation Date~,
+										Button3,~Cancel~ );
+		if ( <SortOrder> == 1 )
+		{
+			DraggedFileList( SortListBy,~Text~,~CreationTime~ );
+		}
+		else if ( <SortOrder> == 2 )
+		{
+			DraggedFileList( SortListBy,~CreationTime~,~Text~ );
+		}
+		else 
+		{
+			return FALSE;
+		}
+	}
+
+
+	DirectoryType = GetDirectoryType( ~<$con.dlgdata[Path]>~ );
+
+	CheckInvalidFiles = TRUE;
+
+	while ( DraggedFileList( GetNext,aFile ) )
+	{
+		if ( !ValidFileForDirectory( ~<$con.aFile[Text]>~,~<$con.dlgdata[Path]>~,~<DirectoryType>~ ) )
+		{
+			Answer = CustomMessageBox( Title,~Suspicious file extension ...~,
+										Message,~Is\n\n<$con.aFile[Text]>\n\nValid?~,
+										Button1,~Yes~,
+										Button2,~Yes. Don't ask again~,
+										Button3,~No.  Stop~ );
+			if ( <Answer> == 1 )
+			{
+				continue;
+			}
+			else if ( <Answer> == 2 )
+			{
+				break;
+			}
+
+			dlg( SetStatus,0,Translate( ~No files were queued~ ) );
+
+			return FALSE;
+		}
+	}
+
+	if ( MessageBox( ~Are you sure you would like to assign the <count> files(s) to this queue?~,YESNO ) != YES )
+	{ 
+		return FALSE;
+	}
+
+	Num = 0;
+
+	more = DraggedFileList( GetFirst,aFile );
+
+	while ( <more> )
+	{
+		if ( !QueueAFile( ~<$con.aFile[Text]>~,~<$con.dlgdata[Path]>~ ) )
+		{
+			dlg( SetStatus,0,Translate( ~Error. Queued <Num> of <Count> files~ ) );
+			return FALSE;
+		}
+
+		++Num;
+
+		more = DraggedFileList( GetNext,aFile );
+	}
+
+	dlg( SetStatus,0,Translate( ~Queued <Num> of <Count> files~ ) );
+
+	return TRUE;
+}
+
+
+STR GetDirectoryType( ToDirectory )
+{
+	Query = ~Select AcceptImages From RemoteJobDirs Where Directory = '<ToDirectory>'~;
+
+	if ( ADO( db,Connect,GetValuesFor,~<Query>~,AcceptImages ) )
+	{
+		return <AcceptImages> ? ~Images~ : ~Text~;
+	}
+
+	return ~Unknown~;
+}
+
+
+NUMERIC ValidFileForDirectory( FromPath,ToDirectory,DirectoryType )
+{
+	if ( IsNull( ~<FromPath>~ ) )
+	{
+		return FALSE;
+	}
+
+	Extension = ~<$Str.$FromPath.Ext>~;
+
+	if ( IsNull( ~<Extension>~ ) )
+	{
+		return FALSE;
+	}
+
+	if ( ~<DirectoryType>~ == ~Text~ )
+	{
+		valid = SimilarStr( ~<Extension>~,~Text~,~txt~,~job~ );
+		return <valid>;
+	}
+	else if ( ~<DirectoryType>~ == ~Image~ )
+	{
+		valid = SimilarStr( ~<Extension>~,~jpg~,~jpeg~,~tif~,~tiff~ );
+		return <valid>;
+	}
+
+	return TRUE; 
+}
+
+
+NUMERIC QueueAFile( FromPath,ToDirectory,DirectoryType )
+{
+	FileName = ~<$Str.$FromPath.FileName.WithoutExt>~;
+
+	Extension = ~.<$Str.$FromPath.ext>~;
+
+	ToPath = ~<ToDirectory>\<FileName><Extension>~;
+
+	count = 1;	LastFileTime = 0;
+
+	while ( TRUE )
+	{
+		if ( !Files( FileExists,~<ToPath>~ ) )
+		{
+			if ( !Files( Copy,~<FromPath>~,~<ToPath>~ ) )
+			{
+				return Warning( Translate( ~Could not copy <FromPath> to <ToPath>~ ) );
+			}
+
+			if ( !Files( ChMod,~<ToPath>~,ReadWrite ) )
+			{
+				// Not sure what to do here
+			}
+
+			if ( !Files( SetFileTimes,~<ToPath>~,Now,Now,Now ) )
+			{
+				theErr = GetLastErrorMsg();
+
+				return Warning( Translate( ~Failed to set the filetime on <ToPath>.\n\n<theErr>~ ) );
+			}
+
+			dlg( SetStatus,0,Translate( ~Queued <FileName>~ ) );
+
+			DeltaTime = Ticks() - <LastFileTime>;
+
+			if ( <DeltaTime> < 20 )	// WANT AT LEAST 20 MS BETWEEN FILES FOR THE REMOTEJOBSERVER
+			{
+				Sleep( <DeltaTime> + 1 );
+			}
+
+			LastFileTime = Ticks();
+
+			return TRUE;
+		}
+
+		ToPath = ~<ToDirectory>\<FileName>_V<++count><Extension>~;
+	}
+}
+
+
+VOID CloseDialog()
+{
+    dlg( END );
+    Exit();
+}
+
+
+VOID Init()
+{
+	if ( Defined( dlg ) )
+	{
+		return;
+	}
+
+	DefineDialog();
+
+	UpdateDirectoryCombo();
+
+	OnChangeDirectory();
+}
+
+
+Init(~~);
+	

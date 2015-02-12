@@ -1,0 +1,524 @@
+VOID ReOpen()
+{
+}
+
+NUMERIC ImportFromFile( FormatID,InPath,OutPath,OutputFormat,HasColumnTitles )
+{
+	if ( !File( DataFile, OPEN,~<InPath>~,READ ) )			// TRY TO OPEN IT
+		{ return Warning( Translate(~Could not open <Path>~) ); }
+
+	Query = ~Select * from FileFormats Where ID = '<FormatID>' Order by Sequence~;
+
+	if ( !PGenConList( FormatList,Connect,Cursor,Static,QUERY,~<Query>~ ) )
+		{ return Warning( Translate(~Failed to query the FileFormats table for ID = <FormatID>~) ); }
+
+	PGenConList( List,Create );
+
+	List( AppendFieldsFromFormatList,FormatList );
+
+	List( Open );
+
+	Count = ErrorCount = 0;
+
+	if ( <HasColumnTitles> )
+	{
+		DataFile( ReadString,temp );	// IGNORE THE FIRST ROW
+	}
+
+	if ( !DataFile( ReadIntoList,FormatList,List,Count,ErrorCount ) )
+	{
+		return Warning( Translate( ~Failed to read all records from <InPath>~ ) );
+	}
+
+	dlg( SetString,Translate( ~Processed <Count> records.  There were <ErrorCount> errors~ ) ,Status,0 );
+	
+	Files( Delete,~<OutPath>~ );
+
+	List( GetFirst,Item );
+
+	if ( !List( Save,~<OutPath>~,~<OutputFormat>~ ) )
+	{
+		//List( GetErrorDescription,0,theErr );
+		return Warning( ~Save to recordset file failed: <OutPath>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnMergeButton()
+{
+	dlg( GetInput,GetStrings,Table_Name,Table_Name,Path,Path );
+
+	if ( ~<Path>~ == ~~ )
+	{
+		if ( !OnImportButton() )
+		{
+			return FALSE;
+		}
+
+		dlg( GetInput,GetStrings,Path,Path );
+
+		if ( ~<Path>~ == ~~ )
+		{
+			return dlg( SetString,Translate( ~You have not specified a Recordset File~ ) ,Status,0 );
+		}
+	}
+
+	return LoadArchive( ~<Path>~,~<Table_Name>~ );
+}
+
+
+NUMERIC LoadArchive( Path,Table )
+{
+	if ( !PGenConList( List,Cursor,Forward,File,~<Path>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );		
+		return Warning( ~Failed to load data from <Path>.  <theErr>~ ); 
+	}
+
+	Total = List( NumEntries );
+
+	if ( !<Total> )
+	{
+		return TRUE;
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	dlg( SetString,Translate( ~Loading <Table> with data from <Total> records~ ) ,Status,0 );
+		
+	if ( !List( UpdateTableFromList,dBase,~<Table>~,Count ) )
+	{
+		Warning( Translate( ~Update failed. The Session Log contains related information.~ ) );
+	}
+
+	dlg( SetString,Translate( ~<Count> of <Total> records were merged into the database~ ) ,Status,0 );
+
+	return TRUE;
+}
+
+
+if ( !DataDict( TheDictionary,Get,DDImportDialogData ) )
+{
+	Dictionary: DDImportDialogData
+			Fields:	Name InPath					Type Text
+			Fields:	Name Path					Type Text
+			Fields:	Name Unicode				Type long
+			Fields:	Name Status					Type Text
+			Fields:	Name FormatID				Type Text
+			Fields:	Name Table_Name				Type Text
+			Fields: Name HasColumnTitles		Type Long
+}
+
+Define: DlgData Using DDImportDialogData
+
+VOID DefineDialog()
+{
+    Left = 5; Top = 5;		hGap = 5; vGap = 10;
+    TextHeight = 20;        TextWidth = 110;  
+	ButtonHeight = 20;		ButtonWidth = 150;
+	StaticTextWidth = 70;	StaticTextHeight = 20;
+    EditTextWidth = 300;	EditTextHeight = 20;
+    ComboBoxWidth = 200;	ComboBoxHeight = 120;
+	x = $Left;				y = $Top;
+	PathWidth = 515;		DialogWidth = (($ButtonWidth + $hGap) * 4) + $hGap * 2;
+
+    Define: ImportDlgDefinition Using DDWinDef
+            Fields: Position		180 50 $DialogWidth 600
+                    Title			~Import Ascii Files~
+                    TypeName		~Dialog~
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "Import.htm" )
+                    OACTIONSTEXT	ACTION EXEC ( CloseDialog() ) ;
+
+    Contains: InListOrder
+    {
+		Define: TablePrompt Using DDWinCtrlDef AsSymbol TablePrompt 
+			Fields: TypeName		StaticText
+					Text			~Table Name~
+					Position		$x,$y,$StaticTextWidth,$StaticTextHeight
+
+		Define: TablesComboBox Using DDWinCtrlDef AsSymbol TablesComboBox 
+			Fields: TypeName		SComboBox  
+					Position		TablePrompt(GetRight,Position) + $hGap,
+									TablePrompt(GetTop,Position),
+									<ComboBoxWidth> ,<ComboBoxHeight> 
+					DActionsText	ACTION EXEC ( OnTablesComboBox() )
+					GenConName      THIS
+					GenConField		~Table_Name~
+					Tooltip         ~Select a Table~ ;
+
+		Define: SearchTableButton Using DDWinCtrlDef AsSymbol SearchTableButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~?~ )
+                    Position		TablesComboBox(GetRight,Position) + $hGap,
+									TablesComboBox(GetTop,Position),20,20
+                    DActionsText	ACTION EXEC  ( OnSearchTableButton() ) 
+					IsTabStop		1
+                    Tooltip			Translate( ~Search the selected table~ );
+
+	
+	    Define: FormatPrompt Using DDWinCtrlDef AsSymbol FormatPrompt 
+            Fields: TypeName		StaticText
+                    Text			~Format ID~
+                    Position		$x,TablePrompt(GetBottom,Position) + $vGap,$StaticTextWidth,$StaticTextHeight
+
+        Define: FormatComboBox Using DDWinCtrlDef AsSymbol FormatComboBox 
+            Fields: TypeName		SComboBox  
+                    Position		FormatPrompt(GetRight,Position) + $hGap,
+									FormatPrompt(GetTop,Position),
+									<ComboBoxWidth> ,<ComboBoxHeight> 
+					DropDownActionsText ACTION CALL ( OnTablesComboBox() )
+					DActionsText	ACTIONS ( Save  )
+                    GenConName       THIS
+                    GenConField		~FormatID~
+                    Tooltip         ~Select a format~
+
+		Define: ViewFormatButton Using DDWinCtrlDef AsSymbol ViewFormatButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~?~ )
+                    Position		FormatComboBox(GetRight,Position) + $hGap,
+									FormatComboBox(GetTop,Position),20,20
+                    DActionsText	ACTION EXEC  ( OnViewFormatButton() ) 
+					IsTabStop		1
+                    Tooltip			Translate( ~Edit exising or add new file formats~ );
+
+		Define: InPathPrompt Using DDWinCtrlDef AsSymbol InPathPrompt 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Input File~ )
+                    Position		$x,FormatPrompt(GetBottom,Position) + $vGap,
+									<StaticTextWidth>,<StaticTextHeight> ;
+
+	   Define: InPathField Using DDWinCtrlDef AsSymbol InPathField         
+			Fields: TypeName		EditText
+					Position        InPathPrompt(GetRight,Position) + $hGap
+									InPathPrompt(GetTop,Position) 
+									$PathWidth $EditTextHeight               
+					GenConName		THIS
+					GenConField		~InPath~
+					IActionsText	~[Get]~
+					OActionsText    ~[Save]~
+					Tooltip			Translate( ~Enter the path of the file to import~ ) ;
+
+		Define: InBrowseButton Using DDWinCtrlDef AsSymbol InBrowseButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~?~ )
+                    Position		InPathField(GetRight,Position) + $hGap,
+									InPathField(GetTop,Position),20,20
+                    DActionsText	ACTION EXEC  ( OnBrowseInputFileButton() ) 
+					IsTabStop		1
+                    Tooltip			Translate( ~Find the file you wish to import~ );
+
+		Define: PathPrompt Using DDWinCtrlDef AsSymbol PathPrompt 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Recordset File~ )
+                    Position		$x,InPathPrompt(GetBottom,Position) + $vGap,
+									<StaticTextWidth>,<StaticTextHeight> ;
+
+	   Define: PathField Using DDWinCtrlDef AsSymbol PathField         
+			Fields: TypeName		EditText
+					Position        PathPrompt(GetRight,Position) + $hGap
+									PathPrompt(GetTop,Position) 
+									$PathWidth $EditTextHeight               
+					GenConName		THIS
+					GenConField		~Path~
+					IActionsText	~[Get]~
+					OActionsText    ~[Save]~
+					Tooltip			Translate( ~Enter the path to save the Imported data to~ ) ;
+
+		Define: BrowseButton Using DDWinCtrlDef AsSymbol BrowseButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~?~ )
+                    Position		PathField(GetRight,Position) + $hGap,
+									PathField(GetTop,Position),20,20
+                    DActionsText	ACTION EXEC  ( OnBrowseButton() ) 
+					IsTabStop		1
+                    Tooltip			Translate( ~Find the file~ );
+
+		Define: HasColumnTitlesBox Using DDWinCtrlDef AsSymbol HasColumnTitlesBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~First Row Contains Column Titles~ )
+                    Position		PathField(GetLeft,Position) + $hGap,
+									PathPrompt(GetBottom,Position) + $vGap,200,20
+					GenConName		THIS
+					GenConField		~HasColumnTitles~
+					IActionsText	~[Get]~
+					OActionsText    ~[Save]~
+                    DActionsText	~[Save]~ 
+					IsTabStop		1
+                    Tooltip			Translate( ~Importing does not use column titles.  Check this box to ignore the first row if it contains column titles.  Or use 'Open Text DB'~ );
+
+		Define: ViewInFileButton Using DDWinCtrlDef AsSymbol ViewInFileButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~1.  View Input File~ )
+                    Position		$x,HasColumnTitlesBox(GetBottom,Position) + $vGap
+									$ButtonWidth, $ButtonHeight + 10
+                    DActionsText	ACTION EXEC  ( OnViewButton() )
+					IsTabStop		1
+                    Tooltip			~View the file you are importing from~
+
+		Define: ConvertButton Using DDWinCtrlDef AsSymbol ConvertButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~2.  Import To Recordset~ )
+                    Position		ViewInFileButton(GetRight,Position) + $hGap,
+									ViewInFileButton(GetTop,Position),
+									$ButtonWidth, $ButtonHeight + 10
+                    DActionsText	ACTION EXEC  ( OnImportButton() ) 
+					IsTabStop		1
+                    Tooltip			Translate( ~Import from the Input File to the Recordset File~ )  ;
+
+		Define: ViewOutFileButton Using DDWinCtrlDef AsSymbol ViewOutFileButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~3.  Edit Recordset File~ )
+                    Position		ConvertButton(GetRight,Position) + $hGap,
+									ConvertButton(GetTop,Position),
+									$ButtonWidth, $ButtonHeight + 10
+                    DActionsText	ACTION EXEC  ( OnViewOutFileButton() ) 
+					IsTabStop		1
+                    Tooltip			~View the file that was imported~
+
+		Define: MergeButton Using DDWinCtrlDef AsSymbol MergeButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~4.  Merge Into Database~ )
+                    Position		ViewOutFileButton(GetRight,Position) + $hGap,
+									ViewOutFileButton(GetTop,Position),
+									$ButtonWidth, $ButtonHeight + 10
+                    DActionsText	ACTION EXEC  ( OnMergeButton() ) 
+					IsTabStop		1
+                    Tooltip			Translate( ~Merge the data from the Recordset File into the selected table of the database~ )
+		
+		Define: Status Using DDWinCtrlDef AsSymbol Status 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Path~ )
+                    Position		$x,MergeButton(GetBottom,Position) + $vGap,
+									$DialogWidth - ($hGap * 2),<StaticTextHeight> 
+					GenConName		THIS
+					GenConField		~Status~
+
+		IF 0
+		{
+			Define: UnicodeCheckBox Using DDWinCtrlDef AsSymbol UnicodeCheckBox 
+				Fields: TypeName		CheckBox
+						GenConName		THIS
+						GenConField		~Unicode~
+						Text			Translate( ~Unicode~ )
+						Position		PathField(GetLeft,Position),PathPrompt(GetBottom,Position) + $vGap,
+										100, <StaticTextHeight>
+						IActionsText    ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save ) 
+						OActionsText	ACTIONS ( Save )
+						Tooltip			~Import in Unicode~ ;
+		}
+    };
+
+	DialogHeight = Status(GetBottom,Position) + $vGap + 20;
+
+    ImportDlgDefinition( Set,Position,~180 180 <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,ImportDlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    Global( dlg );
+
+	OnFormatComboBox(~~);
+
+	SetupTablesComboBox();
+}
+
+NUMERIC OnFormatComboBox( WhereClause )
+{
+	Query = ~Select Distinct ID From FileFormats <WhereClause> Order By ID~;
+	
+	if ( !PGenConList( FormatsList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ return Warning( Translate( ~Failed to query the FileFormats table~ ) ); }
+
+	FormatsList( MakeStringList,FormatChoices,ID );
+
+	FormatChoices( GetString,Firstchoice );
+
+	dlg( SetControlFromStringList,FormatComboBox,FormatChoices,Selection,Update );
+
+	if ( FormatsList( GetFirst,FormatRecord ) )
+	{
+		DlgData( Set,Table_Name,~<$con.FormatRecord[TableName]>~ );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnTablesComboBox()
+{
+	if ( dlg( GetInput,GetStrings,Table_Name,Table_Name ) )
+	{
+		return OnFormatComboBox( ~Where TableName = '<Table_Name>'~ );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC OnSearchTableButton()
+{
+	dlg( GetInput,GetStrings,Table_Name,Table_Name );
+
+	if ( ~<Table_Name>~ == ~~ )
+	{
+		return Warning( Translate(~You must select a table first~) );
+	}
+
+	Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( ~<Table_Name>~ );" ) );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC SetupTablesComboBox()
+{
+	if ( !PGenConList( TablesList,Connect,Cursor,Forward,Schema,~Tables~ ) )
+		{ Error( Translate( ~Failed to query the Tables table~ ) ); }
+
+	TablesList( MakeStringList,TableChoices,TABLE_NAME );
+
+	//TableChoices( GetString,Name );
+
+	dlg( SetControlFromStringList,TablesComboBox,TableChoices,Selection,Update );
+
+	OnTablesComboBox();
+
+	return TRUE;	
+}
+
+
+VOID OnBrowseInputFileButton()
+{
+	Title = Translate( ~Select the file you wish to import~ );
+
+	if ( !FileDialog( Title,~<Title>~,PATH,theFile,Open ) )	// ASK THE USER TO FIND THE FILE
+		{ return; }
+		
+	dlg( SetString,~<theFile>~ ,InPath,0 );	
+	
+	dlg( GetInput,GetStrings,Path,Path );	
+	
+	if ( ~<Path>~ == ~~ )
+	{
+		dlg( SetString,~<theFile>.adtg~,Path,0 );
+	}								
+}
+
+
+VOID OnBrowseButton()
+{
+	Title = Translate( ~Select a path to store the imported data~ );
+
+	if ( !FileDialog( Title,~<Title>~,PATH,theFile,SAVE ) )	// ASK THE USER TO FIND THE FILE
+		{ return; }
+		
+	dlg( SetString,~<theFile>~ ,Path,0 );										
+}
+
+
+NUMERIC OnImportButton()
+{
+	dlg( GetInput,GetStrings,Path,Path,InPath,InPath,FormatID,FormatID,HasColumnTitles,HasColumnTitles );
+
+	if ( ~<FormatID>~ == ~~ )
+	{
+		dlg( SetString,Translate( ~The format cannot be NULL~ ) ,Status,0 );
+		return FALSE;
+	}
+
+	if ( ~<InPath>~ == ~~ )
+	{
+		dlg( SetString,Translate( ~The Input File cannot be NULL~ ) ,Status,0 );
+		return FALSE;
+	}
+
+	if ( ~<Path>~ == ~~ )
+	{
+		Path = ~<InPath>.adtg~;
+		dlg( SetString,~<Path>~,Path,0 );
+	}
+
+	return ImportFromFile( ~<FormatID>~,~<InPath>~,~<Path>~,~~,<HasColumnTitles> );		
+}
+
+
+NUMERIC ViewFileInEditor( FilePath )
+{
+	ProgramName = ~Notepad.exe~;
+
+	Program = ~<$Sys.Directory>\<ProgramName>~;
+
+	if ( !Files( FileExists,~<Program>~ ) )
+	{
+		return Warning( Translate(~Could not find NotePad.exe at <Program>~) );
+	}
+
+	if ( !ShellExecute( Open,~<Program>~,~<FilePath>~ ) )
+	{
+		GetLastError( ErrorString,theErr );
+		return Warning( Translate(~Could not open <FilePath>. <theErr>~) );
+	}
+
+	return TRUE;
+}
+
+
+VOID OnViewButton()
+{
+	dlg( GetInput,GetStrings,InPath,InPath );
+
+	if ( ~<InPath>~ == ~~ )
+	{
+		dlg( SetString,Translate( ~You have not specified an input File~ ) ,Status,0 );
+		return;
+	}
+	
+	ViewFileInEditor( ~<InPath>~ );
+}
+
+
+VOID OnViewOutFileButton()
+{
+	dlg( GetInput,GetStrings,Path,Path,InPath,InPath,FormatID,FormatID,Table_Name,Table_Name );
+
+	if ( ~<Path>~ == ~~ )
+	{
+		dlg( SetString,Translate( ~You have not specified a Recordset File~ ) ,Status,0 );
+		return;
+	}
+
+	Action = ACTION DOC ( Test Open EditAnyRecSetDoc "Init( ~<Path>~,~<Path>~,~<Table_Name>~);" );
+
+	PerformActions( Action );
+}
+
+
+VOID OnViewFormatButton()
+{
+	dlg( GetInput,GetStrings,FormatID,FormatID,Table_Name,Table_Name );
+
+	Query = ~Select * From FileFormats Where ID = '<FormatID>' Order By ID,Sequence~;
+
+	action = ACTION DOC ( FileFormats Open FileFormatsDoc "Init( ~<FormatID>~,~<Table_Name>~,~<Query>~ );" );
+	
+	PerformActions( action );
+}
+
+
+VOID CloseDialog()
+{
+    dlg( END );
+    Exit();
+}
+
+
+DefineDialog();	
+
+
+	

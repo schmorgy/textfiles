@@ -1,0 +1,324 @@
+// UserCompJobMacros.txt
+
+// This file contains the User Specific Macros for use by the Composite Job Generator
+// Macros in the file are assumed to be resolved at the time the Composite Job is
+// being generated.  The data indicated below is only know at the time the Node is
+// being added to the job.
+// NOTE:  It is assumed that the person adding data to this file understands
+//        progamming and Macros in DP2.
+
+// These macros have available as GLOBAL data:
+//	SubjectImgRecord - PGenCon containing all the SubjectInfo and Image Data for the
+//						first record found in the general search for each composite.
+// 	ImagesOrderIDList = list of OrderIds of the Images;
+//	SubjectInfoOrderID = OrderId of the SubjectInfo
+//	InfoType = the type of SubjectInfo table
+//	ImagePath = Last Image Path resolved.
+//  CCList = List of whole groups records being used
+//  MultiImages = Handling if Multiple Images 0=All, 1=First, 2=Last
+
+// Image Fields are evaluated before Text Fields.  
+//  Thus you can make data available from an Image Macro for an associated Text Macro
+
+// To Create a User Specific Macro:
+//	1.  Write the Macro and add to the bottom of this file.
+//	2.	Add a record to the CompositeMacros table
+//      Giving it a usefull name, and set activation <$func.thename()>
+//      where "theName" is your macro name, and () has params if needed
+
+
+
+// Returns the Image path for the SubjectInfo record associated with the query.
+// Query - is the the query which returns the SubjectID to be used to get the image
+STR GetImagePathFromSubjID(Query)
+{
+	if (!ADO( dBase,Connect))
+	{	return ~~;	}
+	
+	if ( !dBase( GetValuesFor,~<Query>~,ImageSubjectID ) )
+	{
+		Log(Session, ~Getting Image Path Macro - Can't get SubjectID for Query: <Query>~);	
+		return ~~;
+	}
+//  Making ImageSubjectID global was causing SIFromImage to fail for countable nodes 
+//  for featured composites.  Once TaggedImage was run, the ImageSubjectID would never be changed
+//	5/20/08
+//	Global(ImageSubjectID);
+		
+	// Get the Image Path associated with the SubjectInfo Record
+//	Query = ~Select Path From Images Where OrderID = '<ImagesOrderID>' AND SubjectID  = '<ImageSubjectID>' AND Rejected <> 1~;
+	Query = ~Select Path From Images Where OrderID In (<ImagesOrderIDList>) AND SubjectID  = '<ImageSubjectID>' AND Rejected <> 1~;
+	if ( !PGenConList( List,Connection,dbase,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		Invoke( ShowWarning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~)) );
+		return ~~;
+	}
+	count = List(NumEntries);
+	if (<count> == 0)
+	{	
+		Log(Session,~Getting Image Path Macro - No Image exists for SubjectID: <ImageSubjectID>~);
+		return ~~;
+	}
+
+	if ((<MultiImages> > 1) && (<count> > 1))  // Use last image
+	{
+		List(GetLast,theImageRecord);
+	}
+	else  // otherwise use first
+	{
+		List(GetFirst,theImageRecord);
+	}
+
+	return ~<$pcon.theImageRecord[Path]>~;
+
+}
+
+
+STR TeacherImage()
+{
+	// Get fields out of student record that tell us who the teacher is
+	// Following does not work for Macros
+//	haveRecord = CCList(GetRecord,SubjectImgRecord);
+//	if (!<haveRecord>)
+//	{	return (~~); }
+
+	TeacherLastName = ~<$pcon.SubjectImgRecord[Teacher]>~;
+	Homeroom = ~<$pcon.SubjectImgRecord[Homeroom]>~;
+
+	// Determine the SubjectInfo Record for the Teacher
+	Query = ~Select SubjectID From SubjectInfo<InfoType> Where OrderID = '<SubjectInfoOrderID>' AND LastName = '<TeacherLastName>' AND Homeroom = '<Homeroom>' AND Teacher = 'T'~;
+
+	ImgPath = GetImagePathFromSubjID(~<Query>~);
+
+	return (~<ImgPath>~);
+}
+
+
+STR TeacherName()
+{
+	if (Defined(ImageSubjectID))
+	{
+		Query = ~Select Firstname,Lastname From SubjectInfo<InfoType> Where OrderID = '<SubjectInfoOrderID>' And SubjectID = '<ImageSubjectID>'~;
+	}
+
+	else
+	{
+		// Get fields out of student record that tell us who the teacher is
+		  // Following does not work for Macros - Have SubjectImgRecord global.
+//		haveRecord = CCList(GetRecord,SubjectImgRecord);
+//		if (!<haveRecord>)
+//		{	return (~~); }
+
+		TeacherLastName = ~<$pcon.SubjectImgRecord[Teacher]>~;
+		Homeroom = ~<$pcon.SubjectImgRecord[Homeroom]>~;
+		// Determine the SubjectInfo Record for the Teacher
+		Query = ~Select Firstname,Lastname From SubjectInfo<InfoType> Where OrderID = '<SubjectInfoOrderID>' AND LastName = '<TeacherLastName>' AND Homeroom = '<Homeroom>' AND Teacher = 'T'~;
+	}
+
+	if (!ADO( dBase,Connect))
+	{	return ~~;	}
+	
+	if ( !dBase( GetValuesFor,~<Query>~,FirstName,LastName ) )
+	{
+		Log(Session,~TeacherName() Macro - Failed Query: <Query>~);	
+		return ~~;
+	}
+
+	NameString =  ~<FirstName> <LastName>~;
+
+	return (~<NameString>~);
+}
+
+
+STR NameFromImage()
+{
+	if (!ADO( dBase,Connect))
+	{	return ~~;	}
+	
+	if (!Defined(ImageSubjectID))
+	{
+		// Using the Image Path, get the SubjectInfoID
+//		Query = ~Select SubjectID From Images Where OrderID = '<ImagesOrderID>' AND Path  = '<ImagePath>'~;
+		Query = ~Select SubjectID From Images Where OrderID In (<ImagesOrderIDList>) AND Path  = '<ImagePath>'~;
+		if ( !dBase( GetValuesFor,~<Query>~,ImageSubjectID ) )
+		{	return ~~;	}
+	}
+
+	Query = ~Select Firstname,Lastname From SubjectInfo<InfoType> Where OrderID = '<SubjectInfoOrderID>' And SubjectID = '<ImageSubjectID>'~;
+	if ( !dBase( GetValuesFor,~<Query>~,FirstName,LastName ) )
+	{	
+		Log(Session,~NameFromImage() Macro Failed Query: <Query>~);	
+		return ~~;
+	}
+
+	NameString =  ~<FirstName> <LastName>~;
+
+	return (~<NameString>~);
+
+}
+
+	// copied from name from Image and generalized to look up any column
+STR SIFromImage(ColumnName)
+{
+	if (!ADO( dBase,Connect))
+	{	return ~~;	}
+	
+	if (!Defined(ImageSubjectID))
+	{
+		// Using the Image Path, get the SubjectInfoID
+		Query = ~Select SubjectID From Images Where OrderID In (<ImagesOrderIDList>) AND Path  = '<ImagePath>'~;
+		if ( !dBase( GetValuesFor,~<Query>~,ImageSubjectID ) )
+		{	return ~~;	}
+	}
+
+	Query = ~Select <ColumnName> From SubjectInfo<InfoType> Where OrderID = '<SubjectInfoOrderID>' And SubjectID = '<ImageSubjectID>'~;
+	if ( !dBase( GetValuesFor,~<Query>~,FieldValue) )
+	{	
+		Log(Session,~NameFromImage() Macro Failed Query: <Query>~);	
+		return ~~;
+	}
+
+	FieldString =  ~<FieldValue>~;
+
+	return (~<FieldString>~);
+
+}
+
+// Searches ALL SubjectInfo records for the order, looking in the Column named
+// "ColumnName" for the Value in "Value".  First one found is returned.
+STR TaggedImage(ColumnName,Value)
+{
+	// Determine the SubjectInfo Record that has the Value in the ColumnName Field
+	Query = ~Select SubjectId From SubjectInfo<InfoType> Where OrderID = '<SubjectInfoOrderID>' And <ColumnName> = '<Value>'~;
+
+	ImgPath = GetImagePathFromSubjID(~<Query>~);
+
+	return (~<ImgPath>~);
+}
+
+
+// Searches ALL SubjectInfo records for the order, looking in the Column named
+// "ColumnName" for the Value in "Value".  First one found is returned.
+STR TaggedName(ColumnName,Value)
+{
+	if (!ADO( dBase,Connect))
+	{	return ~~;	}
+	
+	// Determine the SubjectInfo Record for the Teacher
+	Query = ~Select FirstName,LastName From SubjectInfo<InfoType> Where OrderID = '<SubjectInfoOrderID>' And <ColumnName> = '<Value>'~;
+
+	if ( !dBase( GetValuesFor,~<Query>~,FirstName,LastName ) )
+	{
+		Log(Session,~TaggedName(<ColumnName>,<Value>) Macro - Failed Query: <Query>~);	
+		return ~~;
+	}
+
+	NameString =  ~<FirstName> <LastName>~;
+
+	return (~<NameString>~);
+}
+
+
+// MatchField is the Field name to match the student records field with the 
+STR FindMatchingImage(MatchField,FieldName,Value)
+{
+	theMatchField = ~<$pcon.SubjectImgRecord[<MatchField>]>~;
+
+	MakeSQLSafe(theMatchField);
+
+	// Determine the SubjectInfo Record for the Teacher
+	Query = ~Select SubjectID From SubjectInfo<InfoType> Where OrderID = '<SubjectInfoOrderID>' AND <MatchField> = '<theMatchField>' AND <FieldName> = '<Value>'~;
+
+	ImgPath = GetImagePathFromSubjID(~<Query>~);
+
+	return (~<ImgPath>~);
+
+}
+
+// MatchField is the Field name to match the student records field with the
+// Returns   Firstname Lastname
+STR FindMatchingName(MatchField,FieldName,Value)
+{
+	theMatchField = ~<$pcon.SubjectImgRecord[<MatchField>]>~;
+
+	MakeSQLSafe(theMatchField);
+
+	if (!ADO( dBase,Connect))
+	{	return ~~;	}
+	
+	// Determine the SubjectInfo Record for the Teacher
+	Query = ~Select FirstName,LastName From SubjectInfo<InfoType> Where OrderID = '<SubjectInfoOrderID>' AND <MatchField> = '<theMatchField>' AND <FieldName> = '<Value>'~;
+
+	if ( !dBase( GetValuesFor,~<Query>~,FirstName,LastName ) )
+	{
+		Log(Session,~FindMatchingName(<MatchField>,<FieldName>,<Value>) Macro - Failed Query: <Query>~);	
+		return ~~;
+	}
+
+	NameString =  ~<FirstName> <LastName>~;
+
+	return (~<NameString>~);
+
+}
+
+
+// *** This routine not ready yet ***
+// Searches GROUP'S SubjectInfo records, looking in the Column named
+// "ColumnName" for the Value in "Value".  First one found is returned.
+// The found item is removed from the Group's list.
+  // ** CCList global is not giving desired results in a Macro
+  // Need to get CCList working.  Once do implement this routine, need to modify for
+  // above routines to not use first SubjectImgRecord, as no guarentee that it is
+  // still around after this routine is called.
+STR GroupTaggedImage(ColumnName,Value)
+{
+	ImgPath = ~~;
+
+	more = CCList(GetFirst,theRecord);
+	while ( <more> )
+	{
+		if (~<Value>~ == ~<$pcon.theRecord[<ColumnName>]>~)
+		{
+// *FIX HERE for JET and MSDE
+			ImageSubjectID = ~<$pcon.theRecord[SubjectInfo<infoType>.SubjectID]>~;
+			CCList(Remove);
+			break;
+		}
+		more = CCList(GetNext,theRecord);
+	}
+
+	if (<more>)
+	{
+		Query = ~Select SubjectID from SubjectInfo<infoType> where SubjectID = '<ImageSubjectID>'~;
+		ImgPath = GetImagePathFromSubjID(~<Query>~);
+	}
+
+	return (~<ImgPath>~);
+}
+
+
+
+// Uses: theCmd, theSortBy
+STR Absentees()
+{
+//	theQuery = ~Select * From SubjectInfo<infoType> Where OrderID = '<SubjectInfoOrderID>' AND NOT Exists (Select OrderID,SubjectID From Images Where Orderid='<ImagesOrderID>' and SubjectInfo<infoType>.SubjectID = Images.SubjectID) AND <theCmd> Order By <theSortBy>~;
+	theQuery = ~Select * From SubjectInfo<infoType> Where OrderID = '<SubjectInfoOrderID>' AND NOT Exists (Select OrderID,SubjectID From Images Where Orderid In (<ImagesOrderIDList>) and SubjectInfo<infoType>.SubjectID = Images.SubjectID) AND <theCmd> Order By <theSortBy>~;
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		Invoke( ShowWarning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~)) );
+		return ~~;
+	}
+
+	SetSpecialMacroExpansion(FALSE);
+	NameFormat = ~<$pcon.theRecord[FirstName]> <$pcon.theRecord[LastName]>~;
+	SetSpecialMacroExpansion(TRUE);
+
+	theStr = ~~;
+	while (List(GetNext,theRecord))
+	{
+		theStr = ~<theStr>~ == ~~ ? ~<NameFormat>~ : ~<theStr>, <NameFormat>~;
+	}
+	return ~<theStr>~;
+}

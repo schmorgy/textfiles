@@ -1,0 +1,1193 @@
+// AddSchoolData.txt
+//
+// Main entry points:  AddData() - should always be called at install, to add records to database.  Should this be in Tasks.txt?
+// AddSampleSchoolOrderData() - called if user wants to install sample data and order.
+
+CustomerID = ~SampleCustomer~;	CustomerName = ~Washington School~;
+OrderID = ~SampleOrder~;
+ShootDescID = ~<OrderID>~;		ShootDescName = ~Sample Middle School~;
+InfoType = ~~;					ShootDescType = ~~;
+CustomerProgramID = ~Basic~;
+
+SubjectInfoFile = ~<$App.ShareDirectory>\SampleData\SampleSubjectInfo.txt~;
+OrderDlvrblsData = ~<$App.ShareDirectory>\SampleData\SampleOrderDlvrblData.txt~;
+CustomerProductsData = ~<$App.ShareDirectory>\SampleData\SampleCustomerProductsData.txt~;
+NodeDetailsData = ~<$App.ShareDirectory>\SampleData\SampleNodeDetailsData.txt~;
+NodeDetailsData2 = ~<$App.ShareDirectory>\SampleData\SampleNodeDetailsData2.txt~;
+
+Include: ~DeleteOrder~;
+Include: ~Utilities2~;
+IncludeClass(BaseProduct);
+IncludeClass(BookProduct);
+
+if ( !DictionaryExists( DDProductData ) )
+{
+	Dictionary: DDProductData
+		Fields: Name ID	Type Text;
+}
+
+// Function always called as part of startup
+NUMERIC AddData()
+{
+
+	return TRUE;
+}
+
+
+
+// Function called if want to add sample data and order
+NUMERIC AddSampleSchoolOrderData()
+{
+	WaitCursor(Begin);
+	Log( Session,~Adding Sample School Order~ );
+	StatusBarText( Translate(~Adding Sample School Order~) );
+	if (!ADO(dbase,connect))
+	{
+		return FALSE;
+	}
+
+	if (! CheckOrderExists(dbase))
+	{	
+		StatusBarText( Translate(~Sample School Order already exists~) );
+		Log( Session,~Sample School Order already exists.~ );
+
+		Msg = ~The sample order <OrderID> already exists.\n Do you want to delete and recreate the order?~;
+		if ( MessageBox( ~<Msg>~, YESNO ) == NO )
+		{
+			return TRUE;
+		}
+		else
+		{
+			DeleteSampleData(dbase, ~<CustomerID>~, ~<ShootDescName>~, ~<ShootDescID>~, ~<OrderID>~ );
+		}
+	}
+
+	AddCustomer( dbase, ~<CustomerID>~, ~<CustomerName>~);
+	AddShootDesc( dbase, ~<ShootDescID>~, ~<ShootDescName>~);
+	AddOrder( dbase,~<OrderID>~,~<CustomerID>~, ~<ShootDescID>~ );
+	AddImages( dbase, ~<OrderID>~);
+	AddProducts(dbase);
+	AddFeaturedComposites(dbase);
+	AddMovieProducts(dbase);
+	AddCustomerProducts();
+	AddSubjectInfo();
+	AddSorts(dbase);
+	AddOrderDlvrbls();
+	UpdateOrderDlvrbls(dbase);
+	AddNodeDetails();
+	AddNodeDetails2();
+	AddCompositeJob(dbase,~<OrderID>~);
+	AddCompositeJob2(dbase,~<OrderID>~);
+	AddYearbookData( dbase, ~<ShootDescName>~, ~<ShootDescName>~, ~SubjectInfo~ );
+
+	WaitCursor(End);
+
+	StatusBarText( Translate(~Completed adding Sample School Order~) );
+	Log( Session,~Completed adding Sample School Order~ );
+
+	return TRUE;
+}
+
+
+NUMERIC CheckOrderExists(&dbase)
+{
+	Query = ~Select ID from Orders where ID = '<OrderID>'~;
+	if (dbase(GetValuesFor,~<Query>~,theOrderID))
+	{  // Order ID already exists
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC DeleteSampleData( &dBase, CustomerID, ShootDescName, ShootDescID, OrderID )
+{
+	
+	Cmd = ~Delete from YBSIFieldMap where YearbookID = '<ShootDescName>'~;
+	dBase( IgnoreErrors,CMD,~<Cmd>~ );
+
+	Cmd = ~Delete from YearbookFields where YearbookID = '<ShootDescName>'~;
+	dBase( IgnoreErrors,CMD,~<Cmd>~ );
+
+	Cmd = ~Delete from YearbookDefs where YearbookID = '<ShootDescName>'~;
+	dBase( IgnoreErrors,CMD,~<Cmd>~ );
+
+	Cmd = ~Delete from ExportYBSetups where Setup = '<ShootDescName>'~;
+	dBase( IgnoreErrors,CMD,~<Cmd>~ );
+
+	Cmd = ~Delete from SubjectInfo Where OrderID = '<OrderID>'~;
+	dBase( IgnoreErrors,CMD,~<Cmd>~ );
+
+	Cmd = ~Delete from CustomerProducts Where CustomerID = '<CustomerID>'~;
+	dBase( IgnoreErrors,CMD,~<Cmd>~ );
+	
+	result = DeleteOrdersItemsAndImages( dBase,~<OrderID>~,TRUE,TRUE,TRUE );
+	if ( !<result> )
+	{
+		Warning( ~Could not delete Orders, Images and Order Items for <OrderID>~ );
+	}
+
+	Cmd = ~Delete from Customers Where ID = '<CustomerID>'~;
+	dBase( IgnoreErrors,CMD,~<Cmd>~ );
+
+	return TRUE;
+
+}
+
+NUMERIC AddCustomer( &dbase, CustomerID, CustomerName )
+{
+
+	Log( Session,~Adding Customer <CustomerID>: <CustomerName>~ );
+	StatusBarText( Translate(~Adding Customer <CustomerID>: <CustomerName>~) );
+
+	if (dbase(GetValuesFor,~Select ID from Customers where ID = '<CustomerID>'~,Id))
+	{	//  record already exists
+		Log( Session,~Customer already exists.~ );
+		return TRUE;
+	}
+
+	if ( !dbase( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,CustomerTable,~SELECT * FROM Customers~ ) )
+	{
+		Warning( ~Could not open Customers Recordset~ );
+		return FALSE;
+	}
+
+	CustomerTable( AddNew );
+	CustomerTable( SetFields,	
+					ID,			~<CustomerID>~,
+					Name,		~<CustomerName>~,
+					Contact,	~Ms. Contact~,
+					Street,		~1 State Street~,
+					County,		~~,
+					City,		~Rochester~,
+					State,		~NY~,
+					Country,	~USA~,
+					ZipCode,	~14650~,
+					EMail,		~emailAnywhere.com~,
+					Phone1,		~~,
+					Phone2,		~~ );
+
+	if (!CustomerTable( Update ))
+	{	CustomerTable( CancelUpdate );	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddShootDesc( &dbase, ShootDescID, ShootDescName )
+{
+
+	Log( Session,~Adding ShootDescription <ShootDescID>: <ShootDescName>~ );
+	StatusBarText( Translate(~Adding ShootDescription <ShootDescID>: <ShootDescName>~) );
+
+	if (dbase(GetValuesFor,~Select ID from ShootDescription where ID = '<ShootDescID>'~,Id))
+	{	//  record already exists
+		Log( Session,~ShootDescription already exist.~ );
+		return TRUE;
+	}
+
+	if ( !dbase( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,ShootDescTable,~SELECT * FROM ShootDescription~ ) )
+	{
+		Warning( ~Could not open ShootDescription Recordset~ );
+		return FALSE;
+	}
+
+	ShootDescTable( AddNew );
+	ShootDescTable( SetFields,	
+					ID,			~<ShootDescID>~,
+					Name,		~<ShootDescName>~,
+					Contact,	~Ms. Contact~,
+					Street,		~1 High Street~,
+					County,		~~,
+					City,		~Fairport~,
+					State,		~NY~,
+					ZipCode,	~14450~,
+					Color1,		~250 0 0~,
+					Color2,		~0 0 250~,
+					Background,	~~,
+					TheFile,	~~,
+					Comments,	~Red/Blue~ );
+
+	if (!ShootDescTable( Update ))
+	{	ShootDescTable( CancelUpdate );	}
+
+	return TRUE;
+}
+
+NUMERIC AddOrder( &dbase, OrderID, CustomerID, ShootDescID )
+{
+
+	Log( Session,~Adding Order <OrderID>~ );
+	StatusBarText( Translate(~Adding Order <OrderID>~) );
+
+	if ( !dbase( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,OrdersTable,~SELECT * FROM Orders~ ) )
+	{
+		Warning( ~Could not open Orders Recordset~ );
+		return FALSE;
+	}
+
+	OrdersTable( AddNew );
+	OrdersTable( SetFields,	
+					ID,				~<OrderID>~,
+					CustomerID,		~<CustomerID>~,		
+					ProgramID,		~<CustomerProgramID>~,			
+					InfoType,		~<InfoType>~,
+					ImagesOrderID,	~~,
+					ShootDescID,	~<ShootDescID>~,
+			 		ShootDescType,	~<ShootDescType>~,
+					BatchID,		~~,
+					BatchSeq,		~0~,
+					Status,			~Ready~,	
+					RunCount,		~0~,
+					Type,			~Original~,		
+					OrderDate,		~<$Date.Date>~,
+					ShipDate,		~<$Date.Date>~,
+					Priority,		~~,
+					Description,	~~ );
+//					Owner,			~~ );
+
+	if (!OrdersTable( Update ))
+	{	OrdersTable( CancelUpdate );	}
+
+	return TRUE;
+}
+
+NUMERIC AddImages( &dbase, OrderID)
+{
+
+	Log( Session,~Adding Images for Order <OrderID>~ );
+	StatusBarText( Translate(~Adding Images for Order <OrderID>~) );
+
+	Roll = ~001~;
+	// **Get images to be used for Order
+	OrderImagesDirectory = ~<$App.ShareDirectory>\OrderImages\<OrderID>\<Roll>~;
+	if ( !Directory( Create,~<OrderImagesDirectory>~) )
+	{
+		Warning(~Unable to create Order Images directory: <OrderImagesDirectory>~);
+		return FALSE;
+	}
+
+	// Copy over Images
+	SourceDirectory = ~<$App.ShareDirectory>\Images\KodakKids~;
+	MoreFiles = findfile( aDirectoryEntry,Find,~<SourceDirectory>\*.jpg~ );
+	Copied = 0;
+
+	// Values for creating Thumbnails and adding to database
+	// **Add entries to Images Table
+	size = ~<$SystemSettings.Thumbnail[Size]>~;
+	compressionQuality = ~<$SystemSettings.Thumbnail[Quality]>~;
+	size = IsNULL( ~<size>~ ) ? ~500~ : ~<size>~;
+	compressionQuality = IsNULL( ~<compressionQuality>~ ) ? ~100~ : ~<compressionQuality>~;
+
+	Frame = ~001~;
+	Sequence = 0;
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+				
+		if ( !aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		{
+			aDirectoryEntry( Get,Path,aPath );
+			TheImagePath = ~<OrderImagesDirectory>\<$Str.$aPath.FileName.WithExt>~;
+
+			StatusBarText( Translate(~Adding Image <TheImagePath>~) );
+
+			if ( Files( Copy,~<aPath>~,~<TheImagePath>~ ) )
+			{	// if File already exists, returns False
+				++Copied;
+
+				Files( ChMod,~<TheImagePath>~,ReadWrite );
+				result = AddThumbNailToImage( ~<TheImagePath>~,<size>,<compressionQuality>,FileType,xRes,yRes,PreviewWidth,PreviewLength,NULL,ColorType );
+
+				PaddedFrameNumber = Format( ~<Frame>~,~<$[Symbols].FrameFormat[Value]>~ );
+				Fields		= ~OrderID,Roll,Frame,SubjectID,ImageType,Path,Category,Sequence,Gamma,Width,Length,Filetype,PreviewWidth,PreviewLength,ColorType,CropX,CropY,CropWidth,CropLength~;
+				Values		= ~'<OrderID>','<Roll>','<PaddedFrameNumber>','<PaddedFrameNumber>',0,'<TheImagePath>','All',<Sequence>,1.0,<xRes>,<yRes>,'<Filetype>',<PreviewWidth>,<PreviewLength>,<ColorType>,50.0,50.0,100.0,100.0~;	
+
+				InsertCmd	= ~Insert Into Images(<Fields>) Values(<Values>)~;
+				if ( !dbase( CMD,~<InsertCmd>~ ) )
+				{
+					dbase( GetErrorDescription,theErr );
+					return Warning( Translate( ~Database update failed. <InsertCmd>. <theErr>~ ) );
+				}
+				++Frame;
+				++Sequence;
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddProducts(&dbase)
+{
+	Log( Session,~Adding Sample Products~ );
+	StatusBarText( Translate(~Adding Products~) );
+
+	if ( !dbase( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,ProductsTable,~SELECT * FROM Products~ ) )
+	{
+		Warning( ~Could not open Orders Recordset~ );
+		return FALSE;
+	}
+
+	// Add layouts
+	ProductDir = ~<$App.ShareDirectory>\Layouts\Samples~;
+	MoreFiles = findfile( aDirectoryEntry,Find,~<ProductDir>\*.*~ );
+	while ( $MoreFiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+		aDirectoryEntry( Get,Path,aProductPath );
+
+		if ( !aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		{
+			Files( ChMod,~<aProductPath>~,ReadWrite );
+
+			ProductID = ~<$Str.$aProductPath.FileName.WithOutExt>~;
+
+			cmd = ~Select count(*) from Products Where ID='<ProductID>' And Category='TestSchool' And ProductLayoutPath='<aProductPath>'~;
+			exists = dbase( RecordCountFor,~<cmd>~ );
+			if ( <exists> )
+			{
+				break;
+			}
+
+			ProductsTable( AddNew );
+			ProductsTable( SetFields,	
+					ID,					~<ProductID>~,
+					LayoutName,			~<ProductID>~,
+					Category,			~TestSchool~,
+					Sequence,			0,	
+					ProductType,		~Digital~,	
+					Multiple,			0,		
+					Style,				0,	
+					StyleType,			0,
+					ProductLayoutPath,	~<aProductPath>~,	
+					PreviewPath,		~<ProductDir>\Preview\<$Str.$aProductPath.FileName>.jpg~ );
+			if (String(StringInString,~Style~,~<ProductID>~) != ~~)
+			{
+				ProductsTable( SetFields, Style, 1);
+				if (String(StringInString,~ImageStyle~,~<ProductID>~) != ~~)
+				{
+					ProductsTable( SetFields, StyleType, 0);
+				}
+				else if (String(StringInString,~TextStyle~,~<ProductID>~) != ~~)
+				{
+					ProductsTable( SetFields, StyleType, 1);
+				}
+				else  //ImageAndText Style
+				{
+					ProductsTable( SetFields, StyleType, 2);
+				}
+					
+			}
+			if (!ProductsTable( Update ))
+			{	ProductsTable( CancelUpdate );	}
+		}
+	}
+
+	// Add Grid/Composites
+	aProductPath = ~<$App.ShareDirectory>\Layouts\GridLayouts\10x8 Composite~;
+	ProductID = ~<$Str.$aProductPath.FileName.WithOutExt>~;
+
+	cmd = ~Select count(*) from Products Where ID='<ProductID>' And Category='TestSchool' And ProductLayoutPath='<aProductPath>'~;
+	exists = dbase( RecordCountFor,~<cmd>~ );
+	if ( !<exists> )
+	{
+		ProductsTable( AddNew );
+		ProductsTable( SetFields,	
+				ID,					~<ProductID>~,
+				LayoutName,			~<ProductID>~,
+				Category,			~TestSchool~,
+				Sequence,			0,	
+				ProductType,		~Digital~,	
+				Multiple,			1,		
+				Style,				0,	
+				StyleType,			0,
+				ProductLayoutPath,	~<aProductPath>~,	
+				PreviewPath,		~<aProductPath>\Preview\<$Str.$aProductPath.FileName>.jpg~ );
+
+
+		if (!ProductsTable( Update ))
+		{	ProductsTable( CancelUpdate );	}
+
+		else
+		{	
+			Log( Session,~Adding CompositeNodes table~);
+			StatusBarText( Translate(~Adding CompositeNodes~) );
+
+			if ( !Document( theLayout,ParseFile,~<aProductPath>\Layout.10~ ) )
+			{
+				Log( Session,~An error occured while parsing the job at <aProductPath>\Layout.10~ );
+				return Warning( ~An error occured while parsing the job at <aProductPath>\Layout.10~ );
+			}
+
+			if ( !theLayout( GetRenderList,0,aRenderList ) )
+			{ 
+				Log( Session,~here was no render list for <aProductPath>\Layout.10~);
+				return Warning( ~There was no render list for <aProductPath>\Layout.10~ );
+			}
+
+			count = 0;
+			if ( ++count < 5)
+			{
+				theID = ~~;
+				Cmd = ~Select ID from Products where ID = '<>'~;
+				ADO(dbase,GetValuesFor,~<Cmd>~,theID);
+				if (~<theID>~ == ~~)
+				{  Log( Session,~Failed to find composite in Products table retry <count>~);	}
+				else
+				{	count = 5;	}
+			}
+
+			if (!aRenderList( WriteCompositeNodes,~<ProductID>~))
+			{
+				Log( Session,~Composite Nodes Names not updated~);
+				return Warning( ~Failed to update Composite Node Names~ );
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC AddFeaturedComposites(&dbase)
+{
+	Log( Session,~Adding Sample Featured Composite~ );
+	StatusBarText( Translate(~Adding Sample Featured Composite~) );
+
+	aProductPath = ~<$App.ShareDirectory>\Layouts\GridLayouts\Featured10x8~;
+	ProductID = ~<$Str.$aProductPath.FileName.WithOutExt>~;
+
+	Cmd = ~Select Count(*) from Products Where ID='<ProductID>' AND Category='TestSchool' AND ProductLayoutPath='<aProductPath>'~;
+	exists = dBase( RecordCountFor, ~<cmd>~ );
+	if ( <exists> )
+	{
+		return TRUE;
+	}
+
+	if ( !dbase( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,ProductsTable,~SELECT * FROM Products~ ) )
+	{
+		Warning( ~Could not open Product Recordset~ );
+		return FALSE;
+	}
+
+
+	// Add Grid/Composites
+	ProductsTable( AddNew );
+	ProductsTable( SetFields,	
+			ID,					~<ProductID>~,
+			LayoutName,			~<ProductID>~,
+			Category,			~TestSchool~,
+			Sequence,			0,
+			Subsequence,		1,
+			ProductType,		~Digital~,	
+			Multiple,			1,		
+			Style,				0,	
+			StyleType,			0,
+			ProductLayoutPath,	~<aProductPath>~,	
+			PreviewPath,		~<aProductPath>\Preview\<$Str.$aProductPath.FileName>.jpg~ );
+
+
+	if (!ProductsTable( Update ))
+	{	ProductsTable( CancelUpdate );	}
+
+	else
+	{	
+		Log( Session,~Adding CompositeNodes table~);
+		StatusBarText( Translate(~Adding CompositeNodes~) );
+
+		if ( !Document( theLayout,ParseFile,~<aProductPath>\Layout.010~ ) )
+		{
+			Log( Session,~An error occured while parsing the job at <aProductPath>\Layout.010~ );
+			return Warning( ~An error occured while parsing the job at <aProductPath>\Layout.010~ );
+		}
+
+		if ( !theLayout( GetRenderList,0,aRenderList ) )
+		{ 
+			Log( Session,~here was no render list for <aProductPath>\Layout.010~);
+			return Warning( ~There was no render list for <aProductPath>\Layout.010~ );
+		}
+
+		count = 0;
+		if ( ++count < 5)
+		{
+			theID = ~~;
+			Cmd = ~Select ID from Products where ID = '<>'~;
+			ADO(dbase,GetValuesFor,~<Cmd>~,theID);
+			if (~<theID>~ == ~~)
+			{  Log( Session,~Failed to find composite in Products table retry <count>~);	}
+			else
+			{	count = 5;	}
+		}
+
+		if (!aRenderList( WriteCompositeNodes,~<ProductID>~))
+		{
+			Log( Session,~Composite Nodes Names not updated~);
+			return Warning( ~Failed to update Composite Node Names~ );
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC AddMovieProducts(&dbase)
+{
+	BaseProduct( New,theProduct );
+	theProduct.SetConnection(dbase);
+	Category = ~2012 Workshop~;
+	NotFoundFiles = 0;
+	
+	ID = ~Workshop8x10_1~;
+	Description = ~<ID>~;
+	theProduct.Delete( ~<ID>~ );
+	Path = ~<$App.ShareDirectory>\Layouts\Samples\<Category>\<ID>\<ID>.txt~;
+	ReturnOnFailure(theProduct.AddANewProduct( ~<ID>~,~<Description>~,~<Category>~,~Digital~,~<Path>~,~0~,~0~,~0~));
+	if ( !Files( FileOrDirectoryExists,~<Path>~ ) )
+	{
+		NotFoundFiles = <NotFoundFiles> + 1;
+		Log(Session,~<Path> does not exist~);
+	}
+
+
+	ID = ~QR_1~;
+	Description = ~<ID>~;
+	theProduct.Delete( ~<ID>~ );
+	Path = ~<$App.ShareDirectory>\Layouts\Samples\<Category>\<ID>\<ID>.txt~;
+	ReturnOnFailure(theProduct.AddANewProduct( ~<ID>~,~<Description>~,~<Category>~,~Digital~,~<Path>~,~0~,~0~,~0~));
+	if ( !Files( FileOrDirectoryExists,~<Path>~ ) )
+	{
+		Log(Session,~<Path> does not exist~);
+		NotFoundFiles = <NotFoundFiles> + 1;
+	}
+	
+	ID = ~MovieHeader_1~;
+	Description = ~<ID>~;
+	theProduct.Delete( ~<ID>~ );
+	Path = ~<$App.ShareDirectory>\Layouts\Samples\<Category>\<ID>\<ID>.txt~;
+	ReturnOnFailure(theProduct.AddANewProduct( ~<ID>~,~<Description>~,~<Category>~,~Digital~,~<Path>~,~0~,~0~,~0~));
+	if ( !Files( FileOrDirectoryExists,~<Path>~ ) )
+	{
+		Log(Session,~<Path> does not exist~);
+		NotFoundFiles = <NotFoundFiles> + 1;
+	}
+
+	ID = ~MovieHeader_2~;
+	Description = ~<ID>~;
+	theProduct.Delete( ~<ID>~ );
+	Path = ~<$App.ShareDirectory>\Layouts\Samples\<Category>\<ID>\<ID>.txt~;
+	ReturnOnFailure(theProduct.AddANewProduct( ~<ID>~,~<Description>~,~<Category>~,~Digital~,~<Path>~,~0~,~0~,~0~));
+	if ( !Files( FileOrDirectoryExists,~<Path>~ ) )
+	{
+		Log(Session,~<Path> does not exist~);
+		NotFoundFiles = <NotFoundFiles> + 1;
+	}
+
+	ID = ~Principal_1~;
+	Description = ~<ID>~;
+	theProduct.Delete( ~<ID>~ );
+	Path = ~<$App.ShareDirectory>\Layouts\Samples\<Category>\<ID>\<ID>.txt~;
+	ReturnOnFailure(theProduct.AddANewProduct( ~<ID>~,~<Description>~,~<Category>~,~Digital~,~<Path>~,~0~,~0~,~0~));
+	if ( !Files( FileOrDirectoryExists,~<Path>~ ) )
+	{
+		Log(Session,~<Path> does not exist~);
+		NotFoundFiles = <NotFoundFiles> + 1;
+	}
+		
+	ID = ~MovieVariable_1~;
+	Description = ~<ID>~;
+	theProduct.Delete( ~<ID>~ );
+	Path = ~<$App.ShareDirectory>\Layouts\Samples\<Category>\<ID>\<ID>.txt~;
+	ReturnOnFailure(theProduct.AddANewProduct( ~<ID>~,~<Description>~,~<Category>~,~Digital~,~<Path>~,~0~,~0~,~0~));
+	if ( !Files( FileOrDirectoryExists,~<Path>~ ) )
+	{
+		Log(Session,~<Path> does not exist~);
+		NotFoundFiles = <NotFoundFiles> + 1;
+	}
+	
+	ID = ~MovieTrailer_1~;
+	Description = ~<ID>~;
+	theProduct.Delete( ~<ID>~ );
+	Path = ~<$App.ShareDirectory>\Layouts\Samples\<Category>\<ID>\<ID>.txt~;
+	ReturnOnFailure(theProduct.AddANewProduct( ~<ID>~,~<Description>~,~<Category>~,~Digital~,~<Path>~,~0~,~0~,~0~));
+	if ( !Files( FileOrDirectoryExists,~<Path>~ ) )
+	{
+		Log(Session,~<Path> does not exist~);
+		NotFoundFiles = <NotFoundFiles> + 1;
+	}
+	
+	if (<NotFoundFiles> > 0)
+	{
+		Warning(~Some sample layout files were not found in folder <$App.ShareDirectory>\Layouts\Samples\<Category>\<ID>.  Please re-install DP2 on your server.~);
+	}
+
+	GenCon(ProductData,New,DDProductData);
+	GenCon(ProductData1,New,DDProductData);
+	GenCon(ProductData2,New,DDProductData);
+	GenCon(ProductData3,New,DDProductData);
+	GenCon(ProductData4,New,DDProductData);
+	GenCon(ProductData5,New,DDProductData);
+	
+	ProductData1(SetValue,ID,~MovieHeader_1~);
+	ProductData2(SetValue,ID,~MovieHeader_2~);
+	ProductData3(SetValue,ID,~Principal_1~);
+	ProductData4(SetValue,ID,~MovieVariable_1~);
+	ProductData5(SetValue,ID,~MovieTrailer_1~);
+	
+	ProductData(InsertBack,ProductData1);
+	ProductData(InsertBack,ProductData2);
+	ProductData(InsertBack,ProductData3);
+	ProductData(InsertBack,ProductData4);
+	ProductData(InsertBack,ProductData5);
+	ID = ~AnimotoClassMovie~;
+	ProductDescription = ~<ID>~;
+	DeviceType = ~Animoto~;
+	// Delete the package if it already exists because we can't delete a product if it is in a package
+	Cmd = ~Delete From Packages Where PackageID = '<ID>'~;
+	dbase( CMD,~<Cmd>~ );
+	Cmd = ~Delete From Products Where ID = '<ID>'~;
+	dbase( CMD,~<Cmd>~ );
+	
+	BookProduct( New,fBookProd );
+	fBookProd.Delete(~<ID>~);
+	
+	fBookProd.AddAttribute(ApprovalRequired,0);
+	fBookProd.AddAttribute(Downloadable,0);
+	fBookProd.AddAttribute(DVDOutput,0);
+	fBookProd.AddAttribute(Fit,0);
+	fBookProd.AddAttribute(Format,h264);
+	fBookProd.AddAttribute(FrameRate,4);
+	fBookProd.AddAttribute(HiResDestinationPath,~/labmovies/classpictures/[MG]/[M]_[R].mp4~);
+	fBookProd.AddAttribute(MaxDuration,1800.0);
+	fBookProd.AddAttribute(NoPreview,0);
+	fBookProd.AddAttribute(Pacing,0);
+	fBookProd.AddAttribute(PostRoll,1);
+	fBookProd.AddAttribute(PublishToWeb,1);
+	fBookProd.AddAttribute(ReleaseRImageOrder,1);
+	fBookProd.AddAttribute(Resolution,~720p~);
+	
+	if ( !dbase( GetValuesFor,~Select ID From Animoto Order BY ID~,Setup ) )
+	{
+		Setup = ~Movie~;
+	}
+	
+	fBookProd.AddAttribute(Setup,~<Setup>~);
+	fBookProd.AddAttribute(SongDuration,0);
+	fBookProd.AddAttribute(SongGenre,Jazz);
+	fBookProd.AddAttribute(SongGenre,Jazz);
+	fBookProd.AddAttribute(SongStart,0.0);
+	fBookProd.AddAttribute(SongTitle,~The Entertainer~);
+	fBookProd.AddAttribute(Style,~Color Fold~);
+	fBookProd.AddAttribute(Title,~The Sting~);
+	fBookProd.AddAttribute(WantWebRes,~1~);
+	fBookProd.AddAttribute(WebResDestinationPath,~/labmovies/classpictures/[MG]/[M]_[R].mp4~);
+	
+	if (!fBookProd.AddBook(~<ID>~,~<ProductDescription>~, ~<Category>~,~~,~<DeviceType>~,ProductData))
+	{
+		Warning(fBookProd.GetError());	
+	}
+	return TRUE;
+}
+
+
+NUMERIC	AddSubjectInfo()
+{
+	Log( Session,~Adding SubjectInfo~ );
+	StatusBarText( Translate(~Adding SubjectInfo~) );
+
+	action = ACTION DOC ( TextFileConversion Open TextFileConversion "UpdateTableFromTextFile( ~<SubjectInfoFile>~,~SubjectInfo<InfoType>~ );" );
+	return PerformActions( action );
+
+	return TRUE;
+}
+
+
+NUMERIC	AddSorts(&dbase)
+{
+
+	Log( Session,~Adding Sorts~ );
+	StatusBarText( Translate(~Adding Sorts~) );
+
+	Fields		= ~Name,Sequence,Type,Sort,Restriction~;
+	Values		= ~'Grade',0,'Any SubjectInfo','Grade',''~;	
+	InsertCmd	= ~Insert Into Sorts(<Fields>) Values(<Values>)~;
+
+	if ( !dbase( CMD,~<InsertCmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Log( Session, Translate( ~Database update failed. <InsertCmd>. <theErr>~ ) );
+	}
+
+	Values		= ~'Grade\Lastname',0,'Any SubjectInfo','Grade,Lastname',''~;	
+	InsertCmd	= ~Insert Into Sorts(<Fields>) Values(<Values>)~;
+	if ( !dbase( CMD,~<InsertCmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Log( Session, Translate( ~Database update failed. <InsertCmd>. <theErr>~ ) );
+	}
+
+	Values		= ~'Lastname',0,'Any SubjectInfo','Lastname',''~;	
+	InsertCmd	= ~Insert Into Sorts(<Fields>) Values(<Values>)~;
+	if ( !dbase( CMD,~<InsertCmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Log( Session, Translate( ~Database update failed. <InsertCmd>. <theErr>~ ) );
+	}
+
+	Values		= ~'Grade\Homeroom',0,'Any SubjectInfo','Grade,Homeroom',''~;	
+	InsertCmd	= ~Insert Into Sorts(<Fields>) Values(<Values>)~;
+	if ( !dbase( CMD,~<InsertCmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Log( Session, Translate( ~Database update failed. <InsertCmd>. <theErr>~ ) );
+	}
+
+	Values		= ~'Grade\Homeroom\Lastname',0,'Any SubjectInfo','Grade,Homeroom,Lastname',''~;	
+	InsertCmd	= ~Insert Into Sorts(<Fields>) Values(<Values>)~;
+	if ( !dbase( CMD,~<InsertCmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Log( Session, Translate( ~Database update failed. <InsertCmd>. <theErr>~ ) );
+	}
+
+	Values		= ~'Grade\Teacher',0,'Any SubjectInfo','Grade,Teacher',''~;	
+	InsertCmd	= ~Insert Into Sorts(<Fields>) Values(<Values>)~;
+	if ( !dbase( CMD,~<InsertCmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Log( Session, Translate( ~Database update failed. <InsertCmd>. <theErr>~ ) );
+	}
+	
+	if ( !dbase( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,SortsTable,~SELECT * FROM Sorts~ ) )
+	{
+		Warning( ~Could not open Orders Recordset~ );
+		return FALSE;
+	}
+	
+	SortsTable( AddNew );
+	SortsTable( SetFields,	
+			Name,			~Grade\Homeroom-Students~,
+			Sequence,		0,
+			Type,			~Any SubjectInfo~,
+			Sort,			~Grade,Homeroom~,
+			Restriction,	~Teacher <> 'T'~ );
+
+	if (!SortsTable( Update ))
+	{	
+		SortsTable( CancelUpdate );	
+	}	
+	
+	// Can't use Insert command with restriction since has ' character
+
+	Fields		= ~Name,Sequence,Type,Sort,Restriction~;
+	SortsTable( AddNew );
+	SortsTable( SetFields,	
+			Name,			~Grade\Homeroom - Teacher First~,
+			Sequence,		0,
+			Type,			~Any SubjectInfo~,
+			Sort,			~Grade,Homeroom, Case Teacher When 'T' Then 1 Else 2 End~,
+			Restriction,	~Homeroom <> 'Principal'~ );
+	
+
+	if (!SortsTable( Update ))
+	{	
+		SortsTable( CancelUpdate );	
+	}
+	
+	return TRUE;
+}
+
+
+
+NUMERIC AddOrderDlvrbls()
+{
+	StatusBarText( Translate(~Adding Order Deliverables for <OrderID>~) );
+
+	action = ACTION DOC ( TextFileConversion Open TextFileConversion "UpdateTableFromTextFile( ~<OrderDlvrblsData>~,~OrderDlvrbl~ );" );
+	return PerformActions( action );
+
+}
+
+
+
+
+NUMERIC AddCompositeJob(&dbase,~<OrderID>~)
+{
+
+	Log( Session,~Adding Composite Job for <OrderID>~ );
+	StatusBarText( Translate(~dding Composite Job for <OrderID>~) );
+
+	if ( !dbase( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,CompositeTable,~SELECT * FROM Composite~ ) )
+	{
+		Warning( ~Could not open Composite Recordset~ );
+		return FALSE;
+	}
+
+
+			CompositeTable( AddNew );
+			CompositeTable( SetFields,	
+					OrderID,			~<OrderID>~,
+					Collection,			~10x8 Composite~,
+					Groupby,			~Grade\Homeroom-Students~,
+					Sortby,				~Lastname~,	
+					Quantity,			~0~,	
+					QtyN,				1,		
+					ImagesFrom,			0,
+					ShipDate,			~5/11/02~,	
+					MultiImages,		2,
+					Definition,			~~,	
+					OutputSetup,		~~ );
+			if (!CompositeTable( Update ))
+			{	CompositeTable( CancelUpdate );	}
+
+	return TRUE;
+}
+
+NUMERIC AddCompositeJob2(&dbase,~<OrderID>~)
+{
+	Log( Session,~Adding Featured Composite Job for <OrderID>~ );
+	StatusBarText( Translate(~Adding Featured Composite Job for <OrderID>~) );
+
+	if ( !dbase( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,CompositeTable,~SELECT * FROM Composite~ ) )
+	{
+		Warning( ~Could not open Composite Recordset~ );
+		return FALSE;
+	}
+
+	CompositeTable( AddNew );
+	CompositeTable( SetFields,	
+			OrderID,			~<OrderID>~,
+			Collection,			~Featured10x8~,
+			Groupby,			~Grade\Homeroom-Students~,
+			Sortby,				~Lastname~,	
+			Quantity,			~0~,	
+			QtyN,				1,		
+			ImagesFrom,			0,
+			ShipDate,			~5/20/08~,	
+			MultiImages,		2,
+			Definition,			~~,
+			WhoGetsFeatured,	1,		// all students and staff
+			ShuffleStaff,		0,		// leave featured position empty
+			TypeOfComposite,	1,		// featured
+			StaffRestriction,	~Teacher In ('T') OR Homeroom In ('Principal')~,
+			FeaturedRestriction, ~Q1 In ('1')~,
+			OutputSetup,		~~ );
+
+	if (!CompositeTable( Update ))
+			{	CompositeTable( CancelUpdate );	}
+
+	return TRUE;
+}
+
+NUMERIC AddNodeDetails()
+{
+	Log( Session,~Adding Node Details~ );
+	StatusBarText( Translate(~Adding Node Details~) );
+
+	action = ACTION DOC ( TextFileConversion Open TextFileConversion "UpdateTableFromTextFile( ~<NodeDetailsData>~,~NodeDetails~ );" );
+	return PerformActions( action );
+}
+
+NUMERIC AddNodeDetails2()
+{
+	Log( Session,~Adding Node Details~ );
+	StatusBarText( Translate(~Adding Node Details~) );
+
+	action = ACTION DOC ( TextFileConversion Open TextFileConversion "UpdateTableFromTextFile( ~<NodeDetailsData2>~,~NodeDetails~ );" );
+	return PerformActions( action );
+}
+
+
+NUMERIC AddCustomerProducts()
+{
+	Log( Session,~Adding Customer Products~ );
+	StatusBarText( Translate(~Adding Customer Products~) );
+
+	action = ACTION DOC ( TextFileConversion Open TextFileConversion "UpdateTableFromTextFile( ~<CustomerProductsData>~,~CustomerProducts~ );" );
+	return PerformActions( action );
+
+}
+
+NUMERIC AddYearbookData( &dbase, SchoolName, YearbookID, InfoType )
+{
+
+	Log( Session,~Adding Yearbook Definition <YearbookID> for <SchoolName>~ );
+	StatusBarText( Translate(~Adding Yearbook Definition <YearbookID> for <SchoolName>~) );
+
+	if (dbase(GetValuesFor,~Select YearbookID from YearbookDefs where YearbookID = '<YearbookID>'~,Id))
+	{	//  record already exists
+		Log( Session,~Yearbook Definition already exists.~ );
+		return TRUE;
+	}
+
+	if ( !dbase( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,YearbookDefsTable,~SELECT * FROM YearbookDefs~ ) )
+	{
+		Warning( ~Could not open YearbookDefs Recordset~ );
+		return FALSE;
+	}
+
+	YearbookDefsTable( AddNew );
+	YearbookDefsTable( SetFields,	
+					YearbookID,			~<YearbookID>~,
+					GroupFields,		~Grade~,
+					GroupBy,			~Grade~,
+					SortBy,				~Last Name~,
+					ImageSize,			0,
+					ImageWidth,			320,
+					ImageLength,		400,
+					CompressionQuality,	90,
+					Resolution,			300 );
+
+	if (!YearbookDefsTable( Update ))
+	{	YearbookDefsTable( CancelUpdate );	}
+
+
+	if ( !AddYearbookFields( dbase, ~<YearbookID>~,~<InfoType>~ ) )
+	{
+		Log(Session, ~Failed to load the Yearbook Fields for <YearbookID>~ );
+		return FALSE;
+	}
+
+	if ( !AddSchoolLabInfo( dBase ) )
+	{
+		Log( Session, ~Failed to add School Lab Info data.~ );
+	}
+
+	if ( !AddYBSetup( dBase,~<YearbookID>~,~<InfoType>~,~<SchoolName>~ ) )
+	{
+		Log( Session, ~Failed to create setup for <YearbookID> and <SchoolName>~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC	AddYearbookFields( &dbase, YearbookID,InfoType )
+{
+	Log( Session,~Adding Yearbook Fields for <YearbookID>~ );
+	StatusBarText( Translate(~Adding Yearbook Fields for <YearbookID>~) );
+
+	if ( dbase(RecordCountFor,~Select count(*) from YearbookFields where YearbookID = '<YearbookID>'~) == 18)
+	{	//  record already exists
+		Log( Session,~YearbookFields already exist.~ );
+		return TRUE;
+	}
+
+	MasterKey = ~YearbookID='<YearbookID>'~;
+	SIKey = ~InfoType='<InfoType>'~;
+
+	Sequence = -8;
+	Reserved = TRUE;
+	
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~ExportWithBlanks~,~0~,<Reserved>,<Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~PoseSource~,~0~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~PoseField~,~Rejected~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~PoseValue~,~0~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~SIPoseField~,~0~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~SIPoseValue~,~~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~NamingType~,~0~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~FileNameField~,~~,<Reserved>,<++Sequence> );
+	
+	Sequence = 0;
+	Reserved = FALSE;
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~Volume Name~,~~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~Image Folder~,~~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~Image File Name~,~~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~Grade~,~Grade~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~Last Name~,~LastName~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~First Name~,~FirstName~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~Home Room~,~HomeRoom~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~Period~,~~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~Teacher Name~,~Teacher~,<Reserved>,<++Sequence> );
+	AddFieldMap( dBase,~<MasterKey>~,~<SIKey>~,~<YearbookID>~,~Track~,~~,<Reserved>,<++Sequence> );
+
+	return TRUE;
+}
+
+NUMERIC AddFieldMap( &dBase,MasterKey,SIKey,YearbookID,FieldName,SIFieldName,Reserved,Sequence )
+{
+
+	YBCmd     = ~~;
+	MapCmd	  = ~~;
+
+	Query = ~Select count(*) from YearbookFields Where FieldName='<FieldName>' AND <MasterKey>~;
+	exists = dbase( RecordCountFor,~<Query>~ );
+
+	if ( !<exists> )
+	{
+		YBFields = ~YearbookID,Reserved,Sequence,FieldName~;
+		YBValues = ~'<YearbookID>',<Reserved>,<Sequence>,'<FieldName>'~;
+
+		MapFields = ~YearbookID,InfoType,FieldName,SIFieldName~;
+		MapValues = ~'<YearbookID>','<InfoType>','<FieldName>','<SIFieldName>'~;
+
+		YBCmd   = ~Insert Into YearbookFields(<YBFields>) Values(<YBValues>)~;
+		MapCmd	= ~Insert Into YBSIFieldMap(<MapFields>) Values(<MapValues>)~;
+	}
+	else
+	{
+		return TRUE;
+	}
+
+	if ( !dbase( Cmd, ~<YBCmd>~ ) )
+	{
+		dbase( GetErrorDescription, theErr );
+		Log( Session, ~AddYearbookField: Unable to insert Field into YearbookFields table. <theErr>~ );
+		return FALSE;
+	}
+
+	if ( !SimilarStr( ~<MapCmd>~,~~ ) )
+	{
+		if ( !dbase( Cmd, ~<MapCmd>~ ) )
+		{
+			dbase( GetErrorDescription, theErr );
+			Log( Session, ~AddYearbookField: Unable to insert mapping record into YBSIFieldMap table. <theErr>~ );
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC AddYBSetup( &dBase,YearbookID,InfoType,SchoolName )
+{
+	Log( Session,~Adding Yearbook Export Setup for <SchoolName>~ );
+	StatusBarText( Translate(~Adding Yearbook Export Setup for <SchoolName>~) );
+
+	exists = dbase(RecordCountFor,~Select Count(*) from ExportYBSetups where Setup = '<SchoolName>'~);
+	if ( <exists> )
+	{	//  record already exists
+		Log( Session,~Yearbook Export Setup already exists.~ );
+		return TRUE;
+	}
+
+	if ( !dbase( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,YBSetupTable,~SELECT * FROM ExportYBSetups~ ) )
+	{
+		Warning( ~Could not open YearbookDefs Recordset~ );
+		return FALSE;
+	}
+	YBSetupTable( AddNew );
+	YBSetupTable( SetFields,	
+					Setup,				~<SchoolName>~,
+					SchoolName,			~<SchoolName>~,
+					YearbookIDInst,		~<YearbookID>~,
+					InfoType,			~SubjectInfo~,
+					AllPosesEnabled,	0,
+					Profile,			~srgb~,
+					embed,				0,
+					QueueName,			~~,
+					OutputDirectory,	~<$App.ShareDirectory>\School~,
+					RImageEnabled,		0,
+					RImageTemplate,		~~,
+					RImageWriter,		~~,
+					RImageCDPath,		~~,
+					DeleteAfterRImage,	TRUE,
+					GroupsPerCD,		12,
+					AutoCropSrcX,		50,
+					AutoCropSrcY,		50,
+					AutoCropDstX,		50,
+					AutoCropDstY,		50,
+					AutoCropWidth,		100,
+					AutoCropLength,		100 );
+
+	if (!YBSetupTable( Update ))
+	{	YBSetupTable( CancelUpdate );	}
+
+
+	return TRUE;
+}
+
+NUMERIC AddSchoolLabInfo( &dBase )
+{
+	labName = ~~;
+	contactName = ~~;
+	location = ~~;
+	phoneNumber = ~~;
+	eMail = ~~;
+
+	exists = dBase( RecordCountFor,~Select Count(*) from SchoolLabInfo~ );
+
+	if ( <exists> )
+	{
+		Log( Session,~School Lab Info already exists.~ );
+		return TRUE;
+	}
+
+	Query = ~Select * from LabInfo~;
+	if ( PGenConList( List,Connection,fConnection,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		if ( List( GetNext,Labinfo ) )
+		{
+			labName = ~<$pcon.Labinfo[LabName]>~;
+			contactName = ~<$pcon.Labinfo[ContactName]>~;
+			location = ~<$pcon.Labinfo[Location]>~;
+			phoneNumber = ~<$pcon.Labinfo[Phone]>~;
+			eMail = ~<$pcon.Labinfo[EMail]>~;
+		}
+	}
+
+	if ( !dbase( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,SchoolInfoTable,~SELECT * FROM SchoolLabInfo~ ) )
+	{
+		Warning( ~Could not open SchoolLabInfo Recordset~ );
+		return FALSE;
+	}
+
+	SchoolInfoTable( AddNew );
+	SchoolInfoTable( SetFields,	
+					labName,		~<labName>~,
+					contactName,	~<contactName>~,
+					location,		~<location>~,
+					phone,			~<phoneNumber>~,
+					eMail,			~<eMail>~ );
+
+	if (!SchoolInfoTable( Update ))
+	{	SchoolInfoTable( CancelUpdate );	}
+
+	return TRUE;
+}
+
+NUMERIC UpdateOrderDlvrbls(&dbase)
+{	
+	if ( !dbase( CmdType,SQL,Lock,Optimistic,Cursor,Keyset,RECORDSET,OrderDlvrblTable,~SELECT * FROM OrderDlvrbl~ ) )
+	{
+		Warning( ~Could not open Orders Recordset~ );
+		return FALSE;
+	}
+	
+	OrderDlvrblTable( AddNew );
+	OrderDlvrblTable( SetFields,	
+			OrderID,		~SampleOrder~,
+			Choice,			~AnimotoClassMovie~,
+			Name,~Movie~,
+			SortBy,~Grade\Homeroom - Teacher First~,
+			GroupBy,~Grade\Homeroom~,
+			MultiImages,1,
+			Notes,~Items 6/19/2012~,
+			ShipDate,~6/20/2012~,
+			JobPopulationScript,~85 CreateClassMovie~
+			);
+
+	if (!OrderDlvrblTable( Update ))
+	{	
+		OrderDlvrblTable( CancelUpdate );	
+	}	
+
+	OrderDlvrblTable( AddNew );
+	OrderDlvrblTable( SetFields,	
+			OrderID,		~SampleOrder~,
+			Choice,			~QR_1~,
+			Name,~DP2 Products~,
+			SortBy,~Grade\Homeroom - Teacher First~,
+			GroupBy,~Grade\Homeroom~,
+			MultiImages,1,
+			Notes,~Items 6/19/2012~,
+			ShipDate,~6/20/2012~
+			);
+
+	if (!OrderDlvrblTable( Update ))
+	{	
+		OrderDlvrblTable( CancelUpdate );	
+	}	
+		
+	return TRUE;
+}
+
+//success = AddSampleSchoolOrderData();

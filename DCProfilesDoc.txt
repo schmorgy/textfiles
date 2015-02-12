@@ -1,0 +1,90 @@
+Include: ~Classes\BaseGrid~;
+Include: ~FormattingRoutines.txt~;
+
+VOID EditDCProfiles::EditDCProfiles()					// CONSTRUCTOR
+{
+	TableName = ~DCProfiles~;
+	DocumentQuery = ~Select * from <TableName> Order By EquipmentMake, EquipmentModel	~;
+	Title = ~DCProfiles~;	
+	WindowWidth = 75; WindowHeight = 30;
+	HelpFile = ~KPISHelpFile~;
+	HelpPage = ~DCProfiles.htm~;
+}
+
+STR EditDCProfiles::GetKey( &Item )	{ return ~ID = '<$con.Item[ID]>'~; }  // PRIMARY KEY FOR THE TABLE
+
+VOID EditDCProfiles::OnAddRecord( &NewRow )	
+{ 
+	ID = UniqueDCProfileID();
+	NewRow( Set, ID, ~<ID>~ );
+}
+
+NUMERIC EditDCProfiles::ChangeRecordAudits( &Changed )		// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[ID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes. ID cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[ProfilePath]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes. The Profile Path cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[ColorSpace]>~) && !SimilarStr(~<$Con.Changed[Type]>~, ~Abstract~))
+		{ return Warning( Translate( ~Unable to save pending changes. The Color Space cannot be blank.~ ) ); }
+
+	return TRUE;
+}
+
+
+NUMERIC EditDCProfiles::UpdateICCProfileCombo( &ColumnDefinition,Row,Col )
+{
+	Query = STR ( Select Name From Profiles Where Type = 'Input' Or Type = 'WorkingSpace' Order By Name );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( ~Database query failed: <Query>. <theErr>~ );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,ICCProfiles,Name );
+
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,ICCProfiles(GetCopyOf) );
+
+		DataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC EditDCProfiles::UpdateImageTypeCombo( &ColumnDefinition,Row,Col ) { return TRUE; }
+NUMERIC EditDCProfiles::UpdateRotationCombo( &ColumnDefinition,Row,Col ) { return TRUE; }
+
+VOID EditDCProfiles::Init( theTitle,Query )
+{
+	Title = ~<theTitle>~ == ~~ ? ~Digital Camera Input Profiles~  : ~<theTitle>~;
+	DocumentQuery = ~<Query>~;
+		
+	BaseGrid::Init();
+}
+
+VOID EditDCProfiles::AddStdMenuItems()	// OVERRIDE TO REMOVE THE STANDARD EDITS
+{
+	AddMenuItem( TRUE,	FALSE,Translate(UIMenuText,MenuAdd),ACTION EXEC ( <THIS>.AddRecord() ) );
+	AddMenuItem( DataView(PendingChanges),FALSE,Translate(UIMenuText,MenuSaveChanges),ACTION EXEC ( <THIS>.SaveAllChanges() ) );
+	AddMenuItem( DataView(PendingChanges),FALSE,Translate(UIMenuText,MenuCancelChanges),ACTION EXEC ( <THIS>.RollBackAllChanges() ) );
+	AddMenuItem( TRUE,	FALSE,Translate(UIMenuText,MenuRefresh),ACTION EXEC ( <THIS>.RefreshListView() ) );
+}
+
+
+NUMERIC Init( theTitle,Query )
+{
+	Class( EditDCProfiles,Extends,BaseGrid );
+
+	EditDCProfiles( New,Grid );
+
+	Grid.DefineWindow();
+	Grid.Init( ~<theTitle>~,~<Query>~ );
+
+	return Global( Grid );
+}

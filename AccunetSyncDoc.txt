@@ -1,0 +1,975 @@
+
+Include: ~Utilities2~;
+
+VOID RefreshDoc()
+{
+}
+				
+NUMERIC OnCancelButton()
+{
+	dlg( End );
+	Exit();
+	return TRUE;
+}
+
+ContinueRunning = TRUE;
+
+VOID SetControlsRunning()
+{
+	ContinueRunning = TRUE;
+	dlg( EnableControls,FALSE,GoButton,CancelButton );
+	dlg( EnableControls,TRUE,StopButton );
+}
+
+
+VOID SetControlsStopped()
+{
+	ContinueRunning = FALSE;
+	dlg( EnableControls,TRUE,GoButton,CancelButton );
+	dlg( EnableControls,FALSE,StopButton );
+}
+
+Thread( TheThread );	// ADD THE ARG DEBUG TO RUN AS A SUBROUTINE INSTEAD OF A THREAD FOR DEBUGGING
+
+
+NUMERIC OnGoButton()
+{
+	CustomerCount = OrderCount = 0;
+
+	dlg( GetInput,GetStrings,SyncBy,SyncBy,Choose,Choose,Entered,Entered,AllOrdersInBatch,AllOrdersInBatch );
+
+	Routine = Sync<SyncBy>Thread;
+
+	if ( ~<SyncBy>~ == ~Customer~ )
+	{
+		SetControlsRunning();
+
+		if ( ~<Choose>~ == ~All~ )
+		{
+			TheThread( New,SyncCustomerThread,~Select * From Customers~ );
+			return TRUE;
+		}
+		else if ( ~<Choose>~ == ~UserEntered~ )
+		{
+			TheThread( New,SyncCustomerThread,~Select * From Customers Where ID = '<Entered>'~ );
+			return TRUE;
+		}
+		
+		IF 0	// FOR THE FUTURE
+		{
+			SetControlsStopped();
+			return UserMessage( Translate( ~Sync Selected not supported yet~ ) );
+		}
+	} 
+	else if ( ~<SyncBy>~ == ~Order~ )
+	{
+		SetControlsRunning();
+
+		if ( ~<Choose>~ == ~All~ )
+		{
+			TheThread( New,SyncOrderThread,~Select * From Orders~ );
+			return TRUE;
+		}
+		else if ( ~<Choose>~ == ~UserEntered~ )
+		{
+			Query = ~Select * From Orders Where ID = '<Entered>'~; 
+			
+			if ( MakeNumber( ~<AllOrdersInBatch>~ ) )
+			{
+				Query = AllOrdersInABatchQuery( ~<Entered>~ );
+			}
+
+			TheThread( New,SyncOrderThread,~<Query>~ );
+			return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
+
+STR AllOrdersInABatchQuery( OrderID )
+{
+	UserMessage( ~Querying all orders in the batch that contains order <OrderID>~ );
+
+	Query = ~Select * From Orders Where ID = '<OrderID>'~;
+
+	if ( !PGenConList( SrcList,ConnectAccunet,Cursor,Forward,Lock,ReadOnly,Query,~<Query>~ ) )
+	{ 
+		SrcList( GetErrorDescription,0,theErr );
+		return UserWarning( ~Error querying the database. <Query>  <theErr>~ );
+	}
+
+	if ( SrcList( GetNext,Item )  )
+	{
+		if ( ~<$pcon.Item[BatchID]>~ != ~~ )
+		{
+			return ~Select * From Orders Where BatchID = '<$pcon.Item[BatchID]>'~;
+		}
+	}
+
+	return ~<Query>~;
+}
+
+
+NUMERIC OnStopButton()
+{
+	ContinueRunning = FALSE;
+
+	return FALSE;
+}
+
+
+NUMERIC UserWarning( Msg )
+{
+	UserMessage( ~<Msg>~ );
+	Log( Session,~<Msg>~ );
+
+	ContinueRunning = FALSE;
+
+	if ( IsMainThread() )
+	{
+		Completed( ~Stopped after error: <Msg>~ );
+		return FALSE;
+	}
+
+	Action = STR ( SetControlsStopped() );
+	ThisThread( QueueParent,Action );
+
+	return FALSE;
+}
+
+
+NUMERIC UserMessage( Msg )
+{
+	Invoke( Completed,~<Msg>~ );
+
+	return FALSE;
+
+	if ( IsMainThread() )
+	{
+		Completed( ~<Msg>~ );
+		return TRUE;
+	}
+
+	if ( ThreadIs( ThisThread ) )
+	{
+		Action = STR ( Completed( ~<Msg>~ ) );
+		return ThisThread( QueueParent,Action );
+	}
+
+	return FALSE;
+}
+
+
+VOID SyncCustomerThread( Query )
+{
+	SetThreadPriority( Idle );
+
+	if ( !ADO( dstConnection,Connect ) )
+	{
+		dstConnection( GetErrorDescription,theErr );
+		UserWarning( ~Error connecting to the Shared database: <theErr>~ );
+		return;
+	}
+
+	retval = SyncCustomers( dstConnection,~<Query>~ );
+
+	UserMessage( ~Completed <Query>. <CustomerCount> Customers and <OrderCount> Orders were loaded~ );
+	Log( Session,~Completed <Query>. <CustomerCount> Customers and <OrderCount> Orders were loaded~ );
+
+	if ( ThreadIs( ThisThread ) )
+	{
+		Action = STR ( SetControlsStopped() );
+		ThisThread( QueueParent,Action );
+		return;
+	}
+
+	SetControlsStopped();
+}
+
+
+VOID SyncOrderThread( Query )
+{
+	SetThreadPriority( Idle );
+
+	if ( !ADO( dstConnection,Connect ) )
+	{
+		dstConnection( GetErrorDescription,theErr );
+		UserWarning( ~Error connecting to the Shared database: <theErr>~ );
+		return;
+	}
+
+	retval = SyncOrders( dstConnection,~<Query>~ );
+
+	UserMessage( ~Completed <Query>.  <OrderCount> orders were loaded~ );
+	Log( Session,~Completed <Query>.  <OrderCount> orders were loaded~ );
+
+	if ( ThreadIs( ThisThread ) )
+	{
+		Action = STR ( SetControlsStopped() );
+		ThisThread( QueueParent,Action );
+		return;
+	}
+
+	SetControlsStopped();
+}
+
+CustomerCount = 0;
+
+NUMERIC SyncCustomers( &dstConnection,Query )
+{
+	UserMessage( ~Querying Accunet: <Query>~ );
+
+	if ( !PGenConList( SrcList,ConnectAccunet,Cursor,Forward,Lock,ReadOnly,Query,~<Query>~ ) )
+	{ 
+		SrcList( GetErrorDescription,0,theErr );
+		return UserWarning( ~Error querying the database. <Query>  <theErr>~ );
+	}
+
+	while ( SrcList( GetNext,Item ) && <ContinueRunning> )
+	{	
+		UserMessage( ~Loading Customer <$pcon.Item[ID]>~ );
+
+		if ( !SyncCustomer( dstConnection,Item ) )
+		{
+			return FALSE;
+		}
+
+		++CustomerCount;
+
+		if ( !SyncOrders( dstConnection,~Select * From Orders Where CustomerID = '<$pcon.Item[ID]>'~ ) ) 
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SyncCustomer( &dstConnection,&SrcRecord )
+{
+	Query = ~Select * From Customers Where ID = '<$pcon.SrcRecord[ID]>'~;
+
+	if ( !PGenConList( DstList,Connection,dstConnection,Cursor,KeySet,GetRecordFor,~<Query>~,DstRecord ) )
+	{ 
+		DstList( GetErrorDescription,0,theErr );
+		return UserWarning( ~Error querying the database. <Query>  <theErr>~ );
+	}
+
+	if ( !DstRecord(UpdateFrom,SrcRecord) )
+	{
+		return FALSE;
+	}
+
+	if ( !DstList( Update ) )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+OrderCount = 0;
+
+NUMERIC SyncOrders( &dstConnection,Query )
+{
+	FTQuery = ~Select * From FilmTypes~;
+
+	ForgetGlobal(FilmTypesList);
+
+	if ( !PGenConList( FilmTypesList,Connection,dstConnection,Cursor,Static,Query,~<FTQuery>~ ) )
+	{
+		dstConnection( GetErrorDescription,theErr );
+		Invoke( ShowWarning,~Error querying the Film Types <theErr>~ );
+		return FALSE;
+	}
+
+	Global(FilmTypesList);
+
+	FFQuery = ~Select * From FilmFormats~;
+
+	ForgetGlobal(FilmFormatsList);
+
+	if ( !PGenConList( FilmFormatsList,Connection,dstConnection,Cursor,Static,Query,~<FFQuery>~ ) )
+	{
+		dstConnection( GetErrorDescription,theErr );
+		Invoke( ShowWarning,~Error querying the Film Types <theErr>~ );
+		return FALSE;
+	}
+
+	Global(FilmFormatsList);
+
+	UserMessage( ~Querying Accunet: <Query>~ );
+
+	if ( !PGenConList( SrcList,ConnectAccunet,Cursor,Forward,Lock,ReadOnly,Query,~<Query>~ ) )
+	{ 
+		SrcList( GetErrorDescription,0,theErr );
+		return UserWarning( ~Error querying the database. <Query>  <theErr>~ );
+	}
+
+	while ( SrcList( GetNext,Item ) && <ContinueRunning> )
+	{	
+		UserMessage( ~Loading Order <$pcon.Item[ID]> for Customer <$pcon.Item[CustomerID]>~ );
+
+		if ( !SyncOrder( dstConnection,Item ) )
+		{
+			return FALSE;
+		}
+
+		++OrderCount;
+
+		RollQuery = ~Select * From Rolls Where OrderID = '<$pcon.Item[ID]>' Order By Roll~;
+
+		if ( !SyncRolls( dstConnection,~<RollQuery>~ ) ) 
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC SyncOrder( &dstConnection,&SrcRecord )
+{
+	// MAKE SURE THE CUSTOMER EXISTS FIRST
+
+	Query = ~Select * From Customers Where ID = '<$pcon.SrcRecord[CustomerID]>'~;
+
+	Exists = dstConnection( RecordCountFor,~<Query>~ );
+
+	if ( !<Exists> )
+	{
+		Cmd = ~Insert Into Customers( ID ) Values( '<$pcon.SrcRecord[CustomerID]>' )~;
+
+		if ( !dstConnection( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return UserWarning( Translate( ~Could not add customer <CustomerID>.  Database update failed <Cmd>. <theErr>~ ) );
+		}
+	}
+
+	Query = ~Select * From Orders Where ID = '<$pcon.SrcRecord[ID]>'~;
+
+	if ( !PGenConList( DstList,Connection,dstConnection,Cursor,KeySet,GetRecordFor,~<Query>~,DstRecord ) )
+	{ 
+		DstList( GetErrorDescription,0,theErr );
+		return UserWarning( ~Error querying the database. <Query>  <theErr>~ );
+	}
+
+
+	if ( doNewWay() && ShootDescExists( ~<$pcon.SrcRecord[ID]>~,ShootType) )
+	{
+		DstRecord( Set,ShootDescID,~<$pcon.SrcRecord[ID]>~ );
+		DstRecord( Set,ShootDescType,~<ShootType>~ );
+	}
+
+	DstRecord( Set,OrderDate,~<$Date.Date>~ );	// DEFAULT THE DATA TO TODAY BECAUSE ACCUNET DOESN'T SEND IT
+
+	if ( !DstRecord(UpdateFrom,SrcRecord) )
+	{
+		return UserWarning( Translate( ~Failed to Merge Data for Order <$pcon.SrcRecord[ID]>~ ) );
+	}
+
+	DstRecord( Set,Owner,~Accunet~ );
+
+	FilmTypeText = GetFilmTypeText( SrcRecord );
+	DstRecord( Set,FilmType,~<FilmTypeText>~ );
+
+	if ( !DstList( Update ) )
+	{
+		return UserWarning( Translate( ~Failed to update database for Order <$pcon.SrcRecord[ID]>~ ) );
+	}
+
+	ImportedOrdersList( AddString,~<$pcon.SrcRecord[ID]>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC SyncRolls( &dstConnection,Query )
+{
+	UserMessage( ~Querying Accunet: <Query>~ );
+
+	if ( !PGenConList( SrcList,ConnectAccunet,Cursor,Forward,Lock,ReadOnly,Query,~<Query>~ ) )
+	{ 
+		SrcList( GetErrorDescription,0,theErr );
+		return UserWarning( ~Error querying the database. <Query>  <theErr>~ );
+	}
+
+	while ( SrcList( GetNext,Item ) && <ContinueRunning> )
+	{	
+		UserMessage( ~Loading Roll <$pcon.Item[Roll]> for Order <$pcon.Item[OrderID]>~ );
+
+		if ( !SyncRoll( dstConnection,Item ) )
+		{
+			return FALSE;
+		}
+
+		FrameQuery = ~Select * From Frames Where OrderID = '<$pcon.Item[OrderID]>' AND Roll = '<$pcon.Item[Roll]>' Order By Frame~;
+
+		if ( !SyncFrames( dstConnection,~<FrameQuery>~ ) ) 
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC SyncRoll( &dstConnection,&SrcRecord )
+{
+	Query = ~Select * From Rolls Where OrderID = '<$pcon.SrcRecord[OrderID]>' AND Roll = '<$pcon.SrcRecord[Roll]>'~;
+
+	if ( !PGenConList( DstList,Connection,dstConnection,Cursor,KeySet,GetRecordFor,~<Query>~,DstRecord ) )
+	{ 
+		DstList( GetErrorDescription,0,theErr );
+		return UserWarning( ~Error querying the database. <Query>  <theErr>~ );
+	}
+
+	if ( !DstRecord(UpdateFrom,SrcRecord) )
+	{
+		return FALSE;
+	}
+
+	FilmTypeText = GetFilmTypeText( SrcRecord );
+	DstRecord( Set,FilmType,~<FilmTypeText>~ );
+	FilmFormatText = GetFilmFormatText( SrcRecord );
+	DstRecord( Set,FilmFormat,~<FilmFormatText>~ );
+
+	if ( !DstList( Update ) )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SyncFrames( &dstConnection,Query )
+{
+	UserMessage( ~Querying Accunet: <Query>~ );
+
+	if ( !PGenConList( SrcList,ConnectAccunet,Cursor,Forward,Lock,ReadOnly,Query,~<Query>~ ) )
+	{ 
+		SrcList( GetErrorDescription,0,theErr );
+		return UserWarning( ~Error querying the database. <Query>  <theErr>~ );
+	}
+
+	while ( SrcList( GetNext,Item ) && <ContinueRunning> )
+	{	
+		UserMessage( ~Loading Frame <$pcon.Item[Frame]> for Order <$pcon.Item[OrderID]>, Roll <$pcon.Item[Roll]>~ );
+
+		if ( !SyncFrame( dstConnection,Item ) )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SyncFrame( &dstConnection,&SrcRecord )
+{
+	Query = ~Select * From Images Where OrderID = '<$pcon.SrcRecord[OrderID]>' AND Roll = '<$pcon.SrcRecord[Roll]>' AND Frame = '<$pcon.SrcRecord[Frame]>'~;
+
+	if ( !PGenConList( DstList,Connection,dstConnection,Cursor,KeySet,GetRecordFor,~<Query>~,DstRecord ) )
+	{ 
+		DstList( GetErrorDescription,0,theErr );
+		return UserWarning( ~Error querying the database. <Query>  <theErr>~ );
+	}
+
+	if ( !DstRecord(UpdateFrom,SrcRecord) )
+	{
+		return FALSE;
+	}
+
+	FilmTypeText = GetFilmTypeText( SrcRecord );
+	DstRecord( Set,FilmType,~<FilmTypeText>~ );
+	DstRecord( Set,LutIndex,0 );
+
+	if ( !DstList( Update ) )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+STR GetFilmTypeText( &SrcRecord )
+{
+	FilmType = ~~;
+	FilmCode = MakeNumber(~<$pcon.SrcRecord[FilmType]>~);
+
+	if ( FilmTypesList( Filter,~ID=<FilmCode>~ ) )
+	{
+		if ( FilmTypesList( GetFirst,Item ) )
+		{
+			FilmType = ~<$pcon.Item[FilmType]>~;
+		}
+	}
+
+	return ~<FilmType>~;
+}
+
+
+STR GetFilmFormatText( &SrcRecord )
+{
+	FilmFormat = ~~;
+	FormatCode = MakeNumber(~<$pcon.SrcRecord[FilmFormat]>~);
+
+	if ( FilmFormatsList( Filter,~ID=<FormatCode>~ ) )
+	{
+		if ( FilmFormatsList( GetFirst,Item ) )
+		{
+			FilmFormat = ~<$pcon.Item[FilmFormat]>~;
+		}
+	}
+
+	return ~<FilmFormat>~;
+}
+
+
+VOID Completed( TheMsg )
+{
+	dlg( SetString,~<$Date.Time>: <TheMsg>~,Msg,0 );
+	//Log( Session,~<TheMsg>~ );
+}
+
+
+
+NUMERIC DefineDialog( ID,Description,Left,Top )
+{
+	if ( !Accunet( Interface,Exists ) )
+	{
+		return Warning( Translate( ~This workstation does not have access to Accunet~ ) );
+	}
+
+	if ( Defined( dlg )  )
+	{
+		dlg( SetControlFocus,SelectedEditText );
+		dlg( SetStrings,Entered,~<ID>~ );
+		return TRUE;
+	}
+
+	if ( !DictionaryExists(DDSyncAccunetDialog) )
+	{
+		Dictionary: DDSyncAccunetDialog
+			Fields: Name	SyncBy				type text
+			Fields: Name	Selected			type text
+			Fields: Name	Entered				type text
+			Fields: Name	Choose				type text
+			Fields: Name	Msg					type text
+			Fields: Name	AllOrdersInBatch	type Long
+
+		StringList:	Name SyncAccunetItems
+			Fields: String	Translate(~One~)
+			Fields: String	Translate(~Two~)
+		Hang:	SyncAccunetItems	~[STRINGS]~
+
+	}
+
+
+	Define:	DialogData Using DDSyncAccunetDialog
+		Fields:	SyncBy		~Customer~	
+		Fields:	Choose		~All~
+		Fields: Entered		~<ID>~	;
+
+	DialogWidth = 400;
+	PromptX		= 10;	PromptY		= 10;	PromptWidth	= 90;	PromptHeight = 20;
+	ValueWidth	= 150;
+
+	vGap = 10;			hGap = 10;
+
+	ButtonWidth	= 120;	ButtonHeight	= 20;
+
+
+	Define: SyncDialog Using DDWinDef
+		Fields:	POSITION				0 , 0, $DialogWidth, 300
+				TITLE					~Import From Accunet~
+				TYPENAME				~Dialog~ 
+				WantsMinimizeBox		TRUE
+				OACTIONSTEXT			ACTION EXEC ( OnCancelButton() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "Accunet.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: SyncByPrompt Using DDWinCtrlDef AsSymbol SyncByPrompt
+				fields: TypeName		StaticText 
+						RightJustified	TRUE 
+						Position		$PromptX, $PromptY ,$PromptWidth ,$ButtonHeight
+ 						Text			Translate(~Synchronize By~)
+
+			Define: CustomerRadioButton Using DDWinCtrlDef AsSymbol CustomerRadioButton
+					fields: TypeName		RadioButton  
+							Position		SyncByPrompt(GetRight,Position) + $hGap , SyncByPrompt(GetTop,Position) ,$PromptWidth ,$ButtonHeight
+							IActionsText	~[Get]~
+							DActionsText	~[
+												UnCheckButton(OrderRadioButton) 
+												CheckButton(CustomerRadioButton)
+												"Exec(OnChangeByCustomer();)"
+											 ]~
+							OActionsText	~[Save]~
+							GenConName		THIS
+							GenConField		~SyncBy~
+							RadioTrueValue	~Customer~
+ 							Text			Translate(~Customer~)
+							Tooltip			~Synchronize by Customer~;
+
+			Define: OrderRadioButton Using DDWinCtrlDef AsSymbol OrderRadioButton
+					fields: TypeName		RadioButton  
+							Position		CustomerRadioButton(GetRight,Position) + $hGap , CustomerRadioButton(GetTop,Position) ,$PromptWidth ,$ButtonHeight
+							IActionsText	~[Get]~
+							DActionsText	~[
+												CheckButton(OrderRadioButton) 
+												UncheckButton(CustomerRadioButton)
+												"Exec(OnChangeByOrder();)"
+											 ]~
+							OActionsText	~[Save]~
+							GenConName		THIS
+							GenConField		~SyncBy~
+							RadioTrueValue	~Order~
+ 							Text			Translate(~Order~)
+							Tooltip			~Synchronize by Order~;
+
+			
+			Define: WhichPrompt Using DDWinCtrlDef AsSymbol WhichPrompt
+				fields: TypeName		StaticText  
+						RightJustified	TRUE 
+						Position		$PromptX , SyncByPrompt(GetBottom,Position) + $vGap,$PromptWidth ,$ButtonHeight
+ 						Text			Translate(~Which~)
+
+
+			Define: AllRadioButton Using DDWinCtrlDef AsSymbol AllRadioButton
+				fields: TypeName		RadioButton  
+						Position		WhichPrompt(GetRight,Position) + $hGap, WhichPrompt(GetTop,Position),$PromptWidth ,$ButtonHeight
+						IActionsText	~[Get CheckButton(AllRadioButton)]~
+						DActionsText	~[
+											CheckButton(AllRadioButton) 
+											UncheckButton(UserEnteredRadioButton)
+											UncheckButton(SelectedRadioButton)
+											Disable(SelectedEditText)
+											Disable(BatchOrdersBox)
+											Disable(FieldsListBox)
+											"Exec(OnChangeAll();)"
+										 ]~
+						OActionsText	~[Save]~
+						GenConName		THIS
+						GenConField		~Choose~
+						RadioTrueValue	~All~
+ 						Text			Translate(~All~)
+						Tooltip			~All~;
+
+
+			Define: UserEnteredRadioButton Using DDWinCtrlDef AsSymbol UserEnteredRadioButton
+				fields: TypeName		RadioButton  
+						Position		AllRadioButton(GetRight,Position) + $hGap , AllRadioButton(GetTop,Position),$PromptWidth ,$ButtonHeight
+						IActionsText	~[Get]~
+						DActionsText	~[
+											CheckButton(UserEnteredRadioButton) 
+											UncheckButton(AllRadioButton)
+											UncheckButton(SelectedRadioButton)
+											Enable(SelectedEditText)
+											Enable(BatchOrdersBox)
+											Disable(FieldsListBox)
+											"Exec(OnChangeUserEntered();)"
+										 ]~
+						OActionsText	~[Save]~
+						GenConName		THIS
+						GenConField		~Choose~
+						RadioTrueValue	~UserEntered~
+ 						Text			Translate(~Choose~)
+						Tooltip			~Choose a specific customer or order~;
+
+			Define: SelectedEditText Using DDWinCtrlDef AsSymbol SelectedEditText 
+					fields: TypeName		EditText
+							Position		UserEnteredRadioButton(GetRight,Position) + $hGap,
+											UserEnteredRadioButton(Gettop,Position),<ValueWidth>,<ButtonHeight>
+							GenConName		THIS
+							GenConField		~Entered~
+							IActionsText	~[Get]~
+							OActionsText    ~[Save]~
+							IsEnabled		F
+							Tooltip			Translate(~Enter the desired CustomerID or OrderID~ ) ;
+
+			ypos = SelectedEditText(GetBottom,Position) + $vGap;
+
+			Define: BatchOrdersBox Using DDWinCtrlDef AsSymbol BatchOrdersBox
+				Fields:	GENCONNAME		THIS
+						POSITION		SelectedEditText(GetLeft,Position),SelectedEditText(GetTop,Position)-$ButtonHeight, 150, $ButtonHeight
+						TYPENAME		CheckBox
+						GENCONFIELD		AllOrdersInBatch
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						TEXT			Translate( ~All Orders in the Batch~ )
+						TOOLTIP			Translate( ~When retrieving an order, get all orders in the batch.~ );
+
+			DialogWidth = SelectedEditText(GetRight,Position) + $hGap * 3;
+
+			IF 0	// FOR THE FUTURE
+			{
+
+			Define: SelectedRadioButton Using DDWinCtrlDef AsSymbol SelectedRadioButton
+					fields: TypeName		RadioButton  
+							Position		AllRadioButton(GetLeft,Position) , UserEnteredRadioButton(GetBottom,Position) + $vGap,$PromptWidth ,$ButtonHeight
+							IActionsText	~[Get]~
+							DActionsText	~[
+												CheckButton(SelectedRadioButton) 
+												UncheckButton(AllRadioButton)
+												UncheckButton(UserEnteredRadioButton)
+												Enable(FieldsListBox)
+												Disable(SelectedEditText)
+												"Exec(OnChangeSelectedList();)"
+											 ]~
+							OActionsText	~[Save]~
+							GenConName		THIS
+							GenConField		~Choose~
+							RadioTrueValue	~SelectedList~
+							IsEnabled		F
+ 							Text			Translate(~Selected~)
+							Tooltip			~All~;
+
+			Define: FieldsListBox Using DDWinCtrlDef AsSymbol FieldsListBox
+				Fields:	POSITION		SelectedEditText(GetLeft,Position) SelectedRadioButton(GetTop,Position) $PromptWidth $PromptHeight * 5
+						GENCONFIELD		Fields
+						GENCONNAME		THIS
+						ISENABLED		F
+						IACTIONSTEXT	ACTIONS ( GetList(SyncItems) Get )
+						DACTIONSTEXT	ACTIONS ( Save )
+						OACTIONSTEXT	ACTIONS ( Save )
+						TYPENAME		ListBox ;
+
+
+			ypos = FieldsListBox(GetBottom,Position) + $vGap * 3;
+			
+
+			Define: SelectedGroupBox Using DDWinCtrlDef AsSymbol SelectedGroupBox
+				fields: TypeName		GroupBox  
+						Position		$PromptX , AllRadioButton(GetTop,Position) - $ButtonHeight,
+										$DialogWidth - $hGap*3,
+										(FieldsListBox(GetBottom,Position) - AllRadioButton(GetTop,Position)) + ($vGap * 2)
+ 						Text			Translate(~Which Items~) ;
+			}
+
+			Define: MsgField Using DDWinCtrlDef AsSymbol MsgField
+				Fields:	GENCONNAME		THIS
+						POSITION		$PromptX,$ypos, $DialogWidth - $hGap * 3, $ButtonHeight*2
+						TYPENAME		StaticText
+						GENCONFIELD		Msg
+						GENCONNAME		THIS
+
+			Define: GoButton Using DDWinCtrlDef AsSymbol GoButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnGoButton() )
+						POSITION		($DialogWidth/2) - ($ButtonWidth*1.5 + $hGap),MsgField(GetBottom,Position), $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Go~ )
+						TOOLTIP			Translate( ~Begin synchronizing~ )
+						TYPENAME		BUTTON
+
+			Define: StopButton Using DDWinCtrlDef AsSymbol StopButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnStopButton() )
+						POSITION		GoButton(GetRight,Position)  + $hGap,GoButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Stop~ )
+						TOOLTIP			Translate( ~Stop synchronizing~ )
+						ISENABLED		F
+						TYPENAME		BUTTON
+
+			Define: ViewImportedOrdersButton Using DDWinCtrlDef AsSymbol ViewImportedOrdersButton 
+				Fields: TypeName		Button
+						Text			Translate( ~View Imported Orders~ )
+						Position		StopButton(GetRight,Position) + $hGap,StopButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+						DActionsText	ACTION EXEC  ( OnViewImportedOrdersButton() ) 
+						IsTabStop		1
+						IsEnabled		T
+						Tooltip			Translate( ~View Imported Orders~ )  ;
+		}
+
+	DialogHeight = GoButton(GetBottom,Position) + $PromptY + 30;
+
+	if ( ~<Left>~ == ~~ )	// SUPPOSED TO POSITION SOMEWHERE SPECIAL?
+	{
+		ScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+		ScreenHeight = thisApp( MainWindow,GetClientHeight ) - 50;
+
+		Left = $ScreenWidth - $DialogWidth - 10;	// BOTTOM LEFT OF THE SCREEN
+		Top = $ScreenHeight - $DialogHeight - 10;
+	}
+	
+	SyncDialog( Set,Position,~<Left> <Top>  <DialogWidth>  <DialogHeight>~ );
+	GenDlg( dlg,Definition,SyncDialog,Data,DialogData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DialogData );
+
+	return TRUE;
+}
+
+NUMERIC FindProductDescription( ProductID,&Description )
+{
+	Query = ~Select * From Products Where ID = '<ProductID>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Lock,ReadOnly,Query,~<Query>~ ) )
+		{ return Warning( ~Error checking for orders that are using the Product where <Key>~ ); }
+
+	if ( !List( GetFirst,Product ) )
+	{	
+		return FALSE;
+	}
+
+	Description = ~<$pcon.Product[LayoutName]>~;
+
+	return TRUE;
+}
+
+StringList( ImportedOrdersList,New,NoDuplicateValues );	// WILL HOLD THE LIST OF ORDERS THAT WERE PROCESSED
+
+
+NUMERIC OnViewImportedOrdersButton()
+{
+	if ( ImportedOrdersList(Empty) )
+	{
+		return Warning( Translate( ~No orders have been imported~ ) );
+	}
+
+	Count = ImportedOrdersList(Count);
+
+	if ( ImportedOrdersList(Count) > 20 )
+	{
+		if ( MessageBox( ~<Count> orders have been imported.  Would you like to see all Accunet orders?~,YESNO ) == YES )
+		{
+			return OrderQuery( ~Accunet Orders~,~Select * From Orders Where Owner = 'Accunet' Order By ID~ );
+		}
+
+		return TRUE;
+	}
+
+	ImportedOrdersList( MakeSQlList,Orders,TRUE );
+	
+	return OrderQuery( ~<Orders>~,~Select * From Orders Where ID In (<Orders>) Order By ID~ );
+}
+
+
+NUMERIC OrderQuery( List,Query )
+{
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTIONS ( Doc( ~Orders~ <OpenMethod> OrdersDoc "Init( ~<List>~,~<Query>~);" ) );
+	return PerformActions( Actions );
+}
+
+
+VOID OnChangeByCustomer()
+{
+	dlg( SetControlTitle,AllRadioButton,Translate( ~All Customers~ ),
+							UserEnteredRadioButton,Translate( ~This Customer~ ),
+							SelectedRadioButton,Translate( ~Selected Customers~ ),
+							SelectedGroupBox,Translate( ~Which Customers~ ) );
+
+	dlg( SetCheck,TRUE,CustomerRadioButton );
+	dlg( SetCheck,FALSE,OrderRadioButton );
+	dlg( ShowControls,FALSE,BatchOrdersBox );
+	dlg( SetCheck,FALSE,BatchOrdersBox );
+}
+
+VOID OnChangeByOrder()
+{
+	dlg( SetControlTitle,AllRadioButton,Translate( ~All Orders~ ),
+							UserEnteredRadioButton,Translate( ~This Order~ ),
+							SelectedRadioButton,Translate( ~Selected Orders~ ),
+							SelectedGroupBox,Translate( ~Which Orders~ ) );
+
+	dlg( SetCheck,FALSE,CustomerRadioButton );
+	dlg( SetCheck,TRUE,OrderRadioButton );
+
+	dlg( GetInput,GetStrings,Choose,Choose );
+	dlg( ShowControls,~<Choose>~ == ~UserEntered~,BatchOrdersBox );
+	dlg( SetCheck,FALSE,BatchOrdersBox );
+}
+
+VOID OnChangeAll()
+{
+	dlg( ShowControls,FALSE,FieldsListBox,SelectedEditText,BatchOrdersBox );
+
+	dlg( SetCheck,FALSE,UserEnteredRadioButton );
+	dlg( SetCheck,TRUE,AllRadioButton );
+	dlg( SetCheck,FALSE,BatchOrdersBox );
+
+	dlg( EnableControls,FALSE,SelectedEditText );
+	dlg( SetCheck,FALSE,BatchOrdersBox );
+}
+
+VOID OnChangeSelectedList()
+{
+	dlg( ShowControls,TRUE,FieldsListBox );
+}
+
+
+VOID OnChangeUserEntered()
+{	
+	dlg( ShowControls,FALSE,FieldsListBox );
+	dlg( ShowControls,TRUE,SelectedEditText );
+
+	dlg( SetCheck,TRUE,UserEnteredRadioButton );
+	dlg( SetCheck,FALSE,AllRadioButton );
+
+	dlg( EnableControls,TRUE,SelectedEditText );
+
+	dlg( GetInput,GetStrings,SyncBy,SyncBy,Choose,Choose );
+
+	dlg( ShowControls,~<Choose>~ == ~UserEntered~ && ~<SyncBy>~ == ~Order~,BatchOrdersBox );
+
+	dlg( SetControlFocus,SelectedEditText );
+}
+
+
+VOID SyncWithCustomers( CustomerID )
+{
+	if ( !DefineDialog( ~<CustomerID>~ ) )
+	{
+		Exit();
+	}
+
+	Sleep( 10 );
+
+	OnChangeByCustomer();
+
+	if ( ~<CustomerID>~ != ~~ )
+	{
+		OnChangeUserEntered();
+	}
+	else
+	{
+		OnChangeAll();
+	}
+
+	dlg( SetControlFocus,SelectedEditText );
+}
+
+
+VOID SyncWithOrders( OrderID )
+{
+	if ( !DefineDialog( ~<OrderID>~ ) )
+	{
+		Exit();
+	}
+
+
+	Sleep( 10 );
+
+	OnChangeByOrder();
+
+	if ( ~<OrderID>~ != ~~ )
+	{
+		OnChangeUserEntered();
+	}
+	else
+	{
+		OnChangeAll();
+	}
+
+	dlg( SetControlFocus,SelectedEditText );
+}
+
+//SyncWithOrders(~~);
+

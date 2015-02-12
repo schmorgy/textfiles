@@ -1,0 +1,377 @@
+
+
+IncludeClass( BaseThread );
+Class( MyThread,Extends,BaseThread );
+
+IncludeClass(BaseDialog);
+Class( MaintainOrders,Extends,BaseDialog,
+		Member,fDocumentQuery,Str,~~,
+		Member,fMaxSelectableItems,Numeric,500 );
+
+VOID MaintainOrders::MaintainOrders()
+{
+	Left = 200;
+	Dictionary = ~DDMaintainOrdersDoc~;
+	Title = ~Maintain All Order Items~;
+	HelpPage = ~Remake.htm~;
+}
+
+
+
+NUMERIC NeedsRefreshing( JobPath,IconPath )
+{
+	comparison = Files( CompareFileTimes,~<JobPath>~,~<IconPath>~ );
+
+	if ( <comparison> < -1 )	// an error?
+	{
+		return TRUE;
+	}
+
+	return <comparison> > 0;
+}
+
+NUMERIC MyThread::MaintainOrderItems( OrderID,All,Query )
+{
+	SetPriorityLowest();
+	
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Error( Translate(DBMessages,QueryFailed,~<OrderQuery>~,~<theErr>~) ); 
+	}
+
+	Invoke( ~ThisDialog.StartProgress~,List(NumEntries) );
+
+	RefreshCount = 0;
+
+	List( GetConnection,db );
+
+	while ( List( GetNext,OrderItem ) )		// PARSE THE PRODUCTS
+	{
+		if ( Aborting() )
+			break;
+
+		Invoke( ~ThisDialog.StepProgress~ );
+
+		if ( IsNull( ~<$pcon.OrderItem[JobPath]>~ ) )
+		{
+			Cmd = ~Delete From OrderItemImages Where ItemOrderID = '<OrderID>' AND ItemID = <$pcon.OrderItem[ID]>~;
+			db( Cmd,~<Cmd>~ );
+			continue;
+		}
+
+		if ( !Files( FileExists,~<$pcon.OrderItem[JobPath]>~ ) )
+		{
+			Cmd = ~Delete From OrderItemImages Where ItemOrderID = '<OrderID>' AND ItemID = <$pcon.OrderItem[ID]>~;
+			db( Cmd,~<Cmd>~ );
+			continue;
+		} 
+
+		Invoke( DisplayStatus,~Item <$pcon.OrderItem[ID]>~ );
+
+		OrderItemImagesCount = db( RecordCountFor,~Select count(*) From OrderItemImages Where ItemOrderID = '<OrderID>' AND ItemID = <$pcon.OrderItem[ID]>~ );
+
+		PreviewOutOfDate = NeedsRefreshing(~<$pcon.OrderItem[JobPath]>~,~<$pcon.OrderItem[PreviewPath]>~);
+
+		if ( <All> || <PreviewOutOfDate> || (<OrderItemImagesCount> == 0) )
+		{
+			if ( !Document( Job,ParseFile,~<$pcon.OrderItem[JobPath]>~ ) )
+			{
+				return Warning( ~An error occured while Parsing job for Order <OrderID>,  Item <$pcon.OrderItem[ID]>~ );
+			}
+
+			if ( Job( GetRenderList,0,RenderList ) )
+			{ 
+				RenderList( OverrideManualMaintain, TRUE );
+
+				RenderList( MaintainCrossReference,~<OrderID>~,~<$pcon.OrderItem[ID]>~,TRUE );
+
+				PreviewResult = RenderList( CreatePreviewIcon,~<$pcon.OrderItem[JobPath]>~ );
+				++RefreshCount;
+				if (<PreviewResult>)
+				{
+					Log( Session,~Refreshed Preview for Order <OrderID>, Item <$pcon.OrderItem[ID]>~ );
+				}
+				else
+				{
+					Log( Session,~Did not refresh Preview for Order <OrderID>, Item <$pcon.OrderItem[ID]>~ );
+				}
+			
+				ForgetLocal(Job,RenderList);
+			}
+		}
+	}
+
+	if ( <RefreshCount> )
+	{
+		Action = ACTION DOC ( OrderItemsDoc "RefreshDoc(~<OrderID>~)" );
+		PerformActions( Action );
+	}
+
+	return TRUE;
+}
+
+NUMERIC MaintainOrders::OkayToCancel()
+{
+	if ( <CloseOnComplete> )	{ return TRUE; }
+
+	return MessageBox( ~If you quit then the Maintain Orders agent will no longer operate. Are you sure?~,YESNO ) == YES ;
+}
+
+VOID	MaintainOrders::StartProgress(MaxValue)	{ dlg( ProgressBar,ProgressBox,SetRange,0,<MaxValue>,SetStep,1 ); }
+VOID	MaintainOrders::StepProgress()			{ dlg( ProgressBar,ProgressBox,Stepit ); }
+
+NUMERIC	MyThread::HandleThread( OrderID,All,Query )	{ return MaintainOrderItems( ~<OrderID>~,~<All>~,~<Query>~ ); }
+NUMERIC MyThread::HandleQuit()					{ return Invoke( ~ThisDialog.OnStopButton~ ); }
+
+NUMERIC MaintainOrders::OnStartButton()
+{
+	if ( IsNULL( ~<$con.DlgData[OrderID]>~ ) )
+	{
+		return Warning( ~You must enter an OrderID first~ );
+	}
+
+	dlg( EnableControls,FALSE,StartButton );
+	dlg( EnableControls,TRUE,StopButton );
+
+	MyThread( New,aThread );
+
+	Global( aThread );
+	
+	if ( IsNull(~<fDocumentQuery>~) )
+	{
+		 fDocumentQuery = ~Select ID,JobPath,Remake,PreviewPath From OrderItems Where OrderID = '<OrderID>' Order By ID~;
+	}
+
+	StatusBar( 0,~Starting~ );
+
+	aThread.NewOneShot( ~<$con.DlgData[OrderID]>~,~<$con.DlgData[All].boolean>~,~<fDocumentQuery>~ );
+
+	return TRUE;
+}
+
+
+VOID MaintainOrders::OnStopButton()
+{
+	if ( AThread.Processing() )
+	{
+		StatusBar( 0,~Stopping~ );
+		aThread.Abort();	// THE THREAD WILL GET US BACK IN HERE
+		return;
+	}
+
+	dlg( EnableControls,TRUE,StartButton );
+	dlg( EnableControls,FALSE,StopButton );
+
+	StatusBar( 0,~Stopped~ );
+
+	if ( <CloseOnComplete> )
+	{
+		DoCancelButton();
+	}
+}
+
+VOID MaintainOrders::WindowDefinition()
+{
+	Fields:		IsHidden	<Hidden>;
+}
+
+
+VOID MaintainOrders::DefineControls()
+{
+	Define: OrderPrompt Using DDWinCtrlDef AsSymbol OrderPrompt Private
+		Fields:	TYPENAME			STATICTEXT
+				GENCONNAME			THIS
+				Position			<hgap> <vGap> 70 <ButtonHeight>
+				RightJustified		TRUE
+				Text				~Order ID~;
+
+	Define: OrderField Using DDWinCtrlDef AsSymbol OrderField Private
+		Fields:	TypeName			MaskedEditText
+				Mask				~<$[DATABASE FieldTypes].OrderID[Mask]>~
+				PromptChar			~<$[DATABASE FieldTypes].OrderID[PromptChar]>~
+				AllowedChars		~<$[DATABASE FieldTypes].OrderID[AllowedChars]>~
+				DisallowedChars		~<$[DATABASE FieldTypes].OrderID[DisallowedChars]>~
+				GENCONNAME			THIS
+				GENCONFIELD			OrderID
+				IACTIONSTEXT		ACTIONS ( Get )
+				DACTIONSTEXT		ACTIONS ( Save )
+				OACTIONSTEXT		ACTIONS ( Save )
+				Position			OrderPrompt(GetRight,Position)+$hGap OrderPrompt(GetTop,Position)-2 220 <ButtonHeight>
+				Text				~<OrderID>~;
+
+	Define: BrowseButton Using DDWinCtrlDef AsSymbol BrowseButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Position			OrderField(GetRight,Position)+$hGap OrderField(GetTop,Position),20 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.BrowseOpen() )
+				Text				~?~;
+
+	Define: AllBox Using DDWinCtrlDef AsSymbol AllBox
+		Fields:	TypeName			CheckBox
+				GENCONNAME			THIS
+				GENCONFIELD			All
+				IACTIONSTEXT		ACTIONS ( Get )
+				DACTIONSTEXT		ACTIONS ( Save )
+				OACTIONSTEXT		ACTIONS ( Save )
+				Position			OrderField(GetLeft,Position) OrderPrompt(GetBottom,Position)+$vGap 200 <ButtonHeight>
+				Text				~Maintain even if no job changes~
+				ToolTip				~If checked, jobs for each order item will be parsed even if the it appears there have been no changes.  All order item preview icons will also be recreated.~;
+
+	Define: ProgressBox Using DDWinCtrlDef AsSymbol ProgressBox Private
+		Fields:	TYPENAME			Progress
+				POSITION			<hgap> AllBox(GetBottom,Position) + <vGap> GetDialogWidth() 10
+				ISSMOOTH			1;
+
+	Define: StartButton Using DDWinCtrlDef AsSymbol StartButton Private
+		Fields:	TYPENAME			DefaultButton
+				GENCONNAME			THIS
+				Position			GetDialogCenter() - ($ButtonWidth * 1.5 +$hGap) ProgressBox(GetBottom,Position)+$vGap,$ButtonWidth,$ButtonHeight
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnStartButton() )
+				Text				~Start~;
+
+	Define: StopButton Using DDWinCtrlDef AsSymbol StopButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				IsEnabled			F
+				Position			StartButton(GetRight,Position)+$hGap StartButton(GetTop,Position),$ButtonWidth,$ButtonHeight
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnStopButton() )
+				Text				~Stop~;
+
+	Define: HideButton Using DDWinCtrlDef AsSymbol  HideButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Position			StopButton(GetRight,Position)+$hGap StopButton(GetTop,Position),$ButtonWidth,$ButtonHeight
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnHideButton() )
+				Text				~Hide~;
+}
+
+
+NUMERIC MaintainOrders::BrowseOpen()
+{
+	if ( IsNULL( ~<$con.DlgData[OrderID]>~ ) )
+	{
+		return Warning( ~You must enter an OrderID first~ );
+	}
+
+	Query = ~Select * From OrderItemImages Where ItemOrderID = '<$con.DlgData[OrderID]>' ORDER BY ItemID~;
+	
+	action = ACTION DOC ( OrderItemsImagesDoc Open OrderItemsImagesDoc "Init(~<$con.DlgData[OrderID]>~,~<Query>~);" );
+	return PerformActions( action );
+
+	return TRUE;
+}
+
+
+NUMERIC MaintainOrders::GetImagesWindow()	
+{
+	ReturnOnFailure( GenCon( fActiveWindow,GetActiveWindow ) );	
+	return Private( fActiveWindow );
+}
+	
+	
+NUMERIC	MaintainOrders::LoadImagesFromWindow()
+{
+	ReturnOnFailure( MemberDefined( fActiveWindow ) );						// ARE WE IMPORTING FROM AN OPEN WINDOW?
+		
+	if ( !fActiveWindow( GetActiveViewOfWindow,OrderItemsView,Permanent ) )
+	{
+		fActiveWindow( EnableWindow,TRUE );
+		ForgetPrivate( fActiveWindow );
+		return FALSE;
+	}		
+	
+	ForgetPrivate( fActiveWindow );
+	
+	Count = OrderItemsView( GetSelectedIconCount );
+	
+	ReturnOnSuccess( OrderItemsView( GetSelectedIconCount ) == 0 );
+	
+	OrderItemsView( GetSelected,SelectedOrderItems );
+	
+	OrderItemsView( GetName,OrderID );
+	
+	IDsList = ~~;
+	fComma = ~ ~;
+	Count = 0;
+	
+	WaitCursor( Begin );
+	
+	DisplayStatus(~Building list of items to process~);
+
+	while ( SelectedOrderItems(GetNext,Item) )
+	{
+		IDsList = ~<IDsList><fComma><$con.Item[ID]>~;
+		fComma = ~,~;
+		
+		if ( <++Count> >= <fMaxSelectableItems> )
+		{
+			Warning( ~You may only select up to <fMaxSelectableItems> OrderItems this way~ );
+			break;
+		}
+	}
+		
+	DisplayStatus(~ ~);
+
+	dlg( SetTitle,~Maintain <Count> Selected Order Items~ );
+	
+	fDocumentQuery = ~Select ID,JobPath,Remake,PreviewPath From OrderItems Where OrderID = '<OrderID>' AND ID In (<IDsList>) Order By ID~;
+	
+	WaitCursor( End );
+		
+	return TRUE;
+}
+
+
+
+VOID MaintainOrders::DefineDictionary()
+{
+		Dictionary: ~<Dictionary>~ 
+			Fields: Name OrderID		type text
+			Fields: Name All			type long
+}
+
+VOID	MaintainOrders::SetOrderID( OrderID )	{ dlg( SetStrings,OrderID,~<OrderID>~ ); }
+VOID	MaintainOrders::OnHideButton()			{ ThisDialog.ShowDialog( FALSE ); }
+
+NUMERIC DisplayStatus( msg )					{ return thisDialog.StatusBar( 0,~<$Date.Time>  <msg>~ ); }
+VOID	ReOpen()								{ thisDialog.ReOpen(); }
+
+
+VOID Init( OrderID,AutoStart,CloseOnComplete,Hidden )
+{
+	if ( Defined( thisDialog ) )
+	{
+		ReOpen();
+	}
+	else
+	{
+		CloseOnComplete = DefinedAndTRUE( CloseOnComplete );
+		Hidden			= DefinedAndTRUE( Hidden );
+		Global( Hidden,CloseOnComplete );
+
+		MaintainOrders( New,thisDialog );
+
+		Global( thisDialog );
+		
+		ThisDialog.GetImagesWindow();
+
+		ThisDialog.DefineDialog();
+
+		ThisDialog.SetOrderID( ~<OrderID>~ );
+		
+		ThisDialog.LoadImagesFromWindow();
+
+		if ( !IsNull( ~<OrderID>~ ) && DefinedAndTRUE( AutoStart ) )
+		{
+			Action = ~ThisDialog.OnStartButton();~;
+			QueueContentsAfter( Action,100 );
+		}
+	}
+}
+
+
+
+
+
+

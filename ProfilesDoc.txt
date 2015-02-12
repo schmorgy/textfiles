@@ -1,0 +1,641 @@
+Include: ~Utilities.txt~;
+
+
+IncludeClass( BaseDialog );		// Needed for dialogs
+
+NUMERIC RefreshListView()
+{
+	if ( ProfilesDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	ProfilesDataWindow( StatusBar,Text,~Refreshing~ );
+	ProfilesDataWindow( RefreshWindow );
+	ProfilesDataWindow( StatusBar,Text,~~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !ProfilesDataView( GetChangedRow,ChangedProfile,OrigProfile,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedProfile[Name]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Name cannot be blank.~ ) ); }
+
+	if ( ~<$con.ChangedProfile[Device]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Device type cannot be blank.~ ) ); }
+
+	if ( ~<$con.ChangedProfile[Type]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Profile type cannot be blank.~ ) ); }
+
+	if ( ~<$con.ChangedProfile[Path]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Path cannot be blank.~ ) ); }
+
+	Key = STR ( Name = '<$con.OrigProfile[Name]>' );
+
+	Query = ~Select * From Profiles Where <Key>~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,ChangedProfile,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update Profile record where <Key>. <theErr>~ );
+	}
+
+	ProfilesDataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+NUMERIC VerifyProfiles()
+{
+	if ( !ProfilesDataView( GetSelectedRows,ProfilesToVerify ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	Total = ProfilesToVerify( ChildCount );
+	Count = 0;
+
+	while ( ProfilesToVerify( GetNext,Profile ) )
+	{
+		if ( SimilarStr( ~<$con.Profile[Name]>~,~<Use Embedded>~ ) )
+		{
+			--Total;
+			continue;
+		}
+		
+		if ( Files( Access,~<$con.Profile[Path]>~ ) <= 0 )
+		{
+			if ( MessageBox( ~Profile <$con.Profile[Name]> at <$con.Profile[Path]> does not exist. Continue?~,YESNO ) != YES )
+			{ 
+				return FALSE;
+			}
+		}
+		else
+		{
+			++Count;
+		}
+	}
+
+	return Warning( ~<Count> of <Total> profiles exist at their specified paths~ );
+}
+
+NUMERIC OpenContainingFolder()
+{
+	if ( !ProfilesDataView( GetSelectedRows,Profiles ) )		
+		{ return Warning( ~There was nothing selected~ ); }
+
+	if ( Profiles( GetFirst,Item ) )
+	{
+		return OpenContainingFolderAndSelect( ~<$con.Item[Path]>~ );
+	}
+
+	return Warning( Translate( ~Select one and try again~ ) );
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !ProfilesDataView( GetSelectedRows,ProfilesToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	count = ProfilesToDelete( ChildCount );
+
+	if ( MessageBox( Translate( ~Are you sure you want to delete the <count> selected profiles?~ ),YESNO ) != YES )
+		{ return FALSE; }
+
+	StringList( RowsToDelete,New );
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	while ( ProfilesToDelete( GetNext,Profile ) )
+	{
+		Cmd = ~Delete From Profiles Where Name = '<$con.Profile[Name]>'~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Database update failed: <Cmd>. <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,ProfilesToDelete(GetCurrentPosition) );
+	}
+
+	ProfilesDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Title = Translate( ~Find the desired profile ...~ );
+
+	DefaultDirectory = ~<$App.ShareDirectory>\ICCProfiles~;
+
+	if ( !FileDialog( DefaultDirectory,~<DefaultDirectory>~,Title,~<Title>~,Path,ProfilePath,ALLOWMULTISELECT,Open ) )
+		{ return FALSE; }
+
+	Warned = num = 0;
+
+	while ( Defined( ProfilePath<++num> ) )
+	{
+		ProfilePath = MakePath( Type,UNC,~<ProfilePath<num>>~);
+
+		if ( !Files( IsUNC,~<ProfilePath>~ ) && NetworkOperation() )
+		{
+			Msg = Translate( UIMessages,UnsharedFile,~<ProfilePath>~ );
+
+			if ( MessageBox( ~<Msg>~,YESNO ) != YES )
+				{ return FALSE; }
+
+			Warned = TRUE;
+		}
+
+		Document( Doc,This );
+
+		ForgetLocal( NewRow );
+
+		GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+		NewRow( SetValue,Name,~<$Str.$ProfilePath.Filename.WithoutExt>~ );
+		//NewRow( SetValue,Device,~<$Str.$ProfilePath.folder.Filename>~ );
+		NewRow( SetValue,Path,~<ProfilePath>~ );
+		
+		RowBeingAdded = ProfilesDataView( AddRow,NewRow );
+
+		if ( <RowBeingAdded> <= 0 )
+			{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+		ProfilesDataView( SetActiveCell,<RowBeingAdded>,ID );
+
+		ProfilesDataView( SetActiveCell,<RowBeingAdded>,~Name~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC LoadNewProfiles()
+{
+	if ( !Defined( LoadProfilesObj ) )
+	{
+		ForgetGlobal( LoadProfilesObj );
+		LoadProfiles( New, LoadProfilesObj );
+		Global( LoadProfilesObj );
+		LoadProfilesObj.DefineDialog();
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	ProfilesDataView( DisplayMenu,ProfilesListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( Translate( ~<what> is not implemented yet!~ ) );
+	return TRUE;
+}
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+
+NUMERIC Init( WhichProfiles,DocumentQuery )
+{
+	ProfilesDataWindow( Set,Title,~<WhichProfiles>~ == ~~ ? ~ICC Profile Data~ : ~ICC Profile Data - <WhichProfiles>~ );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{ Error( ~Failed to query the Profiles table~ ); }
+
+	Global( WhichProfiles,DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		SetDocumentData( List(GetObject) );
+
+		if ( !ProfilesDataWindow( CreateWindow,~Profiles~ ) )
+			{ Error( ~Failed to create the window~ ); }
+
+		FirstTime = FALSE;
+
+		return TRUE;
+	}
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseProfilesDataView()
+{
+	if ( ProfilesDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	ProfilesDataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( ProfilesDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !ProfilesDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new profiles that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( ProfilesDataView( PendingChanges ) )
+	{
+		ProfilesDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnButtonClick()
+{	
+	ProfilesDataView( GetActiveCell,Row,Col );
+
+	DefaultDirectory = ~<$App.ShareDirectory>\ICCProfiles~;
+	Title = Translate( ~Find the desired profile ...~ );
+
+	if ( FileDialog( DefaultDirectory,~<DefaultDirectory>~,Title,~<Title>~,Path,ProfilePath,Open ) )
+	{
+		ProfilePath = MakePath( Type,UNC,~<ProfilePath>~);
+
+		if ( !Files( IsUNC,~<ProfilePath>~ ) && NetworkOperation() )
+		{
+			Msg = Translate( UIMessages,UnsharedFile,~<ProfilePath>~ );
+
+			if ( MessageBox( ~<Msg>~,YESNO ) != YES )
+				{ return FALSE; }
+		}
+
+		ProfilesDataView( SetCellValue,<Row>,<Col>,~<ProfilePath>~ );
+	}
+
+	return TRUE;
+}
+
+
+VOID ChangeViewingParameters()
+{
+	action = ACTION DOC ( EditViewingParameters Open ImageViewingParametersDoc );
+
+	PerformActions( action );
+}
+
+Include: ~FileBrowseButtonsInGridView~;
+
+
+if ( !GenCon( ProfilesTableDefinition,GetFrom,Profiles,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The Profiles Table is not properly defined~ ); }
+	
+
+Define:	ProfilesListViewMenu Using DDMenuDef AsSymbol ProfilesListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	OpenContainingFolder	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Open Containing Folder~ )
+					IDText		~ID~
+					ActionsText  ACTION EXEC ( OpenContainingFolder() )
+
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add Profile~ )
+					IDText		~ID~
+					ActionsText  ACTION EXEC ( AddRecord() )
+
+		Define:	LoadNewProfiles using DDMenuItemDef
+			Fields:	Text		Translate( ~&Load Profiles~ )
+					IDText		~ID~
+					ActionsText  ACTION EXEC ( LoadNewProfiles() )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION EXEC ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION EXEC ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION EXEC ( DeleteRecord() )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION EXEC ( RefreshListView(TRUE) )
+
+		Define:	NULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	ChangeViewingProfiles	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Change Viewing Profiles~ )
+					IDText		~ID~
+					ActionsText  ACTION EXEC ( ChangeViewingParameters() )
+
+		Define:	VerifyProfiles	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Verify Profiles~ )
+					IDText		~ID~
+					ActionsText  ACTION EXEC ( VerifyProfiles() )
+	}
+
+
+Define: ProfilesDataWindow Using DDWinDef
+	Fields:		Title					~ICC Profiles~
+				Position				0 30 70 25
+				IsPositionPercent		T
+				EnableStatusBar			F;
+
+	Contains:	INLISTORDER
+	{
+		Define: ProfilesDataView Using DDViewDef AsSymbol ProfilesDataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		ProfilesTableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord(); )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord(); )
+					DoubleClickActionsText	ACTION Exec ( PopupMsg( Translate( ~Double Click is not valid here~ ) ); )
+					ButtonClickActionsText	ACTION Exec ( OnButtonClick(ProfilesDataView,Translate( ~Find the desired profile ...~ ),~<$App.ShareDirectory>\ICCProfiles~) )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView(); )
+					RefreshActionsText		ACTION Exec ( RefreshListView() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "Profiles.htm" )
+					CloseActionsText		ACTION Call ( OnCloseProfilesDataView() ) ;
+	}
+	
+
+Class( LoadProfiles,Extends,BaseDialog,
+	   Member,fNumProfiles,Numeric,0 );
+
+VOID LoadProfiles::LoadProfiles()
+{
+	Title = ~Load Profiles~;
+	ExitScriptOnClose = FALSE;
+	StatusBar = ~~;
+}
+
+VOID LoadProfiles::WindowDefinition()
+{
+	Fields:	WantsMinimizeBox		FALSE
+}
+
+VOID LoadProfiles::DefineMessages()
+{ 
+	BaseDialog::DefineMessages();	
+
+	// Define messages for dialog box
+	Translations( AddText, Info, ~When you select the Load Profiles button, any new profiles that are found in the ICCProfiles folder in the Shared Directory will be added to the ICC Profiles table.~ );
+	Translations( AddText, Status, ~Profiles Added:~ );
+	Translations( AddText, Load, ~Load Profiles~ );
+	Translations( AddText, Close, ~Close~ );
+}
+
+VOID LoadProfiles::DefineControls()
+{
+	Define: InfoStatic Using DDWinCtrlDef AsSymbol InfoStatic Private
+		Fields:	TypeName			StaticText
+				Position			10, 10, 525, 40
+				Text				Translate( Translations, Info )
+
+	Define: StatusStatic Using DDWinCtrlDef AsSymbol StatusStatic Private
+		Fields:	TypeName			StaticText
+				Position			InfoStatic(GetLeft,Position),InfoStatic(GetBottom,Position)+10, 150, 20
+				Text				Translate( Translations, Status )
+
+	Define: StatusListBox Using DDWinCtrlDef AsSymbol StatusListBox
+		Fields:	TypeName			ListBox
+				Position			StatusStatic(GetLeft,Position),StatusStatic(GetBottom,Position)+3, 525, 200
+
+	Define: GoButton Using DDWinCtrlDef AsSymbol GoButton Private
+		Fields:	TypeName			DefaultButton
+				Position			152, StatusListBox(GetBottom,Position)+5, $ButtonWidth+20, $ButtonHeight
+				DActionsText		ACTION EXEC ( <This>.OnGoButton() )
+				Text				Translate( Translations, Load )
+
+	Define: CloseButton Using DDWinCtrlDef AsSymbol CloseButton Private
+		Fields:	TypeName			Button
+				Position			GoButton(GetRight,Position)+8, StatusListBox(GetBottom,Position)+5, $ButtonWidth+20, $ButtonHeight
+				DActionsText		ACTION EXEC ( <This>.DoCancelButton() )
+				Text				Translate( Translations, Close )
+}
+
+VOID LoadProfiles::SetPosition()
+{
+	DialogWidth = aDialog(GetMaxRight,Position) + $hGap * 2 + 5;
+	DialogHeight = aDialog(GetMaxBottom,Position) + $vGap + 40;
+
+	aDialog( Set,Position,~<Left> <Top> <DialogWidth> <DialogHeight>~ );
+}
+
+
+VOID LoadProfiles::OnGoButton()
+{
+	dlg(EnableControls, FALSE, GoButton);
+	dlg(EnableControls, FALSE, CloseButton);
+
+	if ( !Ado( dbase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+		return;
+	}
+
+	fNumProfiles = 0;
+	GetNewProfiles(dBase,~~);
+
+	dlg( ListBox,StatusListBox,AddString,~<fNumProfiles> Profile(s) Were Added~ );
+
+	dlg(EnableControls, TRUE, GoButton);
+	dlg(EnableControls, TRUE, CloseButton);
+}
+
+VOID LoadProfiles::GetNewProfiles( &dBase,DirName )
+{
+	DirToCheck = ~~;
+	if ( SimilarStr( ~<DirName>~,~~ ) )
+	{
+		DirToCheck = ~<$App.ShareDirectory>\ICCProfiles~;
+	}
+	else
+	{
+		okToContinue = FALSE;
+		if ( SimilarStr( ~<DirName>~,~Input~ ) || SimilarStr( ~<DirName>~,~Look~ ) || SimilarStr( ~<DirName>~,~Monitor~ ) ||
+			SimilarStr( ~<DirName>~,~Output~ ) || SimilarStr( ~<DirName>~,~WorkingSpace~ ) || SimilarStr( ~<DirName>~,~ColorEffects~ ) )
+		{
+			okToContinue = TRUE;
+		}
+
+		if ( !<okToContinue> )
+		{
+			return;
+		}
+
+		DirToCheck = ~<$App.ShareDirectory>\ICCProfiles\<DirName>~;
+	}
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~<DirToCheck>\*.*~ );
+	while ( $Morefiles )
+	{		
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,Path );
+		FileName = ~<$Str.$Path.FileName>~;
+		
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		{
+			GetNewProfiles(dBase,~<FileName>~);
+			continue;
+		}
+
+		AddProfileToDB(dBase,~<DirName>~,~<DirToCheck>\<FileName>~);
+	}
+}
+
+VOID LoadProfiles::AddProfileToDB(&dBase,DirName,FilePath)
+{
+	Query = ~Select Count(*) From Profiles Where Path = '<FilePath>'~;
+	ProfilesExists = dbase( RecordCountFor,~<Query>~ );
+	if ( <ProfilesExists> )
+	{
+		return;
+	}
+
+	ProfileName = ~Unknown~;
+	FileName = ~<$Str.$FilePath.Filename.WithoutExt>~;
+	substr( ~<FileName>~,0,31,ProfileName );
+
+	ProfileType = ~Unknown~;
+	Device = ~Unknown~;
+	EditableSpace = 0;
+
+	if ( SimilarStr( ~<DirName>~,~Input~ ) )
+	{
+		ProfileType = ~Input~;
+		Device = ~Input~;
+	}
+	else if ( SimilarStr( ~<DirName>~,~Look~ ) )
+	{
+		ProfileType = ~Look~;
+		Device = ~Look~;
+	}
+	else if ( SimilarStr( ~<DirName>~,~Monitor~ ) )
+	{
+		ProfileType = ~Monitor~;
+		Device = ~Monitor~;
+	}
+	else if ( SimilarStr( ~<DirName>~,~Output~ ) )
+	{
+		ProfileType = ~Output~;
+		Device = ~Output~;
+	}
+	else if ( SimilarStr( ~<DirName>~,~WorkingSpace~ ) )
+	{
+		ProfileType = ~WorkingSpace~;
+		Device = ~Disk~;
+		EditableSpace = 1;
+	}
+		else if ( SimilarStr( ~<DirName>~,~ColorEffects~ ) )
+	{
+		ProfileType = ~ColorEffects~;
+		Device = ~Disk~;
+	}
+
+	Parameters = ~Name,Type,Path,Device,EditableSpace~;
+	Values = ~'<ProfileName>','<ProfileType>', '<FilePath>','<Device>', <EditableSpace>~;
+	SQLCommand = ~Insert Into Profiles(<Parameters>) Values(<Values>)~;
+
+	if ( dBase( Cmd, ~<SQLCommand>~ ) )
+	{
+		dlg( ListBox,StatusListBox,AddString,~<DirName> Profile Added: <FilePath>~ );
+		fNumProfiles = <fNumProfiles> + 1;
+	}
+	else
+	{
+		dBase( GetErrorDescription, theErr );
+		Log( Session, ~Unable to insert profile: '<FilePath>' into the database.\n\n<SQLCommand>\n\n<theErr>~ );	
+		dlg( ListBox,StatusListBox,AddString,~Unable to add Profile: <FilePath>~ );
+	}
+}
+
+VOID LoadProfiles::OnDialogEnd()
+{
+	RefreshListView();
+}

@@ -1,0 +1,630 @@
+//	GeneralPaperFillInclude.cpp
+//
+//	This file contains routines common to both Lucht and Arbitrary Paper Fill Alogrithms
+..
+//	===========================================================================
+//	===========================================================================
+//	=========================== WRITE THE LAYOUT (BELOW) ======================
+//	===========================================================================
+//	===========================================================================
+
+int	WriteTheLayout( TCHAR *FilePath, UGenCon *theLayout )
+{
+	//	CREATE THE HEADER INFORMATION
+	TCHAR	*JobText = malloc( 256 * 1024 * SIZEOF_SHORT ) ;
+	if( JobText )
+	{
+		char	*fp = fopen( FilePath, _T("wb")) ;
+		if( fp )
+		{
+			CreateTheJobHeader( JobText ) ;
+
+			//	CREATE THE MAIN NODE
+			CreateMainNode( JobText, theLayout ) ;
+
+	//		fprintf( fp, JobText ) ;
+			fwrite( JobText, 2, strlen(JobText), fp ) ;
+			JobText[0] = 0x0000 ;
+
+			//	FOR EACH NODE
+			long			 NodeID = 10001L ;
+			long			 DeleteAfter ;
+			long			 NodeDeleteAfter ;
+			UList			*theNodes = theLayout->GetChildren() ;
+			UListIterator	*anIter = new UListIterator( theNodes ) ;
+			UGenCon			*aNode = (UGenCon *) anIter->GetFirst() ;
+			while( aNode )
+			{
+				//		CREATE THE NODE
+				CreateANode( JobText, NodeID, aNode ) ;
+
+				fwrite( JobText, 2, strlen(JobText), fp ) ;
+//				fprintf( fp, JobText ) ;
+				JobText[0] = 0x0000 ;
+
+				NodeID++ ;
+				aNode = (UGenCon *) anIter->GetNext() ;
+			}
+			delete anIter ;
+
+			//	CREATE THE OUTPUT NODE
+			CreateOutputDisk( JobText, theLayout ) ;
+
+	//		SessionLogDirect( _T("ArbitraryPaperFill: JobText: Length = %ld\n"), strlen(JobText) * 2 ) ;
+
+		//	WRITE THE FILE
+			fwrite( JobText, 2, strlen(JobText), fp ) ;
+//			fprintf( fp, JobText ) ;
+			fclose( fp ) ;
+		}
+
+		free( JobText ) ;
+	}
+	return( TRUE ) ;
+}
+
+
+TCHAR *CreateTheJobHeader(TCHAR *JobText)
+{
+	TCHAR	FileHeader[2] ;
+	FileHeader[0] = 0xFEFF ;
+	FileHeader[1] = 0x0000 ;
+	memcpy( JobText, FileHeader, 4L ) ;
+	strcat( JobText, _T("FileType:	Job\r\nMacros:	~Macros.txt~\r\nUnitOfMeasure: ~Inches~\r\n\r\n")) ;
+	return( JobText ) ;
+}
+
+TCHAR *CreateMainNode( TCHAR *JobText, UGenCon *theLayout )
+{
+	TCHAR	MainText[1024] ;
+	TCHAR	MainSize[1024] ;
+
+	double	Width  = theLayout->GetDoubleValue(_T("PaperAdvance")) ;
+	double	Height = gPaperWidth ;
+
+	//	MUST INCLUDE SPILLOVER...
+	//		Fields: Name	SpillOverType	Type	long
+	//		Fields:	Name	SpillOverAmt	Type	double
+	//		0: None, 1: Percent, 2: Fixed
+
+
+	//	ADJUST SPILL OVER IF NOT FOR LUCHT CUTTER.		DON"T APPLY SPILLOVER WHEN USING PAPER FILL
+/*	if( gPrinterSetupGC->GetLongValue(_T("PaperFill")) != 1L )
+	{
+		long	SpillOverType = gPrinterSetupGC->GetLongValue(_T("SpillOverType")) ;
+		double	SpillOverAmt  = gPrinterSetupGC->GetDoubleValue(_T("SpillOverAmt")) ;
+
+		if( SpillOverType == 1L )	
+		{
+			if( SpillOverAmt > 0.0 )
+			{
+				Width  *= SpillOverAmt ;
+				Height *= SpillOverAmt ;
+			}
+		}
+
+		if( SpillOverType == 2L )
+		{
+			Height += SpillOverAmt ;
+		}
+	}
+*/
+
+	strcpy( MainText, _T("Main:\r\n\tAutoCrop: 50 50 50 50 100 100\r\n\tAutoCropMode: ~F~\r\n")) ;
+	sprintf( MainSize, _T("\tIColor: 0 255 255 255\r\n\tIWidth: %lf\r\n\tIHeight: %lf\r\n\r\n"), Width, Height ) ;
+	strcat( JobText, MainText ) ;
+	strcat( JobText, MainSize ) ;
+	return( JobText ) ;
+}
+
+TCHAR *CreateANode( TCHAR *theJob, long NodeID, UGenCon *theSlot )
+{
+	TCHAR	 theLine[1024] ;
+	TCHAR	*ACMode = _T("~C~") ;
+
+	//	SLOT POSITION
+	double	 AdvPos	= theSlot->GetDoubleValue(_T("AdvancePos")) ;
+	double	 HgtPos	= theSlot->GetDoubleValue(_T("HeightPos")) ;
+
+	//	SLOT WIDTH & HEIGHT
+	double	 Width	= theSlot->GetDoubleValue(_T("ImageAdvance")) ;
+	double	 Height	= theSlot->GetDoubleValue(_T("ImageHeight")) ;
+
+	//	SIZE OF IMAGE IN SLOT
+	double	 ImgWdth = theSlot->GetDoubleValue(_T("ImageWidth")) ;
+	double	 ImgHght = theSlot->GetDoubleValue(_T("ImageLength")) ;
+
+	long	 PaperFillType = gPrinterSetupGC->GetLongValue(_T("PaperFill")) ;
+	if( PaperFillType == 1L )	//	LUCHT
+	{
+		if( ! ExactFit( ImgWdth, ImgHght, Width, Height ) )
+		{
+			ACMode = _T("~F~") ;
+			AdjustSlotToImage( ImgWdth, ImgHght, &Width,  &Height ) ;
+		}
+	}
+
+	if( PaperFillType == 2L )	//	ARBITRARY
+	{
+		Width	-= AdvPos ;
+		Height	-= HgtPos ;
+	}
+
+/*	DON"T APPLY SPILLOVER TO PAPER FILL
+	long	SpillOverType = gPrinterSetupGC->GetLongValue(_T("SpillOverType")) ;
+	double	SpillOverAmt	= gPrinterSetupGC->GetDoubleValue(_T("SpillOverAmt")) ;
+	switch( SpillOverType )
+	{
+		case	0	:	//	NO SPILLOVER
+			break ;
+		case	1	:	//	PERCENT
+			AdvPos	*= SpillOverAmt ;
+			HgtPos	*= SpillOverAmt ;
+			Width	*= SpillOverAmt ;
+			Height	*= SpillOverAmt ;
+			break ;
+		case	2	:	//	FIXED
+			HgtPos	+= HgtPos * SpillOverAmt / gPaperWidth ;
+			Height	+= Height * SpillOverAmt / gPaperWidth ;
+			break ;
+	}
+*/
+	sprintf( theLine, _T("IL:	%ld\r\n"), NodeID ) ;
+	strcat( theJob, theLine ) ;
+	strcat( theJob, _T("\tAutocrop:		50 50 50 50 100 100\r\n")) ;
+
+	sprintf( theLine, _T("\tAutocropmode:	%s\r\n"), ACMode ) ;
+	strcat( theJob, theLine ) ;
+
+	TCHAR	*FilePath = theSlot->GetStringValue(_T("FilePath")) ;
+	if( FilePath )
+		{ 	sprintf( theLine, _T("\tIFile:			~%s~\r\n"), FilePath ) ; }
+	else
+		{ sprintf( theLine, _T("\tIFile:			~~\r\n")) ; }
+
+	strcat( theJob, theLine ) ;
+	sprintf( theLine, _T("\tILocation:		%lf %lf %lf %lf\r\n"), AdvPos, HgtPos, Width, Height ) ;
+	strcat( theJob, theLine ) ;
+	strcat( theJob, _T("\tImageResize:		~L~\r\n")) ;
+	strcat( theJob, _T("\tIPrompt:			~Select an image:~\r\n")) ;
+	sprintf( theLine, _T("\tDeleteAfter:		%ld\r\n"), theSlot->GetLongValue(_T("DeleteAfter"))) ;
+	strcat( theJob, theLine ) ;
+
+	//	ADDED THIS TO PREVENT DOUBLE COLOR MANAGEMENT ! 11/27/00
+	TCHAR	InputProfileName[1024] ;
+	UImageCorrections *theImageCorr = GetImageCorrections(NULL,NULL) ;
+	theImageCorr->GetEditSpaceProfileName(InputProfileName) ;
+
+	sprintf( theLine, _T("\tImageInputProfile:	~%s~\r\n"), InputProfileName ) ;
+	strcat( theJob, theLine ) ;
+
+	strcat( theJob, _T("\tAutoRotate:		270\r\n\r\n")) ;
+
+	return( theJob ) ;
+}
+
+int ExactFit( double ImgW, double ImgH, double SltW, double SltH )
+{
+	if( CompareDoubles( ImgW, ImgH ) > 0 )		//	HORIZONTAL IMAGE
+	{
+		if( CompareDoubles( SltW, SltH ) > 0 )	//	HORIZONTAL SLOT
+		{
+			if( CompareDoubles( ImgW, SltW ) < 0 ||
+				CompareDoubles( ImgH, SltH ) < 0 )
+			{
+				return( 0 ) ;
+			}
+		}
+		else				//	VERTICAL SLOT
+		{
+			if( CompareDoubles( ImgW, SltH ) < 0 ||
+				CompareDoubles( ImgH, SltW ) < 0 )
+			{
+				return( 0 ) ;
+			}
+		}
+	}
+	else					//	VERTICAL IMAGE
+	{
+		if( CompareDoubles( SltW, SltH ) > 0 )	//	HORIZONTAL SLOT
+		{
+			if( CompareDoubles( ImgW, SltH ) < 0 ||
+				CompareDoubles( ImgH, SltW ) < 0 )
+			{
+				return( 0 ) ;
+			}
+		}
+		else				//	VERTICAL SLOT
+		{
+			if( CompareDoubles( ImgW, SltW ) < 0 ||
+				CompareDoubles( ImgH, SltH ) < 0 )
+			{
+				return( 0 ) ;
+			}
+		}
+	}
+	return( 1 ) ;
+}
+
+void AdjustSlotToImage( double ImgW, double ImgH, double *Width,  double *Height )
+{
+	double	SltW = *Width ;
+	double  SltH = *Height ;
+
+	if( CompareDoubles( ImgW, ImgH ) > 0 )		//	HORIZONTAL IMAGE
+	{
+		if( CompareDoubles( SltW, SltH ) > 0 )	//	HORIZONTAL SLOT
+		{
+			if( CompareDoubles( ImgW, SltW ) < 0 )
+			{
+				*Width	 = ImgW ;
+			}
+			if( CompareDoubles( ImgH, SltH ) < 0 )
+			{
+				*Height = ImgH ;
+			}
+		}
+		else				//	VERTICAL SLOT
+		{
+			if( CompareDoubles( ImgW, SltH ) < 0 )
+			{
+				*Height = ImgW ;
+			}
+			if( CompareDoubles( ImgH, SltW ) < 0 )
+			{
+				*Width  = ImgH ;
+			}
+		}
+	}
+	else					//	VERTICAL IMAGE
+	{
+		if( CompareDoubles( SltW, SltH ) > 0 )	//	HORIZONTAL SLOT
+		{
+			if( CompareDoubles( ImgW, SltH ) < 0 )
+			{
+				*Height = ImgW ;
+			}
+			if( CompareDoubles( ImgH, SltW ) < 0 )
+			{
+				*Width  = ImgH ;
+			}
+		}
+		else				//	VERTICAL SLOT
+		{
+			if( CompareDoubles( ImgW, SltW ) < 0 )
+			{
+				*Width  = ImgW ;
+			}
+			if( CompareDoubles( ImgH, SltH ) < 0 )
+			{
+				*Height = ImgH ;
+			}
+		}
+	}
+}
+
+
+void CreateOutputDisk( TCHAR *theJob, UGenCon *aPkg )
+{
+	TCHAR	Data[2048] ;
+	TCHAR	Line[2048] ;
+
+	UGenCon *theDefaults = (UGenCon *) GetTreeObject(_T("DefaultSaveImage"), _T("[DEFAULTS]")) ;
+
+	UGenCon *SaveDiskNode = theDefaults->Copy() ;
+
+	strcat( theJob, _T("SaveImage:\r\n")) ;
+	strcat( theJob, _T("\tEnabled: 1\r\n")) ;
+
+	long Qty = aPkg->GetLongValue(_T("Quantity")) ;
+	SaveDiskNode->SetLongValue(_T("Copies:"), Qty ) ;
+
+	double PaperWidth = aPkg->GetDoubleValue(_T("PaperWidth")) ;
+	SaveDiskNode->SetDoubleValue( _T("PaperWidth:"), PaperWidth ) ;
+
+	double PaperAdvance = aPkg->GetDoubleValue(_T("PaperAdvance")) ;
+	SaveDiskNode->SetDoubleValue( _T("PaperAdvance:"), PaperAdvance ) ;
+
+	long	PaperFill = gPrinterSetupGC->GetLongValue( _T("PaperFill")) ;
+
+	//	IF WE ARE GOING TO AN LED, WE MUST INVERT THE IMAGE IF USING LUCHT PAPER FILL TBD
+	TCHAR	*PrinterModel = gPrinterSetupGC->GetStringValue(_T("PrinterModel")) ;
+	if( stricmp( PrinterModel, _T("Digital LED 20P"))	== 0 ||
+		stricmp( PrinterModel, _T("Digital LED 20R"))	== 0 ||
+		stricmp( PrinterModel, _T("Kodak LED"))			== 0 )
+	{
+		strcat( theJob, _T("\tRotated: 180\r\n")) ;
+	}
+
+/*	if( stricmp( PrinterModel, _T("Kodak LFCRT"))	== 0 ||
+		stricmp( PrinterModel, _T("KPDM"))			== 0 ||
+		stricmp( PrinterModel, _T("KPDM II"))		== 0 ||
+		stricmp( PrinterModel, _T("Kodak CRT"))		== 0 )
+	{
+		gPrinterSetupGC->GetAttrValue( _T("CalLutPath"), Line ) ;
+		SaveDiskNode->SetAttrValue( _T("Lookup:"), Line ) ;
+		gPrinterSetupGC->GetAttrValue( _T("PaperPackPath"), Line ) ;
+		SaveDiskNode->SetAttrValue( _T("PaperCalTable:"), Line ) ;
+	}	
+*/
+
+	gPrinterSetupGC->GetAttrValue(_T("Resolution"), Data ) ;
+	SaveDiskNode->SetAttrValue(_T("XRes:"), Data ) ;
+
+	gPrinterSetupGC->GetAttrValue(_T("QueueName"), Data ) ;
+	SaveDiskNode->SetAttrValue(_T("QueueName:"), Data ) ;
+
+	GetOutputPath( Line ) ;
+	SaveDiskNode->SetAttrValue(_T("SaveName:"), Line ) ;
+
+	if( gLogAmount >= 5 )
+	{
+		SessionLogDirect( _T("GeneralPaperFillInclude.CreateOutputDisk: SaveName: [%s]"), Line ) ;
+	}
+
+	TCHAR	theFileType[64] ;
+	gPrinterSetupGC->GetAttrValue(_T("OutputFileType"),theFileType ) ;
+	if( *theFileType == 'J' || *theFileType == 'E' )
+	{
+		SaveDiskNode->SetAttrValue(_T("SaveFileType:"), _T("JPEG") ) ;
+	}
+	else
+	{
+		SaveDiskNode->SetAttrValue(_T("SaveFileType:"), _T("TIFF") ) ;
+	}
+
+
+	if( PaperFill == 1L )	//	DO THIS ONLY IF LUCHT PAPER FILL
+	{
+		long PackageCut = gPrinterSetupGC->GetLongValue(_T("PackageCut")) ;
+		if(  PackageCut == 2 )	//	MultiPunch
+		{
+			aPkg->GetAttrValue(_T("PackageCode"), Data ) ;
+			sprintf( Line, _T("\tMultiPunch: %s\r\n"), Data ) ;
+			strcat( theJob, Line ) ;
+		}
+
+		if( PackageCut == 1 )	// BarCode
+		{
+			aPkg->GetAttrValue(_T("BarCodeString"), Data ) ;
+			SaveDiskNode->SetAttrValue(_T("BarCodeString:"), Data ) ;
+			long StringState = aPkg->GetLongValue(_T("StringState")) ;
+			SaveDiskNode->SetLongValue(_T("StringState:"), StringState ) ;
+		}
+	}
+
+	GetDefaultStrings( SaveDiskNode, theJob ) ;
+
+	delete SaveDiskNode ;
+}
+
+TCHAR *GetOutputPath( TCHAR *Result )
+{
+	TCHAR	FilePath[1204] ;
+	TCHAR	FileName[1024] ;
+	TCHAR	FileExtn[1024] ;
+
+	TCHAR	Source[1024] ;
+
+	gPrinterSetupGC->GetAttrValue(_T("OutputPath"), Source ) ;
+
+	if( *Source )
+	{
+		GetFilePathNameAndExt( Source, FilePath, FileName, FileExtn ) ;
+
+		sprintf( Result, _T("%s\\PF%s_%ld.%s"), FilePath, FileName, Clock(), FileExtn ) ;
+	}
+	else
+	{
+		TCHAR	TmpPath[1024] ;
+		int numCharsInBuf = GetEnvironmentVariable(_T("TMP"), TmpPath, 1024 ) ;
+		if( numCharsInBuf )
+		{
+			sprintf( Result, _T("%s\\[-].jpg"), TmpPath ) ;
+//			theOutputNode->SetAttrValue(_T("SaveName:"), Result ) ;
+			gPrinterSetupGC->SetAttrValue(_T("OutputFileType"), _T("Jpeg")) ;
+			SessionLogDirect( _T("****\tREBatchThread.GetOutputFileName: theOutputNode: Output FileName Created: \"%s\"."), FilePath ) ;
+		}
+
+	}
+
+	if( gLogAmount >= 5 )
+	{
+		SessionLogDirect( _T("GeneralPaperFillInclude.GetOutputPath: \"%s\""), Result ) ;
+	}
+
+	return( Result ) ;
+}
+
+
+void GetDefaultStrings( UGenCon *aGC, TCHAR *theJob )
+{
+	long		 loop ;
+	long		 theType ;
+	TCHAR		 Value[4096] ;
+	TCHAR		 Line[4096] ;
+	TCHAR		*AttrName ;
+	UAttribute	*theAttr ;
+
+	int			 ATTR_STRING	= 8 ;
+	int			 ATTR_CHAR		= 9 ;
+	int			 ATTR_UTEXT		= 12 ;
+
+	UDataDict	*aDD = aGC->GetDataDict() ;
+
+	for( loop = 0L ; loop < aDD->GetNumEntries() ; loop++ )
+	{
+		theAttr = aDD->GetAttributeByOrder( loop ) ;
+		AttrName = theAttr->GetName() ;
+		if( aGC->AttrChanged( AttrName ))
+		{
+			aGC->GetAttrValue( AttrName, Value ) ;
+			theType = theAttr->GetType() ;
+			switch( theType )
+			{
+				case	ATTR_STRING	:
+				case	ATTR_CHAR	:
+				case	ATTR_UTEXT	:
+					sprintf( Line, _T("\t%s ~%s~\r\n"), AttrName, Value ) ;
+					break ;
+				default	:
+					sprintf( Line, _T("\t%s %s\r\n"), AttrName, Value ) ;
+					break ;
+
+			}
+			strcat( theJob, Line ) ;
+		}
+	}
+	return ;
+}
+
+/*
+double	gMinAdvance = 0.50 ;
+
+double GetMinPaperAdvance()
+{
+	TCHAR		*Model	= gPrinterSetupGC->GetStringValue(_T("PrinterModel")) ;
+	TCHAR		*Name	= gPrinterSetupGC->GetStringValue(_T("PrinterName")) ;
+	TCHAR		 Value[256] ;
+	int			 Enabled = FALSE ;
+
+	if( gMinAdvance != 0.0 )
+		return( gMinAdvance ) ;
+
+	GetSystemSettings( Name, _T("MinPaperAdv"), Value, &Enabled ) ;
+
+	if( Enabled )
+	{
+		fMinAdvance = atof( Value ) ;
+		return( fMinAdvance ) ;
+	}
+
+	if( stricmp( Model, _T("KPDM")) == 0 )
+		fMinAdvance = 0.50 ;
+
+	if( stricmp( Model, _T("KPDM II")) == 0 )
+		fMinAdvance = 0.50 ;
+
+	if( stricmp( Model, _T("Kodak LFCRT")) == 0 )
+		fMinAdvance = 0.50 ;
+
+	if( stricmp( Model, _T("Kodak LED")) == 0 )
+		fMinAdvance = 6.50 ;
+
+	if( stricmp( Model, _T("Disk")) == 0 )
+		fMinAdvance = 0.50 ;
+
+	if( stricmp( Model, _T("NT Printer")) == 0 )
+		fMinAdvance = 0.50 ;
+
+	return( fMinAdvance ) ;
+}
+*/
+
+//=============================================================================
+int gDebugCompareDoubles = FALSE ;
+
+int CompareDoubles( double Val1, double Val2 )
+{
+	double	Delta = Val1 - Val2 ;
+	if( Delta < 0.0 )	{ Delta = - Delta ; }
+
+	int	Result = 1 ;
+	if( Delta < 0.0005 )	{ Result =  0 ; }
+	if( Val1  < Val2   )	{ Result = -1 ; }
+
+	if( gDebugCompareDoubles )
+	{
+		SessionLogDirect( _T("CompareDoubles: Val1: %16.16lf, Val2: %16.16lf, Delta: %16.16lf, Result: %d"),
+							Val1, Val2, Delta, Result ) ;
+	}
+
+	return( Result ) ;
+}
+
+void SwapDoubles( double *Val1, double *Val2 )
+{
+	double	Temp = *Val1 ;
+	*Val1 = *Val2 ;
+	*Val2 = Temp ;
+}
+
+//=============================================================================
+//	CONVERT TO HEX ROUTINE
+TCHAR	*gHexChars = _T("0123456789ABCDEF") ;
+void GetBarCode( unsigned int Value, TCHAR *String )
+{
+	int		Val ;
+
+	Val = (Value >>  4) & 0x0000000F ;	String[0] = gHexChars[Val] ;
+	Val = Value & 0x0000000F ;			String[1] = gHexChars[Val] ;
+	String[2] = 0x00 ;
+}
+
+TCHAR *GetQtyBarCode( long Qty, long PkgCode, TCHAR *BarCodeString )
+{
+	//	SAY WE HAVE A QUANTITY GREATER THAN ONE
+	BarCodeString[0] = _T('M') ;
+
+	//	OUTPUT THE PACKAGE CODE
+	BarCodeString[1] = gHexChars[(PkgCode & 0x00F0) >> 4] ;
+	BarCodeString[2] = gHexChars[(PkgCode & 0x000F)] ;
+	
+	//	OUTPUT THE QUANTITY
+	BarCodeString[3] = gHexChars[(Qty & 0x0F00) >> 8] ;
+	BarCodeString[4] = gHexChars[(Qty & 0x00F0) >> 4] ;
+	BarCodeString[5] = gHexChars[(Qty & 0x000F)] ;
+
+	BarCodeString[6] = _T('\0') ;
+	return( BarCodeString ) ;
+}
+//=============================================================================
+
+int DebugGenCon( UGenCon *aGC, int Level )
+{
+	TCHAR		*AttrName ;
+	TCHAR		 AttrValue[2048] ;
+	TCHAR		 Spaces[64] ;
+
+	GetInitialSpacing( Spaces, Level ) ;
+
+	UDataDict	*theDict = aGC->GetDataDict() ;
+
+	TCHAR		*GCName = aGC->GetName() ;
+	TCHAR		*DDName = theDict->GetName() ;
+
+	SessionLogDirect( _T("%sCreate \"%s\" Using \"%s\""), Spaces, GCName, DDName ) ;
+	SessionLogDirect( _T("%s{"), Spaces ) ;
+
+	GetInitialSpacing( Spaces, Level + 1 ) ;
+
+	UListIterator	*anIter = new UListIterator( theDict ) ;
+	UAttribute		*anAttr = (UAttribute *) anIter->GetFirst() ;
+	while( anAttr )
+	{
+		AttrName = anAttr->GetName() ;
+		if( aGC->AttrChanged( AttrName ))
+		{
+			aGC->GetAttrValue( AttrName, AttrValue ) ;
+			SessionLogDirect( _T("%s%s\t\t\"%s\""), Spaces, AttrName, AttrValue ) ;
+		}
+		anAttr = (UAttribute *) anIter->GetNext() ;
+	}
+	GetInitialSpacing( Spaces, Level ) ;
+	SessionLogDirect( _T("%s%c ;"), Spaces, 0x0x7D) ;
+	delete anIter ;
+	return( TRUE ) ;
+}
+
+TCHAR *GetInitialSpacing( TCHAR *Buffer, int Level )
+{
+	TCHAR	Format[32] ;
+	
+	Level = Level * 4 ;
+
+	sprintf( Format, _T("%%-%d.%ds"), Level, Level ) ;
+
+	sprintf( Buffer, Format, _T(" ")) ;
+
+	return( Buffer ) ;
+}

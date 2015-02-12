@@ -1,0 +1,198 @@
+VOID SetupDialog()
+{
+	y = 5;					h = 20;				
+	hGap = 10;				vGap = 10;	
+	MessageHeight = 180; 	DialogWidth = 400;
+
+	Define: MessageBoxDialog Using DDWinDef
+		Fields:	POSITION		25, 25, $DialogWidth, $DialogWidth
+				TITLE			(~<$con.DlgData[Title].QuoteSafe>~ != ~~) ? ~<$con.DlgData[Title].QuoteSafe>~ : ~System Message~
+				TYPENAME		~Dialog~
+				OActionsText	ACTION EXEC ( Cancel() )
+				HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "SystemMessage.htm" );
+
+		Contains: INLISTORDER
+		{
+			if ( ~<$con.DlgData[Message1].QuoteSafe>~ != ~~ )
+			{
+				Define: Message1Field Using DDWinCtrlDef AsSymbol Message1Field
+					Fields:	POSITION		$hGap $y $DialogWidth - $hGap*3 $MessageHeight
+							TEXT			~<$con.DlgData[Message1].QuoteSafe>~
+							TYPENAME		StaticText ;
+
+				y += $MessageHeight + $vGap;
+
+				Log( Session,~<$con.DlgData[Message1].QuoteSafe>~ );
+			}
+
+			if ( ~<$con.DlgData[Message2].QuoteSafe>~ != ~~ )
+			{
+				Define: Message2Field Using DDWinCtrlDef AsSymbol Message2Field
+					Fields:	POSITION		$hGap $y $DialogWidth - $hGap*3 $MessageHeight
+							TEXT			~<$con.DlgData[Message2].QuoteSafe>~
+							TYPENAME		StaticText ;
+
+				y += $MessageHeight + $vGap;
+
+				Log( Session,~<$con.DlgData[Message2].QuoteSafe>~ );
+			}
+
+			MaxButtonWidth = DlgData(GetNumeric,MaxButtonWidth) ?  DlgData(GetNumeric,MaxButtonWidth) : 160;
+			ButtonHeight = DlgData(GetNumeric,MaxButtonHeight) ? DlgData(GetNumeric,MaxButtonHeight) : 20;
+
+			Buttons = NumOfButtons();		
+
+			if ( $Buttons > 0 )
+			{
+				ButtonWidth = ($DialogWidth - (($Buttons + 2) * $hGap)) / $Buttons;
+
+				if ( <ButtonWidth> > <MaxButtonWidth> )
+					{ ButtonWidth = <MaxButtonWidth>; }
+
+				ButtonsWidth = ($ButtonWidth * $Buttons) + ($hGap * ($Buttons - 1));
+				x = ($DialogWidth / 2) - ($ButtonsWidth / 2);
+			}
+			else
+			{
+				ButtonWidth = 120;
+				x = $DialogWidth / 2;
+			}
+
+			Index = -1;
+
+			while ( <++Index> <= <PossibleButtons> )
+			{
+				if ( ~<$con.DlgData[Button<Index>]>~ != ~~ )
+				{
+					Define: Button<Index> Using DDWinCtrlDef AsSymbol Button<Index>
+						Fields:	DACTIONSTEXT	ACTION EXEC ( OnButton(<Index>) )
+								POSITION		$x,$y
+												$ButtonWidth, $ButtonHeight
+								TEXT			~<$con.DlgData[Button<Index>]>~
+								TOOLTIP			~<$con.DlgData[Button<Index>ToolTip]>~
+								TYPENAME		(~<$con.DlgData[DefaultButton]>~ == ~<Index>~) ? ~DEFAULTBUTTON~ : ~BUTTON~
+								HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "MessageDialog.htm" ) ;
+
+					x += $ButtonWidth + $hGap;
+				}
+			}
+
+			y += $ButtonHeight + $vGap;
+		}
+
+	DialogHeight = $y + $vGap + 20;
+
+	xCenter =  App( thisApp,MainWindow,GetClientWidth )/ 2 - $DialogWidth/2;
+	yCenter =  App( thisApp,MainWindow,GetClientHeight )/ 2 - $DialogWidth/2;
+
+	xpos = (Numeric(~<$con.DlgData[xPosition]>~) >= 0) ? Numeric(~<$con.DlgData[xPosition]>~) : <xCenter>; 
+	ypos = (Numeric(~<$con.DlgData[yPosition]>~) >= 0) ? Numeric(~<$con.DlgData[yPosition]>~) : <yCenter>;
+ 
+	MessageBoxDialog( Set,Position,~<xpos>  <ypos>  <DialogWidth>  <DialogHeight>~ );	
+
+	GenDlg( dlg,Definition,MessageBoxDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+	Global( dlg );
+	
+	dlg( AdjustWindowPosition );
+}
+
+
+NUMERIC NumOfButtons()
+{
+	Count = 0;
+	
+	Index = -1;
+
+	while ( <++Index> <= <PossibleButtons> )
+	{
+		Count += ~<$con.DlgData[Button<Index>]>~ != ~~;
+	}
+
+	return $Count;
+}
+
+
+
+VOID OnButton( Which )
+{
+	Respond( <Which> );
+	dlg( End );
+	Exit();
+}
+
+
+VOID Cancel()
+{
+	Respond( 0 );
+	dlg( End );
+	Exit();
+}
+
+
+VOID Respond( Button )
+{
+	DlgData( Set,ButtonPressed,~<Button>~ );
+
+	ReturnTheGencon =  DlgData( GetNumeric,ReturnThisGC ) ;
+	
+	if ( DlgData(GetNumeric,ThreadID) )
+	{
+		if ( !PostThreadMessage( ~<$con.DlgData[ThreadID]>~,~<$con.DlgData[ThreadMessage]>~,<button>,
+							<ReturnTheGencon> ? DlgData(GetObject) : DlgData(GetNumeric,UniqueID) ) )
+		{
+			if ( <ReturnTheGencon> )
+			{
+				Log( Session, ~Message Dialog cannot return information to caller.~) ;
+				DlgData( Temporary );
+			}
+		}
+
+		return;
+	}
+
+	if ( DlgData(GetNumeric,ThreadWindow) )
+	{
+		if ( !PostWindowMessage( ~<$con.DlgData[ThreadWindow]>~,~<$con.DlgData[ThreadMessage]>~,<button>,
+							<ReturnTheGencon> ? DlgData(GetObject) : DlgData(GetNumeric,UniqueID) ) )
+
+		if ( <ReturnTheGencon> )
+		{
+			Log( Session, ~Message Dialog cannot return information to caller.~) ;
+			DlgData( Temporary );
+		}
+
+		return;
+	}
+
+	if ( DlgData(GetNumeric,ResumeThread) )
+	{
+		ResumeThread( ~<$con.DlgData[ResumeThread]>~ );
+	}
+}
+
+PossibleButtons = 4;
+	
+VOID Init( DataGenCon )
+{
+	GenCon( DlgData,Is,<DataGenCon> );	
+
+	if ( !DlgData( GetNumeric,Modal ) && ! DlgData( GetNumeric, UseOrigGC ))
+	{
+		DlgData( Temporary );
+	}	
+	
+	if ( Document( Doc, CountByFileName,MessageDialogDoc ) > 10 )	// TOO MANY OF THESE MESSAGE DIALOGS OPEN?
+	{
+		if ( !DlgData( GetNumeric,Modal ) && !DlgData( GetNumeric,ReturnThisGC ) && !DlgData( GetNumeric,UseOrigGC ) )
+		{
+			Log( Session,~Too many dialogs. Could not display  <$con.DlgData[Title].QuoteSafe>   <$con.DlgData[Message1].QuoteSafe>   <$con.DlgData[Message2].QuoteSafe>~ );
+			exit();
+		}
+	}
+	
+	Global( DlgData );
+	SetupDialog();
+}
+
+

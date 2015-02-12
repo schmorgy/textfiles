@@ -1,0 +1,196 @@
+
+//	THIS FILE CONTAINS THE 'C' SCRIPT TO RUN JOBS
+//	THIS IS THE SISTER OF THE SUBMIT JOB TO QUEUE
+//	ROUTINE EXCEPT THAT THIS SCRIPT WILL NOT OPEN
+//	THE JOBS IN A WINDOW FOR DISPLAY.
+
+#include "CQueue.txt"
+#include "CParseFile.txt"
+#include "CUtils.txt"
+#include "CDebug.txt"
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = 1 ;
+
+main()
+{
+	char	*ListViewGenCon ;
+	char	*SelectedItemsList ;
+	char	*SelectedItem ;
+	char	*anIter ;
+	char	*anADO ;
+	char	*PGCList ;
+	char	*PGC ;
+	char	 Path[1024] ;
+	char	 theQuery[128] ;
+	char	 msg[256] ;
+	int		 result ;
+	long	 LineItem = 0L ;
+	char	 SelectedItemID[32] ;
+
+	//Debug( TRUE ) ;	//	INVOKE THE DEBUGGER !
+
+	//	GET THE JOB ID LIST
+	ListViewGenCon = GetCCodeGenCon() ;
+	if( ListViewGenCon == NULL )
+	{
+		MessageBox("Could not find GenCon.","MB_OK") ;
+		RemoveGCFromTree( ListViewGenCon ) ;
+		return ;
+	}
+
+	//	GET THE ACTUAL SELECTED ITEMS
+	SelectedItemsList = GetChildren( ListViewGenCon ) ;
+	if( SelectedItemsList == NULL )
+	{
+		MessageBox("GenCon has no children.","MB_OK") ;
+		RemoveGCFromTree( ListViewGenCon ) ;
+		return ;
+	}
+
+	//	CREATE THE ITERATOR TO WALK THROUGH THE 
+	//	SELECTED ITEMS
+	anIter = CreateIterator(SelectedItemsList) ;
+	if( anIter == NULL )
+	{
+		MessageBox("Cannot create iterator.","MB_OK") ;
+		RemoveGCFromTree( ListViewGenCon ) ;
+		return ;
+	}
+
+/*	//	CREATE THE CONNECTION TO THE DATABASE
+	anADO = ConnectToADO() ;
+	if( anADO == NULL )
+	{
+		MessageBox("Could not get ADO.","MB_OK") ;
+		RemoveGCFromTree( ListViewGenCon ) ;
+		anIter = Delete( anIter ) ;
+		return ;
+	}
+*/
+	SelectedItem = GetFirst( anIter ) ;
+
+	//	FOR EACH JOB IN THE LIST
+	while( SelectedItem )
+	{
+		//	GET THE JOB PATH
+		//	BUILD THE QUERY
+		GetAttrValue( SelectedItem, "ID", SelectedItemID ) ;
+
+		BuildQuery( SelectedItemID, theQuery ) ;
+
+//		PGCList = NewPGenConList( anADO ) ;
+		PGCList = NewPGenConList( GetKPISConnection() ) ;
+		if( PGCList == NULL )
+		{
+//			ReleaseConnection( anADO ) ;
+//			Delete( anADO ) ;
+			anIter = Delete( anIter ) ;
+			MessageBox("Could not Create PGenConList.","MB_OK") ;
+			RemoveGCFromTree( ListViewGenCon ) ;
+			return ;
+		}
+
+		//	VERIFY THAT THE OBJECT IS STILL IN THE DATABASE
+		result = Query( PGCList, theQuery, "ReadOnly", "ForwardOnly") ;
+		if( result == 1 )
+		{
+			PGC = GetFirst( PGCList ) ;
+			while( PGC )
+			{
+		//		ShowGenCon( PGC ) ;	//	A DEBUG LINE
+				LineItem = LineItem + 1 ;
+		//		printf( "LineItem %ld", LineItem ) ;
+
+				//	OPEN THE DOCUMENT
+				GetAttrValue( PGC, "JobPath", Path ) ;
+
+				//	PARSE THE JOB
+				SubmitJobToQueue( Path ) ;
+
+				PGC = GetNext( PGCList ) ;
+			}
+		}
+		else
+		{
+			sprintf( msg, "Could not locate Item = %s",
+						GetAttrValue( SelectedItem, "ID", SelectedItemID )) ;
+			MessageBox( msg, "MB_OK" ) ;
+		}
+
+		Delete( PGCList ) ;
+
+		Debug( ! HeapCheck("Heap corrupted in CRunJob.")) ;
+
+		SelectedItem = GetNext( anIter ) ;
+	}
+
+	RemoveGCFromTree( ListViewGenCon ) ;
+	anIter = Delete( anIter ) ;
+//	ReleaseConnection( anADO ) ;
+//	Delete( anADO ) ;
+}
+
+
+SubmitJobToQueue( char *thePath )
+{
+	char	*theParser ;
+	char	*theMultiRenderList ;
+	char	*theRenderList ;
+	char	 JobName[34] ;
+	char	 JobPath[1024] ;
+	char	 QueueName[32] ;
+	char	 msg[256] ;
+	int		 result ;
+
+	theParser = ParseJob( thePath ) ;
+
+	//Debug( TRUE ) ;
+
+	if( theParser != NULL )
+	{
+		//	GET THE RENDER LISTS
+		theMultiRenderList = GetRenderLists( theParser ) ;
+		if( theMultiRenderList != NULL )
+		{
+			//	CREATE THE ROLLED OUT JOB
+			theRenderList = GetFirst( theMultiRenderList ) ;
+			while( theRenderList )
+			{
+				//	ADD THE JOB TO THE QUEUE
+				CreateJobName( theRenderList, JobPath, JobName ) ;
+
+				result = WriteJob( theRenderList, JobPath ) ;
+				if( result == 0 )
+				{
+					sprintf( msg, "Could not write job to: %s.", JobPath ) ;
+					MessageBox( msg, "MB_OK" ) ;
+				}
+
+				GetQueueName( theRenderList, QueueName ) ;
+
+				AddJobToQueue( QueueName, JobPath ) ;
+
+				theRenderList = GetNext( theMultiRenderList ) ;
+			}
+		}
+
+		PluckTreeObject( GetName(theParser), "[UserData Jobs]" ) ;
+		Delete( theParser ) ;
+	}
+}
+
+
+
+BuildQuery( char* item, char *aquery )
+{
+	char *QueryText = "Select * From OrderItems Where ID = '%s'" ;
+
+	sprintf( aquery, QueryText, item ) ;
+
+	return( aquery ) ;
+}
+
+
+

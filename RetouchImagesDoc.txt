@@ -1,0 +1,1090 @@
+Include: ~DeleteOrder~;
+
+IncludeClass( BaseMenu );
+IncludeClass( BaseGrid );
+
+Class( ReviewMenu, Extends, BaseMenu );
+
+VOID ReviewMenu::AddMenuItems()
+{
+	Action = ACTION EXEC ( KarsGrid.OnSetIDImages(~ReviewID~) );
+	AddMenuItem( TRUE,FALSE,Translate(~Review Selected Images~), Action );
+	Action = ACTION EXEC ( KarsGrid.OnSetIDOrders(~ReviewID~) );
+	AddMenuItem( TRUE,FALSE,Translate(~Review Selected Orders~), Action );
+	Action = ACTION EXEC ( KarsGrid.OnRunReview(TRUE) );
+	AddMenuItem( TRUE,FALSE,Translate(~Review Full Queue~), Action );
+}
+
+NUMERIC ReviewMenu::DisplayInView( &View,X,Y )
+{
+	DefineViewMenu( View );
+	View( DisplayMenu,fViewMenu,~<X>~,~<Y>~ );
+
+	return ForgetPrivate( fViewMenu );
+}
+
+
+Class( KarsImages, Extends, BaseGrid,
+		Member,WhichQueue,Str,~~,
+		Member,BatchComplete,Numeric,0,
+		Member,sysOverWrite,Numeric,0,
+		Member,Prefix,Str,~~,
+		Member,Suffix,Str,~~,
+		Member,ImgPath,Str,~~,
+		Member,DataPath,Str,~~,
+		Member,RestrictBatchID,Numeric,0,
+		Member,RestrictReviewID,Numeric,0,
+		Member,RestrictMergeID,Numeric,0,
+		Member,AutoBatch,Numeric,0,
+		Member,SingleFace,Numeric,0);
+
+
+VOID KarsImages::KarsImages( whereClause )					// CONSTRUCTOR
+{
+	TableName = ~RetouchImages~;
+	DocumentQuery = ~Select * from <TableName> <whereClause> Order By RetouchState,Priority DESC,OrderID,Roll,Frame ~;
+	WindowTop = 0;
+	WindowWidth = 90;
+	WindowHeight = 25;
+	HelpPage = ~Retouch_Images.htm ~;
+	InsertActiveCell = ~Frame~;
+
+	GetSystemSettings( ~AutoRetouching~,~BatchCompleteProcessing~,BatchComplete,Enabled );
+	if ( IsNULL( ~<BatchComplete>~ ) )
+	{
+		BatchComplete = ~REVIEW~;
+	}
+
+	GetSystemSettings( ~AutoRetouching~,~AutoBatch~,AutoBatch,Enabled );
+	if ( IsNULL( ~<AutoBatch>~ ))
+	{
+		AutoBatch = FALSE;
+	}
+
+	GetSystemSettings( ~AutoRetouching~,~SingleFace~,SingleFace,Enabled );
+	if ( IsNULL( ~<SingleFace>~ ))
+	{
+		AutoBatch = FALSE;
+	}
+
+	GetSystemSettings( ~AutoRetouching~,~OverwriteOriginal~,sysOverWrite,Enabled );
+	if ( IsNULL( ~<sysOverWrite>~ ))
+	{
+		sysOverWrite = FALSE;
+	}
+
+	GetSystemSettings( ~AutoRetouching~,~OriginalPrefix~,Prefix,Enabled );
+	GetSystemSettings( ~AutoRetouching~,~OriginalSuffix~,Suffix,Enabled );
+	GetSystemSettings( ~AutoRetouching~,~OriginalPath~,ImgPath,Enabled );
+
+	if ( IsNull( ~<Prefix>~ ) && IsNull( ~<Suffix>~ ) && IsNull( ~<ImgPath>~ ) )
+	{
+		Suffix = ~_original~;
+	}
+
+		if ( !GetSystemSettings( ~AutoRetouching~,~EnhancementDataFolder~,DataPath,Enabled ) )
+	{
+		DataPath = ~<$App.ShareDirectory>\KparsData~;
+		DataPath = MakePath( Type, UNC, ~<DataPath>~);
+	}
+	else if ( IsNULL( ~<DataPath>~ ) && <Enabled> )
+	{
+		DataPath = ~<$App.ShareDirectory>\KparsData~;
+		DataPath = MakePath( Type, UNC, ~<DataPath>~);
+	}
+
+}
+
+STR KarsImages::GetKey( &Item )	
+{ 
+	// PRIMARY KEY FOR THE TABLE
+		return ~OrderID = '<$con.Item[OrderID]>' AND Roll = '<$con.Item[Roll]>' AND Frame = '<$con.Item[Frame]>'~; 
+}
+
+
+NUMERIC KarsImages::ChangeRecordAudits( &Changed )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[OrderID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  Order cannot be blank.~ ) ); }
+
+	if ( IsNull(~<$Con.Changed[Roll]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  Roll cannot be blank.~ ) ); }
+
+	if ( IsNull(~<$Con.Changed[Frame]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  Frame cannot be blank.~ ) ); }
+
+	return TRUE;
+}
+
+VOID KarsImages::AddStdMenuItems()					// ADD ADDITIONAL RIGHT CLICK MENU ITEMS
+{
+	AddMenuSeparator();
+
+	AddMenuItem( TRUE,FALSE,Translate(~Export Data~),ACTION EXEC ( <THIS>.ExportSelectedToFile() ) );
+	AddMenuSeparator();
+
+	AddMenuItem( TRUE,FALSE,Translate(~Retouch Instructions~),ACTION EXEC ( <THIS>.OnRetouchInstructionsButton() ) );
+	AddMenuSeparator();
+
+	Action = ACTION EXEC ( <THIS>.OnSetIDImages(~BatchID~) );
+	AddNewMenuItem( TRUE,FALSE,Translate(~Set Batch ID for Images~),Action );
+
+	Action = ACTION EXEC ( <THIS>.OnSetIDOrders(~BatchID~) );
+	AddNewMenuItem( TRUE,FALSE,Translate(~Set Batch ID for Orders~),Action );
+
+	Action = ACTION EXEC ( <THIS>.OnClearID(~BatchID~) );
+	AddNewMenuItem( TRUE,FALSE,Translate(~Clear Batch ID~ ),Action );
+
+	Action = ACTION EXEC ( <THIS>.OnRunBatchButton() );
+	AddNewMenuItem( TRUE,FALSE,Translate(~Run Batch~),Action );
+
+	AddMenuSeparator();
+	Action = ACTION EXEC ( <THIS>.OnSetIDImages(~ReviewID~) );
+	AddNewMenuItem( TRUE,FALSE,Translate(~Set Review ID for Images~),Action );
+
+	Action = ACTION EXEC ( <THIS>.OnSetIDOrders(~ReviewID~) );
+	AddNewMenuItem( TRUE,FALSE,Translate(~Set Review ID for Orders~),Action );
+
+	Action = ACTION EXEC ( <THIS>.OnClearID(~ReviewID~) );
+	AddNewMenuItem( TRUE,FALSE,Translate(~Clear Review ID~ ),Action );
+
+	Action = ACTION EXEC ( <THIS>.OnRunReviewButton() );
+	AddNewMenuItem( TRUE,FALSE,Translate(~Run Review~),Action );
+
+	AddMenuSeparator();
+	Action = ACTION EXEC ( <THIS>.OnSetIDImages(~MergeID~) );
+	AddNewMenuItem( TRUE,FALSE,Translate(~Set Merge ID for Images~),Action );
+
+	Action = ACTION EXEC ( <THIS>.OnSetIDOrders(~MergeID~) );
+	AddNewMenuItem( TRUE,FALSE,Translate(~Set Merge ID for Orders~),Action );
+
+	Action = ACTION EXEC ( <THIS>.OnClearID(~MergeID~) );
+	AddNewMenuItem( TRUE,FALSE,Translate(~Clear Merge ID~ ),Action );
+
+	Action = ACTION EXEC ( <THIS>.OnRunMergeButton() );
+	AddNewMenuItem( TRUE,FALSE,Translate(~Run Merge~),Action );
+
+	AddMenuSeparator();
+	AddMenuItem( TRUE,FALSE,Translate(~Run Interactive~),ACTION EXEC ( <THIS>.OnRunInteractiveButton() ) );
+
+	AddMenuSeparator();
+	AddMenuItem( TRUE,FALSE,Translate(~View Images~),ACTION EXEC ( <THIS>.OnViewImages() ) );
+
+	AddMenuSeparator();
+	AddMenuItem( TRUE,FALSE,Translate(~Restore Original Images~),ACTION EXEC ( <THIS>.OnRestoreImages() ) );
+	AddMenuItem( TRUE,FALSE,Translate(~Clear Restore Flag~),ACTION EXEC ( <THIS>.OnUnRestoreImages() ) );
+	AddMenuItem( TRUE,FALSE,Translate(~Delete Originals~),ACTION EXEC ( <THIS>.OnDeleteOriginals() ) );
+
+	AddMenuSeparator();
+	AddMenuItem( TRUE,FALSE,Translate(~Remove Complete~),ACTION EXEC ( <THIS>.OnRemoveComplete() ) );
+	AddMenuItem( TRUE,FALSE,Translate(~Remove Rejected~),ACTION EXEC ( <THIS>.OnRemoveRejected() ) );
+
+	AddMenuSeparator();
+	AddMenuItem( TRUE,FALSE,Translate(~Modify settings~),ACTION EXEC ( <THIS>.OnModifySettings() ) );
+
+}
+
+NUMERIC KarsImages::AddControls( position )
+{
+	Define: ExportDataButton Using DDWinCtrlDef AsSymbol ExportDataButton
+		Fields:	GENCONNAME		This
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.ExportSelectedToFile() )
+				POSITION		$position + $hGap, $vGap 60 $ButtonHeight
+				TEXT			Translate( ~Export~ )
+				TOOLTIP			Translate( ~Export data to a text file~ )
+				TYPENAME		BUTTON
+
+	Define: RetouchInstButton Using DDWinCtrlDef AsSymbol RetouchInstButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnRetouchInstructionsButton() )
+				POSITION		ExportDataButton( GetRight,Position ) + $hGap, $vGap 120 $ButtonHeight
+				TEXT			Translate( ~Retouch Instructions~ )
+				TOOLTIP			Translate( ~View the retouching instructions for this image.~ );
+
+	Define: RunBatchButton Using DDWinCtrlDef AsSymbol RunBatchButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnRunBatchButton() )
+				POSITION		RetouchInstButton( GetRight,Position ) + $hGap, $vGap 80 $ButtonHeight
+				TEXT			Translate( ~Run Batch~ )
+				TOOLTIP			Translate( ~Start retouch batch mode for all images that are queued for batch.~ );
+
+	Define: RunReviewButton Using DDWinCtrlDef AsSymbol RunReviewButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnRunReviewButton() )
+				POSITION		RunBatchButton( GetRight,Position ) + $hGap, $vGap 80 $ButtonHeight
+				TEXT			Translate( ~Run Review~ )
+				TOOLTIP			Translate( ~Start retouch review mode for all images that are queued for review.~ );
+
+	Define: RunMergeButton Using DDWinCtrlDef AsSymbol RunMergeButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnRunMergeButton() )
+				POSITION		RunReviewButton( GetRight,Position ) + $hGap, $vGap 80 $ButtonHeight
+				TEXT			Translate( ~Run Merge~ )
+				TOOLTIP			Translate( ~Merge the original image with the retouching changes.~ );
+
+	Define: RunInteractiveButton Using DDWinCtrlDef AsSymbol RunInteractiveButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnRunInteractiveButton() )
+				POSITION		RunMergeButton( GetRight,Position ) + $hGap, $vGap 100 $ButtonHeight
+				TEXT			Translate( ~Run Interactive~ )
+				TOOLTIP			Translate( ~Retouch the image in interactive mode.~ );
+
+	Define: ViewImagesButton Using DDWinCtrlDef AsSymbol ViewImagesButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnViewImages() )
+				POSITION		RunInteractiveButton( GetRight,Position ) + $hGap, $vGap 80 $ButtonHeight
+				TEXT			Translate( ~View Images~ )
+				TOOLTIP			Translate( ~View the images for the selected OrderID.~ );
+
+	return ViewImagesButton( GetRight,Position );
+}
+
+NUMERIC KarsImages::ProcessTextDrop( &Item )	{ return TRUE; }
+
+
+NUMERIC KarsImages::OnAddRecord( &NewRow )
+{
+	NewRow( SetValues,BatchSetup,~~,RetouchState,~~ );
+	NewRow( SetValues,OnBatchComplete,~<BatchComplete>~ );
+	NewRow( SetValues,OverwriteOriginal,<sysOverWrite> );
+	NewRow( SetValues,OriginalPrefix,~<Prefix>~ );
+
+	NewRow( SetValues,OriginalSuffix,~<Suffix>~ );
+
+	NewRow( SetValues,OriginalPath,~<ImgPath>~ );
+
+	NewRow( SetValues,Priority,0 );
+	NewRow( SetValues,JPEGQuality,100, FileResolution,250 );
+	NewRow( SetValues,RotateFromDisk,0, ArbitraryRotation,0, Brt,0, Red,0, Green,0, Blue,0  );
+	NewRow( SetValues,Contrast,0, Saturation,0 );
+	NewRow( SetValues,Gamma,0,GammaRed,0,GammaGreen,0,GammaBlue,0 );
+	NewRow( SetValues,ICCProfile,~~, DefaultProfileUsed,0, OutputProfile,~~, ImageSource,~~ );
+	NewRow( SetValues,ReviewID,~~ );
+	NewRow( SetValues,MergeID,~~, BatchID,~~ );
+	NewRow( SetValues,SubmittedAt,~<$Date.SortableDateTime>~ );
+
+	NewRow( SetValues,IntermediateDataPath,~<DataPath>~ );
+	NewRow( SetValues,AutoBatch,<AutoBatch>,SingleFace,<SingleFace> );
+	return TRUE;
+}
+
+
+NUMERIC KarsImage::AddImageToTable(Order,Roll,Frame)
+{
+	OnAddRecord( &NewRow );
+	NewRow( SetValues, OrderID,~<Order>~, Roll, ~<Roll>~, Frame, ~<Frame>~ );
+	return TRUE;
+}
+
+NUMERIC KarsImages::OnDuplicateRecord( &NewRow )	{ return NewRow( Set,Frame,~~ ); }
+
+
+NUMERIC	KarsImages::OnButtonClickWantFile(Row,Col)
+{ 
+	if ( IsColumnName(<Col>,~OriginalPath~ ) )					{ return FALSE; }
+	if ( IsColumnName(<Col>,~IntermediateDataPath~ ) )			{ return FALSE; }
+	return TRUE;
+}
+
+STR KarsImages::OnButtonClickTitle(Row,Col)
+{
+	if ( IsColumnName(<Col>,~Order~ ) )				{ return Translate(~Order ID for the image.~); }
+	if ( IsColumnName(<Col>,~Roll~ ) )				{ return Translate(~Roll for the image..~); }
+	if ( IsColumnName(<Col>,~Frame~ ) )				{ return Translate(~Frame for the image.~); }
+
+	if ( IsColumnName(<Col>,~BatchSetup~ ) )		{ return Translate(~The setup to use when retouching the image in batch mode.~); }
+	if ( IsColumnName(<Col>,~OnBatchComplete~ ) )	{ return Translate(~Determines if image will be reviewed after batch retouching is complete.~); }
+	if ( IsColumnName(<Col>,~Priority~ ) )			{ return Translate(~The priority of the image for retouch processing.~); }
+
+	if ( IsColumnName(<Col>,~RetouchState~ ) )		{ return Translate(~The current retouching state of the image.~); }
+	if ( IsColumnName(<Col>,~IntermediateDataPath~ ) )	{ return Translate(~Folder where temporary data will be stored~); }
+
+	if ( IsColumnName(<Col>,~OverwriteOriginal~ ) )	{ return Translate(~Replace the original image with the retouched image.~); }
+	if ( IsColumnName(<Col>,~OriginalPrefix~ ) )	{ return Translate(~If the original image is not overwritten, add this prefix to the beginning of the file name~); }
+	if ( IsColumnName(<Col>,~OriginalSuffix~ ) )	{ return Translate(~If the original image is not overwritten, add this suffix to the end of the file name~); }
+	if ( IsColumnName(<Col>,~OriginalPath~ ) )		{ return Translate(~Path to move the original image to.~); }
+
+	if ( IsColumnName(<Col>,~JPEGQuality~ ) )		{ return Translate(~Compression level for JPEG files (100 is best quality).~); }
+	if ( IsColumnName(<Col>,~FileResolution~ ) )	{ return Translate(~The resolution in pixels per inch that would be used by other applications that export postscript~); }
+	if ( IsColumnName(<Col>,~RotateFromDisk~ ) )	{ return Translate(~Rotation applied before retouching.~); }
+	if ( IsColumnName(<Col>,~ArbitraryRotation~ ) )	{ return Translate(~Angle of Rotation applied before retouching.~); }
+	if ( IsColumnName(<Col>,~Brt~ ) )		{ return Translate(~Density applied before retouching.~); }
+	if ( IsColumnName(<Col>,~Red~ ) )		{ return Translate(~Red applied before retouching.~); }
+	if ( IsColumnName(<Col>,~Grn~ ) )		{ return Translate(~Green applied before retouching.~); }
+	if ( IsColumnName(<Col>,~Blu~ ) )		{ return Translate(~Blue applied before retouching.~); }
+	if ( IsColumnName(<Col>,~Contrast~ ) )	{ return Translate(~Contrast applied before retouching.~); }
+	if ( IsColumnName(<Col>,~Saturation~ )) { return Translate(~Saturation applied before retouching.~); }
+	if ( IsColumnName(<Col>,~Gamma~ ) 		{ return Translate(~Gamma applied before retouching.~); }
+	if ( IsColumnName(<Col>,~GammaRed~ ) )	{ return Translate(~GammaRed applied before retouching.~); }
+	if ( IsColumnName(<Col>,~GammaGreen~ ))	{ return Translate(~GammaGreen applied before retouching.~); }
+	if ( IsColumnName(<Col>,~GammaBlue~ ) 	{ return Translate(~GammaBlue applied before retouching.~); }
+	if ( IsColumnName(<Col>,~LUT~ ) )		{ return Translate(~LUT applied before retouching.~); }
+	if ( IsColumnName(<Col>,~ICCProfile~ ))	{ return Translate(~ICCProfile applied before retouching.~); }
+	if ( IsColumnName(<Col>,~ImageFlattened~ )) { return Translate(~Indicates if the image has been saved with retouching data.~); }
+	if ( IsColumnName(<Col>,~OutputProfile~ ))	{ return Translate(~Output Profile applied before retouching.~); }
+	if ( IsColumnName(<Col>,~AutoBatch~ ))	{ return Translate(~If checked, the batch settings will be determined based on the initial image analysis. The batch setup types must be defined for this feature.~); }
+	if ( IsColumnName(<Col>,~SingleFace~ ))	{ return Translate(~If checked, the Auto Batch analysis and settings will be applied to only one face in the image.~); }
+
+	return BaseGrid::OnButtonClickTitle(<Row>,<Col>);
+}
+
+
+NUMERIC KarsImages::OnRetouchInstructionsButton()
+{
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( Translate(~There were no selected items~) ); }
+
+	while ( SelectedItems( GetNext,Item ) )
+	{
+		Actions = ACTION Doc ( RetouchInstrDialog OpenOnce RetouchInstDoc "Init();" );
+		PerformActions( Actions );
+
+		Actions = ACTION Doc ( RetouchInstrDialog "NewImage( ~<$con.Item[OrderID]>~,~<$con.Item[Roll]>~,~<$con.Item[Frame]>~);" );
+		PerformActions( Actions );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC KarsImages::OnRunBatchButton()
+{
+	Actions = ACTION DOC ( RetouchBatchDoc OpenOnce RetouchBatchDoc "Init(FALSE,<RestrictBatchID>);" );
+	PerformActions( Actions );
+
+	return TRUE;	
+}
+
+/*
+//////////////////////////////////////////////////////////////////////////////////////////////
+//  Special handling for Review Queue to choose selected images, selected orders or everything
+//////////////////////////////////////////////////////////////////////////////////////////////
+NUMERIC KarsImages::OnRunReviewButton(fromButton)
+{
+ 	if ( <fromButton> )
+	{
+		X = 600;
+		Y = -2;
+		DefineReviewMenu(<X>,<Y>);
+	}
+	
+	return TRUE;
+}
+
+
+VOID KarsImages::DefineReviewMenu(X,Y)
+{
+	ReviewMenu( New, theMenu );
+	theMenu.DisplayInView( DataView,<X>,<Y> );
+}
+
+
+NUMERIC KarsImages::OnReviewSelected()
+{
+	if ( !DataView( GetSelected,SelectedImages ) )
+		{ return Warning( Translate( ~There are no Images selected~ ) ); }
+
+	Count = SelectedImages( ChildCount );
+
+	if ( <Count> == 0 )
+		{ return Warning( Translate( ~There are no images selected~ ) ); }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	askedOnce = FALSE;
+	changeAll = FALSE;
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		Key = STR ( OrderID = '<$con.Image[OrderID]>' AND Roll = '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>' );
+
+		workstationQuery = ~Select ReviewID from <TableName> Where <Key>~;
+		if ( !dBase(GetValuesFor,~<workstationQuery>~,ReviewStation ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Error checking Workstation for <Key>: <theErr>~ );
+		}
+
+		if ( (~<ReviewStation>~ != ~~) && (~<ReviewStation>~ != ~<$App.ComputerName>.<$App.Instance>~) && !<askedOnce> )
+		{
+			askedOnce = TRUE;
+			msg = Translate( ~At least one image in your selection is assigned to a different workstation for review.\n\nThe first image is <Key>.\n\nDo you want to change the review workstation for all selected images?~ );		
+			if ( MessageBox( ~<msg>~,YESNO ) == YES )
+			{
+				changeAll = TRUE;
+			}
+		}
+
+		if ( <changeAll> )
+		{
+			Cmd = ~Update RetouchImages Set ReviewID='<$App.ComputerName>.<$App.Instance>' Where <Key>~;
+		}
+		else
+		{
+			Cmd = ~Update RetouchImages Set ReviewID='<$App.ComputerName>.<$App.Instance>' Where <Key> AND (ReviewID = '' OR ReviewID Is NULL)~;
+		}
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Update Failed.  <Cmd>.  <theErr>~ );
+			break;
+		}
+	}
+
+	return OnRunReview( FALSE );
+}
+*/
+
+NUMERIC KarsImages::OnSetIDImages( typeID )
+{
+	if ( !DataView( GetSelected,SelectedImages ) )
+		{ return Warning( Translate( ~There are no Images selected~ ) ); }
+
+	Count = SelectedImages( ChildCount );
+
+	if ( <Count> == 0 )
+		{ return Warning( Translate( ~There are no images selected~ ) ); }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+
+	Restrict<typeID> = FALSE;
+	askedOnce		 = FALSE;
+	changeAll		 = FALSE;
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		Key = STR ( OrderID = '<$con.Image[OrderID]>' AND Roll = '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>' );
+
+		idQuery = ~Select <typeID> from <TableName> Where <Key>~;
+		if ( !dBase(GetValuesFor,~<idQuery>~,idStation ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Error checking <typeID> for <Key>: <theErr>~ );
+		}
+
+		if ( (~<idStation>~ != ~~) && (~<idStation>~ != ~<$App.ComputerName>.<$App.Instance>~) && !<askedOnce> )
+		{
+			askedOnce = TRUE;
+			msg = Translate( ~At least one image in your selection is assigned a different ID for <typeID>.\n\nThe first image is <Key>.\n\nDo you want to change the <typeID> for all selected images?~ );		
+			if ( MessageBox( ~<msg>~,YESNO ) == YES )
+			{
+				changeAll = TRUE;
+			}
+		}
+
+		if ( <changeAll> )
+		{
+			Cmd = ~Update RetouchImages Set <typeID>='<$App.ComputerName>.<$App.Instance>' Where <Key>~;
+			Restrict<typeID> = TRUE;
+		}
+		else
+		{
+			Cmd = ~Update RetouchImages Set <typeID>='<$App.ComputerName>.<$App.Instance>' Where <Key> AND (<typeID> = '' OR <typeID> Is NULL)~;
+			Restrict<typeID> = TRUE;
+		}
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Update Failed.  <Cmd>.  <theErr>~ );
+			break;
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC KarsImages::OnSetIDOrders( typeID )
+{
+	if ( !DataView( GetSelected,SelectedImages ) )
+		{ return Warning( Translate( ~There are no Images selected~ ) ); }
+
+	Count = SelectedImages( ChildCount );
+
+	if ( <Count> == 0 )
+		{ return Warning( Translate( ~There are no images selected~ ) ); }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	OrderId			 = ~~;
+	changeAll		 = FALSE;
+	askedOnce		 = FALSE;
+	Restrict<typeID> = FALSE;
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		imgOrderId = ~<$con.Image[OrderID]>~;
+		if ( ~<OrderId>~ != ~<imgOrderId>~ )
+		{
+			Key = ~OrderID = '<imgOrderId>'~;
+			workstationQuery = ~Select <typeID> from <TableName> Where <Key> AND <typeID> <> '<$App.ComputerName>.<$App.Instance>' AND <typeID> <> '' AND <typeID> Is Not NULL~;
+			NumRecs = dBase( RecordCountFor,~<workstationQuery>~ ); 
+
+			if ( <NumRecs> > 0 && !<askedOnce> )
+			{
+				askedOnce = TRUE;
+				msg = Translate( ~<NumRecs> or more images in your selection are assigned to a different IDs for <typeID>.\n\nDo you want to change the <typeID> for all images in the selected Order(s)?~ );		
+				if ( MessageBox( ~<msg>~,YESNO ) == YES )
+				{
+					changeAll = TRUE;
+				}
+			}
+
+			if ( <changeAll> )
+			{
+				Cmd = ~Update RetouchImages Set <typeID>='<$App.ComputerName>.<$App.Instance>' Where <Key>~;
+				Restrict<typeID> = TRUE;
+			}
+			else
+			{
+				Cmd = ~Update RetouchImages Set <typeID>='<$App.ComputerName>.<$App.Instance>' Where <Key> AND (<typeID> = '' OR <typeID> Is NULL)~;
+				Restrict<typeID> = TRUE;
+			}
+
+			if ( !dBase( CMD,~<Cmd>~ ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				Warning( ~Update Failed.  <Cmd>.  <theErr>~ );
+				break;
+			}
+			OrderId = ~<imgOrderId>~;
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC KarsImages::OnReviewOrders()
+{
+
+	if ( !DataView( GetSelected,SelectedImages ) )
+		{ return Warning( Translate( ~There are no Images selected~ ) ); }
+
+	Count = SelectedImages( ChildCount );
+
+	if ( <Count> == 0 )
+		{ return Warning( Translate( ~There are no images selected~ ) ); }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	OrderId = ~~;
+	changeAll = FALSE;
+	askedOnce = FALSE;
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		imgOrderId = ~<$con.Image[OrderID]>~;
+		if ( ~<OrderId>~ != ~<imgOrderId>~ )
+		{
+			Key = ~OrderID = '<imgOrderId>'~;
+			workstationQuery = ~Select ReviewID from <TableName> Where <Key> AND ReviewID <> '<$App.ComputerName>.<$App.Instance>' AND ReviewID <> '' AND ReviewID Is Not NULL~;
+			NumRecs = dBase( RecordCountFor,~<workstationQuery>~ ); 
+
+			if ( <NumRecs> > 0 && !<askedOnce> )
+			{
+				askedOnce = TRUE;
+				msg = Translate( ~<NumRecs> or more images in your selection are assigned to a different workstation for review.\n\nDo you want to change the review workstation for all images in the selected Order(s)?~ );		
+				if ( MessageBox( ~<msg>~,YESNO ) == YES )
+				{
+					changeAll = TRUE;
+				}
+			}
+
+			if ( <changeAll> )
+			{
+				Cmd = ~Update RetouchImages Set ReviewID='<$App.ComputerName>.<$App.Instance>' Where <Key>~;
+			}
+			else
+			{
+				Cmd = ~Update RetouchImages Set ReviewID='<$App.ComputerName>.<$App.Instance>' Where <Key> AND (ReviewID = '' OR ReviewID Is NULL)~;
+			}
+
+			if ( !dBase( CMD,~<Cmd>~ ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				Warning( ~Update Failed.  <Cmd>.  <theErr>~ );
+				break;
+			}
+			OrderId = ~<imgOrderId>~;
+		}
+	}
+
+	return OnRunReview( FALSE );
+}
+
+
+NUMERIC KarsImages::OnRunReviewButton()
+{
+	Actions = ACTION DOC ( RetouchReviewDoc OpenOnce RetouchReviewDoc "Init( <RestrictReviewID> );" );
+	PerformActions( Actions );
+
+	return TRUE;	
+}
+
+
+NUMERIC KarsImages::OnRunMergeButton()
+{
+	Actions = ACTION DOC ( RetouchMergeDoc OpenOnce RetouchMergeDoc "Init(FALSE,<RestrictMergeID>);" );
+	PerformActions( Actions );
+
+	return TRUE;	
+}
+
+
+NUMERIC KarsImages::OnRunInteractiveButton()
+{
+	if ( !DataView( GetSelected,SelectedImages ) )
+		{ return Warning( Translate(~There are no images selected~) ); }
+
+	Count = 0;
+
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		Actions = ACTION DOC ( RetouchInteractiveDoc OpenOnce RetouchInteractiveDoc "Init(~<$con.Image[OrderID]>~,~<$con.Image[Roll]>~,~<$con.Image[Frame]>~);" );
+		PerformActions( Actions );
+	}
+
+	return TRUE;	
+}
+
+
+NUMERIC  KarsImages::OnViewImages()
+{
+	maxQueryLength = 1400;
+
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( Translate(~There were no selected items~) ); }
+
+	Count = SelectedItems( ChildCount );
+
+	imageCount = 0;
+	queryLength = 0;
+	maxQueryString = <maxQueryLength> - 35;
+	Order = ~~;
+
+	if ( <Count> > 1 )
+	{
+		criteriaList = ~Select * from Images Where (~;
+		while ( SelectedItems( GetNext,Image ) && <queryLength> < <maxQueryString> )
+		{
+			if ( ~<criteriaList>~ == ~Select * from Images Where (~ )
+			{
+				criteriaList = ~<criteriaList> OrderID = '<$con.Image[OrderID]>' AND ((Roll = '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>')~;
+			}
+			else if (~<$con.Image[OrderID]>~ != ~<Order>~ )
+			{
+				criteriaList = ~<criteriaList>)) OR (OrderID = '<$con.Image[OrderID]>' AND ((Roll = '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>')~;
+			}
+			else
+			{
+				criteriaList = ~<criteriaList> OR (Roll = '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>')~;
+			}
+			Order = ~<$con.Image[OrderID]>~;
+			imageCount = <imageCount> + 1;
+			queryLength = strlen( ~<criteriaList>~ );
+		}
+		criteriaList = ~<criteriaList>))~;
+
+		if ( <queryLength> > <maxQueryString> && <imageCount> < <Count> )
+		{
+			Log( Session,~query for <imageCount> images is:<criteriaList>~ );
+
+			Msg = ~You can select up to <imageCount> individual images\nor the selected Order(s).\n\nPlease indicate your selection.~;
+
+			GenCon( MbInfo,New,DDCustomMessageBox );
+			MbInfo( SetValues,Title,Translate(~Auto Retouch Data~),Message,~<Msg>~,
+						Button1,Translate(~&Orders~),Button2,Translate(~&<imageCount> Images~),Button3,Translate(~&Cancel~),
+						SetWindowPos,1,X,-1,Y,-1,Width,325,Height,215 ) ;
+			result = CustomMessageBox(MbInfo);
+			button = MbInfo(GetNumeric, ButtonPressed);
+			if ( <result> == 2 || <button> == 3 )	// result = 2 when X in dialog is pressed
+			{
+				return FALSE;	
+			}
+			else if ( <button> == 1 )
+			{
+				if ( !DataView( GetSelected,SelectedItems ) )
+				{
+					return FALSE;
+				}
+				if ( !SelectedItems( MakeSQLList,OrderList,TRUE,OrderID ) )
+				{
+					return FALSE;
+				}
+
+				JoinOn = ~Images.OrderID = RetouchImages.OrderID AND Images.Roll = RetouchImages.Roll And Images.Frame = RetouchImages.Frame~;
+				criteriaList = ~Select Images.* From Images Inner Join RetouchImages On (<JoinOn>)~;
+				if ( ~<OrderList>~ != ~~ ) 
+				{
+					criteriaList = ~<criteriaList> WHERE RetouchImages.OrderID In (<OrderList>)~;
+				}
+
+				Actions = ACTION DOC ( ImagesDoc OpenOnce ImagesDoc "Init( ~~,1,~<criteriaList>~,0 );" );
+				return PerformActions( Actions );
+			}
+		}
+		Actions = ACTION DOC ( ImagesDoc OpenOnce ImagesDoc "Init( ~<$con.Image[OrderID]>~,1,~<criteriaList>~,0 );" );
+		return PerformActions( Actions );
+	}
+	else if ( <Count> == 1 && Defined(SelectedItems) )	
+	{
+		if ( SelectedItems( GetFirst,Image ) )
+		{
+			criteriaList = ~Select * from Images WHERE OrderID = '<$con.Image[OrderID]>' AND Roll = '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>'~;
+			Actions = ACTION Doc ( ImagesDoc OpenOnce ImagesDoc "Init( ~<$con.Image[OrderID]>~,1,~<criteriaList>~,0 );" );
+			return PerformActions( Actions );
+		}
+		else
+		{
+			return Warning( Translate( ~Unabled to retrieve Auto Retouch data for selected image.~ ) );
+		}
+	}
+	else
+	{
+		return Warning( Translate( ~No images were selected.~ ) );
+	}
+	return FALSE;
+}
+
+	
+NUMERIC  KarsImages::OnRestoreImages()
+{
+	if ( !DataView( GetSelected,SelectedImages ) )
+		{ return Warning( Translate( ~There are no Images selected~ ) ); }
+
+	Count = SelectedImages( ChildCount );
+
+	if ( <Count> == 0 )
+		{ return Warning( Translate( ~There are no images selected~ ) ); }
+
+	if ( !DefinedAndNotNull(DontAsk) )
+	{
+		if ( MessageBox( Translate( ~Are you sure you want to restore the originals for the <count> selected images? ~ ),YESNO ) == NO )
+			{ return TRUE; }
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		Key = STR ( OrderID = '<$con.Image[OrderID]>' AND Roll = '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>' );
+
+		Cmd = ~Update RetouchImages Set RestoreOriginal=1 Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Update Failed.  <Cmd>.  <theErr>~ );
+			break;
+		}
+	}
+
+	Actions = ACTION DOC ( RetouchRestoreDoc OpenOnce RetouchRestoreDoc "Init(FALSE);" );
+	PerformActions( Actions );
+	return TRUE;
+}
+
+
+NUMERIC  KarsImages::OnUnRestoreImages()
+{
+	if ( !DataView( GetSelected,SelectedImages ) )
+		{ return Warning( Translate( ~There are no Images selected~ ) ); }
+
+	Count = SelectedImages( ChildCount );
+
+	if ( <Count> == 0 )
+		{ return Warning( Translate( ~There are no images selected~ ) ); }
+
+	if ( !DefinedAndNotNull(DontAsk) )
+	{
+		if ( MessageBox( Translate( ~Are you sure you want to clear the Restore Originals flag for the <count> selected images? ~ ),YESNO ) == NO )
+			{ return TRUE; }
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		Key = STR ( OrderID = '<$con.Image[OrderID]>' AND Roll = '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>' );
+
+		Cmd = ~Update RetouchImages Set RestoreOriginal=0 Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Update Failed.  <Cmd>.  <theErr>~ );
+			break;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC KarsImages::OnClearID( typeID )
+{
+	if ( !DataView( GetSelected,SelectedImages ) )
+		{ return Warning( Translate( ~There are no Images selected~ ) ); }
+
+	Count = SelectedImages( ChildCount );
+
+	if ( <Count> == 0 )
+		{ return Warning( Translate( ~There are no images selected~ ) ); }
+
+	if ( !DefinedAndNotNull(DontAsk) )
+	{
+		if ( MessageBox( Translate( ~Are you sure you want to clear the <typeID> field for the <count> selected images? ~ ),YESNO ) == NO )
+			{ return TRUE; }
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	Restrict<typeID> = FALSE;
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		Key = STR ( OrderID = '<$con.Image[OrderID]>' AND Roll = '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>' );
+
+		Cmd = ~Update RetouchImages Set <typeID>='' Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Update Failed.  <Cmd>.  <theErr>~ );
+			break;
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC KarsImages::OnModifySettings()
+{
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( Translate(~There were no selected items~) ); }
+
+	WaitCursor( Begin );
+	Order = ~~;
+	warnedOnce = FALSE;
+	UsingBatchSetupDlg = FALSE;
+
+	while ( SelectedItems( GetNext,Image ))
+	{
+		if ( ~<Order>~ == ~~ )
+		{
+			Order = ~<$con.Image[OrderID]>~;
+		}
+
+		if (~<$con.Image[OrderID]>~ != ~<Order>~ )
+		{
+			if ( !<warnedOnce> )
+			{
+				Warning( ~The settings for images from only one order can be modified at a time.~ );			
+				warnedOnce = TRUE;
+				WaitCursor( Begin );
+			}
+		}
+		else
+		{
+			UsingBatchSetupDlg = TRUE;
+			Actions = ACTION Doc ( RetouchBatchConfigDlg OpenOnce RetouchBatchConfigDlg "Init( ~<Order>~ ,~<$con.Image[Roll]>~,~<$con.Image[Frame]>~ );" );
+			PerformActions( Actions );
+			WaitCursor( Begin );
+		}
+	}
+
+	if ( <UsingBatchSetupDlg> )
+	{
+		Actions = ACTION Doc ( RetouchBatchConfigDlg OpenOnce RetouchBatchConfigDlg "OnAddImagesComplete();" );
+		PerformActions( Actions );
+	}
+
+	WaitCursor( End );
+	return TRUE;
+}
+
+
+NUMERIC KarsImages::UpdateBatchSetupCombo( &ColumnDefinition,row,col )
+{
+	Query = ~Select Name From RetouchBatchSetup Order By Name~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	List( MakeStringList,Setups,Name );
+
+	
+	return UpdateComboBox( ColumnDefinition,Setups,BatchSetup );
+}
+
+
+NUMERIC KarsImages::OnStopButton()
+{
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( Translate(~There were no selected items~) ); }
+
+	while ( SelectedItems( GetNext,Item ) )
+	{
+		// Do something( ~<$con.Item[<WhichPath>]>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC  KarsImages::OnRemoveComplete()
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	Key = STR ( RetouchState = 'Complete' );
+
+	recordQuery = ~Select RetouchState from <TableName> Where <Key>~;
+	NumRecs = dBase( RecordCountFor,~<recordQuery>~ ); 
+	if ( MessageBox( Translate( ~Are you sure you want to remove <NumRecs> records marked as Complete? ~ ),YESNO ) == NO )
+		{ return TRUE; }
+
+	Cmd = ~Delete from RetouchImages Where <Key>~;
+
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Update Failed.  <Cmd>.  <theErr>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC  KarsImages::OnRemoveRejected()
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	Key = STR ( RetouchState = 'Rejected' );
+	recordQuery = ~Select RetouchState from <TableName> Where <Key>~;
+	NumRecs = dBase( RecordCountFor,~<recordQuery>~ ); 
+
+	if ( MessageBox( Translate( ~Are you sure you want to remove <NumRecs> records marked as Rejected? ~ ),YESNO ) == NO )
+		{ return TRUE; }
+
+	Cmd = ~Delete from RetouchImages Where <Key>~;
+
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Delete Failed.  <Cmd>.  <theErr>~ ) );
+	}
+
+	return TRUE;
+}
+
+NUMERIC	KarsImages::OnDeleteOriginals()
+{
+	if ( !DataView( GetSelected,SelectedImages ) )
+		{ return Warning( Translate( ~There are no Images selected~ ) ); }
+
+	Count = SelectedImages( ChildCount );
+
+	if ( <Count> == 0 )
+		{ return Warning( Translate( ~There are no images selected~ ) ); }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~Could not connect to the database. <theErr>~) );
+	}
+
+	while ( SelectedImages( GetNext,Item ) ) 
+	{
+		if ( ~<$con.Item[RetouchState]>~ == ~Complete~ && ~<$con.Item[OverwriteOriginal]>~ == ~0~ )
+		{
+			DeleteKPARSImageOriginal( dBase,~<$con.Item[OrderID]>~,~<$con.Item[Roll]>~,~<$con.Item[Frame]>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC KarsImages::RefreshListView()
+{
+	BaseGrid::RefreshListView();
+
+	kparsCredits = 0;
+	dongleError = 0;
+	kparsCredits = CheckKparsDongle(dongleError);
+	if ( <dongleError> == 0 )
+	{
+		StatusBar( Translate(~Retouch Credits:<kparsCredits>~) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC Init(theTitle,whereClause)
+{
+	if ( Defined(KarsGrid) )
+	{
+		TableName = KarsGrid.Get( TableName );
+		KarsGrid.Set( DocumentQuery,~Select * from <TableName> <whereClause> Order By RetouchState,Priority DESC,OrderID,Roll,Frame ~ );
+		KarsGrid.ReOpen();
+		KarsGrid.RefreshListView();
+		return TRUE;
+	}
+
+	KarsImages( New,KarsGrid,~<whereClause>~ );
+
+	Title = Translate( ~<theTitle>~ == ~~ ? ~Retouch Images~  : ~<theTitle>~ );
+	KarsGrid.Set(Title,~<Title>~ );
+
+	KarsGrid.DefineWindow();
+	KarsGrid.Init();
+
+	GetSystemSettings( ~AutoRetouching~,~LowCreditWarning~,lowCredits,Enabled );
+	if ( !IsNULL( ~<lowCredits>~ ))
+	{
+		credits = 0;
+		credits = CheckKparsDongle(dongleError);
+		if ( <credits> < atof( ~<lowCredits>~ ) )
+		{
+			Warning( Translate( ~<credits> Retouch Credits Remaining. Please order addtional retouch credits.~ ) );
+		}	
+		KarsGrid.StatusBar( ~Retouch Credits: <credits>~ );
+	}
+
+	Global( KarsGrid );
+
+	return TRUE;
+}
+

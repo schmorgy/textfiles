@@ -1,0 +1,244 @@
+Include: ~FormattingRoutines~;
+
+IncludeClass( BaseGrid );
+
+Class( Merge,Extends,BaseGrid,
+		Member,fID,Str,~<ID>~ );
+
+
+VOID Merge::Merge()					
+{
+	TableName = ~RImageMerge~;
+	WindowTop = 60;
+	WindowWidth = 90;
+	WindowHeight = 30;
+	HelpPage = ~LabelData.htm~;
+}
+
+STR Merge::GetKey( &Item )					// PRIMARY KEY FOR THE TABLE
+{
+	return ~ID = '<$con.Item[ID]>' AND FieldNumber = <$con.Item[FieldNumber]>~;
+}
+
+
+NUMERIC Merge::ChangeRecordAudits( &Changed )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[ID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  ID cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[FieldNumber]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  FieldNumber cannot be blank.~ ) ); }
+
+	return TRUE;
+}
+
+
+NUMERIC Merge::OnAddRecord( &NewRow )
+{
+	NewRow( Set,ID,~<fID>~ );
+	
+	return TRUE;
+}
+
+
+NUMERIC Merge::OnUseMacro()
+{
+	ControlView( GetControlValue,MacrosComboBox,Name );
+
+	if ( IsNull( ~<Name>~ ) )
+	{
+		return Warning( Translate(~You have not selected a macro to use~) );
+	}
+	
+	numTokens = GetTokens( ~<Name>~,~ ~,Subject,theFieldName );
+	
+	if ( SimilarStr( ~<Subject>~,~Subjects~ ) )
+	{
+		Invoke = STR ( <$@Func.SubjectField(`<InfoType>`,`<SubjectInfoOrderID>`,`<SubjectID>`,`<theFieldName>`)> ); 
+	}
+	else if ( !ADO( dBase,Connect,GetValuesFor,~Select Activate from RImageMacros Where Name = '<Name>'~,Invoke ) )
+	{
+		List( GetErrorDescription,theErr );
+		return Warning( Translate(~Failed to find the Activation string for Macro <Name>.  <theErr>~) );
+	}
+
+	CopyContentsToClipboard(Invoke);
+
+	StatusBar( ~The macro '<Name>' is now in your paste buffer. Select an insertion point in the appropriate Data field and type ctrl-v to paste~ );
+
+	return TRUE;
+}
+
+NUMERIC Merge::UpdateMacrosList()
+{
+	ControlView( GetControlValue,CategoryComboBox,Category );
+
+	Query = ~Select Name From RImageMacros Where Category = '<Category>' Order By Name~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	List( MakeStringList,Macros,Name );
+	
+	GetTokens( ~<Category>~,~ ~,SubjectCategory,InfoType );
+	
+	if ( SimilarStr( ~<SubjectCategory>~,~SubjectInfo~ ) )
+	{
+		List( GetConnection,connection );
+		
+		Query = ~Select * From SubjectInfo<InfoType>~;
+	
+		if ( !PGenConList( SubjectList,Connect,Cursor,Forward,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+		{
+			SubjectList( GetErrorDescription,0,theErr );
+			return Warning( ~Failed to Query.  <theErr>~ );
+		}
+
+		Index = 0;
+		while ( SubjectList( FieldInfo,<Index++>,Name,theFieldName ) )
+		{
+			ContinueIf( SimilarStr( ~<theFieldName>~,~OrderID~,~SubjectID~ ) );
+			Macros( AddString,~Subjects <theFieldName>~ ); 
+		}
+	}   
+
+	return ControlView( SetControlFromStringList,MacrosComboBox,Macros );
+}
+
+
+NUMERIC Merge::UpdateCategoriesList()
+{
+	Query = ~Select Distinct Category From RImageMacros Order By Category~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	List( MakeStringList,Macros,Category );
+	
+	List( GetConnection,connection );
+	
+	if ( !PGenConList( SchemaList,Connection,connection,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		return Warning( ~Schema query failed  <theErr>~ ) );
+	}
+	
+	SchemaList( Filter,~Table_Name Like 'SubjectInfo%'~ );
+	SchemaList( Sort,~Table_Name~ );
+
+	while ( SchemaList( GetNext,Table ) )
+	{
+		theTableName = ~<$pcon.Table[TABLE_NAME]>~;
+		
+		if ( !SimilarStr( ~<theTableName>~,~SubjectInfoColumns~ ) )
+		{
+			substr( ~<theTableName>~,strlen(~SubjectInfo~),99,theType);
+			theType = IsNull(~<theType>~) ? ~SubjectInfo~ : ~SubjectInfo <theType>~;
+			Macros( AddString,~<theType>~ );
+		}
+	}
+
+	ControlView( SetControlFromStringList,CategoryComboBox,Macros );
+
+	return UpdateMacrosList();
+}
+
+NUMERIC Merge::AddControls( position )
+{		
+	Define: CategoryStatic Using DDWinCtrlDef AsSymbol  CategoryStatic Private
+		Fields:	TYPENAME		StaticText
+				POSITION		$position + $hGap, $vGap+3 50 $ButtonHeight
+				RIGHTJUSTIFIED	TRUE
+				TEXT			Translate( ~Category~ )
+
+	Define: CategoryComboBox Using DDWinCtrlDef AsSymbol CategoryComboBox  Private
+		Fields: TypeName        ComboBox  
+				Position		CategoryStatic(GetRight,Position) + $hGap*2, $vGap,150,120
+				DropDownActionsText	ACTION EXEC ( <THIS>.UpdateCategoriesList() )
+				DActionsText	ACTION EXEC ( <THIS>.UpdateMacrosList() )
+				OActionsText	ACTIONS ( Save )
+				GenConName		THIS
+				GenConField		~Category~
+				Mask			~<$[DATABASE FieldTypes].ScanSetupName[Mask]>~
+				PromptChar		~<$[DATABASE FieldTypes].ScanSetupName[PromptChar]>~
+				AllowedChars	~<$[DATABASE FieldTypes].ScanSetupName[AllowedChars]>~
+				DisallowedChars ~<$[DATABASE FieldTypes].ScanSetupName[DisallowedChars]>~
+				Tooltip			~Select a category of macros~
+
+	Define: MacroStatic Using DDWinCtrlDef AsSymbol  MacroStatic Private
+		Fields:	TYPENAME		StaticText
+				Position		CategoryComboBox(GetRight,Position) + $hGap, CategoryStatic(GetTop,Position),40,$ButtonHeight
+				RIGHTJUSTIFIED	TRUE
+				TEXT			Translate( ~Macro~ )
+
+	Define: MacrosComboBox Using DDWinCtrlDef AsSymbol MacrosComboBox  Private
+		Fields: TypeName        ComboBox  
+				Position		MacroStatic(GetRight,Position) + $hGap*2, CategoryComboBox(GetTop,Position),150,120
+				//IActionsText	ACTION EXEC ( <THIS>.UpdateMacrosList() )
+				DropDownActionsText	ACTION EXEC ( <THIS>.UpdateMacrosList() )
+				DActionsText	ACTIONS ( Save )
+				OActionsText	ACTIONS ( Save )
+				GenConName		THIS
+				GenConField		~Template~
+				Mask			~<$[DATABASE FieldTypes].ScanSetupName[Mask]>~
+				PromptChar		~<$[DATABASE FieldTypes].ScanSetupName[PromptChar]>~
+				AllowedChars	~<$[DATABASE FieldTypes].ScanSetupName[AllowedChars]>~
+				DisallowedChars ~<$[DATABASE FieldTypes].ScanSetupName[DisallowedChars]>~
+				Tooltip			~Select a predefined Macro from this list and then press the Copy button.~
+
+	Define: UseMacroButton Using DDWinCtrlDef AsSymbol  UseMacroButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnUseMacro() )
+				Position		MacrosComboBox(GetRight,Position) + $hGap*2, MacrosComboBox(GetTop,Position),50,$ButtonHeight
+				TEXT			Translate( ~Copy~ )
+				TOOLTIP			Translate( ~Press this button to copy the macro into your paste buffer.  Then use ctrl-v to paste it into one of the Data fields below.~ );
+
+	Define: ViewMacrosButton Using DDWinCtrlDef AsSymbol  ViewMacrosButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.ViewMacros() )
+				POSITION		UseMacroButton(GetRight,Position)+$hGap, UseMacroButton(GetTop,Position) 20 $ButtonHeight
+				TEXT			Translate( ~?~ )
+				TOOLTIP			Translate( ~View the list of Label Macros~ );
+
+	return MacrosComboBox( GetRight,Position );
+}
+
+NUMERIC Merge::ViewMacros()
+{
+	Actions = ACTION Doc ( ~RImageMacrosDoc~ OpenOnce RImageMacrosDoc "Init();" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC Merge::InitComplete()		{ return UpdateCategoriesList(); }
+
+
+NUMERIC Init( ID,Query )
+{
+	if ( Defined( Grid ) )
+	{
+		Grid.Set( DocumentQuery,~<Query>~ );
+		Grid.Set( fID,~<ID>~ );
+		Grid.Set( Title,~Label Data for Job - <ID>~ );
+		Grid.RefreshListView();
+		return Grid.ReOpen();
+	}
+
+	Merge( New,Grid );
+
+	Grid.Set( fID,~<ID>~ );
+	Grid.Set( DocumentQuery,~<Query>~ );
+	Grid.Set( Title,Translate(~Label Data for Job - <ID>~) );
+
+	Grid.DefineWindow();
+	Grid.Init();
+
+	return Global( Grid );
+}
+

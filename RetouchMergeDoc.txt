@@ -1,0 +1,300 @@
+
+IncludeClass( KarsDialog );
+
+VOID MergeDlg::MergeDlg()					// CONSTRUCTOR
+{
+	KarsType		= ~Merge~;
+	NextProcess		= ~Complete~;
+	BeginState		= ~QueuedFor<KarsType>~;
+	InProcessState	= ~In<KarsType>~;
+	CompleteState	= ~<NextProcess>~;
+	Sort			= ~<KarsType>ID Desc,Priority Desc, SubmittedAt,OrderID,Roll,Frame~;
+	Key				= ~RetouchState = '<BeginState>'~;
+	BaseKey			= ~RetouchState = '<BeginState>'~;
+	Left			= 515;
+	GoButtonToolTip = Translate( ~Run the background Retouch <KarsType> process.~ );
+	Title			= Translate( ~Retouching <KarsType> operation~ );
+	Fields1			= ~*~;
+	Query			= ~SELECT <Fields1> FROM <MasterTable> WHERE <Key> ORDER BY <Sort>~;
+}
+
+/*
+NUMERIC MergeDlg::DefineControls()
+{
+	Define: Select<KarsType>IDPrompt Using DDWinCtrlDef AsSymbol Select<KarsType>IDPrompt
+		Fields:	TYPENAME			StaticText
+				TEXT				~Order ID~
+				RIGHTJUSTIFIED		TRUE
+				POSITION			<hgap> <vGap> * 2 <ButtonWidth> <ButtonHeight>;
+
+	Define: <KarsType>IDComboBox Using DDWinCtrlDef AsSymbol <KarsType>IDComboBox Private
+		Fields:	TYPENAME			ComboBox
+				POSITION			Select<KarsType>IDPrompt(GetRight,Position) + <hGap> <vGap> <ButtonWidth> * 3 <ButtonHeight> * 3
+				LEFTJUSTIFIED		TRUE
+				GENCONNAME			THIS
+				GENCONFIELD			Selected<KarsType>ID
+				DropDownActionsText	ACTION EXEC ( <THIS>.OnRefreshID(<KarsType>ID) )
+				DActionsText		ACTIONS ( Save )
+				OActionsText		ACTIONS ( Save )
+				TOOLTIP				Translate( ~Select the ID for processing in the <KarsType> Queue.~ )
+				
+	return KarsDialog::DefineControls();
+}
+*/
+
+VOID MergeDlg::EnableIDControl( value )
+{
+	dlg( EnableControls,<value>,<KarsType>IDComboBox );
+	
+}
+
+NUMERIC MergeDlg::SetupOperation()
+{
+//	credits = 0;
+//	dongleError = 0;
+//	credits = CheckKparsDongle(dongleError);
+//	StatusBar( 1,Translate( ~Credits: <credits>~ ) );
+//	if ( <credits> <= 0 && (<dongleError> == 0 || <dongleError> == <DONGLE_NO_CREDITS> || <dongleError> == <DONGLE_INIT_ERROR> ) )
+	if ( <credits> <= 0 )
+	{
+		Msg = ~The merge queue has stopped due to no retouch credits remaining.~;
+		dlg( SetControlValue,CurrentImageText,Translate( ~<Msg>~ ) );
+		dlg( SetControlTitle, StopButton, Translate( ~Restart~ ) );
+		fStopPending = TRUE;
+	}
+
+	result = KarsDialog::SetupOperation();
+
+	if ( <result> == <ERROR_ON_SETUP> )
+	{
+		return ExitOnError();
+	}
+
+	if ( <result> == <WAIT_ON_SETUP> )
+	{
+		return TRUE;
+	}
+	
+	<KarsType>PreprocessData( SetValues,CompleteNotification,~<THIS>.OnComplete(%d,%ld);~ );
+
+	if ( !RunOperation( ~<Order>~,~<Roll>~,~<Frame>~ ) )
+	{
+		Actions = STR ( <THIS>.SetupOperation(); );
+		QueueContentsAfter( Actions,2000 );
+	}
+
+	return TRUE;
+}
+
+NUMERIC MergeDlg::RunOperation( Order,Roll,Frame )
+{
+	if ( !Defined( Kpars ) )
+	{
+		KparsConnect( ~Batch~ );
+	}
+
+//	credits = 0;
+//	dongleError = 0;
+//	credits = CheckKparsDongle(dongleError);
+//	StatusBar( 1,Translate( ~Credits: <credits>~ ) );
+	StatusBar( 0,Translate( ~Processing image in <KarsType>.~ ) );
+
+	if ( !Kpars( Initialize,<KarsType>PreprocessData ) )
+	{
+		ErrMsg = Translate( ~Unable to initialize the retouching software interface.~ );
+		fExitOnComplete = TRUE;
+		StatusBar( 0,~<ErrMsg>~ );
+		return Warning( Translate( ~<ErrMsg>~ ) );
+	}
+
+	GenCon( Control,IsCopyOf,<KarsType>PreprocessData,PERMANENT );
+	if ( !Kpars( ~Run<KarsType>~,Control ) )
+	{
+		ErrMsg = Translate( ~Unable to run the <KarsType> retouching software interface.~ );
+		dlg( SetStatus,0,~Unable to initialize the retouching software interface~ );
+		fExitOnComplete = TRUE;
+		StatusBar( 0,~<ErrMsg>~ );
+		return Warning( Translate( ~<ErrMsg>~ ) );
+	}
+	return TRUE;	
+}
+
+NUMERIC MergeDlg::OnComplete( Status,ControlAddr )
+{
+	GenCon( ControlInfo, Is, <ControlAddr>, TEMPORARY );
+	ControlInfo( GetValues,OrderID,Order,Roll,Roll,Frame,Frame );
+
+	if ( <Status> == 1 )
+	{
+		txtMsg = ~Completed <KarsType> processing for <Order>,<Roll>,<Frame>.~;
+		dlg( SetControlValue,CurrentImageText,Translate( ~<txtMsg>~ ) );
+		RemakeItemsUsing(~<Order>~,~<Roll>~,~<Frame>~ );
+		StatusBar( 0,Translate( ~<KarsType> Complete~ ) );
+	}
+	else if ( <Status> == 2 )
+	{
+		txtMsg = ~<KarsType> Retouch processing failed to acquire credits for <Order>,<Roll>,<Frame>.~;
+		dlg( SetControlValue,CurrentImageText,Translate( ~<txtMsg>~ ) );
+		Log( Session, ~<txtMsg>~ );
+		StatusBar( 0,Translate( ~<KarsType> Dongle Error~ ) );
+	}
+	else if ( <Status> == 3 )
+	{
+		txtMsg = ~<KarsType> Retouch processing failed for <Order>,<Roll>,<Frame>.~;
+		dlg( SetControlValue,CurrentImageText,Translate( ~<txtMsg>~ ) );
+		Log( Session, ~<txtMsg>~ );
+		StatusBar( 0,Translate( ~<KarsType> Error~ ) );
+	}
+
+//	StatusBar( 0,Translate( ~<KarsType> Complete~ ) );
+
+//	Log( Session, ~**** Checking for available KPARS credits~ );
+	credits = 0;
+	dongleError = 0;
+	credits = CheckKparsDongle(dongleError);
+	StatusBar( 0,Translate( ~<KarsType> Complete for <Order>,<Roll>,<Frame>~ ) );
+	StatusBar( 1,Translate( ~Credits: <credits>~) );
+
+	if ( !IsNULL( ~<sysLowCreditSetting>~ ) )
+	{
+		if ( <credits> < atof( ~<sysLowCreditSetting>~ )  && !<fWarnedLowCredits> && (<dongleError> == 0 || <dongleError> == <DONGLE_NO_CREDITS> ))
+		{
+			Warning( Translate( ~<credits> Retouch Credits Remaining. Please order addtional retouch credits.~ ) );
+			fWarnedLowCredits = TRUE;
+		}
+		else
+		{
+			Actions = STR ( <THIS>.SetupOperation(); );
+			QueueContentsAfter( Actions,200 );
+			return TRUE;
+		}
+	}
+
+	if ( <credits> > 0 )
+	{
+		Actions = STR ( <THIS>.SetupOperation(); );
+		QueueContentsAfter( Actions,200 );
+		return TRUE;
+	}
+
+	Msg = ~The merge queue has stopped due to no retouch credits remaining.~;
+	Log( Session,~<Msg>~ );
+	dlg( SetControlValue,CurrentImageText,Translate( ~<Msg>~ ) );
+	dlg( SetControlTitle, StopButton, Translate( ~Restart~ ) );
+	fStopped = TRUE;
+	fStopPending = TRUE;
+	return Warning( Translate( ~There are no retouch credits remaining. The merge queue has been stopped.~ ) );
+}
+
+
+NUMERIC MergeDlg::ExitOnError()
+{
+	ForgetPrivate( Kpars );
+	ForgetPrivate( <KarsType>PreprocessData );
+
+	dlg( End );
+	ForgetGlobal( <THIS> );
+
+	return FALSE;
+}
+
+VOID MergeDlg::DoStopButton()
+{
+	if ( <fStopPending> && <fStopped> )
+	{
+		credits = 0;
+		dongleError = 0;
+		credits = CheckKparsDongle(dongleError);
+		if ( <credits> <= 0 && (<dongleError> == 0 || <dongleError> == <DONGLE_NO_CREDITS>) )
+		{
+			Warning( Translate( ~<credits> Retouch Credits Remaining. Please order addtional retouch credits.~ ) );
+			return;
+		}	
+		StatusBar( 1,~Credits: <credits>~ );
+	}
+
+	KarsDialog::DoStopButton();
+}
+
+VOID Init(StartNow,Restricted)
+{
+	AutoStart = FALSE;
+	if ( DefinedAndNotNull( StartNow ) )
+	{
+		AutoStart = <StartNow>;
+	}
+
+	HereOnly = FALSE;
+	if ( DefinedAndNotNull( Restricted ) )
+	{
+		HereOnly = <Restricted>;
+	}
+
+	if ( !Defined( KarsMerge ) )
+	{
+		Class( MergeDlg,Extends,KarsDialog,
+						Member,Order,Str,~~,
+						Member,Roll,Str,~~,
+						Member,Frame,Str,~~,
+						Member,credits,Numeric,1 );
+
+		MergeDlg( New,KarsMerge );
+
+		KarsMerge.DefineDictionary();
+		KarsMerge.DefineDialog();
+		KarsMerge.InitDictionaryData();
+
+		if ( <HereOnly> )
+		{
+			localKey = ~<BaseKey> And (MergeID='<$App.ComputerName>.<$App.Instance>' OR MergeID='<$App.ComputerName>')~;
+		}
+		else
+		{
+			localKey = ~<BaseKey> And (MergeID='<$App.ComputerName>.<$App.Instance>' OR MergeID='<$App.ComputerName>' OR MergeID='' OR MergeID IS NULL)~;
+		}
+		Query = ~SELECT <Fields1> FROM RetouchImages WHERE <localKey> ORDER BY <Sort>~;
+		KarsMerge.Set( Key,~<localKey>~ );
+		KarsMerge.Set( Query,~<Query>~ );
+
+		Global( KarsMerge );
+		if ( <AutoStart> )
+		{
+			KarsMerge.OnGoButton();
+		}
+		return;
+	}
+
+	KarsMerge.ReOpen();
+
+	if ( <HereOnly> )
+	{
+		localKey = ~<BaseKey> And (MergeID='<$App.ComputerName>.<$App.Instance>' OR MergeID='<$App.ComputerName>')~;
+	}
+	else
+	{
+		localKey = ~<BaseKey> And (MergeID='<$App.ComputerName>.<$App.Instance>' OR MergeID='<$App.ComputerName>' OR MergeID='' OR MergeID IS NULL)~;
+	}
+	Query = ~SELECT <Fields1> FROM RetouchImages WHERE <localKey> ORDER BY  <Sort>~;
+	KarsMerge.Set( Key,~<localKey>~ );
+	KarsMerge.Set( Query,~<Query>~ );
+
+	if ( <AutoStart> )
+	{
+		KarsMerge.Set( fExitOnEmptyQueue,FALSE );
+
+		if ( KarsMerge.GetStopPendingFlag() || KarsMerge.GetStoppedFlag() )
+		{
+			KarsMerge.DoStopButton();
+		}
+	}
+
+}
+
+VOID CancelAutoDialog()
+{
+	if ( Defined( KarsMerge ) )
+	{
+		KarsMerge.DoCancelButton( TRUE,TRUE );
+	}
+
+}

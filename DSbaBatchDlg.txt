@@ -1,0 +1,1602 @@
+
+IncludeClass( BaseDialog );
+IncludeClass( BaseThread );
+
+Include: ~DcSbaDoc~;
+
+Class( DSbaThread,Extends,BaseThread,
+		Member,fConnectionCount,Numeric,0,
+		Member,fEndOrderStatus,Str,~Adjust~,
+		Member,originalStatus,Str,~Auto Balance~,
+		Member,ImagesFields,Str,~OrderID,Roll,Frame,ICCProfile,Path,ColorType~,
+		Member,ImagesSort,Str,~OrderID,Roll,Frame~,
+		Member,DoValues,Str,~AutoBalance=0~,
+		Member,UndoValues,Str,~AutoBalance=1~,
+		Member,SBA_IMAGES_COMPLETE,Numeric,1,
+		Member,SBA_STOPPED,Numeric,-1,
+		Member,NO_IMAGES,Numeric,-2,
+		Member,DB_ERROR,Numeric,-3,
+		Member,m_checkColorType,Numeric,0 );
+
+
+VOID DSbaThread::DSbaThread( )	
+{ 
+	DefineThreadMessages(); 
+	Enabled = TRUE;
+	m_checkColorType = FALSE;
+	if ( GetSystemSettings( ~AdjustImages~,~CheckColorType~,Value,Enabled ))
+	{
+		m_checkColorType = Numeric( ~<Value>~ ) != 0;
+	}
+}
+
+VOID DSbaThread::!DSbaThread()	
+{ 
+}
+
+
+NUMERIC	DSbaThread::HandleThread( Level, Preference, addrOrderList, ApplyShasta, FlagShasta )	
+{ 
+
+	fAborting = FALSE;
+	StringList( activeOrderList,Is,<addrOrderList>,TEMPORARY );
+	result = AutoBalanceOrder( ~<level>~, ~<Preference>~, activeOrderList, <ApplyShasta>, <FlagShasta> ); 
+	return <result>;
+}
+
+
+NUMERIC DSbaThread::HandleQuit()
+{
+	return TRUE;
+}
+
+VOID DSbaThread::DefineThreadMessages()
+{
+
+	if ( Defined( SbaTranslations ) )
+	{
+		return;
+	}
+
+	Define:	SbaTranslations Using DDSymbol Private;	// Translations object for English
+
+	// DEFINE THE BASE TRANSLATIONS OBJECT FOR ALL THE OTHER LANGUAGES IN THE HELP MENU
+
+	Index = 0;
+
+	while ( GenCon( HelpObj,GetFrom,Language<++Index>,~[UI Menus HelpMenuObj]~ ) )
+	{
+		if ( !SimilarStr(~<$con.HelpObj[EnglishText]>~,~English~) )
+		{
+			Define:	~Translations<$con.HelpObj[EnglishText]>~ Using DDSymbol Private;
+		}
+		ForgetLocal( HelpObj );
+	}
+
+	SbaTranslations( AddText,ConnectionFailed,~Failed to connect to the database.  %1~ );
+	SbaTranslations( AddText,QueryFailed, ~Query Failed:%1.  %2~ );
+	SbaTranslations( AddText,CmdFailed, ~Cmd Failed:%1.  %2~ );
+	SbaTranslations( AddText,DbErrorMessage,~The auto balance batch process has stopped due to a datatbase error.~ );
+	SbaTranslations( AddText,EmptyMessage,~The auto balance batch is empty.~ );
+	SbaTranslations( AddText,StoppedMessage,~The auto balance batch process is not running.~ );
+	SbaTranslations( AddText,AutoBalRemaining,~%1 images remaining in Auto Balance Queue~ );
+	SbaTranslations( AddText,NoAutoBalPath,~Path for image %1 does not exist.~ );
+	SbaTranslations( AddText,NotColorImage,~Image %1 is BW, Sepia or Spot Color and cannot be Auto Balanced in batch mode.~ );
+	SbaTranslations( AddText,CurrentAutoBalImage,~Auto Balancing Image Order:'%1', Roll:'%2', Frame:'%3'~ );
+	SbaTranslations( AddText,CompleteMessage,~The auto balance batch process has completed.~ );
+	SbaTranslations( AddText,ChromaKeyedImage,~AE cannot be run in batch mode on chromakeyed image %1 ~ );
+	SbaTranslations( AddText,DebugStart,~Starting AutoBal for %1~ );
+
+}
+
+
+NUMERIC DSbaThread::AutoBalanceOrder( level, Preference, &activeOrderList, ApplyShasta, FlagShasta )
+{
+	Count = 0;
+
+	if ( !Defined( DImageSba ) )
+	{
+		SbaInit();
+	}
+
+	Count = activeOrderList( NumEntries );
+	if ( <Count> == 0 )
+	{
+		Invoke( DSbaProcessStopped, ~~ );
+		Invoke( ShowSbaCurrentImage, Translate( SbaTranslations,EmptyMessage ) );
+		Invoke( ShowSbaImagesLeft, Translate( SbaTranslations,AutoBalRemaining,~0~ ) );
+		ForgetGlobal( DImageSba.);
+
+		return FALSE;
+	}
+
+	AutoBalOrder = activeOrderList( GetFirst,OrderID );
+
+	While ( <AutoBalOrder> )
+	{
+		StartOrder( ~<OrderID>~ );
+
+		result = AutoBalanceImages( <level>, ~<Preference>~, ~<OrderID>~, <ApplyShasta>, <FlagShasta> ) ;
+		if ( <result> == <SBA_STOPPED> )
+		{
+			ResetOrderStatus( ~<OrderID>~ );
+			Invoke( DSbaProcessStopped, Translate( SbaTranslations,StoppedMessage ) );
+			ForgetGlobal( DImageSba.);
+			return FALSE;
+		}
+		else if ( <result> == <NO_IMAGES> )
+		{
+			ResetOrderStatus( ~<OrderID>~ );
+
+			AutoBalOrder = activeOrderList( GetNext,OrderID );
+			continue;
+		}
+		else if ( <result> == <DB_ERROR> )
+		{
+			ResetOrderStatus( ~<OrderID>~ );
+			Invoke( DSbaProcessStopped, Translate( SbaTranslations,DbErrorMessage ) );
+			ForgetGlobal( DImageSba.);
+			return FALSE;
+		}
+
+		EndOrder( ~<OrderID>~ );
+
+		AutoBalOrder = activeOrderList( GetNext,OrderID );
+	}
+
+	ForgetGlobal( DImageSba.);
+	Invoke( DSbaProcessStopped, Translate( SbaTranslations,CompleteMessage ) );
+	return TRUE;
+}
+
+NUMERIC DSbaThread::AutoBalanceImages( level, Preference, OrderID, ApplyShasta, FlagShasta )
+{
+	Path		= ~~;
+
+	Query = ~Select <ImagesFields> from Images Where OrderID = '<OrderID>' AND AutoBalance = 1 Order by <ImagesSort>~;
+
+	if ( <fAborting> )
+	{
+		Invoke( ShowSbaCurrentImage, Translate( SbaTranslations,StoppedMessage ) );
+		Log( Session, Translate( SbaTranslations,StoppedMessage ) );
+		return <SBA_STOPPED>;
+	}
+	
+	if ( !GetDatabaseConnection() )
+	{
+		return <DB_ERROR>;
+	}
+
+	if ( !PGenConList( imageList,Connection,dBase,Cursor,Static,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		Invoke( ShowSbaWarning, Translate( SbaTranslations,QueryFailed,~<Query>~, ~<theErr>~ ) );
+		return <SBA_STOPPED>;
+	}
+
+	imageList( SetConnection,~~ );	// DISCONNECT LIST FROM THE DATABASE
+	imageList( Private );
+
+	Count = imageList( NumEntries );
+	if ( <Count> == 0 )
+	{
+		Invoke( ShowSbaCurrentImage, Translate( SbaTranslations,EmptyMessage ) );
+		Invoke( ShowSbaImagesLeft, Translate( SbaTranslations,AutoBalRemaining,~0~ ) );
+		Log( Session, Translate( SbaTranslations,EmptyMessage ) );
+
+		ForgetPrivate( imageList );
+		return <NO_IMAGES>;
+	}
+
+	autoBalImage = imageList( GetFirst,record );
+	embeddedProfile = ~~;
+	embeddedProfileChecked = FALSE;
+	ImagesLeft = <Count>;
+
+	ReleaseDatabaseConnection();
+
+	while ( <autoBalImage> && !<fAborting> )
+	{
+		Order = ~<$pcon.record[OrderID]>~;
+		Roll  = ~<$pcon.record[Roll]>~;
+		Frame = ~<$pcon.record[Frame]>~;
+		OrderRollFrame = ~OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+		Invoke( ShowSbaCurrentImage, Translate( SbaTranslations, CurrentAutoBalImage, ~<Order>~, ~<Roll>~, ~<Frame>~ ) );
+		imagesLeft = <imagesLeft> - 1;
+		Invoke( ShowSbaImagesLeft, Translate( SbaTranslations, AutoBalRemaining, ~<imagesLeft>~ ) );
+
+		UndoCmd = ~Update Images Set <UndoValues> Where <OrderRollFrame>~;
+
+		Path  = ~<$pcon.record[Path]>~;
+
+		if ( <fAborting> )
+		{
+			ForgetPrivate( imageList );
+			return <SBA_STOPPED>;
+		}
+
+		if ( IsNULL(~<Path>~) || !Files( FileExists,~<Path>~) )
+		{
+			Invoke( ShowSbaCurrentImage, Translate( SbaTranslations,NoAutoBalPath,~<OrderRollFrame>~ ) );
+			Log( Session, Translate( SbaTranslations,NoAutoBalPath,~<OrderRollFrame>~ ) );
+			autoBalImage = imageList( GetNext,record );
+			continue;
+		}
+
+		ColorType = Numeric( ~<$pcon.record[ColorType]>~ );
+
+		if ( <m_checkColorType> && <ColorType> == 0 )
+		{
+			ColorType = DetermineColorType( ~<Path>~ );
+		}
+		
+		if ( <ColorType> > 1 )
+		{
+			ImageCorrections( UpdateColorType,~<Path>~,<ColorType> );
+
+			Invoke( ShowSbaCurrentImage, Translate( SbaTranslations,NotColorImage,~<OrderRollFrame>~ ) );
+			Log( Session, Translate( SbaTranslations,NotColorImage,~<OrderRollFrame>~ ) );
+			autoBalImage = imageList( GetNext,record );
+			continue;
+		}
+
+		ICCProfile = ~<$pcon.record[ICCProfile]>~;
+		DImageSba.SetBatchMode( TRUE ) ;
+		result = DImageSba.BalanceImage( 0,~<Preference>~,~<level>~,
+								~<Order>~,~<Roll>~,~<Frame>~,~<Path>~,~<ICCProfile>~,
+								~<embeddedProfile>~,<embeddedProfileChecked>,<ColorType> );
+
+		if ( <result> )
+		{
+			GetSbaSliders( den,red,green,blue );
+
+			ImageCorrections( UpdateDRGB,~<Path>~,<den>,<red>,<green>,<blue>,<colorType>,0 );
+		}
+
+		//	APPLY SHASTA HERE AS REQUESTED.
+		if ( <ApplyShasta> )
+		{
+			BatchMode = TRUE ;			
+
+			// Check to see if chroma key elements exist.  If so, don't apply in batch...
+
+			HasMask = CheckForCKMask( ~<Path>~ );
+
+			if ( <HasMask> )
+			{
+				Log( Session,Translate( SbaTranslations,ChromaKeyedImage,~<Path>~ ) );
+				BroadcastMessageToAllViews( RedrawByPath,~<Path>~,TRUE );
+				autoBalImage = imageList( GetNext,record );
+				continue;
+
+			}
+			
+			else if ( !AutoEnhance(~<Path>~, <BatchMode> ) )
+			{
+				Log( Session,Translate( SbaTranslations,AutoEnhanceFailed,~<Path>~ ) );
+			}
+		}
+
+		else if ( <FlagShasta> )
+		{
+			// Check to see if chroma key elements exist.  If so, don't apply in batch...
+
+			HasMask = CheckForCKMask( ~<Path>~ );
+
+			if ( <HasMask> )
+			{
+				Log( Session,Translate( SbaTranslations,ChromaKeyedImage,~<Path>~ ) );
+				BroadcastMessageToAllViews( RedrawByPath,~<Path>~,TRUE );
+				autoBalImage = imageList( GetNext,record );
+				continue;
+
+			}
+
+			else   // set ApplyShasta flag in ImageCorrections
+			{
+				result = ImageCorrections( UpdateAEFlag,~<Path>~, <FlagShasta> );
+			}
+		}
+
+		BroadcastMessageToAllViews( RedrawByPath,~<Path>~,TRUE );
+
+		autoBalImage = imageList( GetNext,record );
+		<--Count>;
+	}
+
+	ForgetPrivate( imageList );
+	
+	if ( <fAborting> && <Count> > 0 )
+	{
+		Invoke( ShowSbaCurrentImage, Translate( SbaTranslations,StoppedMessage ) );
+		Log( Session, Translate( SbaTranslations,StoppedMessage ) );
+		return <SBA_STOPPED>;
+	}
+	
+	return <SBA_IMAGES_COMPLETE>;
+}
+
+NUMERIC DSbaThread::GetDatabaseConnection()
+{
+	if ( MemberDefined( dBase ) )		{ ++fConnectionCount;  return TRUE; }
+
+	if ( ADO( dBase,Connect ) )
+	{
+		++fConnectionCount;
+		return Private( dBase );
+	}
+
+	fConnection( GetErrorDescription,theErr );
+
+	Log( Session,Translate( SbaTranslations,ConnectionFailed,~<theErr>~ ) );
+	Invoke( ShowSbaPopup, Translate( SbaTranslations,ConnectionFailed,~<theErr>~ ) );
+	
+	return FALSE;
+}
+
+
+NUMERIC DSbaThread::ReleaseDatabaseConnection()
+{ 
+	if ( MemberDefined( dBase ) )
+	{
+		--fConnectionCount;
+	}
+
+	if ( <fConnectionCount> <= 0 )
+	{
+		ForgetPrivate( dBase );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC DSbaThread::ResetOrderStatus( OrderID )
+{
+	if ( !GetDatabaseConnection() )
+	{
+		return FALSE;
+	}
+
+	UpdateOrderStatus( ~<OrderID>~,~<originalStatus>~ );
+	ReleaseDatabaseConnection();
+
+	return TRUE;
+}
+
+
+VOID DSbaThread::StartOrder( OrderID )
+{
+	if ( !GetDatabaseConnection() )
+	{
+		return;
+	}
+
+	Query = ~Select Status from Orders Where ID = '<OrderID>'~;
+	dBase( GetValuesFor,~<Query>~,originalStatus );
+
+	UpdateOrderStatus( ~<OrderID>~, ~Auto Balancing~ );
+	ReleaseDatabaseConnection();
+}
+
+
+VOID DSbaThread::EndOrder( OrderID )
+{
+	if ( !GetDatabaseConnection() )
+	{
+		return;
+	}
+
+	UpdateOrderStatus( ~<OrderID>~,~<fEndOrderStatus>~ );
+
+	ReleaseDatabaseConnection();
+}
+
+
+VOID DSbaThread::UpdateOrderStatus( OrderID, status )
+{
+
+	Cmd = ~Update Orders Set Status = '<status>' Where ID = '<OrderID>'~;
+	if (!dBase( Cmd,~<Cmd>~ ))
+	{
+		dBase( GetErrorDescription, theErr );
+		Log( Session,Translate( SbaTranslations,CmdFailed,~<Cmd>~, ~<theErr>~ ) );
+	}
+
+}
+
+
+///////////////////////////////////////////////////////
+//  Dialog control
+//////////////////////////////////////////////////////
+Class( DSbaBatch,Extends,BaseDialog,
+		Member,Preference,Str,~~,
+		Member,fStopped,Numeric,TRUE,
+		Member,fStopPending,Numeric,TRUE,
+		Member,fExitOnComplete,Numeric,FALSE,
+		Member,OrderSort,Str,~ShipDate,Priority Desc,ID~,
+		Member,OrderFields,Str,~ID~,
+		Member,DefaultOrderStatus,Str,~~,
+		Member,DefaultSbaLevel,Str,~~,
+		Member,DefaultAutoBalPref,Str,~~,
+		Member,DefaultSaveSbaData,Numeric,0,
+		Member,AUTO_BAL_ORDER,Numeric,0,
+		Member,ALL_ORDERS,Str,~*~,
+		Member,DRGB_OPTION,Numeric,0,
+		Member,RGB_OPTION,Numeric,1,
+		Member,DEN_OPTION,Numeric,16 );
+
+
+				// CONSTRUCTOR
+VOID DSbaBatch::DSbaBatch()	
+{
+	ButtonWidth = 80;
+	Dictionary = ~DDDSbaDialogData~;
+	HelpPage = ~AutoBalance_Batch.htm~;
+	Title = ~Auto Balance Batch~;
+	Top   = 0;
+	Left  = 50;
+
+	GetWorkstationSettings( ~Analyzer~, ~DefaultEndAutoBalOrderStatus~, DefaultOrderStatus, Enabled );
+	if ( IsNULL( ~<DefaultOrderStatus>~ ) )
+	{
+		DefaultOrderStatus = ~Adjust~;
+	}
+
+	GetWorkstationSettings( ~Analyzer~, ~DefaultAutoBalLevel~, DefaultSbaLevel, Enabled );
+	if ( IsNULL( ~<DefaultSbaLevel>~ ) )
+	{
+		DefaultSbaLevel = ~DRGB~;
+	}
+
+	GetWorkstationSettings( ~Analyzer~, ~DefaultAutoBalPref~, DefaultAutoBalPref, Enabled );
+	if ( IsNull( ~<DefaultAutoBalPref>~ ) )
+	{
+		GetSystemSettings( ~Analyzer~, ~DefaultAutoBalPref~, DefaultAutoBalPref, Enabled );
+	}
+
+	if ( !GetWorkstationSettings( ~Analyzer~,~SaveAutoBalData~,DefaultSaveSbaData,Enabled ) )
+	{
+		DefaultSaveSbaData = 0;
+	}
+}
+
+
+VOID DSbaBatch::!DSbaBatch()					// DESTRUCTOR
+{
+}
+
+
+VOID DSbaBatch::DefineMessages()
+{
+	BaseDialog::DefineMessages();
+
+	Translations( AddText,StopButtonLabel,~Stop~ );	
+	Translations( AddText,StopButtonTip,~Stop when auto balance has completed for the current image.~ );	
+	Translations( AddText,CancelButtonLabel,~Exit~ );	
+	Translations( AddText,CancelButtonTip,~Close the dialog.~ );	
+	Translations( AddText,OrdersLabel,~Order ID~ );	
+	Translations( AddText,OrdersTip,~Select from the orders with status set to Auto Balance.~ );	
+	Translations( AddText,SetupLabel,~Load Setup~ );
+	Translations( AddText,SetupTip,~Select the setup to be used for the batch~ );	
+	Translations( AddText,EditSetupLabel,~?~ );
+	Translations( AddText,EditSetupTip,~Edit the auto balance batch setups table~ );	
+	Translations( AddText,SaveSetupLabel,~Save~ );
+	Translations( AddText,SaveSetupTip,~Save the current setup in the auto balance batch setups table~ );	
+	Translations( AddText,PreferenceLabel,~Preference~ );
+	Translations( AddText,PreferenceTip,~Select the digital auto balance preference~ );	
+	Translations( AddText,AutoBalImagesLabel,~Mark All Images for Auto Balance~ );
+	Translations( AddText,AutoBalImagesTip,~Flag all of the images in the order for auto balance.~ );	
+	Translations( AddText,AutoBalImagesVerify,~Are you sure you want to mark all of the images in the selected order(s) for Auto Balance?~ );	
+	Translations( AddText,SbaLevelLabel,~Auto Balance Option~ );
+	Translations( AddText,SbaLevelTip,~Select the Auto Balance option to be performed.~ );	
+	Translations( AddText,NoAutoBalStatusOrders,~There are no orders that with Status Auto Balance~ );
+	Translations( AddText,AutoBalStatusOrders,~There are %1 order(s) with Status Auto Balance~ );
+	Translations( AddText,CurrentImageTip, ~The Order / Roll / Frame currently in the auto balance process.~  );
+	Translations( AddText,AutoBalanceLabel, ~Run Auto Balance~  );
+	Translations( AddText,AutoBalanceTip, ~Run Auto balance for the selected Auto Balance Option.~  );
+	Translations( AddText,StopMessage,~The auto balance batch will stop when finished processing the current image.~ );
+	Translations( AddText,StoppedMessage,~The auto balance batch process is not running.~ );
+	Translations( AddText,NoPrefsMessage,~There are no Digital SBA Preferences defined.~ );
+	Translations( AddText,StopBatchQuery,~Do you want to stop the background Auto Balance operation?~ );
+	Translations( AddText,StatusLabel, ~Order Status on Complete~ );
+	Translations( AddText,StatusTip, ~Select the desired order status to be assigned when auto balance is complete~ );
+	Translations( AddText,SysQueryFailed, ~Failed to query the SystemSettings table. %1.  $2.~ );
+	Translations( AddText,WSQueryFailed, ~Failed to query the WorkstationSettings table. %1.  $2.~ );
+	Translations( AddText,QueryFailed, ~Query Failed:%1.  %2~ );
+	Translations( AddText,CmdFailed, ~Cmd Failed:%1.  %2~ );
+	Translations( AddText,NeedsAutoBalance, ~%1 images from Order %2 need auto balancing.~ );
+	Translations( AddText,TotalNeedsAutoBalance, ~%1 images need auto balancing.~ );
+	Translations( AddText,NoOrders,~You must select an order first.~ );
+	Translations( AddText,NoSetup,~No setup name specified in batch setup field.~ );
+	Translations( AddText,NewSetupQuery,~Create a new setup called %1?~ );
+	Translations( AddText,UpdateSetupQuery,~Update the existing setup called %1?~ );
+	Translations( AddText,UpdateSetupFailed,~Could not update Auto Balance Batch Setups record where %1. %2~ );
+	Translations( AddText,NoLoadSetup,~You must select a setup to load~ );
+	Translations( AddText,LoadSetupFailed,~Failed to update the dialog from %1~ );
+	Translations( AddText,SetupNotFound,~Could not find a setup named %1~ );
+	Translations( AddText,SetupLoaded,~Loaded Setup: %1~ );
+	Translations( AddText,TrackSbaLabel,~Track Auto Balance Data~ );
+	Translations( AddText,TrackSbaTip,~Save the Auto Balance analysis data for each image in the DSBAImages table (system setting).~ );
+	Translations( AddText,ApplyShastaLabel,~Apply Auto Enhancement~ );
+	Translations( AddText,ApplyShastaTip,~Apply Auto Enhancement Algorithm to these images (faster render but uses more disk space).~ );
+	Translations( AddText,FlagShastaLabel,~Mark for Auto Enhancement~ );
+	Translations( AddText,FlagShastaTip,~Mark image to apply the Auto Enhancement Algorithm at render time (slower render but saves disk space).~ );
+	Translations( AddText,AutoEnhanceFailed,~AutoEnhance failed for %1~ );
+	Translations( AddText,ChromaKeyedImage,~AE cannot be run in batch mode on chromakeyed image %1 ~ );
+
+}
+
+VOID DSbaBatch::DefineDictionary()
+{
+	Dictionary: ~DDDSbaDialogData~ 
+		Fields: Name OrderIDList		type text
+		Fields: Name SbaLevel			type text
+		Fields: Name Preference			type text
+		Fields: Name OrderStatus		type text
+		Fields: Name Setup				type text
+		Fields: Name ApplyShasta		type long
+		Fields: Name FlagShasta			type long
+;
+}
+
+VOID DSbaBatch::InitDialogData()
+{
+	DlgData( SetValues,SbaLevel,~DRGB~, Preference,~~ );
+	DlgData( SetValues,OrderStatus,~Adjust~, Setup,~~ );
+}
+
+
+NUMERIC DSbaBatch::DefineControls()
+{
+	DialogHeight = aDialog(GetMaxBottom,Position);
+	promptWidth  = 125;
+
+	Define: OrderFieldPrompt	Using DDWinCtrlDef AsSymbol OrderFieldPrompt Private
+		Fields: TypeName			StaticText
+				Text				Translate( Translations,OrdersLabel )
+				POSITION			<hgap> * 2 <DialogHeight> + <vGap> * 2, 90,$ButtonHeight ;
+
+	Define: OrderIDListBox Using DDWinCtrlDef AsSymbol OrderIDListBox Private
+		Fields: GENCONNAME			THIS
+				GENCONFIELD			~OrderIDList~
+				ALLOWMULTIPLESELECTION	TRUE
+
+				HorizontalScrollPixels  1000     
+					// Sets the width, in pixels, to 1000, by which a list box can be scrolled horizontally. 
+			        // If the size of the list box is smaller than this value, the horizontal scroll bar will 
+			        // horizontally scroll items in the list box. If the list box is as large or larger than this value, 
+                                                         // the horizontal scroll bar is hidden. 
+				RIGHTJUSTIFIED		TRUE
+				IACTIONSTEXT		ACTIONS ( Get )
+				DACTIONSTEXT		ACTIONS ( Save 	"Exec(<THIS>.OrderSelected())")
+				OACTIONSTEXT		ACTIONS ( Save 	"Exec(<THIS>.OrderSelected())")
+				NoDuplicates		TRUE
+				ToolTip				Translate( Translations,OrdersTip )
+				TYPENAME			ListBox
+				KEYBOARDACTIONSTEXT	 ACTION EXEC ( <THIS>.OnKeyDown() )
+				Position			OrderFieldPrompt(GetLeft,Position),OrderFieldPrompt(GetBottom,Position),340,<ButtonHeight> * 10;
+
+	Define: RefreshListButton Using DDWinCtrlDef AsSymbol RefreshListButton
+		Fields:	TYPENAME			Button
+				TEXT				~Refresh List~
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.FindOrdersForAutoBal(FALSE) )
+				TOOLTIP				~Refresh the Auto Balance Orders list~
+				POSITION			OrderFieldPrompt(GetLeft,Position), OrderIDListBox(GetBottom,Position) - 8, OrderIDListBox(GetWidth,Position),  <ButtonHeight> + 2;
+			
+	Define: AutoBalImagesButton Using DDWinCtrlDef AsSymbol AutoBalImagesButton 
+        Fields: TypeName			Button  
+				Position			RefreshListButton(GetLeft,Position), RefreshListButton(GetBottom,Position) +$vGap* 2,RefreshListButton(GetWidth,Position),  <ButtonHeight> + 2
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.SetImagesForAutoBal() )
+				GenConName			THIS
+				Text				Translate( Translations,AutoBalImagesLabel )
+				Tooltip				Translate( Translations,AutoBalImagesTip );
+
+	Define: TrackAutoBalCheckBox Using DDWinCtrlDef AsSymbol TrackAutoBalCheckBox 
+		Fields: TypeName			CheckBox  
+				POSITION			AutoBalImagesButton(GetLeft,Position), AutoBalImagesButton(GetBottom,Position)+$vGap, 190, $ButtonHeight
+				IActionsText		~[Get]~
+				DActionsText		~[Save "Exec(<THIS>.OnTrackAutoBalData())"]~
+				OActionsText		~[Save]~
+				IsEnabled			T
+				GenConName			THIS
+				GenConField			~TrackAutoBalData~
+				Text				Translate( Translations, TrackSbaLabel )
+				Tooltip				Translate( Translations, TrackSbatip );
+
+	Define: LoadSetupButton	Using	DDWinCtrlDef AsSymbol LoadSetupButton Private
+		Fields: TypeName			Button
+				Text				Translate( Translations,SetupLabel )
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnLoadBatchSetup(TRUE) )
+				GenConName			THIS
+				RightJustified		TRUE
+				POSITION			OrderFieldPrompt(GetLeft,Position)+$hGap ,TrackAutoBalCheckBox(GetBottom,Position) + $vGap * 5,
+									70,$ButtonHeight ;
+
+	Define: BatchSetupComboBox Using DDWinCtrlDef AsSymbol BatchSetupComboBox Private
+		Fields: TypeName			ComboBox  
+				Position			LoadSetupButton(GetRight,Position) + $hGap,LoadSetupButton(GetTop,Position),155 ,$ButtonHeight*10
+				DropDownActionsText	ACTION EXEC ( <THIS>.LoadSetupComboBox() )
+				IActionsText		ACTION EXEC ( <THIS>.LoadSetupComboBox() )
+				DActionsText		ACTIONS ( SAVE )
+				OActionsText		ACTIONS ( SAVE )
+				GenConName			THIS
+				GenConField			~Setup~
+				Tooltip				Translate( Translations,SetupTip );
+
+	Define: EditSetupsButton Using DDWinCtrlDef AsSymbol EditSetupsButton 
+		Fields:	TypeName			Button
+				Text				Translate( Translations,EditSetupLabel )
+				Position			BatchSetupComboBox(GetRight,Position) + $vGap,BatchSetupComboBox(GetTop,Position),
+									20,<ButtonHeight>
+				DActionsText		ACTION EXEC  (  <THIS>.OnEditBatchSetups() ) 
+				Tooltip				Translate( Translations,EditSetupTip );
+
+	Define: SaveSetupButton Using DDWinCtrlDef AsSymbol SaveSetupButton 
+		Fields:	TypeName			Button
+				Text				Translate( Translations,SaveSetupLabel )
+				Position			EditSetupsButton(GetRight,Position) + $hGap,EditSetupsButton(GetTop,Position),
+									48,<ButtonHeight>
+				DActionsText		ACTIONS ( Save "Exec( <THIS>.OnSaveBatchSetup())" ) 
+				Tooltip				Translate( Translations,SaveSetupTip );
+
+	Define: SbaLevelPrompt	Using	DDWinCtrlDef AsSymbol SbaLevelPrompt Private
+		Fields: TypeName			StaticText
+				Text				Translate( Translations,SbaLevelLabel )
+				RightJustified		TRUE
+				POSITION			LoadSetupButton(GetLeft,Position),LoadSetupButton(GetBottom,Position) + $vGap * 2,
+									$promptWidth,$ButtonHeight ;
+
+	Define: SbaLevelComboBox Using DDWinCtrlDef AsSymbol SbaLevelComboBox Private
+		Fields: TypeName			SComboBox  
+				Position			SbaLevelPrompt(GetRight,Position) + $hGap,SbaLevelPrompt(GetTop,Position),175 ,$ButtonHeight*4
+				DropDownActionsText	ACTION EXEC ( <THIS>.LoadSbaLevelComboBox() )
+				IActionsText		ACTION EXEC ( <THIS>.LoadSbaLevelComboBox() )
+				DActionsText		ACTIONS ( SAVE )
+				OActionsText		ACTIONS ( SAVE )
+				GenConName			THIS
+				GenConField			~SbaLevel~
+				Tooltip				Translate( Translations,SbaLevelTip );
+
+	Define: PreferencePrompt	Using	DDWinCtrlDef AsSymbol PreferencePrompt Private
+		Fields: TypeName			StaticText
+				Text				Translate( Translations,PreferenceLabel )
+				RightJustified		TRUE
+				POSITION			SbaLevelPrompt(GetLeft,Position),SbaLevelPrompt(GetBottom,Position) + $vGap,
+									$promptWidth,$ButtonHeight ;
+
+	Define: PreferenceComboBox Using DDWinCtrlDef AsSymbol PreferenceComboBox Private
+		Fields: TypeName			SComboBox  
+				Position			PreferencePrompt(GetRight,Position) + $hGap,PreferencePrompt(GetTop,Position),175 ,$ButtonHeight*10
+				DropDownActionsText	ACTION EXEC ( <THIS>.LoadPreferenceComboBox() )
+				IActionsText		ACTION EXEC ( <THIS>.LoadPreferenceComboBox() )
+				DActionsText		ACTIONS ( SAVE )
+				OActionsText		ACTIONS ( SAVE )
+				GenConName			THIS
+				GenConField			~Preference~
+				Tooltip				Translate( Translations,PreferenceTip );
+
+
+	Define: PrefsSetupButton Using DDWinCtrlDef AsSymbol PrefsSetupButton 
+		Fields: TypeName			Button
+				Text				Translate(~?~)
+				Position			PreferenceComboBox(GetRight,Position) + $hGap,PreferenceComboBox(GetTop,Position), 20,<ButtonHeight>
+				DActionsText		ACTION EXEC ( <THIS>.OnViewSbaPreferences() )
+				Tooltip				Translate(~View the Auto Balance Preferences table.~ );
+
+	Define: StatusPrompt Using DDWinCtrlDef AsSymbol StatusPrompt Private
+		Fields: TypeName			StaticText  
+				Text				Translate( Translations, StatusLabel )
+				POSITION			PreferencePrompt(GetLeft,Position),PreferencePrompt(GetBottom,Position) + $vGap,
+									$promptWidth,$ButtonHeight
+				RightJustified		TRUE;
+
+	Define: StatusComboBox Using DDWinCtrlDef AsSymbol StatusComboBox Private
+		Fields: TypeName			SComboBox  
+				Position			StatusPrompt(GetRight, Position)+$hGap, StatusPrompt(GetTop, Position),175 ,$ButtonHeight*10
+				DActionsText		ACTIONS ( Save )
+				OActionsText		ACTIONS ( Save )
+				IActionsText		ACTION EXEC ( <THIS>.LoadStatusComboBox() )
+				DropDownActionsText ACTION CALL ( <THIS>.LoadStatusComboBox()  )
+				GenConField			~OrderStatus~
+				IsTabStop			T
+				Tooltip				Translate( Translations, StatusTip );
+
+	Define: ApplyShastaCheckBox Using DDWinCtrlDef AsSymbol ApplyShastaCheckBox 
+		Fields: TypeName			CheckBox  
+				POSITION			StatusPrompt(GetLeft,Position), StatusPrompt(GetBottom,Position)+$vGap, 190, $ButtonHeight
+				IActionsText		~[Get]~
+				DActionsText		~[Save "Exec(<THIS>.OnApplyShasta())"]~
+				OActionsText		~[Save]~
+				IsEnabled			T
+				GenConName			THIS
+				GenConField			~ApplyShasta~
+				Text				Translate( Translations, ApplyShastaLabel )
+				Tooltip				Translate( Translations, ApplyShastatip );
+
+	Define: FlagShastaCheckBox Using DDWinCtrlDef AsSymbol FlagShastaCheckBox 
+		Fields: TypeName			CheckBox  
+				POSITION			StatusPrompt(GetLeft,Position), ApplyShastaCheckBox(GetBottom,Position)+$vGap, 190, $ButtonHeight
+				IActionsText		~[Get]~
+				DActionsText		~[Save "Exec(<THIS>.OnFlagShasta())"]~
+				OActionsText		~[Save]~
+				IsEnabled			T
+				GenConName			THIS
+				GenConField			~FlagShasta~
+				Text				Translate( Translations, FlagShastaLabel )
+				Tooltip				Translate( Translations, FlagShastatip );
+
+
+	groupHeight = FlagShastaCheckBox( GetBottom, Position) - LoadSetupButton(GetTop,Position)  + $vGap * 8;
+	groupWidth  = PrefsSetupButton( GetRight,Position) - LoadSetupButton(GetLeft,Position) + $hGap * 4;
+
+	Define:BatchGroup Using DDWinCtrlDef AsSymbol BatchGroup
+        Fields: TypeName	GroupBox
+				Position	$hGap LoadSetupButton(GetTop,Position)-$vGap *4, $groupWidth $groupHeight;
+
+	DialogHeight = aDialog(GetMaxBottom,Position);
+	dWidth  = BatchGroup(GetRight,Position) - $hGap*4;
+
+	Define: CurrentImageText Using DDWinCtrlDef AsSymbol CurrentImageText Private
+		Fields:	TYPENAME			StaticText
+				POSITION			OrderFieldPrompt(GetLeft,Position), BatchGroup(GetBottom,Position) + $vGap, 
+									$dWidth, $ButtonHeight * 2
+				TEXT				~~
+				LEFTJUSTIFIED		TRUE
+				GENCONNAME			THIS
+				GENCONFIELD			~CurrentImageText~
+				TOOLTIP				Translate( ~The Order / Roll / Frame currently in the auto balance process.~ )
+				
+	Define: ImagesLeftText Using DDWinCtrlDef AsSymbol ImagesLeftText Private
+		Fields:	TYPENAME			StaticText
+				POSITION			OrderFieldPrompt(GetLeft,Position), CurrentImageText(GetBottom,Position) + <vGap>, 
+									$dWidth, $ButtonHeight * 2
+				TEXT				~~
+				LEFTJUSTIFIED		TRUE
+				GENCONNAME			THIS
+				GENCONFIELD			~ImagesLeftText~
+				TOOLTIP				Translate( Translations,CurrentImageTip );
+				
+	Define: AutoBalanceButton Using DDWinCtrlDef AsSymbol AutoBalanceButton Private
+		Fields:	TYPENAME			Button
+				TEXT				Translate( Translations,AutoBalanceLabel )
+				Tooltip				Translate( Translations,AutoBalanceTip )
+				POSITION			GetDialogCenter() - 50, ImagesLeftText(GetBottom, Position)+$vGap 100 <ButtonHeight>
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.RunSBA() )
+				ISENABLED			T;
+
+
+	DialogWidth = aDialog(GetMaxRight,Position) + $hGap * 2;
+
+	if ( $DialogWidth < $ButtonWidth * 2 + $hGap * 2 )
+	{
+		DialogWidth = $ButtonWidth * 2 + $hGap * 4;
+	}
+
+	Define: StopButton Using DDWinCtrlDef AsSymbol StopButton
+		Fields:	GENCONNAME			THIS
+					DACTIONSTEXT	ACTION EXEC ( <THIS>.OnStopButton() )
+					POSITION		($DialogWidth/2) - ($ButtonWidth) - $hGap,AutoBalanceButton(GetBottom, Position) +$vGap * 2, $ButtonWidth, $ButtonHeight
+					TEXT			Translate( Translations,StopButtonLabel )
+					TOOLTIP			Translate( Translations,StopButtonTip )
+					TYPENAME		BUTTON
+					ISTABSTOP		TRUE;
+
+	Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+		Fields:	GENCONNAME			THIS
+					DACTIONSTEXT	ACTION EXEC ( <THIS>.DoCancelButton() )
+					POSITION		StopButton(GetRight,Position) + $hGap,StopButton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+					TEXT			Translate( Translations,CancelButtonLabel )
+					TOOLTIP			Translate( Translations,CancelButtonTip )
+					TYPENAME		BUTTON
+					ISTABSTOP		TRUE;
+
+	return TRUE;
+}
+
+// dialog selections
+// finds orders with status of Auto Balance
+NUMERIC DSbaBatch::FindOrdersForAutoBal( createList )
+{
+	dlg( SetStatus,0, ~~ );	
+
+	Order = ~~;
+	dlg( GetInput );
+
+	// get the currently selected Orders
+	if ( Defined( OrderList ) )
+	{
+		ForgetPermanent( OrderList );
+	}
+
+	StringList(OrderList, New);
+
+	while ( dlg(ListBox, OrderIDListBox, GetNthSelectedItem, <Index++>, Order) > 0 )
+	{
+		StringList(	OrderList, InListOrder, AddStrings, ~<Order>~);
+	}
+
+	// refresh the list
+	idQuery = ~Select ID From Orders Where Status = 'Auto Balance' Order by <OrderSort>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<idQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( Translations,QueryFailed,~<idQuery>~,~<theErr>~ ) ); 
+	}
+
+	Count = List( NumEntries );
+
+	if ( <Count> == 0 )
+	{
+		ForgetPermanent( OrderList );
+		dlg( SetControlFromStringList,OrderIDListBox,List );
+		dlg( SetStatus,0,Translate( Translations,AutoBalStatusOrders, ~<Count>~) );
+		dlg( SetStatus,0,Translate( Translations,NoAutoBalStatusOrders ) );
+		return TRUE;
+	}
+
+	List( MakeStringList,IDList,ID );
+
+	dlg( SetControlFromStringList,OrderIDListBox,IDList );
+
+	// re-select original selections
+	oldCount = OrderList( NumEntries );
+
+	if ( <oldCount> > 0 )
+	{
+		selected = OrderList( GetFirst, OrderNum );
+		while ( <selected> )
+		{
+			Index = dlg( ListBox, OrderIDListBox, FindString, -1, ~<OrderNum>~);
+			if ( <Index> >= 0 )
+			{
+				dlg( ListBox, OrderIDListBox, SetSel, <Index>, 1);
+
+			}
+			selected = OrderList( GetNext, OrderNum );
+		}
+	}
+
+	dlg( SetStatus,0,Translate( Translations,AutoBalStatusOrders, ~<Count>~) );
+
+	return TRUE;
+}
+
+
+VOID DSbaBatch::OnTrackAutoBalData()
+{
+	dlg( GetInput );
+
+	dlg( GetControlValue,TrackAutoBalCheckBox,saveData );
+
+	SetWorkstationSettings( ~Analyzer~, ~SaveAutoBalData~, ~<saveData>~, TRUE );
+}
+
+
+VOID DSbaBatch::LoadSbaTracking()
+{
+	if ( !IsNull( ~<saveSbaData>~ ) )
+	{
+		dlg( SetCheck, <saveSbaData>, TrackAutoBalCheckBox );
+	}
+	else
+	{
+		dlg( SetCheck, 0, TrackAutoBalCheckBox );
+	}
+}
+
+VOID DSbaBatch::OnApplyShasta()
+{
+	dlg( GetInput );
+
+	dlg( GetControlValue,TrackAutoBalCheckBox,saveData );
+	DlgData( GetValues, ApplyShasta, ApplyShasta );
+	DlgData( GetValues, FlagShasta, FlagShasta );
+
+	if ( <ApplyShasta> && <FlagShasta> )
+	{
+		DlgData( SetValues, FlagShasta, 0 );
+		dlg( Update );
+	}
+
+//	SetWorkstationSettings( ~Analyzer~, ~SaveAutoBalData~, ~<saveData>~, TRUE );
+}
+
+VOID DSbaBatch::OnFlagShasta()
+{
+	dlg( GetInput );
+
+	DlgData( GetValues, ApplyShasta, ApplyShasta );
+	DlgData( GetValues, FlagShasta, FlagShasta );
+
+	if ( <ApplyShasta> && <FlagShasta> )
+	{
+		DlgData( SetValues, ApplyShasta, 0 );
+		dlg( Update );
+	}
+
+//	SetWorkstationSettings( ~Analyzer~, ~SaveAutoBalData~, ~<saveData>~, TRUE );
+}
+
+NUMERIC DSbaBatch::LoadPreferenceComboBox()
+{
+	dlg( SetStatus,0, ~~ );	
+
+	PrefsQuery = ~Select Name From DSbaPrefsDef Order By Name~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<PrefsQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( Translations, QueryFailed, ~<PrefsQuery>~, ~<theErr>~ ) ); 
+	}
+
+	Count = List( NumEntries );
+
+	if ( !<Count> )
+	{
+		return Warning( Translate( Translations,NoPrefsMessage ) );
+	}
+
+	List( MakeStringList,PrefsList,Name );
+	dlg( SetControlFromStringList,PreferenceComboBox,PrefsList,Selection );
+
+	if ( !IsNull( ~<DefaultAutoBalPref>~ ) )
+	{
+		dlg( ComboBox,PreferenceComboBox,SelectString,~<DefaultAutoBalPref>~,-1 );
+		DlgData( SetValues,Preference,~<DefaultAutoBalPref>~ );
+	}
+	else
+	{
+		dlg( ListBox,PreferenceComboBox,select,0 );
+	}
+
+	return <Count>;
+}
+
+
+NUMERIC DSbaBatch::OnViewSbaPreferences()
+{
+	Action = ACTION Doc ( ~DSbaPrefsDefDoc~ OpenOnce DSbaPrefsDefDoc "Init();" ); 
+	return PerformActions( Action );
+
+}
+
+NUMERIC DSbaBatch::LoadStatusComboBox( )
+{
+	Query = ~Select * From WorkstationSettings Where Computer = '<$App.ComputerName>' AND Category = 'OrderStatus' AND Enabled <> 0 Order By Item~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the WorkstationSettings table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		ForgetLocal( List );
+
+		Query = ~Select * From SystemSettings Where Category = 'OrderStatus' AND Enabled <> 0 Order By Item~;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ 
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate( ~Failed to query the SystemSettings table.\n\n<Query>\n\n<theErr>~ ) ); 
+		}
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		StringList( theStringList,New,Is,~<$[DATABASE FieldTypes].OrderStatus[ChoiceList]>~ );
+
+		more = theStringList( GetFirstString,aString );
+
+		while ( <more> )
+		{
+			dlg( ComboBox,StatusComboBox,AddString,~<aString>~ );
+			more = theStringList( GetNextString,aString );
+		}
+	}
+	else
+	{
+		while ( List( GetNext,Item ) )
+		{
+			dlg( ComboBox,StatusComboBox,AddString,~<$pcon.Item[SettingsText]>~ );
+		}
+	}
+
+	dlg( ComboBox,StatusComboBox,SelectString,~<DefaultOrderStatus>~,-1 );
+	DlgData( SetValues,OrderStatus,~<DefaultOrderStatus>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC DSbaBatch::LoadSbaLevelComboBox()
+{
+	dlg( SetStatus,0, ~~ );	
+
+	StringList( SbaOptionsList,New,Is,~<$[DATABASE FieldTypes].DSbaLevelsType[ChoiceList]>~ );
+	dlg( SetControlFromStringList, ~SbaLevelComboBox~, SbaOptionsList, Update );
+
+	dlg( ComboBox,SbaLevelComboBox,SelectString,~<DefaultSbaLevel>~,-1 );
+
+	DlgData( SetValues,SbaLevel,~<DefaultSbaLevel>~ );
+
+	return TRUE;
+}
+
+NUMERIC DSbaBatch::LoadSetupComboBox()
+{
+	dlg( SetStatus,0, ~~ );	
+
+	SetupQuery = ~Select Setup From DSbaBatchSetups Order By Setup~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<SetupQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( Translations, QueryFailed, ~<SetupQuery>~, ~<theErr>~ ) ); 
+	}
+
+	Count = List( NumEntries );
+
+	List( MakeStringList,setupsList,Setup );
+	dlg( SetControlFromStringList,BatchSetupComboBox,setupsList,NoSelection );
+
+	return <Count>;
+}
+
+VOID DSbaBatch::OnEditBatchSetups()
+{
+	Query = ~Select * From DSbaBatchSetups Order By Setup~;
+
+	Actions = ACTION Doc ( ~DSbaBatchSetups~ OpenOnce DSbaBatchSetupsDoc "Init( ~DSbaBatchSetups~, ~<Query>~ );" );
+
+	PerformActions( Actions );
+}
+
+NUMERIC DSbaBatch::OnLoadBatchSetup( DisplayWarning )
+{
+	dlg( GetInput );
+
+	SetupName = ~<$con.DlgData[Setup]>~;
+
+	if ( IsNull( ~<SetupName>~ ) )
+	{
+		if ( !<DisplayWarning> )
+		{
+			return FALSE;
+		}
+
+		return Warning(Translate( Translations,NoLoadSetup ));
+	}
+
+	Key = ~Setup = '<SetupName>'~;
+
+	Query = ~Select * from DSbaBatchSetups Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( Translations, QueryFailed, ~<Query>~, ~<theErr>~ ) );
+	}
+
+	if ( !List( GetFirst, Setup ) )
+	{
+		return Warning( Translate( Translations, SetupNotFound, ~<SetupName>~ ) );
+	}
+
+	if ( !Setup( UpdateIn,DlgData ) )
+	{
+		return Warning( Translate( Translations,LoadSetupFailed, ~<SetupName>~ ) );
+	}
+
+	AutoEnhanceValue = ~<$pcon.Setup[ApplyShasta].numeric>~;
+
+	dlg( Update );
+
+	if ( <AutoEnhanceValue> == 0 )
+	{
+		dlg( SetCheck, 0, ApplyShastaCheckBox );
+		dlg( SetCheck, 0, FlagShastaCheckBox );
+	}
+	else if ( <AutoEnhanceValue> == 1 )
+	{
+		dlg( SetCheck, 1, ApplyShastaCheckBox );
+		dlg( SetCheck, 0, FlagShastaCheckBox );
+	}
+	else if ( <AutoEnhanceValue> == 2 )
+	{
+		dlg( SetCheck, 0, ApplyShastaCheckBox );
+		dlg( SetCheck, 1, FlagShastaCheckBox );
+	}
+
+	dlg( SetStatus,0,Translate( Translations,SetupLoaded, ~<SetupName>~ ) );
+
+	return TRUE;
+}
+
+
+NUMERIC DSbaBatch::OnSaveBatchSetup()
+{
+	dlg( GetInput );
+
+	SetupName = ~<$con.DlgData[Setup]>~;
+
+	if ( ~<SetupName>~ == ~~ )
+	{
+		return Warning( Translate( Translations,NoSetup ) );
+	}
+
+	Key = ~Setup = '<SetupName>'~;
+
+	Query = ~Select * From DSbaBatchSetups Where <Key>~;
+
+	if ( PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		if ( !List( GetFirst,Item ) )
+		{
+			if ( MessageBox( Translate( Translations, NewSetupQuery, ~<SetupName>~),YESNO ) != YES )
+			{
+				return FALSE;
+			}
+
+			List( AddNew,Item );
+			Item( Set,Setup,~<SetupName>~ );
+		}
+		else
+		{
+			if ( MessageBox( Translate( Translations,UpdateSetupQuery, ~<SetupName>~ ),YESNO ) != YES )
+			{
+				return FALSE;
+			}
+		}
+
+		if ( !Item( UpdateFrom,DlgData ) )
+		{
+			List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+			return Warning( Translate( Translations,UpdateSetupFailed, ~<Key>~, ~<theErr>~ ) );
+		}
+		
+		dlg( GetControlValue, ApplyShastaCheckBox, ApplyShastaValue );
+		dlg( GetControlValue, FlagShastaCheckBox, FlagShastaValue );
+
+		if ( <ApplyShastaValue> == 0 && <FlagShastaValue> == 0 )
+		{
+			Item( Set,ApplyShasta,~0~ );
+		}
+		else if ( <ApplyShastaValue> == 1 )
+		{
+			Item( Set,ApplyShasta,~1~ );
+		}
+		else if ( <FlagShastaValue> == 1 )
+		{
+			Item( Set,ApplyShasta,~2~ );
+		}
+
+		return List( Update );
+	}
+
+	List( GetErrorDescription,0,theErr );
+	return Warning( Translate( Translations, QueryFailed, ~<Query>~, ~<theErr>~ ) );
+}
+
+
+NUMERIC DSbaBatch::GetSbaLevel( selection )
+{
+	if ( ~<selection>~ == ~RGB~ )
+	{
+		return <RGB_OPTION>;
+	}
+	else if ( ~<selection>~ == ~Density~ )
+	{
+		return <DEN_OPTION>;
+	}
+
+	return <DRGB_OPTION>;
+}
+
+
+VOID DSbaBatch::DoCancelButton( DontAsk, ExitWhenEmpty )
+{
+	SkipQuestion = FALSE;
+	fExitOnComplete = TRUE;
+
+	if ( Defined( OrderList ) )
+	{
+		ForgetPermanent( OrderList );
+	}
+
+	if ( Defined( aThread ) )
+	{
+		if ( !aThread.Processing() )
+		{	
+			SkipQuestion = TRUE;
+		}
+	}
+
+	if ( !<fStopPending> && !<fStopped>  )
+	{
+		if ( <SkipQuestion> )
+		{
+			if ( Defined( aThread ) )
+			{
+				aThread.Abort();
+			}
+		}
+		else
+		{
+			if ( MessageBox( Translate( Translations,StopBatchQuery ), YESNO ) == YES )
+			{
+				if ( Defined( aThread ) )
+				{
+					aThread.Abort();
+				}
+			}
+		}
+	}
+	else 
+	{
+		CloseDialog();
+	}
+}
+
+VOID DSbaBatch::OnStopButton( askFirst )	//Stop Button
+{
+	fStopPending = TRUE;
+		
+	askMsg = TRUE;
+	if ( DefinedAndNotNull( askFirst ) )
+	{
+		askMsg = <askFirst>;
+	}
+
+	if ( Defined( aThread ) )
+	{
+		if ( aThread.Processing() )
+		{
+			dlg( SetControlValue,ImagesLeftText,Translate( Translations,StopMessage ) );	
+			aThread.Abort();
+		}
+		else
+		{
+			dlg( SetControlValue,ImagesLeftText,Translate( Translations,StoppedMessage ) );	
+		}
+	}
+	else
+	{
+		dlg( SetControlValue,ImagesLeftText,Translate( Translations,StoppedMessage ) );	
+	}
+}
+
+/////////////
+////////// perform the operation
+/////////////
+NUMERIC DSbaBatch::SetImagesForAutoBal()
+{
+	dlg( GetInput );
+	
+	numEntries = dlg( ListBox, OrderIDListBox,GetSelectedCount);
+	if ( <numEntries> == 0 )
+	{
+		EnableIDControl( TRUE );
+		return Warning( Translate( Translations,NoOrders ) );
+	}
+
+	WaitCursor( BEGIN );
+	Index = 0;
+	Order = ~~;
+	OrdersList = ~(~;
+
+	while ( dlg(ListBox, OrderIDListBox, GetNthSelectedItem, <Index++>, Order) > 0 )
+	{
+		if ( ~<OrdersList>~ != ~(~ )
+		{
+			OrdersList = ~<OrdersList>,~;
+		}
+
+		OrdersList = ~<OrdersList> '<Order>'~;
+	}
+
+	OrdersList = ~<OrdersList> )~;
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session,Translate( Translations,CmdFailed, ~<Cmd>~,~<theErr>~ ) );
+		WaitCursor( END );
+		return Warning( Translate( Translations,CmdFailed, ~<Cmd>~,~<theErr>~ ) );
+	}
+
+	compQuery = ~Select count(*) from CompSbaData Where OrderID in <OrdersList> AND (Brt<>0 OR Red<>0 OR Grn<>0 OR Blu<>0 OR CompBrt<>0 OR CompRed<>0 OR CompGrn<>0 OR CompBlu<>0)~;
+	
+	compSbaCount = 0;
+	dBase( GetValuesFor,~<compQuery>~,compSBACount);
+
+	if ( <compSBACount> > 0 )
+	{
+		WaitCursor( END );
+		msg = ~Composite SBA has already been run on these images.\nTo run the standard SBA,\n  reset the image adjustments to 0 and\n  delete the corresponding rows from the CompSbaData table. ~;
+		return Warning( ~<msg>~ );
+	}
+	
+	if ( MessageBox( Translate( Translations, AutoBalImagesVerify ),YESNO ) != YES )
+	{
+		WaitCursor( END );
+		return FALSE;
+	}
+
+	Cmd = ~Update Images Set AutoBalance=1 Where OrderID in <OrdersList> ~;
+
+	if (  !dBase( Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session,Translate( Translations,CmdFailed, ~<Cmd>~,~<theErr>~ ) );
+		WaitCursor( END );
+		return Warning( Translate( Translations,CmdFailed, ~<Cmd>~,~<theErr>~ ) );
+	}
+
+	Count = dBase( RecordsAffected );
+	ShowImagesLeft( Translate( Translations,TotalNeedsAutoBalance,~<Count>~ ) );
+
+	WaitCursor( END );
+
+	return TRUE;
+}
+
+
+NUMERIC DSbaBatch::RunSBA()
+{
+	dlg( GetInput );
+	EnableIDControl( FALSE );
+	DlgData( GetValues,Preference,Preference,SbaLevel,SbaLevel );
+
+	numEntries = dlg( ListBox, OrderIDListBox,GetSelectedCount);
+
+	if ( <numEntries> == 0 )
+	{
+		EnableIDControl( TRUE );
+		return Warning( Translate( Translations,NoOrders ) );
+	}
+
+	OrderQuery = ~~;
+	Order = ~~;
+
+	if ( Defined( OrderList ) )
+	{
+		ForgetPermanent( OrderList );
+	}
+
+	StringList(OrderList, New, Permanent);
+
+	while ( dlg(ListBox, OrderIDListBox, GetNthSelectedItem, <Index++>, Order) > 0 )
+	{
+		StringList(	OrderList, InListOrder, AddStrings, ~<Order>~);
+	}
+
+	level = GetSbaLevel( ~<SbaLevel>~ );
+
+	fStopPending = FALSE;
+	fStopped = FALSE;
+
+	if ( !Defined( aThread ) )
+	{
+		DSbaThread( New,aThread );
+		Private( aThread );
+	}
+
+	DlgData( GetValues,OrderStatus, endOrderStatus);
+	aThread.Set( fEndOrderStatus, ~<endOrderStatus>~ );
+
+	ApplyShasta = 0 ;
+	DlgData( GetValues, ApplyShasta, ApplyShasta );
+
+	FlagShasta = 0 ;
+	DlgData( GetValues, FlagShasta, FlagShasta );
+
+//	aThread.DebugThread();
+
+	result = aThread.NewOneShot( ~<level>~, ~<Preference>~, OrderList( GetObject ), ~<ApplyShasta>~, ~<FlagShasta>~ );
+
+	return <result>;
+}
+
+
+NUMERIC DSbaBatch::InitializeOrder( OrderNum )
+{
+	Index = dlg( ListBox, OrderIDListBox, FindString, -1, ~<OrderNum>~);
+	if ( <Index> >= 0 )
+	{
+		dlg( ListBox, OrderIDListBox, SetSel, <Index>, 1);
+		OrderSelected();
+	}
+	else
+	{
+		Index = dlg( ListBox,OrderIDListBox,AddString,~<OrderNum>~ );
+		dlg( ListBox, OrderIDListBox, SetSel, <Index>, 1);
+		OrderSelected();
+	}
+
+
+	return TRUE;
+}
+
+
+VOID DSbaBatch::OrderSelected()
+{
+	dlg( GetInput );
+	DlgData( GetValues,OrderIDList,Order );
+
+	if ( ~<Order>~ == ~~ )
+	{
+		Warning( Translate( Translations,NoOrders ) );
+	}
+
+	Query = ~Select count(*) From Images Where OrderID='<Order>' AND AutoBalance=1~;
+	Count = ADO( dBase,Connect,RecordCountFor,~<Query>~ );
+
+	ShowImagesLeft( Translate( Translations,NeedsAutoBalance,<Count>,~<Order>~ ) );
+
+	dlg( SetControlFocus,BatchSetupComboBox );
+}
+
+
+VOID DSbaBatch::EnableIDControl( enable ) 	//override
+{
+	dlg( EnableControls,<enable>,OrderIDListBox,PreferenceComboBox,StatusComboBox,AutoBalImagesButton,
+								 LoadSetupButton,BatchSetupComboBox, EditSetupsButton, SaveSetupButton,
+								 SbaLevelComboBox, AutoBalanceButton, RefreshListButton, TrackAutoBalCheckBox );
+}
+
+
+NUMERIC DSbaBatch::ShowCurrentImage( Msg )
+{
+	dlg( SetStatus,0, ~~ );	
+
+	dlg( SetControlValue,CurrentImageText,~<Msg>~ );
+	return TRUE;
+}
+
+
+NUMERIC DSbaBatch::ShowImagesLeft( Msg )
+{
+	dlg( SetStatus,0, ~~ );	
+
+	dlg( SetControlValue,ImagesLeftText,~<Msg>~ );
+	return TRUE;
+}
+
+
+
+
+NUMERIC DSbaBatch::ShowWarning( Msg )
+{
+	dlg( SetStatus,0, ~~ );	
+
+	dlg( SetControlValue,CurrentImageText,~<Msg>~ );
+	Warning( ~<Msg>~ );
+	Log( Session, ~<Msg>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC DSbaBatch::ShowPopup( Msg )
+{
+	Popup( ~<Msg>~ );
+	return TRUE;
+}
+
+
+NUMERIC DSbaBatch::ProcessStopped( Msg )
+{
+	EnableIDControl( TRUE );
+
+	fStopped = TRUE;
+	dlg( SetStatus,0, ~~ );	
+
+	dlg( SetControlValue,CurrentImageText,~~ );
+	dlg( SetControlValue,ImagesLeftText,~<Msg>~ );
+
+	if ( <fExitOnComplete> )
+	{
+		return CloseDialog();
+	}
+
+	return TRUE;
+}
+
+NUMERIC DSbaBatch::CloseDialog()
+{
+	DlgData( GetValues,OrderStatus,endOrderStatus,Preference,Preference,SbaLevel,SbaLevel );
+
+	SetWorkstationSettings( ~Analyzer~, ~DefaultEndAutoBalOrderStatus~, ~<endOrderStatus>~, TRUE );
+	SetWorkstationSettings( ~Analyzer~, ~DefaultAutoBalPref~, ~<Preference>~, TRUE );
+	SetWorkstationSettings( ~Analyzer~, ~DefaultAutoBalLevel~, ~<SbaLevel>~, TRUE );
+
+	ForgetPrivate( aThread );
+	return BaseDialog::DoCancelButton();
+}
+
+
+VOID Init( OrderNum )
+{
+	HereOnly = FALSE;
+	if ( DefinedAndNotNull( Restricted ) )
+	{
+		HereOnly = <Restricted>;
+	}
+
+	OrderSet = FALSE;
+	if ( DefinedAndNotNull( OrderNum ) )
+	{
+		OrderSet = TRUE;
+	}
+	
+
+	if ( !Defined( SbaDlg ) )
+	{
+		DSbaBatch( New,SbaDlg );
+
+		SbaDlg.DefineDialog();
+
+		SbaDlg.FindOrdersForAutoBal(TRUE);
+		SbaDlg.LoadPreferenceComboBox();
+		SbaDlg.LoadStatusComboBox();
+		SbaDlg.LoadSbaLevelComboBox();
+		SbaDlg.LoadSbaTracking();
+
+		Global( SbaDlg );
+
+		if ( <OrderSet> )
+		{
+			SbaDlg.Set( Title, Translate( ~Auto Balance Batch for <OrderNum>~ ) );
+			SbaDlg.InitializeOrder( ~<OrderNum>~ );
+		}
+
+		return;
+	}
+
+	SbaDlg.ReOpen();
+	OrderSet = FALSE;
+
+	if ( DefinedAndNotNull( OrderNum ) )
+	{
+		OrderSet = TRUE;
+	}
+
+	if ( <OrderSet> )
+	{
+		SbaDlg.InitializeOrder( ~<OrderNum>~ );
+	}
+
+
+}
+
+
+NUMERIC ShowSbaCurrentImage( Msg )
+{
+	return SbaDlg.ShowCurrentImage( ~<Msg>~ );
+}
+
+NUMERIC ShowSbaImagesLeft( Msg )
+{
+	return SbaDlg.ShowImagesLeft( ~<Msg>~ );
+}
+
+NUMERIC ShowSbaWarning( Msg )
+{
+	return SbaDlg.ShowWarning( ~<Msg>~ );
+}
+
+NUMERIC ShowSbaPopUp( Msg )
+{
+	return SbaDlg.ShowPopup( ~<Msg>~ );
+}
+
+NUMERIC DSbaProcessStopped( Msg )
+{
+	return SbaDlg.ProcessStopped( ~<Msg>~ );
+}

@@ -1,0 +1,281 @@
+IF 0
+{
+	// ############################### Start of Slaved Bremson Film Drive Support
+
+		STX = chr(2);	BEL = chr(7);	CR = chr(13);	LF = chr(10);	DC4 = chr(20);  FS = chr(28);	
+
+		filmDriveResponse	=  			~O??000000000~;
+		filmDriveIDResponse = 			~<LF>$$01$$$$$$$~;
+		
+		filmTypeChanged	=				~<FS>~;
+		
+		filmDriveEnterOperatorIdCmd =	~<LF><BEL>~;
+		filmDriveScanCmd =				~<LF><STX>~;
+		filmDriveMsgCmd	=				~<LF><DC4>~;
+		filmDriveMsgDataLen	=			32;
+
+		wakeUpFilmDrive	=				TRUE;
+		PipeName						= ~\\.\Pipe\DP2_ScanPipe~;
+
+		Device( FDIN );
+		Device( FDOUT );
+		Device( Pipe );
+
+
+	NUMERIC TestSlavedOperation()
+	{
+		if ( Defined( FDIN ) )
+		{
+			FDIN(Close);
+			FDOUT(Close);
+		}
+
+		retval = Pipe( CreateNamedPipe,~<PipeName>~ );
+
+		CreateBremsonTestFile(~d:\\BremsonIn.dat~);
+
+		FilmDriveInit( ~d:\\BremsonIn.dat~,~d:\\BremsonOut.dat~ );
+
+		Action = STR ( FilmDriveListen(); );
+		return QueueContentsAfter( Action,1000 );
+	}
+			
+
+	NUMERIC FilmDriveInit( InFile,OutFile )
+	{
+		if ( !OpenSerialFilmDrive(~<InFile>~,FDIN,~<OutFile>~,FDOUT) )
+			{ return FALSE; }
+
+		EmptySerialBuffer( FDIN );
+		EmptySerialBuffer( FDOUT );
+
+		if  ( <wakeUpFilmDrive> )
+		{
+			return SendFilmDriveResponse( FDOUT,~<filmDriveResponse>~ );
+		}
+
+		return TRUE;
+	}
+
+
+	NUMERIC OpenSerialFilmDrive( InFile,&InPort,OutFile,&OutPort )
+	{
+		if ( !InPort( Name,~<InFile>~,Access,Read,Mode,OpenExisting,AnsiIO,Open ) )
+		{
+			return Warning( ~Failed to open <Input>~ );
+		}
+
+		if ( !OutPort( Name,~<OutFile>~,Access,Write,Mode,CreateAlways,AnsiIO,Open ) )
+		{
+			return Warning( ~Failed to open <Output>~ );
+		}
+
+		return TRUE;
+	}
+
+
+
+	NUMERIC QueueFilmDriveListen()
+	{
+		Action = STR ( FilmDriveListen(); );
+		return QueueContentsAfter( Action,1000 );
+	}
+
+
+	NUMERIC FilmDriveListen()
+	{
+		cmd = ~~;
+
+		if ( ReadSerialPort( FDIN,2,50,cmd ) >= 2  )		
+		{
+			if ( ~<cmd>~ == ~<filmDriveScanCmd>~ )				
+			{ 
+				return DoFilmDriveScanCmd( FDIN,FDOUT );
+			}
+
+			if ( ~<cmd>~ == ~<filmDriveMsgCmd>~ )				
+			{ 
+				DoFilmDriveMsgCmd( FDIN,FDOUT );
+				return QueueFilmDriveListen();
+			}
+
+			if ( ~<cmd>~ == ~<filmDriveEnterOperatorIdCmd>~ )	
+			{ 
+				DoFilmDriveEnterOperatorIdCmd( FDIN,FDOUT );
+				return QueueFilmDriveListen();
+			}
+
+			FilmDriveUnknownMsg( FDIN,~<cmd>~ );
+		}
+
+		return FALSE;
+	}
+
+
+	NUMERIC DoFilmDriveMsgCmd( &InPort,&OutPort )
+	{
+		cmd = ~~;
+
+		if ( ReadSerialPort( InPort,<filmDriveMsgDataLen>,2000,cmd ) < <filmDriveMsgDataLen> )
+		{	
+			return FilmDriveUnknownMsg( ~<port>~,~Did not receive rest of command: FilmDriveMsg~ );
+		}	
+
+		EmptySerialBuffer( InPort );
+
+		substr( ~<cmd>~,0,1,msgType );
+
+		if ( ~<msgType>~ == ~<filmTypeChanged>~ )		
+		{ 
+			return DoFilmTypeChanged( OutPort,~<cmd>~ );
+		}
+
+		Log( Session,~Received: Wake Up Msg~ );
+
+		SendFilmDriveResponse( OutPort,~<filmDriveResponse>~ );
+		
+		return TRUE;	
+	}
+
+
+	NUMERIC DoFilmTypeChanged( &OutPort,msg )
+	{
+		Log( Session,~Received: FilmType Change [<msg>]~ );	
+		dlg( SetString,~Received: FilmType Change [<msg>]~,Msg,0 );
+
+		substr( ~<msg>~,30,1,filmCode ); 
+
+		Query = ~Select Name from DRGBRefs Where FilmCode = '<filmCode>'~;
+
+		if ( !Ado( dBase,Connect,GetValuesFor,~<Query>~,Name ) )
+		{
+			Warning( ~Could not find DRGBRefs for FilmCode <filmCode>~ );
+		}
+		else
+		{
+			Log( Session,~Filmtype <filmCode> is <Name>~ );
+			dlg( SetString,~Filmtype <filmCode> is <Name>~,Msg,0 );
+
+			DlgData( SetValues,DRGBRefs,~<Name>~ );
+		}
+
+		return SendFilmDriveResponse( OutPort,~<filmDriveResponse>~ );
+	}
+
+			
+	NUMERIC DoFilmDriveEnterOperatorIdCmd( &InPort,&OutPort )
+	{
+		msg = ~~;
+
+		if ( ReadSerialPort( InPort,32,2000,msg  ) < 32 )
+		{
+			return FilmDriveUnknownMsg( ~Did not receive rest of operator id message~ );
+		}
+
+		EmptySerialBuffer( InPort );
+
+		Log( Session, ~Received: [<msg>]~ );
+
+		substr( ~<msg>~,0,1,theType );
+
+		if (  ~<theType>~ == ~A~ )
+		{
+			return  FilmDriveListen();	// DO NOTHING
+		}
+
+		return SendFilmDriveResponse( OutPort,~<filmDriveIDResponse>~ );
+	}	
+
+
+	NUMERIC DoFilmDriveScanCmd( &InPort,&OutPort )
+	{
+		msg = ~~;
+
+		if ( ReadSerialPort( InPort,61,2000,msg ) < 61 )
+		{
+			return FilmDriveUnknownMsg( ~Did not receive all of scan message~ );
+		}
+		
+		EmptySerialBuffer( InPort );
+
+		Log( Session,~Received: [<msg>]~ );
+		dlg( SetString,~Received: [<msg>]~,Msg,0 );
+
+		substr( ~<msg>~,0,7,Order,7,4,roll,11,3,frame );
+
+		substr( ~<msg>~,21,16,thisFileName );	
+		thisFileName = String( TrimRight,~<thisFileName>~ );
+
+		if ( ~<thisFileName>~ != ~~ )
+		{
+			Frame = ~<thisFileName>~;
+			// Roll should be set to NULL here.  Can we do that?
+		}
+
+		dlg( SetString,~<Order>~,Order,0 );
+		dlg( SetString,~<Roll>~,Roll,0 );
+		dlg( SetString,~<Frame>~,Frame,0 );
+
+		substr( ~<msg>~,14,5,yOffset,19,1,cropOrientation,20,1,cropCode );
+
+		useAct = TRUE;
+							
+		if ( <useAct> )
+		{	
+			substr( ~<msg>~,37,3,DDD,40,3,RRR,43,3,GGG,46,3,BBB );
+			substr( ~<msg>~,49,3,deltaDDD,52,3,deltaRRR,55,3,deltaGGG,58,3,deltaBBB );
+						
+			actD = <DDD> + <deltaDDD>;
+			actR = <RRR> + <deltaRRR>;
+			actG = <GGG> + <deltaGGG>;
+			actB = <BBB> + <deltaBBB>;
+
+			dlg( SetString,~<actD>~,dDensity,0 );
+			dlg( SetString,~<actR>~,dRed,0 );
+			dlg( SetString,~<actG>~,dGreen,0 );
+			dlg( SetString,~<actB>~,dBlue,0 );
+		}
+
+		SetCropWhere( ~BremsonCropCode = '<cropOrientation><CropCode>'~ );
+
+		dlg( GetInput,GetStrings,Volume,Volume );
+
+		SizzleControl( SetValues,FilmDriveAction,~FilmDriveListen();~ );
+
+		ScanAnImage( ~<Volume>~,~<Order>~,~<Roll>~,~<Frame>~,~<$con.DlgData[FileExtension]>~,FALSE );
+
+		return TRUE;
+	}
+		
+	NUMERIC FilmDriveUnknownMsg( &InPort,msg )
+	{
+		EmptySerialBuffer( InPort );
+
+		return Warning( ~<msg>~ );
+	}
+
+
+	NUMERIC CreateBremsonTestFile(Path)
+	{
+		if ( !Device( aTempFile,Name,~<Path>~,Access,Write,Mode,CreateAlways,AnsiIO,Open ) )
+		{
+			return Warning( ~Failed to create d:\BremsonIn.dat~ );
+		}
+
+		aTempFile( WriteString,~~,~<LF><DC4>       PRESS READY BUTTON       ~,WriteComplete,1000 );
+		aTempFile( WriteString,~~,~<LF><BEL>       ENTER OPERATOR ID        ~,WriteComplete,1000 );
+		aTempFile( WriteString,~~,~<LF><DC4><filmTypeChanged>C   FILM TYPE HAS CHANGED TO 1 ~,WriteComplete,1000 );
+		aTempFile( WriteString,~~,~<LF><STX>12345671234123+99991H                128000004009-00+00-00+00~,WriteComplete,1000 );
+		aTempFile( WriteString,~~,~<LF><STX>12345671234124+99991H                128000004009-00+00-00+00~,WriteComplete,1000 );
+		aTempFile( WriteString,~~,~<LF><STX>12345671234125+99991H                128000004009-00+00-00+00~,WriteComplete,1000 );
+		aTempFile( WriteString,~~,~<LF><STX>12345671234126+99991H                128000004009-00+00-00+00~,WriteComplete,1000 );
+		aTempFile( WriteString,~~,~<LF><STX>12345671234127+99991H                128000004009-00+00-00+00~,WriteComplete,1000 );
+		aTempFile( WriteString,~~,~<LF><STX>12345671234128+99991H                128000004009-00+00-00+00~,WriteComplete,1000 );
+		aTempFile( WriteString,~~,~<LF><STX>12345671234129+99991H                128000004009-00+00-00+00~,WriteComplete,1000 );
+		aTempFile( WriteString,~~,~<LF><STX>12345671234130+99991H                128000004009-00+00-00+00~,WriteComplete,1000 );
+
+		aTempFile( Close );
+
+		return TRUE;
+	}
+}

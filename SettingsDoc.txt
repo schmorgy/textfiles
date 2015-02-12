@@ -1,0 +1,334 @@
+
+VOID Reopen()
+{
+	RefreshListView();
+}
+
+NUMERIC RefreshListView()
+{
+	if ( SettingsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	SettingsDataWindow( StatusBar,Text,~Refreshing~ );
+	SettingsDataWindow( RefreshWindow );
+	SettingsDataWindow( StatusBar,Text,~~ );
+
+	return TRUE;
+}
+
+
+STR GetKey( &Setting )
+{
+	Key = STR (	Category	= '<$con.Setting[Category]>'	AND
+				Item		= '<$con.Setting[Item]>'	AND
+				UserName	= '<$con.Setting[UserName]>' );
+
+	return ~<Key>~;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !SettingsDataView( GetChangedRow,ChangedSetting,OrigSetting,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate( ~There was no changed row.~ ) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedSetting[Category]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  Type cannot be blank.~ ); }
+
+	if ( ~<$con.ChangedSetting[Item]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  Item cannot be blank.~ ); }
+
+	Key = GetKey( OrigSetting );
+
+	Query = ~Select * From Settings Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <Query>. <theErr>~ ) );
+	}
+
+	if ( !List( UpdateFrom,ChangedSetting,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+		return Warning( Translate( ~Could not update Setting record where <Key>. <theErr>~ ) );
+	}
+
+	SettingsDataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+NUMERIC DuplicateRecord()
+{
+	if ( !SettingsDataView( GetSelectedRows,SelectedItems ) )		
+		{ return Warning( Translate( UIMessages,NoRowsSelected ) ); }
+
+	if ( !SelectedItems( GetFirst,SelectedItem ) )
+		{ return Warning( Translate( UIMessages,NoRowsSelected ) ); }
+
+	
+	RowBeingAdded = SettingsDataView( AddRow,SelectedItem );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	SettingsDataView( SetActiveCell,<RowBeingAdded>,Item );
+
+	return TRUE;
+}
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !SettingsDataView( GetSelectedRows,SettingsToDelete ) )		
+		{ return Warning( Translate( ~There was no row selected to delete~ ) ); }
+
+	if ( MessageBox( ~Are you sure you want to delete the selected Settings?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( SettingsToDelete( GetNext,Setting ) )
+	{
+		Key = GetKey( Setting );
+
+		Cmd = ~Delete From Settings Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate( ~Database update failed: <Cmd>. <theErr>~ ) );
+			break;
+		}
+
+		RowsToDelete( AddString,SettingsToDelete(GetCurrentPosition) );
+	}
+
+	SettingsDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	RowBeingAdded = SettingsDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate( ~You are too low on memory to add any more rows~ ) ); }
+
+	SettingsDataView( SetActiveCell,<RowBeingAdded>,Setting );
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	SettingsDataView( DisplayMenu,SettingsListViewMenu );
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC OnCloseSettingsDataView()
+{
+	if ( SettingsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	SettingsDataWindow( ForceCloseWindow );
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( SettingsDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !SettingsDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new settings that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( SettingsDataView( PendingChanges ) )
+	{
+		SettingsDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+NUMERIC RefreshUsersList()
+{
+	Query = ~Select Distinct UserName From Users Order By UserName~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Users table. <theErr>~ );
+	}
+
+	List( MakeStringList,UserNames,UserName );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	Fields( GetByName,UserName,UserNameField );
+
+	return UserNameField( DeleteReference,ChoiceList,Set,ChoiceList,UserNames(GetCopyOf) );	
+}
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+NUMERIC Init( WhichSettings,DocumentQuery )
+{
+	SettingsDataWindow( Set,Title,~<WhichSettings>~ == ~~ ? ~User Setting Data~ : ~User Setting Data - <WhichSettings>~ );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+			{ Error( ~Failed to query the Settings table~ ); }
+
+		SetDocumentData( List(GetObject) );
+
+		Global( WhichSettings,DocumentQuery );
+
+		if ( !SettingsDataWindow( CreateWindow,~Settings~ ) )
+			{ Error( ~Failed to create the window~ ); }
+
+		RefreshUsersList();
+
+		SettingsDataWindow( RefreshWindow );
+
+		return TRUE;
+	}
+
+	RefreshUsersList();
+
+	return RefreshListView();
+}
+
+
+if ( !GenCon( TableDefinition,GetFrom,Settings,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The Settings Table is not properly defined~ ); }
+	
+
+Define:	SettingsListViewMenu Using DDMenuDef AsSymbol SettingsListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add Setting~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+					Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+					
+		Define:	Duplicate	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Duplicate~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DuplicateRecord(); )
+
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(); )
+	}
+
+Define: SettingsDataWindow Using DDWinDef
+	Fields:		Title					~User Specific Settings~
+				Position				0 0 50 70
+				IsPositionPercent		T
+				EnableStatusBar			F;
+
+	Contains:	INLISTORDER
+	{
+		Define: SettingsDataView Using DDViewDef AsSymbol SettingsDataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView() )
+					HActionsText			ACTION SHOWHELPPAGE ( AdminHelpFile "UserSettings.htm" )
+					CloseActionsText		ACTION Call ( OnCloseSettingsDataView() ) ;
+	}
+	
+

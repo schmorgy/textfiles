@@ -1,0 +1,140 @@
+
+NUMERIC DefineDialog()
+{
+	if ( !DictionaryExists(ListOfTablesDictionary) )
+	{
+		Dictionary: ListOfTablesDictionary
+			Fields: Name	TableName			type text
+	}
+
+	Define:	DialogData Using ListOfTablesDictionary
+		Fields:	TableName		~~ ;
+
+	DialogWidth = 300;
+	vGap = 1;				hGap = 5;
+	PromptX		= $hGap;	PromptY		= 10;	PromptWidth	= 50;	PromptHeight = 20;		ValueWidth	= 150;
+	ButtonWidth	= 90;		ButtonHeight	= 20;
+
+	Left = 100;				Top = 400;
+
+	Define: TheDialog Using DDWinDef
+		Fields:	POSITION				<Left>, <Top>, $DialogWidth, 300
+				TITLE					~Select a Table to Open~
+				TYPENAME				~Dialog~ 
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "T_SelectTable.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: TableNameComboBox Using DDWinCtrlDef AsSymbol TableNameComboBox
+				Fields: TypeName		ComboBox  
+						Position		$PromptX, $PromptY, 250, 200
+						GenConName		THIS
+						GenConField		TableName;
+
+			DialogWidth = TableNameComboBox( GetRight,Position ) + ($hGap * 3);
+
+			Define: OpenButton Using DDWinCtrlDef AsSymbol OpenButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( DoOpenButton() )
+						POSITION		($DialogWidth/2) - ($ButtonWidth) - $hGap,
+										TableNameComboBox(GetTop,Position) + ($ButtonHeight * 2) + $vGap, $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Open~ )
+						TOOLTIP			Translate( ~Open the selected table~ )
+						TYPENAME		DefaultButton
+
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( DoCancelButton() )
+						POSITION		OpenButton(GetRight,Position) + $hGap,
+										OpenButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Cancel~ )
+						TOOLTIP			Translate( ~Exit without opening~ )
+						TYPENAME		BUTTON
+		}
+
+	// TRY TO POSITION THIS WINDOW NEXT TO THE WINDOW ACTIVE WINDOW
+
+	x = 100; y = 100;
+
+	if ( 0 )
+	{
+		if ( GenCon( CallersWindow,GetWindow,~~ ) )
+		{
+			CallersWindow( GetWindowPosition,Left,Top,Right,Bottom );
+			x = <Left> - <DialogWidth> - 5;
+			y = <Top>;
+		}
+	}
+
+	x = 100; y = 100;
+
+	if ( GenCon( CallersWindow,GetWindow,~~ ) )
+	{
+		CallersWindow( GetWindowPosition,Left,Top,Right,Bottom );
+		x = <Left> - <DialogWidth> - 25;
+		y = <Top>;
+	}
+
+	if ( <x> < 10 )	{ x = 10; }
+	if ( <y> < 0 )	{ y = 0; }
+
+	DialogHeight = OpenButton(GetBottom,Position) + $PromptY + 20;
+	TheDialog( Set,Position,~<x> <y>  <DialogWidth>  <DialogHeight>~ );
+	GenDlg( dlg,Definition,TheDialog,Data,DialogData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DialogData );
+
+	return TRUE;
+}
+
+
+NUMERIC DoCancelButton()
+{
+	dlg( End );
+	Exit();
+}
+
+
+NUMERIC DoOpenButton()
+{
+	dlg( GetInput,GetString,TableName,TableName );
+
+	OpenTheRecordset(~<TableName>~);
+
+	DoCancelButton();
+}
+
+
+NUMERIC SelectATable()
+{
+	return DefineDialog();
+}
+
+
+NUMERIC OpenTheRecordset(Path,TableName)
+{
+	//Action = ACTION DOC ( Test Open SearchDoc "ConnectAndSearch( ~<Path>;Extended Properties=Excel 8.0;~,~Microsoft.Jet.OLEDB.4.0~,~~,~~,~<TableName>~,~Select * From <TableName>~);" );	
+	
+	Provider = ~Microsoft.Jet.OLEDB.4.0~;
+
+	Query = ~Select * From DATA~;
+
+	Action = ACTION DOC ( EditAnyRecset Open EditAnyRecsetDoc "ConnectExcel( ~<Path>~,<TableName>,~<Query>~ );" );
+
+	return PerformActions( Action );
+}
+
+
+NUMERIC OpenAFile( Path )
+{
+	Debug( 1 );
+	//return Warning( Translate( ~We are not quite ready to open spreadsheets yet.\n\nBut ... you can convert spreadsheets to Jet databases which we can open.~ ) );
+
+	OpenTheRecordset(~<Path>~,Data);
+
+	Exit();
+
+	//SelectATable();
+
+	return TRUE;
+}

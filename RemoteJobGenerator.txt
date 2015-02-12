@@ -1,0 +1,291 @@
+
+
+
+STR
+CreateJob( theJob )
+{
+	if ( !file( Job,Open,~<theJob>~,Create,Write ) )	// OPEN A JOB FILE
+	{
+		Warning( ~Failed to create <theJob>~ );
+	}
+
+	Job( ~FileType: Layout~ );
+	Job( ~Macros:   |Macros.txt|~ );
+	Job( ~UnitOfMeasure: Inches~ );
+	
+	Job( ~Main:~ );
+	Job( ~  IWidth: 4~ );
+	Job( ~  IHeight: 4~ );
+	Job( ~  IColor: 0 255 255 255~ );
+
+	Job( ~IL: 1~ );
+	Job( ~  ILocation: .5 .5 3 3~ );
+	Job( ~  IFile: |<$App.ShareDirectory>\Images\Shirley|~ );
+	Job( ~  IPrompt: |Select an image|~ );
+	Job( ~  AutoCrop: 50 50 50 50 100 100~ );
+	Job( ~  IColor: 0 0 0 255~ );
+	Job( ~  SharpenFaster: 80~ );
+
+	Job( ~IL: 2~ );
+	Job( ~  ILocation: .5 3.1 0 0~ );
+	Job( ~  TLocation: 0 0 3 .5~ );
+	Job( ~  IColor: 0 255 255 255~ );
+	Job( ~  TColor: 0 0 0 0~ );
+	Job( ~  TPrompt: |Enter Some Text|~ );
+	Job( ~  Text: |<$@IFile.1.FileName>|~ );
+
+	Job( ~SaveImage:~ );
+	Job( ~  QueueName: |Disk|~ );
+	Job( ~  SaveName: $App.ShareDir + |TestRJSOrderOutput\| + $Job.Name~ );
+	Job( ~  SaveFileType: JPEG~ );
+	Job( ~  Copies: 1~ );
+	Job( ~  Xres: 100~ );
+	Job( ~  Enabled: 1~ );
+
+	Job( Close );
+
+	return ~OK~;
+}
+
+
+	
+
+
+
+
+NUMERIC FeedJobs( Qty,DelayTime,Queue,Order )
+{
+	index = 0;
+
+	 OrderSeq = 1;
+
+	 OrderItemSeq = OrderItem = 0;
+
+	while ( <++index> <= <Qty> && !<Stop> )
+	{
+		if ( IsNull( ~<Order>~ ) )
+		{
+			OrigPath = ~<Queue>\Job_<index>~;
+		}
+		else
+		{
+			OrigPath = ~<Queue>\<Order>_<OrderSeq>_<++OrderItem>_<++OrderItemSeq>~;
+		}
+
+		iter = 0;
+
+		Path = ~<OrigPath>~;
+
+		while ( Files( FileExists,~<Path>.txt~ ) )
+		{
+			Path = ~<OrigPath>_<++iter>~;
+		}
+
+		Invoke( dlg,SetStatus,0,Translate( ~<index>)  <Path>.txt~ ) );
+
+		CreateJob( ~<Path>.txt~ );
+
+		Log( Session,~Created Job <Path>.txt~ );
+
+		if ( <DelayTime> )
+		{
+			Sleep( <DelayTime> );
+		}
+	}
+
+	Invoke( dlg,EnableControls,TRUE,GoButton );
+	Invoke( dlg,EnableControls,FALSE,StopButton );
+
+	return TRUE;
+}
+
+
+NUMERIC DefineDialog()
+{
+	if ( !DictionaryExists( DDRemoteJobTester ) )
+	{
+        Dictionary: DDRemoteJobTester 
+            Fields: Name	Queue		type text
+			Fields: Name	Delay		type long
+			Fields: Name	Qty			type long
+			Fields: Name	Order		type text
+ 	}
+
+	Define: DlgData Using DDRemoteJobTester
+		Fields: Delay	0
+				Queue	~<$App.Directory>\RemoteJobQueue~
+				Order	~~
+				Qty		1;
+
+	Left = 100;	Top = 100;	DialogWidth = 500; DialogHeight = 300;
+
+	StaticTextWidth = 70;	StaticTextHeight = 20;
+	EditTextWidth = 50;		EditTextHeight = 20;
+
+	vGap = 5; hGap = 5; ButtonWidth = 90; ButtonHeight = 20;
+
+	Define: aDialog Using DDWinDef
+		Fields:	POSITION				100,100,$DialogWidth,$DialogHeight 
+				TITLE					~Remote Job Tester~
+				TYPENAME				~Dialog~ 
+				STATUSBAR				~1 100~
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "ProgrammerAssistant.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: QueuePrompt Using DDWinCtrlDef AsSymbol QueuePrompt
+				Fields:	TypeName		StaticText
+						Text			Translate( ~Queue~ )
+						RightJustified	TRUE
+						Position		$vGap,$vGap,$StaticTextWidth, $StaticTextHeight
+
+			Define: QueueField Using DDWinCtrlDef AsSymbol QueueField
+				Fields:	TypeName		EditText
+						GenConName		This
+						GenConField		Queue
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						Position		QueuePrompt(GetRight,Position) + $hGap,QueuePrompt(GetTop,Position),400, $EditTextHeight
+
+			Define: BrowseButton Using DDWinCtrlDef AsSymbol BrowseButton 
+				Fields:	TypeName		Button
+						Text			Translate( ~?~ )
+						Position		QueueField(GetRight,Position)+ $hGap,QueueField(GetTop,Position),20,<ButtonHeight>
+						DActionsText	ACTION EXEC  ( OnBrowseButton() ) 
+						Tooltip			Translate( ~Find the remote queue directory to feed jobs to~ );
+
+			Define: DelayPrompt Using DDWinCtrlDef AsSymbol DelayPrompt
+				Fields:	TypeName		StaticText
+						Text			Translate( ~Delay (ms)~ )
+						RightJustified	TRUE
+						Position		QueuePrompt(GetLeft,Position),QueuePrompt(GetBottom,Position)+$vGap,$StaticTextWidth, $EditTextHeight
+
+			Define: DelayField Using DDWinCtrlDef AsSymbol DelayField
+				Fields:	TypeName		EditText
+						GenConName		This
+						GenConField		Delay
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						Position		DelayPrompt(GetRight,Position) + $hGap,DelayPrompt(GetTop,Position),$EditTextWidth, $EditTextHeight
+
+			Define: QtyPrompt Using DDWinCtrlDef AsSymbol QtyPrompt
+				Fields:	TypeName		StaticText
+						Text			Translate( ~Qty~ )
+						RightJustified	TRUE
+						Position		DelayPrompt(GetLeft,Position),DelayPrompt(GetBottom,Position)+$vGap,$StaticTextWidth, $EditTextHeight
+
+			Define: QtyField Using DDWinCtrlDef AsSymbol QtyField
+				Fields:	TypeName		EditText
+						GenConName		This
+						GenConField		qty
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						Position		QtyPrompt(GetRight,Position) + $hGap,QtyPrompt(GetTop,Position),$EditTextWidth, $EditTextHeight
+
+			Define: OrderPrompt Using DDWinCtrlDef AsSymbol OrderPrompt
+				Fields:	TypeName		StaticText
+						Text			Translate( ~Order~ )
+						RightJustified	TRUE
+						Position		QtyPrompt(GetLeft,Position),QtyPrompt(GetBottom,Position)+$vGap,$StaticTextWidth, $EditTextHeight
+
+			Define: OrderField Using DDWinCtrlDef AsSymbol OrderField
+				Fields:	TypeName		EditText
+						GenConName		This
+						GenConField		Order
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						Position		OrderPrompt(GetRight,Position) + $hGap,OrderPrompt(GetTop,Position),150, $EditTextHeight
+
+			Define: GoButton Using DDWinCtrlDef AsSymbol GoButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( GoButton() )
+						POSITION		($DialogWidth/2) - ($ButtonWidth) - $hGap,OrderPrompt(GetBottom,Position)+$vGap*3, $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Go~ )
+						TOOLTIP		Translate( ~Start submitting jobs to the remote job server~ )
+						TYPENAME		BUTTON
+
+			Define: StopButton Using DDWinCtrlDef AsSymbol StopButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( DoStopButton() )
+						POSITION		GoButton(GetRight,Position) + $hGap,GoButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Stop~ )
+						IsEnabled		F
+						TOOLTIP			Translate( ~Stop submitting jobs~ )
+						TYPENAME		BUTTON
+		}
+
+	DialogWidth = BrowseButton(GetRight,Position) + $hGap*2;
+	DialogHeight = StopButton(GetBottom,Position) + $vGap + 30;
+
+	aDialog( Set,Position,~100 100 <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,aDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DlgData );
+
+	return TRUE;
+}
+
+
+NUMERIC OnBrowseButton()
+{
+	StartingDirectory = ~<$App.Directory>~;
+
+	Title = Translate( ~Find the Remote Job Queue to Feed~ );
+
+	SubTitle = Translate( ~~ );
+
+	if ( GetFolder( ~<Title>~,~<SubTitle>~,Path ) )
+	{
+		return dlg( SetString,~<Path>~,Queue,0 );
+	}
+
+	return FALSE;
+}
+
+
+VOID EnableGo( Value )
+{
+	dlg( EnableControls,<Value>,GoButton );
+	dlg( EnableControls,!<Value>,StopButton );
+}
+
+
+Stop = TRUE;
+
+NUMERIC GoButton()
+{
+	dlg( GetInput );
+
+	EnableGo( FALSE );
+
+	Stop = FALSE;
+
+	aThread( New,FeedJobs,~<$con.DlgData[Qty]>~,~<$con.DlgData[Delay]>~,~<$con.DlgData[Queue]>~,~<$con.DlgData[Order]>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC DoStopButton()
+{
+	Stop = TRUE;
+	EnableGo( TRUE );
+	return TRUE;
+}
+
+
+NUMERIC DoCancelButton()
+{
+	if ( aThread( IsActive ) )
+	{
+		return Warning( ~You are still submitting jobs.  Press stop first.~ );
+	}
+
+	dlg( End );
+	Exit();
+}
+
+Thread( aThread );
+
+DefineDialog();

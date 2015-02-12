@@ -1,0 +1,4840 @@
+Include: ~UtilityRoutines~;
+
+IncludeClass( BaseMenu );
+
+Left = 0;	Top = 0;	DialogWidth = 300; DialogHeight = 300;
+
+vGap = 5; hGap = 5; ButtonWidth = 100; EditTextHeight = ButtonHeight = 20;
+PromptWidth = 70;
+
+Font = ~Courier~;
+Fontsize = 9;
+TabStops = 10;
+
+ScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+ScreenHeight = App( thisApp,MainWindow,GetClientHeight );
+
+FileTextWidth = <ScreenWidth> * .87;   PathTextWidth = $FileTextWidth - 150;
+
+CommonLength =  16 * 25; //<ScreenHeight> * .5; 
+
+TabIndex = 0;
+
+WinMergeKey = ~HKEY_CURRENT_USER[Software\Thingamahoochie\WinMerge\Executable]~;
+
+
+ 
+NUMERIC DefineDialog()
+{
+	FirstTime = FALSE;
+
+	if ( !DictionaryExists( DDProgrammerAssistantDialog ) )
+	{
+        Dictionary: DDProgrammerAssistantDialog 
+            Fields: Name	CheckDirectoriesFirst			type Long
+            Fields: Name	ScriptsRunLocal					type Long
+			Fields: Name	Debug							type Long
+			Fields: Name	DontDebugThis					type Long
+			Fields: Name	Editor							type Text
+			Fields: Name	AdditionalTextFiles				type Text
+			
+			Fields: Name	TextFiles						type Text
+			Fields: Name	TextFilesTitle					type Text
+			Fields: Name	TextFilesPrototypes				type Text
+			
+			Fields: Name	ScriptOverrides					type Text
+			Fields: Name	ScriptOverridesTitle			type Text
+			Fields: Name	ScriptOverridesPrototypes		type Text
+			
+			Fields: Name	ScriptLibOverrides				type Text
+			Fields: Name	ScriptLibOverridesTitle			type Text
+			Fields: Name	ScriptLibOverridesPrototypes	type Text
+
+			Fields: Name	Scripts							type Text
+			Fields: Name	ScriptsTitle					type Text
+			Fields: Name	ScriptsPrototypes				type Text
+
+			Fields: Name	Classes							type Text
+			Fields: Name	ClassesTitle					type Text
+			Fields: Name	ClassesPrototypes				type Text
+	
+			Fields: Name	Macros							type Text
+			Fields: Name	MacrosTitle						type Text
+			Fields: Name	MacrosPrototypes				type Text
+			
+			Fields: Name	UserTableDefinitions			type Text
+			Fields: Name	UserTableDefinitionsTitle		type Text
+			Fields: Name	UserTableDefinitionsPrototypes	type Text
+		
+			Fields: Name	CommonText						type Text
+			Fields: Name	CommonTextTitle					type Text
+			Fields: Name	CommonTextPrototypes			type Text
+			
+			Fields: Name	KPSS							type Text
+			Fields: Name	KPSSTitle						type Text
+			Fields: Name	KPSSPrototypes					type Text
+
+			Fields: Name	CurrentFilePath					type Text
+			Fields: Name	ScriptFiles						type Text
+			
+			Fields: Name	Trigger							type Text
+			Fields: Name	Scratch							type Text
+			Fields: Name	Script							type Text
+			Fields: Name	SampleDirectory					type Text
+			Fields: Name	SampleFile						type Text
+			Fields: Name	SampleCode						type Text
+			
+			Fields: Name	RefSubject						type Text
+			Fields: Name	RefCategory						type Text
+			Fields: Name	RefItem							type Text
+			Fields: Name	RefSubItem						type Text
+			Fields: Name	RefDescription					type Text
+			Fields: Name	RefCode							type Text
+			Fields: Name	Threads							type Text
+			Fields: Name	Stack							type Text
+			Fields: Name	Editing							type Long
+			Fields: Name	DescriptionType					type Text
+			Fields: Name	SearchText						type Text
+			
+			Fields: Name	GotoText						type Text;
+
+		FirstTime = TRUE;
+	}
+
+	if ( <FirstTime> )
+	{
+		Define: DlgData Using DDProgrammerAssistantDialog
+			
+			Fields: DontDebugThis			TRUE
+					ScriptsRunLocal			Numeric( ~<$Sym.ScriptsRunLocal>~ )
+					DescriptionType			 ~Description~;
+		
+ 	}
+	else
+	{
+		Define: DlgData Using DDProgrammerAssistantDialog
+			Fields: CheckDirectoriesFirst	Debug( GetCheckDirectoriesFirst )
+					ScriptsRunLocal			Numeric( ~<$Sym.ScriptsRunLocal>~ )
+					Debug					Debug( GetDebug )
+					DontDebugThis			Debug( GetDontDebugThis )
+					DescriptionType			~Description~;
+	}
+
+	Define: aDialog Using DDWinDef
+		Fields:	POSITION				100,100,$DialogWidth,$DialogHeight 
+				TITLE					~Programmer's Assistant~
+				TYPENAME				~Dialog~ 
+				STATUSBAR				~2 90 10~
+				WANTSMINIMIZEBOX		TRUE
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				RClickDnActionsText ACTION Exec ( RightClickIn() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPLHelpFile "ProgrammerAssistant.htm" ) 
+				//StatusBarClickActionsText 	ACTION EXEC ( StatusBarClick(%ld) );
+
+		Contains: INLISTORDER
+		{
+			Define: IgnoreLibBox Using DDWinCtrlDef AsSymbol IgnoreLibBox 
+				Fields:	GENCONNAME		THIS
+						GENCONFIELD		CheckDirectoriesFirst
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						DACTIONSTEXT	ACTION EXEC ( OnIgnoreLib() )
+						POSITION		$hGap,$vGap, 400, $ButtonHeight
+						TEXT			Translate( ~Run scripts from TextFiles  before checking script library: <$App.Title>_text.txl. ~ )
+						TOOLTIP			Translate( ~~ )
+						TYPENAME		CheckBox;
+
+			Define: RunLocalBox Using DDWinCtrlDef AsSymbol RunLocalBox 
+				Fields:	GENCONNAME		THIS
+						GENCONFIELD		ScriptsRunLocal
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						DACTIONSTEXT	ACTION EXEC ( OnRunLocal() )
+						POSITION		IgnoreLibBox(GetRight,Position) + 20,IgnoreLibBox(GetTop,Position), 400, $ButtonHeight
+						TEXT			Translate( ~Get scripts from <$App.ComputerName> rather than from the <$App.Title> server.~ )
+						TOOLTIP			Translate( ~~ )
+						TYPENAME		CheckBox;
+
+			TopOfTab = IgnoreLibBox(GetBottom,Position) + 45;
+
+			Define: TabWindow Using DDWinCtrlDef AsSymbol TabWindow
+				Fields: Position	IgnoreLibBox(GetLeft,Position)-2,IgnoreLibBox(GetBottom,Position) + $vGap*4 $FileTextWidth+$hGap*2 500
+						TypeName	TabCtrl
+						TabChangeActionsText ACTION EXEC ( OnTabChange() )
+						Text		~TCS_HOTTRACK | TCS_MULTILINE | TCS_TOOLTIPS~
+					Contains: InListOrder
+					{
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~Reference~
+									TypeName		Tab
+									Tooltip			~Select the file(s) you wish to use~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_Reference.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineReferenceTabControls($hGap,$TopOfTab);
+							}
+
+
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~Scratch~
+									TypeName		Tab
+									Tooltip			~User defined preferences for the Programmer's Assistant~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_Scratch.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineScratchTabControls($hGap,$TopOfTab);
+							}
+
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~Find~
+									TypeName		Tab
+									Tooltip			~Select the file(s) you wish to use~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_Find.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineExampleTabControls($hGap,$TopOfTab);
+							}
+
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~Prefs~
+									TypeName		Tab
+									Tooltip			~User defined preferences for the Programmer's Assistant~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_Prefs.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefinePrefsTabControls($hGap,$TopOfTab);
+							}
+
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~Tools~
+									TypeName		Tab
+									Tooltip			~Tools used for developing and debugging~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_Tools.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineToolsTabControls($hGap,$TopOfTab);
+							}
+
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~Threads~
+									TypeName		Tab
+									Tooltip			~See the active threads and their stacks~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_Threads.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineThreadTabControls($hGap,$TopOfTab);
+							}
+
+
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~TextFiles~
+									TypeName		Tab
+									Tooltip			~Files that were extracted from the Script Library~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_TextFiles.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineFilesTabControls(~<$App.Directory>~,TextFiles,$hGap,$TopOfTab,TRUE);
+							}
+							
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~ScriptLibOverrides~
+									TypeName		Tab
+									Tooltip			~Scripts to run instead of the corresponding scripts in the script library~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_Overrides.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineFilesTabControls(~<$App.ScriptLibOverrides>~,ScriptLibOverrides,$hGap,$TopOfTab,TRUE,~<$App.ScriptLibOverrides>~);
+							}
+							
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~ScriptOverrides~
+									TypeName		Tab
+									Tooltip			~Overrides to scripts for customization~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_Overrides.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineFilesTabControls(~<$App.ShareDirectory>\Scripts~,ScriptOverrides,$hGap,$TopOfTab,TRUE);
+							}
+
+
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~Scripts~
+									TypeName		Tab
+									Tooltip			~The <$App.Title> Scripts folder~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_Scripts.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineFilesTabControls(~<$App.ShareDirectory>~,Scripts,$hGap,$TopOfTab,TRUE);
+							}
+
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~Classes~
+									TypeName		Tab
+									Tooltip			~Base classes you may use to customize <$App.Title>~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_Classes.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineFilesTabControls(~<$App.ShareDirectory>\Scripts~,Classes,$hGap,$TopOfTab,TRUE);
+							}
+
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~Macros~
+									TypeName		Tab
+									Tooltip			~Select the file(s) you wish to use~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_Macros.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineFilesTabControls(~<$App.ShareDirectory>\Scripts~,Macros,$hGap,$TopOfTab,TRUE);
+							}
+
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~UserTables~
+									TypeName		Tab
+									Tooltip			~Select the file(s) you wish to use~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_UserTables.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineFilesTabControls(~<$App.ShareDirectory>\Scripts~,UserTableDefinitions,$hGap,$TopOfTab,TRUE);
+							}
+
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~Session Logs~
+									TypeName		Tab
+									Tooltip			~Select the file(s) you wish to use~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_SessionLog.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineFilesTabControls(~<$App.Directory>\SessionLogs~,~<$App.Title>~,$hGap,$TopOfTab,TRUE);
+							}
+
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~Trace Files~
+									TypeName		Tab
+									Tooltip			~Select the file(s) you wish to use~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_TraceFiles.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineFilesTabControls(~<$App.Directory>\TraceFiles~,~<$App.Title>~,$hGap,$TopOfTab,TRUE);
+							}
+							
+						Define: Tab<++TabIndex> Using DDWinCtrlDef
+							Fields: Text			~CommonText~
+									TypeName		Tab
+									Tooltip			~Ignore this.  It is for Kodak use only.~
+									HActionsText	ACTION SHOWHELPPAGE ( KPLHelpFile "ProgAssist_CommonText.htm" )
+
+							Contains: INLISTORDER
+							{
+								DefineFilesTabControls(~<$App.Directory>~,CommonText,$hGap,$TopOfTab,TRUE);
+							}
+
+					}
+
+
+			Define: ScriptPrompt Using DDWinCtrlDef AsSymbol ScriptPrompt 
+				Fields:	Text			Trigger
+						POSITION		$hGap,TabWindow(GetBottom,Position)+$vGap*2, $PromptWidth, $ButtonHeight
+						TEXT			Translate( ~Script~ )
+						TOOLTIP			Translate( ~~ )
+						RIGHTJUSTIFIED	TRUE
+						TYPENAME		StaticText
+
+			Define: ScriptField Using DDWinCtrlDef AsSymbol ScriptField 
+				Fields: TypeName		EditText
+						GenConField		Script
+						GenConName		THIS
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						Position		ScriptPrompt(GetRight,Position) + $hGap,ScriptPrompt(GetTop,Position),$PathTextWidth+50,$ButtonHeight;
+
+			Define: ScriptBrowse Using DDWinCtrlDef AsSymbol ScriptBrowse 
+				Fields:	Text			Trigger
+						POSITION		ScriptField(GetRight,Position)+$hGap,ScriptField(GetTop,Position), 20, $ButtonHeight
+						TEXT			Translate( ~?~ )
+						TOOLTIP			Translate( ~Use a file dialog to find the script to run~ )
+						DActionsText	ACTION EXEC ( OnScriptBrowse() )
+						TYPENAME		Button
+
+			Define: TriggerPrompt Using DDWinCtrlDef AsSymbol TriggerPrompt 
+				Fields:	Text			Trigger
+						POSITION		ScriptPrompt(GetLeft,Position),ScriptPrompt(GetBottom,Position)+$vGap, $PromptWidth, $ButtonHeight
+						TEXT			Translate( ~Trigger~ )
+						TOOLTIP			Translate( ~~ )
+						RIGHTJUSTIFIED	TRUE
+						TYPENAME		StaticText
+
+			Define: TriggerField Using DDWinCtrlDef AsSymbol TriggerField 
+				Fields: TypeName		EditText
+						GenConField		Trigger
+						GenConName		THIS
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						Position		TriggerPrompt(GetRight,Position) + $hGap,TriggerPrompt(GetTop,Position),$PathTextWidth+50,$ButtonHeight;
+
+
+			Define: EditButton Using DDWinCtrlDef AsSymbol EditButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnEditButton() )
+						POSITION		$hGap,TriggerPrompt(GetBottom,Position)+$vGap*1, $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~&Edit~ )
+						TOOLTIP			Translate( ~Edit the selected file(s) using your preferred editor or Notepad if you have not specified an editor in the Prefs tab.~ )
+						TYPENAME		BUTTON
+
+			Define: RunButton Using DDWinCtrlDef AsSymbol RunButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnRunButton() )
+						POSITION		EditButton(GetRight,Position) + $hGap,EditButton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~&Run~ )
+						TOOLTIP			Translate( ~Run the selected script.  If the trigger field is filled in, the trigger code will be executed after loading the file.~ )
+						TYPENAME		BUTTON
+
+			Define: SessionLogButton Using DDWinCtrlDef AsSymbol SessionLogButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnSessionLog() )
+						POSITION		RunButton(GetRight,Position) + $hGap,RunButton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~SessionLog~ )
+						TOOLTIP			Translate( ~View the active session log~ )
+						TYPENAME		BUTTON
+						
+			Define: NewSessionLogButton Using DDWinCtrlDef AsSymbol NewSessionLogButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnNewSessionLogButton() )
+						POSITION		SessionLogButton(GetRight,Position) + $hGap,SessionLogButton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~New SessionLog~ )
+						TOOLTIP			Translate( ~Close the current session log and open a new one~ )
+						TYPENAME		BUTTON
+						
+						
+						
+
+			Define: WorkstationPrefButton Using DDWinCtrlDef AsSymbol WorkstationPrefButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnWorkstationPrefs() )
+						POSITION		NewSessionLogButton(GetRight,Position) + $hGap,NewSessionLogButton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~WorkStation Prefs~ )
+						TOOLTIP			Translate( ~View the Worstation.prf file on this workstation~ )
+						TYPENAME		BUTTON
+
+			Define: TreeButton Using DDWinCtrlDef AsSymbol TreeButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnTreeButton() )
+						POSITION		WorkstationPrefButton(GetRight,Position) + $hGap,WorkstationPrefButton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~App Tree~ )
+						TOOLTIP			Translate( ~View the GenCons on the Application Tree~ )
+						TYPENAME		BUTTON
+
+		Define: HTTPServerButton Using DDWinCtrlDef AsSymbol HTTPServerButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnHTTPServerButton() )
+						POSITION		TreeButton(GetRight,Position) + $hGap,TreeButton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~HTTP Server~ )
+						TOOLTIP			Translate( ~Open the HTTP Server control window~ )
+						TYPENAME		BUTTON
+
+		Define: TraceDialogButton Using DDWinCtrlDef AsSymbol TraceDialogButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnTraceDialogButton() )
+						POSITION		HTTPServerButton(GetRight,Position) + $hGap,HTTPServerButton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Trace~ )
+						TOOLTIP			Translate( ~Open the Tracing control window~ )
+						TYPENAME		BUTTON
+
+			}
+
+
+	DialogWidth = TabWindow(GetRight,Position) + $vGap * 2;
+	DialogHeight = EditButton(GetBottom,Position) + $vGap + 30;
+
+	aDialog( Set,Position,~<Left> <Top> <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,aDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DlgData );
+	
+	//dlg( SetStatus,1,~Click to Shrink~ );
+
+	return TRUE;
+}
+
+
+
+
+VOID DefineFilesTabControls( Path,ADirectory,x,y,Manipulate,ActualDirectory )
+{				
+	Define: CurrentFilePathField<TabIndex> Using DDWinCtrlDef AsSymbol CurrentFilePathField<TabIndex> 
+		Fields: TypeName		StaticText
+				GenConField		<ADirectory>Title
+				GenConName		THIS
+				IActionsText	ACTIONS ( Get )
+				OActionsText	ACTIONS ( Save )
+				Text			DefinedAndNotNull(ActualDirectory) ? ~<ActualDirectory>~ : ~<Path>\<aDirectory>~
+				Position		$x+$hGap,$y+10,600 ,15
+
+
+	Define: ListBox<TabIndex> Using DDWinCtrlDef AsSymbol ListBox<TabIndex>
+		Fields:	POSITION		$x+$hGap,$y+30,200 ,$CommonLength
+				GENCONNAME		THIS
+				GENCONFIELD		~<ADirectory>~
+				ALLOWMULTIPLESELECTION	TRUE
+				IACTIONSTEXT	ACTIONS ( Get )
+				DACTIONSTEXT	ACTIONS ( Save "Exec(OnTextFileSelected(~<ADirectory>~);)"  )
+				OACTIONSTEXT	ACTIONS ( Save )
+				DOUBLECLICKACTIONSTEXT	ACTION EXEC ( OnEditButton() )
+				NoDuplicates	TRUE
+				TOOLTIP			Translate( ~~ )
+				SORTED			TRUE
+				TYPENAME		ListBox ;
+
+	Define: PrototypesField<TabIndex> Using DDWinCtrlDef AsSymbol PrototypesField<TabIndex> 
+		Fields: TypeName		MLEditText
+				GenConField		<ADirectory>Prototypes
+				GenConName		THIS
+				IActionsText	ACTIONS ( Get )
+				OActionsText	ACTIONS ( Save )
+				Font			~<Font>~
+				FontSize		~<FontSize>~
+				MaxTextSize		1024 * 1024 * 8
+				TabStops		<TabStops>
+				ReadOnly		T
+				POSITION		ListBox<TabIndex>(GetRight,Position)+$hGap,$y+30,$FileTextWidth-ListBox<TabIndex>(GetRight,Position)-$hGap*2,400;
+
+	Tab<TabIndex>Directory = DefinedAndNotNull(ActualDirectory) ? ~<ActualDirectory>~ : ~<Path>\<aDirectory>~;
+	Tab<TabIndex>Prototypes = ~<aDirectory>Prototypes~;
+	Tab<TabIndex>Title = ~<ADirectory>Title~;
+	
+	Global( Tab<TabIndex>Directory,Tab<TabIndex>Prototypes,Tab<TabIndex>Title );
+
+	if ( <Manipulate> )
+	{
+	
+		Define: NewFileButton Using DDWinCtrlDef AsSymbol NewFileButton 
+			Fields:	GENCONNAME		THIS
+					DACTIONSTEXT	ACTION EXEC ( OnNewFileButton() )
+					POSITION		$x+$hGap,ListBox<TabIndex>(GetBottom,Position)+$vGap*1,$ButtonWidth, $ButtonHeight
+					TEXT			Translate( ~New~ )
+					TOOLTIP			Translate( ~Open the editor~ )
+					TYPENAME		BUTTON
+
+		Define: OpenFileButton Using DDWinCtrlDef AsSymbol OpenFileButton 
+			Fields:	GENCONNAME		THIS
+					DACTIONSTEXT	ACTION EXEC ( OnEditButton() )
+					POSITION		NewFileButton(GetRight,Position) + $hGap,NewFileButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+					TEXT			Translate( ~Open File~ )
+					TOOLTIP			Translate( ~Edit the selected file.  Same as double clicking the file.  If using NotePad++, you may place the cursor on a routine before opening and you will automatically jump to that routine in the editor.~ )
+					TYPENAME		BUTTON
+					
+		Define: MakeWritableButton Using DDWinCtrlDef AsSymbol MakeWritableButton 
+			Fields:	GENCONNAME		THIS
+					DACTIONSTEXT	ACTION EXEC ( OnMakeWritable(TRUE) )
+					POSITION		OpenFileButton(GetRight,Position) + $hGap,OpenFileButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+					TEXT			Translate( ~Make Writable~ )
+					TOOLTIP			Translate( ~Make the selected file(s) writable~ )
+					TYPENAME		BUTTON
+
+
+		Define: ReadOnlyButton Using DDWinCtrlDef AsSymbol ReadOnlyButton 
+			Fields:	GENCONNAME		THIS
+					DACTIONSTEXT	ACTION EXEC ( OnMakeWritable(FALSE) )
+					POSITION		MakeWritableButton(GetRight,Position) + $hGap,MakeWritableButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+					TEXT			Translate( ~Make Read-Only~ )
+					TOOLTIP			Translate( ~Make the select file(s) read-only~ )
+					TYPENAME		BUTTON
+
+		Define: DeleteButton Using DDWinCtrlDef AsSymbol DeleteButton 
+			Fields:	GENCONNAME		THIS
+					DACTIONSTEXT	ACTION EXEC ( OnDelete() )
+					POSITION		ReadOnlyButton(GetRight,Position) + $hGap,ReadOnlyButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+					TEXT			Translate( ~Delete~ )
+					TOOLTIP			Translate( ~Delete the selected file(s)~ )
+					TYPENAME		BUTTON
+
+		Define: RefreshButton Using DDWinCtrlDef AsSymbol RefreshButton 
+			Fields:	GENCONNAME		THIS
+					DACTIONSTEXT	ACTION EXEC ( RefreshDirectories() )
+					POSITION		DeleteButton(GetRight,Position) + $hGap,DeleteButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+					TEXT			Translate( ~Refresh~ )
+					TOOLTIP			Translate( ~Refresh the list of files~ )
+					TYPENAME		BUTTON
+
+		
+
+		Define: CompareFileButton Using DDWinCtrlDef AsSymbol CompareFileButton 
+			Fields:	GENCONNAME		THIS
+					DACTIONSTEXT	ACTION EXEC ( OnCompareFile() )
+					POSITION		RefreshButton(GetRight,Position) + $hGap,RefreshButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+					TEXT			Translate( ~Compare File~ )
+					TOOLTIP			Translate( ~Compare the local file to the file on the shared <$App.Title> server.  Disabled if WinMerge is not installed (www.winmerge.org)~ )
+					ISENABLED		(SimilarStr( ~<ADirectory>~,~ScriptOverrides~,~ScriptLibOverrides~,~Scripts~,~Classes~,~Macros~,~UserTableDefinitions~ ) && !IsNULL(~<$Registry.<WinMergeKey>>~)) ? T : F
+					TYPENAME		BUTTON
+					
+		Define: CompareDirectoryButton Using DDWinCtrlDef AsSymbol CompareDirectoryButton 
+			Fields:	GENCONNAME		THIS
+					DACTIONSTEXT	ACTION EXEC ( OnCompareDirectory() )
+					POSITION		CompareFileButton(GetRight,Position) + $hGap,CompareFileButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+					TEXT			Translate( ~Compare Directory~ )
+					TOOLTIP			Translate( ~Compare the local directory to the directory on the shared <$App.Title> server.  Disabled if WinMerge is not installed (www.winmerge.org)~ )
+					ISENABLED		(SimilarStr( ~<ADirectory>~,~ScriptOverrides~,~ScriptLibOverrides~,~Scripts~,~Classes~,~Macros~,~UserTableDefinitions~ ) && !IsNULL(~<$Registry.<WinMergeKey>>~)) ? T : F
+					TYPENAME		BUTTON
+
+		Define: CopyFileToServerButton Using DDWinCtrlDef AsSymbol CopyFileToServerButton 
+			Fields:	GENCONNAME		THIS
+					DACTIONSTEXT	ACTION EXEC ( OnCopyFileToServer() )
+					POSITION		CompareDirectoryButton(GetRight,Position) + $hGap,CompareDirectoryButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+					TEXT			Translate( ~Copy To Server~ )
+					TOOLTIP			Translate( ~Copy the local directory to the directory on the shared <$App.Title> server.~ )
+					ISENABLED		(SimilarStr( ~<ADirectory>~,~ScriptOverrides~,~ScriptLibOverrides~,~Scripts~,~Classes~,~Macros~,~UserTableDefinitions~ ) && !IsNULL(~<$Registry.<WinMergeKey>>~)) ? T : F
+					TYPENAME		BUTTON
+	}
+}
+
+
+VOID DefineExampleTabControls( x,y )
+{
+	Define: SampleCodeField Using DDWinCtrlDef AsSymbol SampleCodeField 
+		Fields: TypeName		MLEditText
+				GenConField		SampleCode
+				GenConName		THIS
+				IActionsText	ACTIONS ( Get )
+				DActionsText	ACTIONS ( Save )
+				OActionsText	ACTIONS ( Save )
+				Font			~<Font>~
+				FontSize		~<FontSize>~
+				MaxTextSize		1024 * 1024 * 8
+				TabStops		<TabStops>
+				ReadOnly		T
+				POSITION		$x+$hGap,$y+30
+								$FileTextWidth-$hgap,400
+
+	Define: FindButton Using DDWinCtrlDef AsSymbol FindButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnFindButton() )
+				POSITION		SampleCodeField(GetLeft,Position),SampleCodeField(GetBottom,Position)+$vGap*4,
+								$ButtonWidth, $ButtonHeight
+				TEXT			Translate( ~Find~ )
+				TOOLTIP			Translate( ~Find files containing the specified string~ )
+				TYPENAME		BUTTON
+
+	Define: FindField Using DDWinCtrlDef AsSymbol FindField 
+		Fields:	GENCONNAME		THIS
+				IACTIONSTEXT	ACTIONS ( Get )
+				DACTIONSTEXT	ACTIONS ( Save )
+				IACTIONSTEXT	ACTIONS ( Get )
+				POSITION		FindButton(GetRight,Position)+$hGap,FindButton(GetTop,Position),
+								200, $ButtonHeight
+				GenConName		THIS
+				GenConField		SearchText
+				TOOLTIP			Translate( ~Find files containing this specified string~ )
+				DisallowedChars	STR ( ~ )
+				WantReturnKey	T
+				ReturnKeyActionsText ACTION EXEC ( OnFindButton() )
+				TYPENAME		EditText
+
+	Define: EditSelectedButton Using DDWinCtrlDef AsSymbol EditSelectedButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnEditSelectedButton() )
+				POSITION		FindField(GetRight,Position)+$hGap,FindField(GetTop,Position),
+								$ButtonWidth*.5, $ButtonHeight
+				TEXT			Translate( ~Edit~ )
+				TOOLTIP			Translate( ~Click somewhere in a line above and then press this button.  The appropriate file will be opened and the search text will be in the paste buffer, so you can Ctrl-F and Ctrl-V to find the appropriate line.~ )
+				TYPENAME		BUTTON
+
+	
+	Define: FindSessionLogErrorsButton Using DDWinCtrlDef AsSymbol FindSessionLogErrorsButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnFindSessionLogErrorsButton() )
+				POSITION		EditSelectedButton(GetRight,Position)+$hGap*2,EditSelectedButton(GetTop,Position),
+								$ButtonWidth*1.1, $ButtonHeight
+				TEXT			Translate( ~SessionLog Find~ )
+				TOOLTIP			Translate( ~Find session log files containing the specified string~ )
+				TYPENAME		BUTTON
+	
+}
+
+
+
+
+VOID DefineReferenceTabControls( x,y )
+{
+	Define: ListBoxRefSubject Using DDWinCtrlDef AsSymbol ListBoxRefSubject
+		Fields:	POSITION		$x+$hGap,$y+30,60 ,$CommonLength
+				GENCONNAME		THIS
+				GENCONFIELD		RefSubject
+				ALLOWMULTIPLESELECTION	FALSE
+				IACTIONSTEXT	ACTIONS ( Get )
+				DACTIONSTEXT	ACTIONS ( Save "Exec(OnRefSubjectSelected();)"  )
+				OACTIONSTEXT	ACTIONS ( Save )
+				NoDuplicates	TRUE
+				TOOLTIP			Translate( ~Left Click to select.  Right Click to find related topics.~ )
+				SORTED			TRUE
+				TYPENAME		ListBox ;
+
+	Define: EditAllRefButton Using DDWinCtrlDef AsSymbol EditAllRefButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( EditAllRef() )
+				POSITION		ListBoxRefSubject(GetLeft,Position),ListBoxRefSubject(GetTop,Position)-$ButtonHeight-$vGap,
+								ListBoxRefSubject(GetWidth,Position), $ButtonHeight
+				TEXT			Translate( ~Subject~ )
+				TOOLTIP			Translate( ~View the reference information for the selected subject~ )
+				TYPENAME		BUTTON
+
+	Define: ListBoxRefCategory Using DDWinCtrlDef AsSymbol ListBoxRefCategory
+		Fields:	POSITION		ListBoxRefSubject(GetRight,Position)+$hGap,$y+30,
+								ListBoxRefSubject(GetWidth,Position)+40 , $CommonLength
+				GENCONNAME		THIS
+				GENCONFIELD		RefCategory
+				ALLOWMULTIPLESELECTION	FALSE
+				IACTIONSTEXT	ACTIONS ( Get )
+				DACTIONSTEXT	ACTIONS ( Save "Exec(OnRefCategorySelectedButton();)"  )
+				OACTIONSTEXT	ACTIONS ( Save )
+				NoDuplicates	TRUE
+				TOOLTIP			Translate( ~Left Click to select.  Right Click to find related topics.~ )
+				SORTED			TRUE
+				TYPENAME		ListBox ;
+
+	Define: ListBoxRefItem Using DDWinCtrlDef AsSymbol ListBoxRefItem
+		Fields:	POSITION		ListBoxRefCategory(GetRight,Position)+$hGap,$y+30,
+								ListBoxRefCategory(GetWidth,Position), $CommonLength
+				GENCONNAME		THIS
+				GENCONFIELD		RefItem
+				ALLOWMULTIPLESELECTION	FALSE
+				IACTIONSTEXT	ACTIONS ( Get )
+				DACTIONSTEXT	ACTIONS ( Save "Exec(OnRefItemSelectedButton();)"  )
+				OACTIONSTEXT	ACTIONS ( Save )
+				NoDuplicates	TRUE
+				TOOLTIP			Translate( ~Left Click to select.  Right Click to find related topics.~ )
+				SORTED			TRUE
+				TYPENAME		ListBox ;
+
+	Define: ListBoxRefSubItem Using DDWinCtrlDef AsSymbol ListBoxRefSubItem
+		Fields:	POSITION		ListBoxRefItem(GetRight,Position)+$hGap,$y+30,
+								ListBoxRefItem(GetWidth,Position) , $CommonLength
+				GENCONNAME		THIS
+				GENCONFIELD		RefSubItem
+				ALLOWMULTIPLESELECTION	FALSE
+				IACTIONSTEXT	ACTIONS ( Get )
+				DACTIONSTEXT	ACTIONS ( Save "Exec(OnRefSubItemSelected();)"  )
+				OACTIONSTEXT	ACTIONS ( Save )
+				NoDuplicates	TRUE
+				TOOLTIP			Translate( ~Left Click to select.  Right Click to find related topics.~ )
+				SORTED			TRUE
+				TYPENAME		ListBox ;
+
+	Define: EditCategoryRefButton Using DDWinCtrlDef AsSymbol EditCategoryRefButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( EditCategoryRef() )
+				POSITION		EditAllRefButton(GetRight,Position)+$hGap,EditAllRefButton(GetTop,Position),
+								ListBoxRefCategory(GetWidth,Position), $ButtonHeight
+				TEXT			Translate( ~Category~ )
+				TOOLTIP			Translate( ~View the reference information for everything in the category~ )
+				TYPENAME		BUTTON
+
+	Define: EditItemRefButton Using DDWinCtrlDef AsSymbol EditItemRefButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( EditItemRef() )
+				POSITION		EditCategoryRefButton(GetRight,Position)+$hGap,EditCategoryRefButton(GetTop,Position),
+								ListBoxRefItem(GetWidth,Position), $ButtonHeight
+				TEXT			Translate( ~Item~ )
+				TOOLTIP			Translate( ~View the reference information for the selected item~ )
+				TYPENAME		BUTTON
+
+	Define: EditSubItemRefButton Using DDWinCtrlDef AsSymbol EditSubItemRefButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( EditSubItemRef() )
+				POSITION		EditItemRefButton(GetRight,Position)+$hGap,EditItemRefButton(GetTop,Position),
+								ListBoxRefItem(GetWidth,Position), $ButtonHeight
+				TEXT			Translate( ~SubItem~ )
+				TOOLTIP			Translate( ~View the reference information for the selected item~ )
+				TYPENAME		BUTTON
+
+
+	Define: RefDescriptionField Using DDWinCtrlDef AsSymbol RefDescriptionField 
+		Fields: TypeName		MLEditText
+				GenConField		RefDescription
+				GenConName		THIS
+				IActionsText	ACTIONS ( Get )
+				DActionsText	ACTIONS ( Save "Exec(IsRefCodeDirty())" )
+				OActionsText	ACTIONS ( Save )
+				Font			~<Font>~
+				FontSize		~<FontSize>~
+				MaxTextSize		1024 * 1024 * 8
+				TabStops		<TabStops>
+				ReadOnly		T
+				NoHorizontalScroll T
+				POSITION		ListBoxRefSubItem(GetRight,Position)+$hGap,$y+30,
+								$FileTextWidth-ListBoxRefSubItem(GetRight,Position)-$hGap*2,380
+
+	Define: RefCodeField Using DDWinCtrlDef AsSymbol RefCodeField 
+		Fields: TypeName		MLEditText
+				GenConField		RefCode
+				GenConName		THIS
+				IActionsText	ACTIONS ( Get )
+				DActionsText	ACTIONS ( Save "Exec(IsRefCodeDirty())" )
+				OActionsText	ACTIONS ( Save )
+				Font			~<Font>~
+				FontSize		~<FontSize>~
+				MaxTextSize		1024 * 1024 * 8
+				TabStops		<TabStops>
+				ReadOnly		T
+				IsHidden		T
+				NoHorizontalScroll F
+				RClickUpActions 	ACTION EXEC ( OnSearchSelectedButton() )
+				POSITION		ListBoxRefSubItem(GetRight,Position)+$hGap,$y+30,
+								$FileTextWidth-ListBoxRefSubItem(GetRight,Position)-$hGap*2,380
+
+
+	Define: DescriptionRadioButton Using DDWinCtrlDef AsSymbol DescriptionRadioButton 
+		Fields:	GENCONNAME		THIS
+				GENCONFIELD		DescriptionType
+				IACTIONSTEXT	[Get]
+				DActionsText	~[
+									CheckButton(DescriptionRadioButton) 
+									UncheckButton(CodeRadioButton)
+									"Exec(OnChangeDescription();)"
+								]~
+				OACTIONSText	[Save]
+				POSITION		RefDescriptionField(GetLeft,Position)+$hGap*0,RefDescriptionField(GetTop,Position) - $vGap*6,
+								90, 14
+				TEXT			Translate( ~Description~ )
+				TOOLTIP			Translate( ~Show the description of the item below~ )
+				TYPENAME		RadioButton
+				FontWeight		600
+				RadioTrueValue	Description
+
+	Define: CodeRadioButton Using DDWinCtrlDef AsSymbol CodeRadioButton 
+		Fields:	GENCONNAME		THIS
+				GENCONFIELD		DescriptionType
+				IACTIONSTEXT	[Get]
+				DActionsText	~[
+									CheckButton(CodeRadioButton) 
+									UncheckButton(DescriptionRadioButton)
+									"Exec(OnChangeDescription();)"
+								]~
+				OACTIONSText	[Save]
+				POSITION		DescriptionRadioButton(GetLeft,Position),DescriptionRadioButton(GetBottom,Position),
+								90, 14
+				TEXT			Translate( ~Example~ )
+				TOOLTIP			Translate( ~Show the example code of the item below~ )
+				TYPENAME		RadioButton
+				FontWeight		600
+				RadioTrueValue	Executable
+
+	Define: RefreshRefButton Using DDWinCtrlDef AsSymbol RefreshRefButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnReLoadRefSubject() )
+				POSITION		ListBoxRefSubject(GetLeft,Position),ListBoxRefSubject(Getbottom,Position)+$ButtonHeight,
+								ListBoxRefSubject(GetWidth,Position), $ButtonHeight
+				TEXT			Translate( ~Refresh~ )
+				TOOLTIP			Translate( ~Reread the reference information after external editing.~ )
+				TYPENAME		BUTTON
+
+
+	Define: HistoryBackButton Using DDWinCtrlDef AsSymbol HistoryBackButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnHistoryBack() )
+				POSITION		RefreshRefButton(GetLeft,Position),RefreshRefButton(GetTop,Position)-$ButtonHeight-$vGap,
+								ListBoxRefSubject(GetWidth,Position), $ButtonHeight
+				TEXT			Translate( ~Back~ )
+				TOOLTIP			Translate( ~Move backwards in the stack of history information~ )
+				TYPENAME		BUTTON
+
+	Define: HistoryForwardButton Using DDWinCtrlDef AsSymbol HistoryForwardButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnHistoryForward() )
+				POSITION		HistoryBackButton(Getright,Position)+$hgap,HistoryBackButton(GetTop,Position),
+								HistoryBackButton(GetWidth,Position), $ButtonHeight
+				TEXT			Translate( ~Forward~ )
+				TOOLTIP			Translate( ~Move forwards in the stack of history information~ )
+				TYPENAME		BUTTON
+
+	Define: HistoryClearButton Using DDWinCtrlDef AsSymbol HistoryClearButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnHistoryClear() )
+				POSITION		HistoryForwardButton(Getright,Position)+$hgap,HistoryForwardButton(GetTop,Position),
+								HistoryBackButton(GetWidth,Position), $ButtonHeight
+				TEXT			Translate( ~Clear~ )
+				TOOLTIP			Translate( ~Move forwards in the stack of history information~ )
+				TYPENAME		BUTTON
+
+	Define: HistoryMenuButton Using DDWinCtrlDef AsSymbol HistoryMenuButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnHistoryMenu() )
+				POSITION		HistoryClearButton(Getright,Position)+$hgap,HistoryClearButton(GetTop,Position),
+								HistoryBackButton(GetWidth,Position), $ButtonHeight
+				TEXT			Translate( ~History~ )
+				TOOLTIP			Translate( ~Select a certain history position~ )
+				TYPENAME		BUTTON
+
+
+	Define: GotoButton Using DDWinCtrlDef AsSymbol GotoButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnGoto() )
+				POSITION		HistoryMenuButton(Getright,Position)+$hgap,HistoryMenuButton(GetTop,Position),
+								HistoryMenuButton(GetWidth,Position), $ButtonHeight
+				TEXT			Translate( ~Go To~ )
+				TOOLTIP			Translate( ~Select a reference page~ )
+				TYPENAME		BUTTON
+
+	Define: GotoRefField Using DDWinCtrlDef AsSymbol GotoRefField 
+		Fields:	GENCONNAME		THIS
+				IACTIONSTEXT	ACTIONS ( Get )
+				DACTIONSTEXT	ACTIONS ( Save )
+				OACTIONSTEXT	ACTIONS ( Save )
+				POSITION		GotoButton(GetRight,Position)+$hGap,GotoButton(GetTop,Position),
+								305, $ButtonHeight
+				GenConName		THIS
+				GenConField		GotoText
+				TOOLTIP			Translate( ~Enter Subject | Category | Item | Subitem~ )
+				DisallowedChars	STR ( ~ )
+				WantReturnKey	~T~
+				ReturnKeyActionsText ACTION EXEC ( OnGoto() )
+				TYPENAME		MaskedEditText
+				Mask			RepeatStr(128,~%~)  
+				AllowedChars	~| ~  
+
+	Define: FindRefButton Using DDWinCtrlDef AsSymbol FindRefButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnFindRef() )
+				POSITION		RefreshRefButton(GetRight,Position)+$hGap,RefreshRefButton(GetTop,Position),
+								HistoryBackButton(GetWidth,Position), $ButtonHeight
+				TEXT			Translate( ~Find~ )
+				TOOLTIP			Translate( ~View examples of the string in the TextFiles~ )
+				TYPENAME		BUTTON
+
+	Define: FindRefField Using DDWinCtrlDef AsSymbol FindRefField 
+		Fields:	GENCONNAME		THIS
+				IACTIONSTEXT	ACTIONS ( Get )
+				DACTIONSTEXT	ACTIONS ( Save Update(FindField) )
+				IACTIONSTEXT	ACTIONS ( Get )
+				POSITION		FindRefButton(GetRight,Position)+$hGap,FindRefButton(GetTop,Position),
+								190, $ButtonHeight
+				GenConName		THIS
+				GenConField		SearchText
+				TOOLTIP			Translate( ~Find files containing this specified string~ )
+				DisallowedChars	STR ( ~ )
+				WantReturnKey	~T~
+				ReturnKeyActionsText ACTION EXEC ( OnFindRef() )
+				TYPENAME		MaskedEditText
+				Mask			RepeatStr(256,~%~)  
+				AllowedChars	~| ~  
+
+
+	Define: SimilarSubjectButton Using DDWinCtrlDef AsSymbol SimilarSubjectButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnSimilarSubjectButton() )
+				POSITION		FindRefField(GetRight,Position)+$hGap,FindRefField(GetTop,Position),
+								85, $ButtonHeight
+				TEXT			Translate( ~Similar Subject~ )
+				TOOLTIP			Translate( ~Find similar subjects containing the specified string~ )
+				TYPENAME		BUTTON
+
+	Define: SimilarCategoryButton Using DDWinCtrlDef AsSymbol SimilarCategoryButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnSimilarCategoryButton() )
+				POSITION		SimilarSubjectButton(GetRight,Position)+$hGap,SimilarSubjectButton(GetTop,Position),
+								85, $ButtonHeight
+				TEXT			Translate( ~Similar Category~ )
+				TOOLTIP			Translate( ~Find similar categories containing the specified string~ )
+				TYPENAME		BUTTON
+
+
+	Define: SimilarItemButton Using DDWinCtrlDef AsSymbol SimilarItemButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnSimilarItemButton() )
+				POSITION		SimilarCategoryButton(GetRight,Position)+$hGap,SimilarCategoryButton(GetTop,Position),
+								65, $ButtonHeight
+				TEXT			Translate( ~Similar Item~ )
+				TOOLTIP			Translate( ~Find similar items containing the specified string~ )
+				TYPENAME		BUTTON
+
+	Define: SimilarSearchButton Using DDWinCtrlDef AsSymbol SimilarSearchButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnSearchButton() )
+				POSITION		SimilarItemButton(GetRight,Position)+$hGap,SimilarItemButton(GetTop,Position),
+								45, $ButtonHeight
+				TEXT			Translate( ~Similar~ )
+				TOOLTIP			Translate( ~Find similar items, subitems, descriptions, or examples containing the specified string~ )
+				TYPENAME		BUTTON
+
+	Define: SelectedSearchButton Using DDWinCtrlDef AsSymbol SelectedSearchButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnSearchSelectedButton() )
+				POSITION		SimilarSearchButton(GetRight,Position)+$hGap*4,SimilarSearchButton(GetTop,Position),
+								80, $ButtonHeight
+				TEXT			Translate( ~Find Selected~ )
+				TOOLTIP			Translate( ~Find similar categories, items, subitems, descriptions, or examples containing the string you have selected above~ )
+				TYPENAME		BUTTON
+
+	Define: NewRefButton Using DDWinCtrlDef AsSymbol NewRefButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnNewRef() )
+				POSITION		SelectedSearchButton(GetRight,Position)+$hGap,SelectedSearchButton(GetTop,Position),
+								45, $ButtonHeight
+				TEXT			Translate( ~New~ )
+				TOOLTIP			Translate( ~Add a new reference~ )
+				TYPENAME		BUTTON
+
+	Define: ExecuteRefCodeButton Using DDWinCtrlDef AsSymbol ExecuteRefCodeButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( ExecuteRefCode(FALSE) )
+				//POSITION		RefDescriptionField(GetLeft,Position),EditItemRefButton(GetTop,Position),
+				//				$ButtonWidth/2, $ButtonHeight
+				POSITION		DescriptionRadioButton(GetRight,Position) + $hGap*1,DescriptionRadioButton(GetTop,Position)+4,
+								$ButtonWidth/2, $ButtonHeight				
+				TEXT			Translate( ~Execute~ )
+				TOOLTIP			Translate( ~Execute the example~ )
+				TYPENAME		BUTTON
+
+	Define: DebugRefCodeButton Using DDWinCtrlDef AsSymbol DebugRefCodeButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( ExecuteRefCode(TRUE) )
+				POSITION		ExecuteRefCodeButton(GetRight,Position)+$hGap,ExecuteRefCodeButton(GetTop,Position),
+								$ButtonWidth/2, $ButtonHeight
+				TEXT			Translate( ~Debug~ )
+				TOOLTIP			Translate( ~Execute the example code in the debugger~ )
+				TYPENAME		BUTTON
+
+	Define: ScratchRefCodeButton Using DDWinCtrlDef AsSymbol ScratchRefCodeButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( CopyRefToScratch(TRUE) )
+				POSITION		DebugRefCodeButton(GetRight,Position)+$hGap,DebugRefCodeButton(GetTop,Position),
+								$ButtonWidth/2, $ButtonHeight
+				TEXT			Translate( ~Scratch~ )
+				TOOLTIP			Translate( ~Copy the text to the scratch area~ )
+				TYPENAME		BUTTON
+
+	Define: EditDescriptionButton Using DDWinCtrlDef AsSymbol EditDescriptionButton 
+		Fields:	GENCONNAME		THIS
+				GENCONFIELD		Editing
+				IACTIONSTEXT	[Get]
+				OACTIONSText	[Save]
+				DACTIONSTEXT	ACTIONS ( Save "EXEC(SetEditing()) )
+				POSITION		ScratchRefCodeButton(GetRight,Position)+$hGap*1,ScratchRefCodeButton(GetTop,Position),
+								40, $ButtonHeight
+				TEXT			Translate( ~Edit~ )
+				TOOLTIP			Translate( ~Edit the description or the executable example for this item~ )
+				TYPENAME		CheckBox
+
+	Define: CopyCodeToClipboardButton Using DDWinCtrlDef AsSymbol CopyCodeToClipboardButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( CopyCodeToClipboard() )
+				POSITION		EditDescriptionButton(GetRight,Position)+$hGap,EditDescriptionButton(GetTop,Position),
+								$ButtonWidth/2, $ButtonHeight
+				TEXT			Translate( ~Copy~ )
+				TOOLTIP			Translate( ~Copy the text to the clipboard~ )
+				TYPENAME		BUTTON
+				
+	Define: SaveRefButton Using DDWinCtrlDef AsSymbol SaveRefButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnSaveRefButton() )
+				POSITION		CopyCodeToClipboardButton(GetRight,Position)+$hGap,CopyCodeToClipboardButton(GetTop,Position),
+								$ButtonWidth/2, $ButtonHeight
+				TEXT			Translate( ~Save~ )
+				ISHIDDEN		T
+				TOOLTIP			Translate( ~Save the description or code to the KPL table in the database~ )
+				TYPENAME		BUTTON
+
+	Define: ArchiveRefButton Using DDWinCtrlDef AsSymbol ArchiveRefButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnArchiveRefButton() )
+				POSITION		SaveRefButton(GetRight,Position)+$hGap*1,SaveRefButton(GetTop,Position),
+								$ButtonWidth/2, $ButtonHeight
+				TEXT			Translate( ~Archive~ )
+				TOOLTIP			Translate( ~Archive all or a selected portion of KPL database to an external file~ )
+				TYPENAME		BUTTON
+
+	Define: LoadRefButton Using DDWinCtrlDef AsSymbol LoadRefButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnLoadRefButton() )
+				POSITION		ArchiveRefButton(GetRight,Position)+$hGap,ArchiveRefButton(GetTop,Position),
+								$ButtonWidth/2, $ButtonHeight
+				TEXT			Translate( ~Load~ )
+				TOOLTIP			Translate( ~Load the KPL database from an external archive file~ )
+				TYPENAME		BUTTON
+				
+	Define: ReplaceRefButton Using DDWinCtrlDef AsSymbol ReplaceRefButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnReplaceRefButton() )
+				POSITION		LoadRefButton(GetRight,Position)+$hGap,LoadRefButton(GetTop,Position),
+								$ButtonWidth/2, $ButtonHeight
+				TEXT			Translate( ~Re-Load~ )
+				TOOLTIP			Translate( ~Replace the entire KPL database from the contents of \Scripts\Assistant\KPL~ )
+				TYPENAME		BUTTON
+
+
+	Define: BuildObjRefButton Using DDWinCtrlDef AsSymbol BuildObjRefButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnBuildObjRefButton() )
+				POSITION		ReplaceRefButton(GetRight,Position)+$hGap*2,ReplaceRefButton(GetTop,Position),
+								15, $ButtonHeight
+				TEXT			Translate( ~O~ )
+				TOOLTIP			Translate( ~For Kodak Use Only - Parse DP2 Source code to populate the reference database with built-in objects~ )
+				TYPENAME		BUTTON
+				ISHIDDEN		KeyState(Control) ? F : T
+
+	Define: BuildFuncRefButton Using DDWinCtrlDef AsSymbol BuildFuncRefButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnBuildFuncRefButton() )
+				POSITION		BuildObjRefButton(GetRight,Position)+$hGap,BuildObjRefButton(GetTop,Position),
+								BuildObjRefButton(GetWidth,Position), $ButtonHeight
+				TEXT			Translate( ~F~ )
+				TOOLTIP			Translate( ~For Kodak Use Only - Parse DP2 Source code to populate the reference database with built-in functions~ )
+				TYPENAME		BUTTON
+				ISHIDDEN		KeyState(Control) ? F : T
+}
+
+
+
+VOID DefineThreadTabControls( x,y )
+{
+	Define: ListBoxThreads Using DDWinCtrlDef AsSymbol ListBoxThreads
+		Fields:	POSITION		$x+$hGap,$y+30,150 ,$CommonLength
+				GENCONNAME		THIS
+				GENCONFIELD		Threads
+				ALLOWMULTIPLESELECTION	FALSE
+				IACTIONSTEXT	ACTIONS ( Get )
+				DACTIONSTEXT	ACTIONS ( Save "Exec(OnThreadSelected();)"  )
+				OACTIONSTEXT	ACTIONS ( Save )
+				NoDuplicates	TRUE
+				TOOLTIP			Translate( ~Select a thread to see it's stack~ )
+				SORTED			TRUE
+				TYPENAME		ListBox ;
+
+	Define: StackField Using DDWinCtrlDef AsSymbol StackField 
+		Fields: TypeName		MLEditText
+				GenConField		Stack
+				GenConName		THIS
+				IActionsText	ACTIONS ( Get )
+				DActionsText	ACTIONS ( Save )
+				OActionsText	ACTIONS ( Save )
+				Font			~<Font>~
+				FontSize		~<FontSize>~
+				MaxTextSize		1024 * 1024 * 8
+				TabStops		<TabStops>
+				ReadOnly		T
+				POSITION		ListBoxThreads(GetRight,Position)+$hGap,$y+30,
+								$FileTextWidth-ListBoxThreads(GetWidth,Position)-
+								 ListBoxThreads(GetWidth,Position)-$hGap*2,400
+
+	Define: RefreshThreadsButton Using DDWinCtrlDef AsSymbol RefreshThreadsButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( PopulateThreadList() )
+				POSITION		StackField(GetLeft,Position),StackField(GetBottom,Position)+$vGap*4,
+								$ButtonWidth, $ButtonHeight
+				TEXT			Translate( ~Refresh Threads~ )
+				TOOLTIP			Translate( ~Redisplay the list of active threads~ )
+				TYPENAME		BUTTON
+
+	Define: ClearThreadStackButton Using DDWinCtrlDef AsSymbol ClearThreadStackButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnClearThreadStack() )
+				POSITION		RefreshThreadsButton(GetRight,Position)+$hGap,RefreshThreadsButton(GetTop,Position),
+								$ButtonWidth, $ButtonHeight
+				TEXT			Translate( ~Clear~ )
+				TOOLTIP			Translate( ~Clear the list of thread stacks~ )
+				TYPENAME		BUTTON
+
+	Define: KillAllThreadsButton Using DDWinCtrlDef AsSymbol KillAllThreadsButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( KillAllThreads() )
+				POSITION		ClearThreadStackButton(GetRight,Position)+$hGap,ClearThreadStackButton(GetTop,Position),
+								$ButtonWidth, $ButtonHeight
+				TEXT			Translate( ~Kill All~ )
+				TOOLTIP			Translate( ~Kill all of the threads~ )
+				TYPENAME		BUTTON
+}
+
+
+VOID DefinePrefsTabControls( x,y)
+{
+	Define: EditorPrompt Using DDWinCtrlDef AsSymbol EditorPrompt
+		Fields:	TypeName		StaticText
+				Text			~Editor~
+				RightJustified	TRUE
+				POSITION		$x+$hGap,$y+30,$PromptWidth $ButtonHeight
+
+	Define: EditorField Using DDWinCtrlDef AsSymbol EditorField 
+		Fields: TypeName		EditText
+				GenConField		Editor
+				GenConName		THIS
+				IActionsText	ACTIONS ( Get )
+				OActionsText	ACTIONS ( Save )
+				Position		EditorPrompt(GetRight,Position) + $hGap,EditorPrompt(GetTop,Position),$PathTextWidth,$ButtonHeight;
+
+	Define: EditorBrowseButton Using DDWinCtrlDef AsSymbol EditorBrowseButton
+		Fields:	TypeName		Button
+				Text			~?~
+				DActionsText	ACTION EXEC ( OnBrowseEditor() )
+				Position		EditorField(GetRight,Position)+$hGap EditorField(GetTop,Position),20 $ButtonHeight
+
+	Define: AddTextFilesLocationPrompt Using DDWinCtrlDef AsSymbol AddTextFilesLocationPrompt
+		Fields:	TypeName		StaticText
+				Text			~Additional Text Files Location~
+				RightJustified	TRUE
+				POSITION		$x+$hGap,EditorField(GetBottom,Position)+$vGap,$PromptWidth*2 $ButtonHeight
+
+	Define: AddTextFilesLocationField Using DDWinCtrlDef AsSymbol AddTextFilesLocationField 
+		Fields: TypeName		EditText
+				GenConField		AdditionalTextFiles
+				GenConName		THIS
+				IActionsText	ACTIONS ( Get )
+				OActionsText	ACTIONS ( Save )
+				Position		AddTextFilesLocationPrompt(GetRight,Position) + $hGap,AddTextFilesLocationPrompt(GetTop,Position),$PathTextWidth-70,$ButtonHeight;
+
+	Define: AddTextFilesBrowseButton Using DDWinCtrlDef AsSymbol AddTextFilesBrowseButton
+		Fields:	TypeName		Button
+				Text			~?~
+				DActionsText	ACTION EXEC ( OnBrowseAddTextFiles() )
+				Position		AddTextFilesLocationField(GetRight,Position)+$hGap AddTextFilesLocationField(GetTop,Position),20 $ButtonHeight
+
+	Define: DontDebugThisBox Using DDWinCtrlDef AsSymbol DontDebugThisBox 
+		Fields:	GENCONNAME		THIS
+				GENCONFIELD		DontDebugThis
+				IACTIONSTEXT	ACTIONS ( Get )
+				OACTIONSTEXT	ACTIONS ( Save )
+				DACTIONSTEXT	ACTION EXEC ( OnDontDebugThis() )
+				POSITION		AddTextFilesLocationField(GetLeft,Position),AddTextFilesLocationField(GetBottom,Position)+$vGap,200, $ButtonHeight
+				TEXT			Translate( ~Don't debug this script~ )
+				TOOLTIP			Translate( ~~ )
+				TYPENAME		CheckBox;
+
+}
+
+
+VOID DefineToolsTabControls( x,y)
+{
+	ButtonW = 170;
+
+	Define: SpyButton Using DDWinCtrlDef AsSymbol SpyButton
+		Fields:	TypeName		Button
+				Text			~Spy~
+				DACTIONSTEXT	ACTION EXEC ( OnSpy() )
+				TOOLTIP			~Watch active threads and documents~
+				POSITION		$x+$hGap,$y+30,$ButtonW $ButtonHeight
+
+	Define: DiagnosticButton Using DDWinCtrlDef AsSymbol DiagnosticButton 
+		Fields: TypeName		Button
+				Text			~Timing~
+				DACTIONSTEXT	ACTION EXEC ( OnTiming() )
+				TOOLTIP			~Watch database and memory timing and usage~
+				Position		SpyButton(GetLeft,Position),SpyButton(GetBottom,Position)+$vGap,$ButtonW,$ButtonHeight
+
+	Define: TreeButton Using DDWinCtrlDef AsSymbol TreeButton 
+		Fields: TypeName		Button
+				Text			~App Tree~
+				DACTIONSTEXT	ACTION EXEC ( OnTree() )
+				TOOLTIP			~Display the applications tree of Generic Containers  (GenCons)~
+				Position		DiagnosticButton(GetLeft,Position),DiagnosticButton(GetBottom,Position)+$vGap,$ButtonW,$ButtonHeight
+
+	Define: KillBackgroundTasksButton Using DDWinCtrlDef AsSymbol KillBackgroundTasksButton 
+		Fields: TypeName		Button
+				Text			~Kill Background Tasks~
+				DACTIONSTEXT	ACTION EXEC ( KillBackgroundTasks() )
+				TOOLTIP			~Kill all backgrounds tasks to make debugging easier~
+				Position		TreeButton(GetLeft,Position),TreeButton(GetBottom,Position)+$vGap,$ButtonW,$ButtonHeight
+
+	Define: CMemoryStateButton Using DDWinCtrlDef AsSymbol CMemoryStateButton 
+		Fields: TypeName		Button
+				Text			~CMemoryState~
+				DACTIONSTEXT	ACTION EXEC ( OnCMemoryState() )
+				TOOLTIP			~Use CMemoryState in the Debug version of <$App.Title> to find memory leaks~
+				Position		KillBackgroundTasksButton(GetLeft,Position),KillBackgroundTasksButton(GetBottom,Position)+$vGap,$ButtonW,$ButtonHeight
+
+	Define: CRTMemoryStateButton Using DDWinCtrlDef AsSymbol CRTMemoryStateButton 
+		Fields: TypeName		Button
+				Text			~CRTMemState~
+				DACTIONSTEXT	ACTION EXEC ( OnCRTMemState() )
+				TOOLTIP			~Use CRTMemState in the Debug version of <$App.Title> to find memory leaks~
+				Position		CMemoryStateButton(GetLeft,Position),CMemoryStateButton(GetBottom,Position)+$vGap,$ButtonW,$ButtonHeight
+
+	Define: SQLMaintButton Using DDWinCtrlDef AsSymbol SQLMaintButton 
+		Fields: TypeName		Button
+				Text			~SQL Maintenance~
+				DACTIONSTEXT	ACTION EXEC ( OnSQLMaintenance() )
+				TOOLTIP			~View and maintain the database using SQL statements~
+				Position		CRTMemoryStateButton(GetLeft,Position),CRTMemoryStateButton(GetBottom,Position)+$vGap * 4,$ButtonW,$ButtonHeight
+
+	Define: ExtractAllButton Using DDWinCtrlDef AsSymbol ExtractAllButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnExtractAllButton() )
+				Position		SQLMaintButton(GetLeft,Position),SQLMaintButton(GetBottom,Position)+$vGap*4,$ButtonW,$ButtonHeight
+				TEXT			Translate( ~Extract Scripts~ )
+				TOOLTIP			Translate( ~Extract all the scripts from the script library and place them in a folder called TextFiles.  You do not have to take <$App.Title> down to perform this function.~ )
+				TYPENAME		BUTTON
+
+	Define: UpdlibButton Using DDWinCtrlDef AsSymbol UpdlibButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnUpdlibButton() )
+				Position		ExtractAllButton(GetLeft,Position),ExtractAllButton(GetBottom,Position)+$vGap,$ButtonW,$ButtonHeight
+				TEXT			Translate( ~Update Script Library~ )
+				TOOLTIP			Translate( ~Freshen the script library with any files that you have modified.  This will not add new files to the library.  You do not have to take <$App.Title> down to perform this function.~ )
+				TYPENAME		BUTTON
+
+	Define: NewlibButton Using DDWinCtrlDef AsSymbol NewlibButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnNewlibButton() )
+				Position		UpdlibButton(GetLeft,Position),UpdlibButton(GetBottom,Position)+$vGap,$ButtonW,$ButtonHeight
+				TEXT			Translate( ~Recreate Script Library~ )
+				TOOLTIP			Translate( ~Recreate the script library.  Use this when adding new files that are not currently in the library.  You do not have to take <$App.Title> down to perform this function.~ )
+				TYPENAME		BUTTON
+
+	Define: DistributelibButton Using DDWinCtrlDef AsSymbol DistributelibButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnDistributeLibButton() )
+				Position		NewlibButton(GetLeft,Position),NewlibButton(GetBottom,Position)+$vGap,$ButtonW,$ButtonHeight
+				TEXT			Translate( ~Distribute V<$App.MajorVersion> Library~ )
+				TOOLTIP			Translate( ~Put your script library on the server so that other version <$App.MajorVersion> workstations will pick it up the next time <$App.Title> starts up~ )
+				TYPENAME		BUTTON;
+				
+				
+	NotePadPlusPath = NotePadPlusPath();
+
+	Define: UserDefineLangButton Using DDWinCtrlDef AsSymbol UserDefineLangButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( IntegrateWithNotePadPlus() )
+				Position		NewlibButton(GetLeft,Position),DistributelibButton(GetBottom,Position)+20,$ButtonW,$ButtonHeight
+				TEXT			Translate( ~Integrate with NotePad++~ )
+				TOOLTIP			Translate( ~Adds COLOR CODING (<$env.APPDATA>\Notepad++\userDefineLang.xml),CODE SNIPPETS (<$env.APPDATA>\Notepad++\plugins\config\SnippetPlus.xml), and AUTO COMPLETION ( <$Str.$NotePadPlusPath.Path>\plugins\APIs\kpl.xml) for KPL files.~ )
+				TYPENAME		BUTTON
+
+	Define: FindMethodsButton Using DDWinCtrlDef AsSymbol FindMethodsButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( FindMethodsOfObjects() )
+				Position		NewlibButton(GetLeft,Position),NewlibButton(GetBottom,Position)+$vGap* 4,$ButtonW,$ButtonHeight
+				TEXT			Translate( ~Find Methods~ )
+				TOOLTIP			Translate( ~For Kodak Use Only.  Used to search the code for Object methods~ )
+				TYPENAME		BUTTON
+				IsHidden		KeyState(Control) ? F : T
+
+
+}
+
+
+VOID DefineScratchTabControls( x,y)
+{
+
+	Define: ScratchField Using DDWinCtrlDef AsSymbol ScratchField 
+		Fields: TypeName		MLEditText
+				GenConField		Scratch
+				GenConName		THIS
+				IActionsText	ACTIONS ( Get )
+				DActionsText	ACTIONS ( Save )
+				OActionsText	ACTIONS ( Save )
+				Font			~<Font>~
+				FontSize		<FontSize>
+				MaxTextSize		1024 * 1024 * 8
+				TabStops		<TabStops>
+				POSITION		$x+$hGap,$y+30,$FileTextWidth 400
+
+	Define: ExecuteButton Using DDWinCtrlDef AsSymbol ExecuteButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnExecute() )
+				POSITION		$hGap*3,ScratchField(GetBottom,Position)+$vGap*2, $ButtonWidth, $ButtonHeight
+				TEXT			Translate( ~E&xecute~ )
+				TOOLTIP			Translate( ~Execute the selected text in the scratch window~ )
+				TYPENAME		BUTTON
+
+	Define: ExecuteDebugButton Using DDWinCtrlDef AsSymbol ExecuteDebugButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnExecuteDebug() )
+				POSITION		ExecuteButton(GetRight,Position)+$hGap,ExecuteButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+				TEXT			Translate( ~Debug~ )
+				TOOLTIP			Translate( ~Debug the selected text in the scratch window~ )
+				TYPENAME		BUTTON
+
+	Define: LoadButton Using DDWinCtrlDef AsSymbol LoadButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnLoad() )
+				POSITION		ExecuteDebugButton(GetRight,Position)+$hGap,ExecuteButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+				TEXT			Translate( ~Load~ )
+				TOOLTIP			Translate( ~Load a script into the scratch area~ )
+				TYPENAME		BUTTON
+
+	Define: SaveButton Using DDWinCtrlDef AsSymbol SaveButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnSave() )
+				POSITION		LoadButton(GetRight,Position)+$hGap,LoadButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+				TEXT			Translate( ~Save~ )
+				TOOLTIP			Translate( ~Save the script in the scratch area to disk~ )
+				TYPENAME		BUTTON
+
+	Define: SaveAsButton Using DDWinCtrlDef AsSymbol SaveAsButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnSaveAs() )
+				POSITION		SaveButton(GetRight,Position)+$hGap,SaveButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+				TEXT			Translate( ~Save As~ )
+				TOOLTIP			Translate( ~Save the script in the scratch area to a file of your choice~ )
+				TYPENAME		BUTTON
+
+	Define: ClearButton Using DDWinCtrlDef AsSymbol ClearButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnClear() )
+				POSITION		SaveAsButton(GetRight,Position)+$hGap,SaveAsButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+				TEXT			Translate( ~Clear~ )
+				TOOLTIP			Translate( ~Clear the text in the scratch area~ )
+				TYPENAME		BUTTON
+
+	Define: EditScratchButton Using DDWinCtrlDef AsSymbol EditScratchButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnScratchPadEdit() )
+				POSITION		ClearButton(GetRight,Position)+$hGap,ClearButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+				TEXT			Translate( ~Edit~ )
+				TOOLTIP			Translate( ~Edit the text using the editor of your choice~ )
+				TYPENAME		BUTTON
+
+	Define: ReloadScratchButton Using DDWinCtrlDef AsSymbol ReloadScratchButton 
+		Fields:	GENCONNAME		THIS
+				DACTIONSTEXT	ACTION EXEC ( OnScratchPadReload() )
+				POSITION		EditScratchButton(GetRight,Position)+$hGap,EditScratchButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+				TEXT			Translate( ~Reload~ )
+				TOOLTIP			Translate( ~Reload the scratch text after editing with another editor~ )
+				TYPENAME		BUTTON
+}
+
+
+NUMERIC OnScratchPadEdit()
+{
+	OnSave();
+
+	return EditFile(~<ScratchPath>~);
+}
+
+
+NUMERIC OnScratchPadReload()
+{
+	return LoadIntoScratch( ~<ScratchPath>~ );
+}
+
+
+NUMERIC PopulateThreadList()
+{
+	if ( !GenCon( ThreadsList,GetFrom,Threads,~[GenCons]~ ) )
+	{
+		return Warning( ~Could not find thread list~ );
+	}
+
+	dlg( ListBox,ListBoxThreads,ResetContent );
+
+	while ( ThreadsList( GetNext,aThread ) )
+	{
+		aThread( GetName,Name );
+		dlg( ListBox,ListBoxThreads,AddString,~<$con.aThread.name>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnThreadSelected()
+{
+	dlg( ListBox,ListBoxThreads,GetSelectedItem,WhichThread );
+
+	if ( Debug( DumpThreadStack,~<WhichThread>~,theStack ) )
+	{
+		dlg( AppendStringsFromContents,Stack,theStack );
+	}
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC OnClearThreadStack()
+{
+	dlg( SetStrings,Stack,~~ );
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC OnBuildFuncRefButton()
+{
+	if ( !ADO( dBase,Connect ) )
+	{
+		List( GetErrorDescription,theErr );
+		return Warning( ~Failed to connect to the KPL table. <theErr>~ );
+	}
+
+	Title = Translate( ~Find file to parse~ );
+
+	if ( !FileDialog( Title,~<Title>~,Path,Path,Open ) )
+	{
+		return FALSE;
+	}
+
+	if ( !file( cpp,Open,~<Path>~,Read ) )
+	{
+		return Warning( ~Failed to open <Path>~ );
+	}
+
+	CR = chr(0x0D);  LF = chr(0x0A);
+	CRLF = ~<CR><LF>~;
+
+	while ( cpp( ReadString,aLine ) )
+	{
+		if ( !IsNull( String( StringInString,~symTable->Add~,~<aLine>~ ) ) )
+		{
+			GetTokens( ~<aLine>~,~"~,BeginOnLine,FunctionName );
+
+			GetTokens( ~<aLine>~,~/~,BeginOnLine,Category );
+
+			if ( IsNull( ~<Category>~ ) )
+			{
+				Category = ~TBD~;
+			}
+			
+			Category = String( TrimLeft,~<Category>~ );
+			Category = String( TrimRight,~<Category>~ );
+			
+			if ( !SimilarStr( ~<Category>~,~Hidden~ ) )
+			{			
+
+				Line1 = ~FUNCTION:     <FunctionName>~;
+				Line2 = ~INVOKE:       retval = <FunctionName>(Args...);~;
+				Line3 = ~ARGS:         TBD~;
+				Line4 = ~RETURNS:      Number~;
+				Line5 = ~DESCRIPTION:  TBD~;
+				
+				theText = ~<Line1><CRLF><Line2><CRLF><Line3><CRLF><Line4><CRLF><CRLF><Line5>~;
+
+				dBase( IgnoreErrors,Cmd,~Insert Into KPL(Subject,Category,Item,SubItem,Description) Values('Functions','<Category>','<FunctionName>','Description','<theText>')~ );
+				dBase( ReportErrors );
+				Log( session,~Adding 'Functions','<Category>','<FunctionName>'~ );
+			}
+			else
+			{
+				dBase( Cmd,~delete from KPL where  Subject='Functions' and Category='Hidden'~ );
+
+				Log( session,~Removing 'Functions','<Category>','<FunctionName>'~ );
+			}
+		}
+	}
+
+	Warning( ~Finished <Path>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OnBuildObjRefsButton()
+{
+	PrefixPath = ~M:\AppsV2\Apps\UtilityDLL~;
+	
+	BuildObjRefButton( ~<PrefixPath>\BremsonCustomer.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\BremsonFrame.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\BremsonObjects.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\BremsonOrder.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\BremsonRoll.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\FileIO.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\CreateSQLServerDB.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerApp.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerADO.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerArray.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerAutoCollage.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerAutomation.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerBitmap.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerBremsonFD.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerCCritical.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerCDO.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerChangeNotification.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerChromaKey.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerClass.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerCMC.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerColorPro.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerCompAlignSba.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerDateTime.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerDateTimeSpan.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerDC.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerDcSba.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerDevice.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerDigitalCamera.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerDigitalSig.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerDSbaPrefs.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerFilmterm.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerGridPosition.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerHalseFD.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerHTMLView.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerHTMLWindow.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerHTTPServer.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerIMA.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerImageMastering.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerImageMem.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerImageView.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerInternetSession.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerKarsBatch.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerKarsObject.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerKarsReview.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerLayoutAndJobView.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerLibrary.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerLut.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerManagedObject.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerManagedObjects.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerMapi.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerMutex.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerObj.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerParam.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerPDF.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerPhoenix.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerPie.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerPieDustBuster.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerPIEOmron.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerPrint.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerQueue.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerRectangle.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerRegistry.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerRemoteJobServer.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerRenderEngine.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerRenderJobHandler.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerRenderList.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerRImage.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerScriptEngine.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerSemaphore.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerSizzle.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerSocket.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerSQLDMO.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerString.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerStringArray.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerThread.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerTwain.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerUADORecordSet.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerUDataDict.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerUDocument.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerUGenCon.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerUGenDlg.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerUHelp.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerUnzip.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerUPGenCon.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerUPGenConList.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerUStringList.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerVideo.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerWinPrinter.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerXML.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerXMLNode.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScanneXMLNodeList.cpp~ );
+	BuildObjRefButton( ~<PrefixPath>\ScannerZip.cpp~ );
+	
+	return TRUE;
+}
+
+
+NUMERIC OnBuildObjRefButton()
+{
+	if ( KeyState(Control) )
+	{
+		return OnBuildObjRefsButton();
+	}
+	
+	Title = Translate( ~Find file to parse~ );
+
+	if ( !FileDialog( Title,~<Title>~,Path,Path,Open ) )
+	{
+		return FALSE;
+	}
+	
+	return BuildObjRefButton( ~<Path>~ );
+}
+
+	
+NUMERIC BuildObjRefButton( Path )
+{
+	dlg( SetStatus,0,~Processing <Path>~ );
+	
+	if ( !ADO( dBase,Connect ) )
+	{
+		List( GetErrorDescription,theErr );
+		return Warning( ~Failed to connect to the KPL table. <theErr>~ );
+	}
+	
+	if ( !file( cpp,Open,~<Path>~,Read ) )
+	{
+		return Warning( ~Failed to open <Path>~ );
+	}
+
+	LastLine = ~~;
+
+	while ( cpp( ReadString,aLine ) )
+	{
+		if ( !IsNull( String( StringInString,~::Parse(~,~<aLine>~ ) ) )
+			break;
+
+		LastLine = ~<aLine>~;
+	}
+
+	if ( SimilarStr( ~<lastLine>~,~double~,~long~,~int~ ) )
+	{
+		LastLine = ~Number~;
+	}
+	else
+	{
+		LastLine = ~String~;
+	}
+
+	GetTokens( ~<aLine>~,~:~,ObjectName );
+
+	substr( ~<ObjectName>~,7,999,ObjectName );
+
+	substr( ~<ObjectName>~,0,1,FirstCharacter );
+
+	if ( ~<FirstCharacter>~ == ~U~ )
+	{
+		substr( ~<ObjectName>~,1,999,ObjectName );
+	}
+
+
+	CR = chr(0x0D);  LF = chr(0x0A);
+	CRLF = ~<CR><LF>~;
+
+	while ( cpp( ReadString,aLine ) )
+	{
+		substr( ~<aLine>~,0,1,FirstCharacter );	// {  DO THIS TO FAKE OUT THE TRANSLATOR WHICH IS COUNTING SQUIGGLY BRACES.
+
+		if ( ~<FirstCharacter>~ == ~}~ )
+			break;
+
+		if ( !IsNull( String( StringInString,~operation,_T("~,~<aLine>~ ) ) )
+		{
+			Hidden = !IsNull( String( StringInString,~Hidden~,~<aLine>~ ) );
+			
+			GetTokens( ~<aLine>~,~"~,BeginOnLine,Parameter );
+
+			Line1 = ~METHOD:       <Parameter>~;
+			Line2 = ~CLASS:        <ObjectName>~;
+			Line3 = ~INSTANTIATE:  retval = <ObjectName>(MyObj);~;
+			Line4 = ~INVOKE:       retval = MyObj(<Parameter>,Args...);~;
+			Line5 = ~ARGS:         TBD~;
+			Line6 = ~RETURNS:      <LastLine>~;
+			Line7 = ~DESCRIPTION:  TBD~;
+			
+			theText = ~<Line1><CRLF><Line2><CRLF><Line3><CRLF><Line4><CRLF><Line5><CRLF><Line6><CRLF><CRLF><Line7>~;
+
+			if ( <Hidden> )
+			{
+				Log( session,~'Skipped Objects','<ObjectName>','<Parameter>' because it is supposed to be hidden from users~ );
+			}
+			else
+			{
+				dbase( IgnoreErrors );
+				if ( !dBase( Cmd,~Insert Into KPL(Subject,Category,Item,SubItem,Description) Values('Objects','<ObjectName>','<Parameter>','Description','<theText>')~ ) )
+				{
+					dbase( GetErrorNumber,errNum );
+					
+					if ( dbase( ErrorIs,~<errNum>~,Duplicate ) )
+					{
+						Log( session,~'Skipped Objects','<ObjectName>','<Parameter>' because it already exists~ );
+					}
+					else
+					{
+						dbase( GetErrorDescription,theErr );
+						Warning( ~'Skipped Objects','<ObjectName>','<Parameter>' because of <theErr>~ );
+					}
+				}
+				else
+				{
+				 Log( session,~'Objects','<ObjectName>','<Parameter>'~ );
+				}
+				
+				dbase( ReportErrors );
+			}
+		}
+	}
+
+	Warning( ~Finished <ObjectName>~ );
+
+	return TRUE;
+}
+
+
+
+
+VOID OnArchiveRefButton()
+{
+	Class( ArchiveMenu,Extends,BaseMenu );
+
+	ArchiveMenu( New,theMenu );
+
+	theMenu.DisplayInView(dlg);
+}
+
+VOID ArchiveMenu::AddMenuItems( &View )	// OVERRIDE FROM BASEMENU TO ADD MENU ITEMS
+{
+	Action = ACTION EXEC ( DoArchiveRefButton(All) );
+	AddMenuItem( TRUE,FALSE,Translate(~All~),Action );
+
+	Action = ACTION EXEC ( DoArchiveRefButton(Subject) );
+	AddMenuItem( TRUE,FALSE,Translate(~Subject~),Action );
+
+	Action = ACTION EXEC ( DoArchiveRefButton(Category) );
+	AddMenuItem( TRUE,FALSE,Translate(~Category~),Action );
+
+	Action = ACTION EXEC ( DoArchiveRefButton(Item) );
+	AddMenuItem( TRUE,FALSE,Translate(~Item~),Action );
+
+	Action = ACTION EXEC ( DoArchiveRefButton(SubItem) );
+	AddMenuItem( TRUE,FALSE,Translate(~SubItem~),Action );
+}
+
+
+NUMERIC OpenArchive()	// Not currently used
+{
+	action = ACTION DOC ( KPLDoc OpenOnce KPLDoc "Init( ~KPL~,~Select * From KPL Where Subject = '<WhichSubject>' Order By Subject,Category,Item,SubItem~,~~ );" );
+	return PerformActions( action );
+}
+
+
+STR FormulateQuery( Which )
+{
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+	dlg( ListBox,ListBoxRefCategory,GetSelectedItem,WhichCategory );
+	dlg( ListBox,ListBoxRefItem,GetSelectedItem,WhichItem );
+	dlg( ListBox,ListBoxRefSubItem,GetSelectedItem,WhichSubItem );
+
+	if ( SimilarStr( ~<Which>~,~All~ ) )
+	{
+		Query = ~Select * From KPL~;
+	}
+	else if ( SimilarStr( ~<Which>~,~Subject~ ) )
+	{
+		Query = ~Select * From KPL Where Subject = '<WhichSubject>'~;
+	}
+	else if ( SimilarStr( ~<Which>~,~Category~ ) )
+	{
+		Query = ~Select * From KPL Where Subject = '<WhichSubject>' And Category = '<WhichCategory>'~;
+	}
+	else if ( SimilarStr( ~<Which>~,~Item~ ) )
+	{
+		Query = ~Select * From KPL Where Subject = '<WhichSubject>' And Category = '<WhichCategory>' AND Item = '<Item>'~;
+	}
+	else if ( SimilarStr( ~<Which>~,~SubItem~ ) )
+	{
+		Query = ~Select * From KPL Where Subject = '<WhichSubject>' And Category = '<WhichCategory>' AND Item = '<Item>' AND SubItem = '<WhichSubItem>'~;
+	}
+
+	return ~<Query>~;
+}
+
+
+NUMERIC DoArchiveRefButton( Which )
+{
+	Query = FormulateQuery( ~<Which>~ );
+
+	if ( !PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the KPL table. <theErr>~ );
+	}
+
+	Title = Translate( ~Specify where to save the archive~ );
+
+	DefaultPath = ~<$App.ShareDirectory>\Scripts\Assistant~;
+
+	if ( !FileDialog( Title,~<Title>~,DefaultDirectory,~<DefaultPath>~,DefaultFile,~KPL~,Path,Path,HideReadOnly,NoValidate,Save ) )
+	{
+		return FALSE;
+	}
+
+	if ( Files( DirectoryExists,~<Path>~ ) )
+	{
+		return Warning( Translate( ~Sorry, <Path> is a already a directory.  Can't create an archive file called <Path>~ ) );
+	}
+
+	WaitCursor( Begin );
+
+	DirPath = MakePath( DirectoryOf,~<Path>~ );
+
+	if ( !Directory( Create,~<DirPath>~ ) )
+	{
+		return Warning( ~Could not create directory for <DirPath>.  <$Func.GetLastErrorMsg()>~ );
+	}
+
+	if ( Files( FileExists,~<Path>~ ) )
+	{
+		Files( ChMod,~<Path>.tmp~,ReadWrite );
+
+		Files( Delete,~<Path>.tmp~ );
+
+		if ( !Files( Rename,~<Path>~,~<Path>.tmp~ ) )
+		{
+			theErr = GetLastErrorMsg();
+			WaitCursor( End );
+			return Warning( ~Failed to rename <Path> to <Path>.tmp.  <theErr>~ );
+		}
+	}
+	
+	Files( ChMod,~<Path>~,ReadWrite );
+
+	Files( Delete,~<Path>~ );
+
+	if ( Files( FileExists,~<Path>~ ) )
+	{
+		WaitCursor( End );
+		return Warning( Translate( ~Could not delete <Path>.  <$Func.GetLastErrorMsg()>~ ) );
+	}
+
+	if ( !List( Save,~<Path>~,~XML~ ) )
+	{
+		WaitCursor( End );
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Save to file failed: <Path>. <theErr>~ );
+	}
+	
+	Files( ChMod,~<Path>~,Read );
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC OnLoadRefButton()
+{
+	Title = Translate( ~Find the archive of KPL information~ );
+
+	DefaultPath = ~<$App.ShareDirectory>\Scripts\Assistant~;
+
+	if ( !FileDialog( Title,~<Title>~,DefaultDirectory,~<DefaultPath>~,DefaultFile,~KPL~,Path,Path,HideReadOnly,NoValidate,Open ) )
+	{
+		return FALSE;
+	}
+
+	return LoadTheArchive( ~<Path>~,FALSE );
+}
+
+
+NUMERIC OnReplaceRefButton()
+{
+	return LoadTheArchive( ~<$App.ShareDirectory>\Scripts\Assistant\KPL~,TRUE );
+}
+
+
+NUMERIC LoadTheArchive( Path,Replace )
+{
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,File,~<Path>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the KPL table. <theErr>~ );
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		List( GetErrorDescription,theErr );
+		return Warning( ~Failed to connect to the shared database. <theErr>~ );
+	}
+	
+	if ( <Replace> )
+	{
+		if ( !dbase( Cmd,~Delete From KPL~ ) )
+		{
+			WaitCursor( End );		
+			return Warning( ~Failed to delete existing records in the KPL table~ );
+		}
+	}
+
+	Count = 0;
+
+	WaitCursor( Begin );
+
+	if ( !List( UpdateTableFromList,dBase,~KPL~,Count ) )
+	{	
+		WaitCursor( End );		
+		return Warning( ~Update of table KPL failed~ );
+	}
+
+	WaitCursor( End );
+
+	return Warning( ~Updated <Count> records~ );
+}
+
+
+NUMERIC InitialLoad()
+{
+	Path = ~<$App.ShareDirectory>\Scripts\Assistant\KPL~;
+
+	NeedToLoadNewRef = FALSE;		// ASSUME WE DON'T NEED TO RELOAD
+
+	if ( Files( FileExists,~<Path>~ )  )
+	{
+		//Files( ChMod,~<Path>~,ReadWrite );
+
+		NeedToLoadNewRef = TRUE;	// THERE IS A FILE WE COULD READ FROM SO NOW ASSUME WE DO NEED TO LOAD IT
+
+		Files( GetFileTimes,~<Path>~,creationDate,writeDate,accessDate );
+
+		Query = ~SELECT Description From KPL WHERE Subject = 'Assistant' AND Category = 'Overview' and Item = 'Introduction' And SubItem = 'Version'~;
+
+		if ( ADO( dBase,Connect,GetValuesFor,~<Query>~,DocVersion ) )
+		{
+			DateTime( TheDatabaseVersion,SetFromSortableDateTime,~<DocVersion>~ );
+			DateTime( TheFileVersion,SetFromSortableDateTime,~<writeDate>~ );
+
+			NeedToLoadNewRef = TheFileVersion( IsGreater,TheDatabaseVersion );
+		}
+	}
+
+	if ( <NeedToLoadNewRef> )
+	{
+		if ( MessageBox( ~The KPL reference information needs updating.  Is it okay to load it now?~,YESNO ) != YES )
+		{
+			return FALSE;
+		} 
+
+		LoadTheArchive( ~<$App.ShareDirectory>\Scripts\Assistant\KPL~,TRUE );
+
+		dBase( Cmd,~Update KPL Set Description='<writeDate>' Where Subject = 'Assistant' AND Category = 'Overview' and Item = 'Introduction' And SubItem = 'Version'~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC GotoItemNoHistory(WhichSubject,WhichCategory,WhichItem,WhichSubItem)
+{
+	UpdateHistory = FALSE;
+
+	GotoItem(~<WhichSubject>~,~<WhichCategory>~,~<WhichItem>~,~<WhichSubItem>~);
+
+	UpdateHistory = TRUE;
+
+	return TRUE;
+}
+
+
+NUMERIC GotoItem(WhichSubject,WhichCategory,WhichItem,WhichSubItem)
+{
+	dlg( ListBox,ListBoxRefSubject,ResetContent );
+
+	Query = ~Select Subject From KPL Order By Subject~;
+
+	if ( PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		dlg( ListBox,ListBoxRefSubject,AddStringsFromPGenConList,List,Subject );
+	}
+
+	dlg( ListBox,ListBoxRefCategory,ResetContent );
+
+	Query = ~Select Category From KPL Where Subject = '<WhichSubject>' Order By Category~;
+
+	if ( PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		dlg( ListBox,ListBoxRefCategory,AddStringsFromPGenConList,List,Category );
+	}
+
+	dlg( ListBox,ListBoxRefItem,ResetContent );
+
+	Query = ~Select Item From KPL Where Subject = '<WhichSubject>' AND Category = '<WhichCategory>' Order By Subject,Category~;
+
+	if ( PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		dlg( ListBox,ListBoxRefItem,AddStringsFromPGenConList,List,Item );
+	}
+
+	dlg( ListBox,ListBoxRefSubItem,ResetContent );
+
+	Query = ~Select * From KPL Where Subject = '<WhichSubject>' AND Category = '<WhichCategory>' and Item = '<WhichItem>' Order By Item~;
+
+	if ( PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+			dlg( ListBox,ListBoxRefSubItem,AddStringsFromPGenConList,List,SubItem );
+	}
+
+	if ( !IsNull(~<WhichSubject>~) )	{ dlg( ListBox,ListBoxRefSubject,SelectString,0,~<WhichSubject>~ ); }
+	if ( !IsNull(~<WhichCategory>~) )	{ dlg( ListBox,ListBoxRefCategory,SelectString,0,~<WhichCategory>~ ); }
+	if ( !IsNull(~<WhichItem>~) )		{ dlg( ListBox,ListBoxRefItem,SelectString,0,~<WhichItem>~ ); }
+	if ( !IsNull(~<WhichSubItem>~) )	{ dlg( ListBox,ListBoxRefSubItem,SelectString,0,~<WhichSubItem>~ ); }
+
+	OnRefSubItemSelected();
+
+	if ( dlg( SelectedTab,TabWindow ) != 0 )
+	{
+		dlg( SelectTab,TabWindow,0 );
+	}
+
+	//dlg( SetStatus,0,~<WhichSubject>  |  <WhichCategory>  |  <WhichItem>  |  <WhichSubItem>~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnReLoadRefSubject()
+{
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+	dlg( ListBox,ListBoxRefCategory,GetSelectedItem,WhichCategory );
+	dlg( ListBox,ListBoxRefItem,GetSelectedItem,WhichItem );
+	dlg( ListBox,ListBoxRefSubItem,GetSelectedItem,WhichSubItem );
+
+	OnLoadRefSubject();
+
+	return GotoItemNoHistory(~<WhichSubject>~,~<WhichCategory>~,~<WhichItem>~,~<WhichSubItem>~);
+}
+
+
+
+NUMERIC OnLoadRefSubject()
+{
+	dlg( ListBox,ListBoxRefSubject,ResetContent );
+
+	Query = ~Select Subject From KPL Order By Subject~;
+
+	if ( PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		dlg( ListBox,ListBoxRefSubject,AddStringsFromPGenConList,List,Subject );
+
+		dlg( ListBox,ListBoxRefSubject,Select,0 );
+
+		OnRefSubjectSelected();
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnRefSubjectSelected()
+{
+	//dlg( GetInput );
+
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+
+	dlg( SetStrings,SearchText,~<WhichSubject>~ );
+
+	dlg( ListBox,ListBoxRefCategory,ResetContent );
+
+	Query = ~Select Category From KPL Where Subject = '<WhichSubject>' Order By Subject,Category,Item~;
+
+	if ( PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		dlg( ListBox,ListBoxRefCategory,AddStringsFromPGenConList,List,Category );
+
+		dlg( ListBox,ListBoxRefCategory,Select,0 );
+
+		OnRefCategorySelected();
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnRefCategorySelectedButton()
+{
+	//dlg( GetInput );
+
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+
+	dlg( ListBox,ListBoxRefCategory,GetSelectedItem,WhichCategory );
+
+	if ( SimilarStr( ~<WhichSubject>~,~Objects~ ) )
+	{
+		dlg( SetStrings,SearchText,~<WhichCategory>(~ );
+	}
+	else
+	{
+		dlg( SetStrings,SearchText,~<WhichCategory>~ );
+	}
+
+	return OnRefCategorySelected();
+}
+
+
+NUMERIC OnRefCategorySelected()
+{
+	//dlg( GetInput );
+
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+
+	dlg( ListBox,ListBoxRefCategory,GetSelectedItem,WhichCategory );
+
+	dlg( ListBox,ListBoxRefItem,ResetContent );
+
+	Query = ~Select Item From KPL Where Subject = '<WhichSubject>' AND Category = '<WhichCategory>' Order By Subject,Category,Item~;
+
+	if ( PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		dlg( ListBox,ListBoxRefItem,AddStringsFromPGenConList,List,Item );
+
+		dlg( ListBox,ListBoxRefItem,Select,0 );
+
+		OnRefItemSelected();
+	}
+
+	return TRUE;
+}
+
+NUMERIC OnRefItemSelectedButton()
+{
+	//dlg( GetInput );
+
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+
+	dlg( ListBox,ListBoxRefItem,GetSelectedItem,WhichItem );
+
+	if ( SimilarStr( ~<WhichSubject>~,~Functions~ ) )
+	{
+		dlg( SetStrings,SearchText,~<WhichItem>(~ );
+	}
+	else if ( SimilarStr( ~<WhichSubject>~,~Objects~ ) )
+	{
+		dlg( SetStrings,SearchText,~<WhichItem>~ );
+	}
+	else
+	{
+		dlg( SetStrings,SearchText,~<WhichItem>~ );
+	}
+	return OnRefItemSelected();
+}
+
+
+NUMERIC OnRefItemSelected()
+{
+	//dlg( GetInput );
+
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+	dlg( ListBox,ListBoxRefCategory,GetSelectedItem,WhichCategory );
+	dlg( ListBox,ListBoxRefItem,GetSelectedItem,WhichItem );
+
+	dlg( ListBox,ListBoxRefSubItem,ResetContent );
+
+	Query = ~Select * From KPL Where Subject = '<WhichSubject>' AND Category = '<WhichCategory>' and Item = '<WhichItem>' Order By Subject,Category,Item~;
+
+	if ( PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		if ( List( GetFirst,Item ) )
+		{
+			dlg( ListBox,ListBoxRefSubItem,AddStringsFromPGenConList,List,SubItem );
+
+			if ( dlg( ListBox,ListBoxRefSubItem,SelectString,0,~Description~ ) < 0 )
+			{
+				dlg( ListBox,ListBoxRefSubItem,Select,0 );
+			}
+
+			OnRefSubItemSelected();
+		}
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC OnRefSubItemSelected()
+{
+	dlg( GetInput );
+
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+	dlg( ListBox,ListBoxRefCategory,GetSelectedItem,WhichCategory );
+	dlg( ListBox,ListBoxRefItem,GetSelectedItem,WhichItem );
+	dlg( ListBox,ListBoxRefSubItem,GetSelectedItem,WhichSubItem );
+
+	if ( !GotoSubitem(~<WhichSubject>~,~<WhichCategory>~,~<WhichItem>~,~<WhichSubItem>~) )
+	{
+		return FALSE;
+	}
+		
+
+	return TRUE;
+}
+
+
+NUMERIC GotoSubItem( WhichSubject,WhichCategory,WhichItem,WhichSubItem )
+{
+	Query = ~Select * From KPL Where Subject = '<WhichSubject>' AND Category = '<WhichCategory>' and Item = '<WhichItem>' and SubItem = '<WhichSubItem>' Order By Subject,Category,Item,SubItem~;
+
+	if ( PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		if ( List( GetFirst,Item ) )
+		{
+			dlg( SetStrings,RefDescription,~~,RefCode,~~ );
+
+			Item( GetValue,~Description~,theData );
+			dlg( AppendStringsFromContents,RefDescription,theData );
+
+			Item( GetValue,~Executable~,theData );
+			dlg( AppendStringsFromContents,RefCode,theData );
+
+			OnChangeDescription();
+
+			if ( <UpdateHistory> )
+			{
+				ReferenceHistory( AddString,~<WhichSubject>|<WhichCategory>|<WhichItem>|<WhichSubItem>~ );
+				ReferenceHistoryPos = ReferenceHistory( LastPosition );
+			}
+
+			Where = ~<WhichSubject>  |  <WhichCategory>  |  <WhichItem>  |  <WhichSubItem>~;
+
+			dlg( SetStatus,0,~<Where>~ );
+
+			if ( KeyState( Control ) )
+			{
+				CopyContentsToClipboard( Where );
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnHistoryBack()
+{
+	if ( <--ReferenceHistoryPos> < 0 )
+	{
+		ReferenceHistoryPos = 0;
+	}
+
+	return GotoHistoryPosition(); 
+}
+
+NUMERIC OnHistoryForward()
+{
+	if ( <ReferenceHistoryPos++> > ReferenceHistory( LastPosition ) )
+	{
+		ReferenceHistoryPos = ReferenceHistory( LastPosition );
+	}
+
+	return GotoHistoryPosition(); 
+}
+
+NUMERIC OnHistoryClear()
+{
+	dlg( SetStatus,0,~History was cleared~ );
+	ReferenceHistoryPos = 0;
+	return ReferenceHistory( DeleteAll );
+}
+
+
+NUMERIC OnHistoryMenu()
+{
+	Class( HistoryMenu,Extends,BaseMenu );
+
+	HistoryMenu( New,theMenu );
+
+	return theMenu.DisplayInView(dlg);
+}
+
+NUMERIC OnGoto()
+{
+	NumTokens = GetTokens( ~<$con.DlgData[GotoText]>~,~|~,WhichSubject,WhichCategory,WhichItem,WhichSubItem );
+
+	if ( <NumTokens> < 0 )	{ return FALSE; }
+
+	WhichSubject = String( TrimLeftRight,~<WhichSubject>~ );
+	WhichCategory = String( TrimLeftRight,~<WhichCategory>~ );
+	WhichItem = String( TrimLeftRight,~<WhichItem>~ );
+	WhichSubItem = String( TrimLeftRight,~<WhichSubItem>~ );
+
+	return GotoItem( ~<WhichSubject>~,~<WhichCategory>~,~<WhichItem>~,~<WhichSubItem>~ );
+}
+
+
+VOID HistoryMenu::AddMenuItems( &View )	// OVERRIDE FROM BASEMENU TO ADD MENU ITEMS
+{
+	Last = ReferenceHistory( LastPosition );
+ 
+	while ( <++Count> < 80 )
+	{
+		Action = ACTION EXEC ( SetAndGotoHistoryPosition(<Last>) );
+
+		if ( !ReferenceHistory( GetStringAt,<Last>,Keys ) )
+			break;
+
+		Keys = String( Replace,~<Keys>~,~|~,~  |  ~ );
+
+		AddMenuItem( TRUE,FALSE,Translate(~<Keys>~),Action );
+
+		if ( <--Last> <= 0 )
+			break;
+	}
+
+}
+
+NUMERIC SetAndGotoHistoryPosition( pos )
+{
+	ReferenceHistoryPos = <pos>;
+	return GotoHistoryPosition();
+}
+
+
+NUMERIC GotoHistoryPosition()
+{
+	if ( ReferenceHistory( GetStringAt,<ReferenceHistoryPos>,Keys ) )
+	{
+		GetTokens( ~<Keys>~,~|~,WhichSubject,WhichCategory,WhichItem,WhichSubItem );
+
+		GotoItemNoHistory(~<WhichSubject>~,~<WhichCategory>~,~<WhichItem>~,~<WhichSubItem>~);
+
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC RightClickIn()
+{
+	if ( dlg( GetControlWithFocus,CtrlName ) )
+	{
+		if ( !IsNull( String( BeginsWith,~ListBox~,~<CtrlName>~ ) ) )
+		{
+			dlg( ListBox,~<CtrlName>~,GetSelectedItem,Which );
+
+			return SearchFor( ~<Which>~ );
+		}
+	}
+
+	return dlg( SetStatus,0,~No control had focus~ );
+}
+
+NUMERIC OnSearchSelectedButton()
+{
+	dlg( GetInput );
+
+	dlg( GetControlWithFocus,CtrlName );
+
+	if ( ~<$con.DlgData[DescriptionType]>~ == ~Description~ )
+	{
+		if ( !dlg( EditText,RefDescriptionField,GetSelectedText,SearchText ) )
+		{
+			return Warning( ~Nothing selected~ );
+		}
+	}
+	else
+	{
+		if ( !dlg( EditText,RefCodeField,GetSelectedText,SearchText ) )
+		{
+			return Warning( ~Nothing selected~ );
+		}
+	}
+
+	return SearchFor( ~<SearchText>~ );
+}
+
+NUMERIC SearchFor( SearchText )
+{
+	dlg( SetStatus,0,~Items containing <SearchText>~ );
+	MakeSQLSafe( SearchText );
+
+	SearchText = String( RemoveCharFromString,~(~,~<SearchText>~ );
+	SearchText = String( RemoveCharFromString,~)~,~<SearchText>~ );
+
+	Key = ~Category Like '%<SearchText>%' OR Item Like '%<SearchText>%' OR SubItem Like '%<SearchText>%' OR Description Like '%<SearchText>%' OR Executable Like '%<SearchText>%'~;
+
+	Query = ~Select * From KPL Where <Key> Order By Subject,Category,Item,SubItem~;
+
+	Class( SearchSelected,Extends,BaseMenu,
+			Member,fQuery,Str,~<Query>~,
+			Member,fString,Str,~<SearchText>~ );
+
+	SearchSelected( New,theMenu );
+
+	return theMenu.DisplayInView(dlg);
+}
+
+VOID SearchSelected::AddMenuItems( &View )	// OVERRIDE FROM BASEMENU TO ADD MENU ITEMS
+{
+	if ( !PGenConList( List,Connect,Cursor,Static,Query,~<fQuery>~ ) )	{ return FALSE; }
+
+	count = 0;
+
+	while ( List(GetNext,Item) && <++count> < 100 )
+	{
+		Action = ACTION EXEC ( GotoItem(~<$pcon.Item[Subject]>~,~<$pcon.Item[Category]>~,~<$pcon.Item[Item]>~,~<$pcon.Item[SubItem]>~) );
+		AddMenuItem( TRUE,FALSE,~<$pcon.Item[Subject]> | <$pcon.Item[Category]> | <$pcon.Item[Item]> | <$pcon.Item[SubItem]>~,Action );
+	}
+}
+
+
+VOID IsRefCodeDirty()
+{
+	Modified = dlg( EditText,RefCodeField,GetModify ) || dlg( EditText,RefDescriptionField,GetModify );
+
+	dlg( EnableControls,<Modified>,SaveRefButton );
+}
+
+
+NUMERIC OnChangeDescription()
+{
+	dlg( GetInput );
+
+	if ( ~<$con.DlgData[DescriptionType]>~ == ~Description~ )
+	{
+		dlg( ShowControls,TRUE,RefDescriptionField );
+		dlg( ShowControls,FALSE,RefCodeField );
+	}
+	else
+	{
+		dlg( ShowControls,FALSE,RefDescriptionField );
+		dlg( ShowControls,TRUE,RefCodeField );
+	}
+
+	IsRefCodeDirty();
+
+	return TRUE;
+}
+
+NUMERIC EditAllRef()
+{
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+
+	action = ACTION DOC ( KPLDoc OpenOnce KPLDoc "Init( ~KPL~,~Select * From KPL Where Subject = '<WhichSubject>' Order By Subject,Category,Item,SubItem~,~~ );" );
+	return PerformActions( action );
+}
+
+NUMERIC EditCategoryRef()
+{
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+	dlg( ListBox,ListBoxRefCategory,GetSelectedItem,WhichCategory );
+
+	if ( !IsNull(~WhichCategory>~) )
+	{
+		action = ACTION DOC ( KPLDoc OpenOnce KPLDoc "Init( ~KPL~,~Select * From KPL Where Subject = '<WhichSubject>' AND Category = '<WhichCategory>' Order By Subject,Category,Item,SubItem~,~~ );" );
+		return PerformActions( action );
+	}
+
+	return FALSE;
+}
+
+
+
+NUMERIC EditItemRef()
+{
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+	dlg( ListBox,ListBoxRefCategory,GetSelectedItem,WhichCategory );
+	dlg( ListBox,ListBoxRefItem,GetSelectedItem,WhichItem );
+
+	if ( !IsNull(~WhichCategory>~) && !IsNull(~WhichItem>~) )
+	{
+		action = ACTION DOC ( KPLDoc OpenOnce KPLDoc "Init( ~KPL~,~Select * From KPL Where Subject = '<WhichSubject>' AND Category = '<WhichCategory>' AND Item = '<WhichItem>' Order By Subject,Category,Item,SubItem~,~~ );" );
+		return PerformActions( action );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC EditSubItemRef()
+{
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+	dlg( ListBox,ListBoxRefCategory,GetSelectedItem,WhichCategory );
+	dlg( ListBox,ListBoxRefItem,GetSelectedItem,WhichItem );
+	dlg( ListBox,ListBoxRefSubItem,GetSelectedItem,WhichSubItem );
+
+	if ( !IsNull(~WhichCategory>~) && !IsNull(~WhichItem>~) && !IsNull(~WhichSubItem>~) )
+	{
+		action = ACTION DOC ( KPLDoc OpenOnce KPLDoc "Init( ~KPL~,~Select * From KPL Where Subject = '<WhichSubject>' AND Category = '<WhichCategory>' AND Item = '<WhichItem>' AND SubItem = '<WhichSubItem>' Order By Subject,Category,Item,SubItem~,~~ );" );
+		return PerformActions( action );
+	}
+
+	return FALSE;
+}
+
+
+
+NUMERIC SetEditing()
+{
+	dlg( GetInput );
+
+	Value = ~<$con.dlgData[Editing]>~;
+
+	dlg( EditText,RefDescriptionField,SetReadOnly,!<Value> );
+	dlg( EditText,RefCodeField,SetReadOnly,!<Value> );
+
+	dlg( ShowControls,<Value>,SaveRefButton );
+
+	return TRUE;
+}
+
+NUMERIC OnSaveRefButton()
+{
+	dlg( GetInput );
+
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+	dlg( ListBox,ListBoxRefCategory,GetSelectedItem,WhichCategory );
+	dlg( ListBox,ListBoxRefItem,GetSelectedItem,WhichItem );
+	dlg( ListBox,ListBoxRefSubItem,GetSelectedItem,WhichSubItem );
+
+	Query = ~Select * From KPL Where Subject = '<WhichSubject>' AND Category = '<WhichCategory>' and Item = '<WhichItem>' and SubItem = '<WhichSubItem>'~;
+
+	if ( PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		if ( List( GetFirst,Item ) )
+		{
+			dlg( GetStrings,RefDescription,RefDescription );
+			Item( SetFromContentsOf,~Description~,RefDescription );
+
+			dlg( GetStrings,theCode,RefCode );
+			Item( SetFromContentsOf,~Executable~,theCode );
+			
+			if ( !List( Update ) )
+			{
+				List( GetErrorDescription,0,theErr );
+				return Warning( ~Update Failed.  <theErr>~ );
+			}
+		}
+	}
+
+	dlg( EnableControls,FALSE,SaveRefButton );
+
+	return TRUE;
+}
+
+
+NUMERIC CopyRefToScratch()
+{
+	dlg( GetInput );
+
+	DlgData( GetValues,RefCode,ScratchData );
+
+	dlg( SetStringsFromContents,Scratch,ScratchData );
+
+	return dlg( SelectTab,TabWindow,1 );
+}
+
+
+NUMERIC ExecuteRefCode( WantDebug )
+{
+	dlg( GetInput );
+
+	DlgData( GetValues,RefCode,Executable );
+
+	if ( IsContentsNULL( Executable ) )
+	{
+		return Warning( ~There is no executable example code for this item~ );
+	}
+
+	Path = ~<$App.Dir>\scripts\ExampleTemp.txt~ ;
+
+	Files( Delete,~<Path>~ );
+
+	if ( !File( ScratchFile,Open,~<Path>~,Create,Write,Close ) )	
+	{
+		return Warning( Translate( ~Failed to create <Path>~ ) );
+	}
+
+	if ( <WantDebug> )
+	{
+		ScratchFile( WriteLine,~;Debug(1);~ );
+		ScratchFile( CRLF );
+	}
+
+	ScratchFile( WriteContentsOf,Executable );
+
+	if ( <WantDebug> )
+	{
+		ScratchFile( CRLF,CRLF,WriteLine,~;Debug(1);~,CRLF );
+	}
+
+	ScratchFile( Close );
+
+	Open( Any,~<Path>~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC OldExecuteRefCode( WantDebug )
+{
+	if ( dlg( EditText,RefCodeField,GetModify ) )
+	{
+		OnSaveRefButton();
+	}
+
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+	dlg( ListBox,ListBoxRefCategory,GetSelectedItem,WhichCategory );
+	dlg( ListBox,ListBoxRefItem,GetSelectedItem,WhichItem );
+	dlg( ListBox,ListBoxRefSubItem,GetSelectedItem,WhichSubItem );
+
+	Query = ~Select * From KPL Where Subject = '<WhichSubject>' AND Category = '<WhichCategory>' and Item = '<WhichItem>' and SubItem = '<WhichSubItem>'~;
+
+	if ( PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		if ( List( GetFirst,Item ) )
+		{
+			Item( GetValue,Executable,Executable );
+
+			if ( IsContentsNULL( Executable ) )
+			{
+				return Warning( ~There is no executable example code for this item~ );
+			}
+
+			Path = ~<$App.Dir>\scripts\ExampleTemp.txt~ ;
+
+			Files( Delete,~<Path>~ );
+
+			if ( !File( ScratchFile,Open,~<Path>~,Create,Write,Close ) )	
+			{
+				return Warning( Translate( ~Failed to create <Path>~ ) );
+			}
+
+			if ( <WantDebug> )
+			{
+				ScratchFile( WriteLine,~;Debug(1);~ );
+				ScratchFile( CRLF );
+			}
+
+			ScratchFile( WriteContentsOf,Executable );
+
+			if ( <WantDebug> )
+			{
+				ScratchFile( CRLF,CRLF,WriteLine,~;Debug(1);~,CRLF );
+			}
+
+			ScratchFile( Close );
+
+			Open( Any,~<Path>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnSampleDirectorySelected()
+{
+	dlg( GetInput );
+
+	dlg( ListBox,ListBoxSampleCode,GetSelectedItem,WhichDirectory );
+
+	dlg( ListBox,ListBoxSampleFile,ResetContent );
+
+	dlg( ListBox,ListBoxSampleFile,Dir,~<$App.Directory>\Scripts\Assistant\SampleCode\<WhichDirectory>\*.*~ );
+
+	return TRUE;
+}
+
+
+VOID AddExample( Path,aStringAddr )
+{
+	MessagePump();
+	
+	StringVariableFromBuffer( aString,<aStringAddr> );
+
+	CR = chr(0x0D);  LF = chr(0x0A);
+
+	Where = ~---- <Path><CR><LF>~;
+
+	dlg( AppendStringsFromContents,SampleCode,Where );
+
+	if ( !IsNull( aString ) )
+	{
+		dlg( AppendStringsFromContents,SampleCode,aString );
+	}
+
+	MessagePump();
+}
+
+
+NUMERIC FindExample( Path,Which,TheFunction )
+{
+	Invoke( ShowProgress,~Searching <Path>~ );
+
+	if ( SimilarStr( ~SimpleSearch~,~<Which>~ ) )						// Just Searching for a string?
+	{
+		aString = FileContainsSimilarStr( ~<path>~,~<thefunction>~,TRUE,FALSE,TRUE );
+
+		if ( !IsContentsNull( aString ) )
+		{
+			Invoke( AddExample,~<Path>~,BufferFromStringVariable(aString) );
+		}
+
+		return TRUE;
+	}
+
+	if ( !IsNull( String( BeginsWith,~Obj -~,~<Which>~ ) ) )			// Obj Reference?
+	{
+		substr( ~<Which>~,6,999,Which );
+
+		aString = FileContainsSimilarStr( ~<path>~,~<Which>~,TRUE,FALSE );
+
+		if ( IsContentsNull( aString ) )
+		{
+			return FALSE;
+		}
+
+		aString = FileContainsSimilarStr( ~<path>~,~<TheFunction>~,TRUE,TRUE );
+
+		if ( !IsContentsNull( aString ) )
+		{
+			Invoke( AddExample,~<Path>~,BufferFromStringVariable(aString) );
+		}
+		
+		return TRUE;	
+	}
+
+	aString = FindFunctionExamples( ~<Path>~,~<TheFunction>~,~   ~ );	// Must be a function!
+
+	if ( !IsContentsNull( aString ) )
+	{
+		Invoke( AddExample,~<Path>~,BufferFromStringVariable(aString) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC FindExamples( Path,Which,TheFunction )
+{
+	count = 0;
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~<Path>~ );
+
+	while ( $Morefiles )
+	{
+		if ( !<Finding> )
+			break;
+
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+			continue;
+
+		FindExample( ~<aPath>~,~<Which>~,~<TheFunction>~ );
+
+		++count;
+
+		if ( !<Finding> )
+			break;
+			
+		Sleep(1);
+	}
+	
+	return <count>;
+}
+
+
+NUMERIC FindExamplesThread( Which,TheFunction )
+{
+	Finding = TRUE;
+
+	count = 0;
+
+	if ( ~<Which>~ == ~SessionLogErrors~ )
+	{
+		if ( <Finding> )
+		{
+			count = <count> + FindExamples( ~<$App.Directory>\SessionLogs\<$App.Title>\*.txt~,~SimpleSearch~,~<TheFunction>~ );
+		}
+	}
+	else
+	{
+		if ( <Finding> )
+		{
+			count = <count> + FindExamples( ~<$App.Directory>\TextFiles\*.txt~,~<Which>~,~<TheFunction>~ );
+		}
+		if ( <Finding> )
+		{
+			<count> + FindExamples( ~<$App.Directory>\CommonText\*.txt~,~<Which>~,~<TheFunction>~ );
+		}
+		if ( <Finding> )
+		{
+			<count> + FindExamples( ~<$App.Directory>\KPSS\*.txt~,~<Which>~,~<TheFunction>~ );
+		}
+		if ( <Finding> )
+		{
+			<count> + FindExamples( ~<$App.Directory>\Scripts\Classes\*.txt~,~<Which>~,~<TheFunction>~ );
+		}
+		if ( <Finding> )
+		{
+			<count> + FindExamples( ~<$App.Directory>\Scripts\Macros\*.txt~,~<Which>~,~<TheFunction>~ );
+		}
+		if ( <Finding> )
+		{
+			<count> + FindExamples( ~<$App.Directory>\KEXDSSTextFiles\*.txt~,~<Which>~,~<TheFunction>~ );
+		}
+		if ( <Finding> )
+		{
+			<count> + FindExamples( ~<$App.Directory>\PLSTextFiles\*.txt~,~<Which>~,~<TheFunction>~ );
+		}
+
+	}
+
+	Finding = FALSE;
+
+	Invoke( dlg,SetControlTitle,FindExamplesButton,~Find Examples~ );
+	Invoke( dlg,SetControlTitle,FindButton,~Find~ );
+
+	Invoke( ShowProgress,~Finished searching <count> files~ );
+
+	return TRUE;
+}
+
+
+VOID ShowProgress( msg )
+{
+	dlg( SetStatus,0,~<msg>~ );
+}
+
+
+
+Finding = FALSE;
+
+NUMERIC OnFindExamplesButton()
+{
+	dlg( GetInput );
+
+	if ( <Finding> )
+	{
+		Finding = FALSE;
+
+		dlg( SetControlTitle,FindExamplesButton,~Find Examples~ );
+
+		return TRUE;
+	}
+
+	dlg( SetControlTitle,FindExamplesButton,~Stop Finding~ );
+
+	dlg( ListBox,ListBoxSampleFile,GetSelectedItem,TheFunction );
+
+	dlg( SetStrings,SampleCode,~~ );
+
+	dlg( ListBox,ListBoxSampleCode,GetSelectedItem,Which );
+	
+	ForgetGlobal( FindThread );
+	Thread( FindThread );
+	Global( FindThread );
+
+	FindThread( New,FindExamplesThread,~<Which>~,~<TheFunction>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OnFindRef()
+{
+	dlg( GetStrings,SearchText,SearchText );
+
+	if ( IsContentsNull( SearchText ) )
+	{
+		return Warning( ~You must specify something to search for~ );
+	}
+
+	dlg( SelectTab,TabWindow,2 );
+
+	return OnFindButton();
+}
+
+
+
+
+NUMERIC OnSimilarCategoryButton()
+{
+	dlg( GetStrings,SearchText,SearchText );
+
+	if ( IsContentsNull( SearchText ) )
+	{
+		return Warning( ~You must specify something to search for~ );
+	}
+
+	MakeSQLSafe( SearchText );
+
+	SearchText = String( RemoveCharFromString,~(~,~<SearchText>~ );
+	SearchText = String( RemoveCharFromString,~)~,~<SearchText>~ );
+
+	action = ACTION DOC ( KPLDoc OpenOnce KPLDoc "Init( ~KPL~,~Select * From KPL Where Category Like '%<SearchText>%' Order By Category,Item,SubItem~,~~ );" );
+	return PerformActions( action );
+}
+
+NUMERIC OnSimilarSubjectButton()
+{
+	dlg( GetStrings,SearchText,SearchText );
+
+	if ( IsContentsNull( SearchText ) )
+	{
+		return Warning( ~You must specify something to search for~ );
+	}
+
+	MakeSQLSafe( SearchText );
+
+	SearchText = String( RemoveCharFromString,~(~,~<SearchText>~ );
+	SearchText = String( RemoveCharFromString,~)~,~<SearchText>~ );
+
+	action = ACTION DOC ( KPLDoc OpenOnce KPLDoc "Init( ~KPL~,~Select * From KPL Where Subject Like '%<SearchText>%' Order By Subject,Category,Item,SubItem~,~~ );" );
+	return PerformActions( action );
+}
+
+
+NUMERIC OnSimilarItemButton()
+{
+	dlg( GetStrings,SearchText,SearchText );
+
+	if ( IsContentsNull( SearchText ) )
+	{
+		return Warning( ~You must specify something to search for~ );
+	}
+
+	MakeSQLSafe( SearchText );
+
+	SearchText = String( RemoveCharFromString,~(~,~<SearchText>~ );
+	SearchText = String( RemoveCharFromString,~)~,~<SearchText>~ );
+
+	action = ACTION DOC ( KPLDoc OpenOnce KPLDoc "Init( ~KPL~,~Select * From KPL Where Item Like '%<SearchText>%' Order By Item,SubItem~,~~ );" );
+	return PerformActions( action );
+}
+
+NUMERIC OnSearchButton()
+{
+	dlg( GetStrings,SearchText,SearchText );
+
+	if ( IsContentsNull( SearchText ) )
+	{
+		return Warning( ~You must specify something to search for~ );
+	}
+
+	MakeSQLSafe( SearchText );
+
+	SearchText = String( RemoveCharFromString,~(~,~<SearchText>~ );
+	SearchText = String( RemoveCharFromString,~)~,~<SearchText>~ );
+
+	Key = ~Item Like '%<SearchText>%' OR SubItem Like '%<SearchText>%' OR Description Like '%<SearchText>%' OR Executable Like '%<SearchText>%'~;
+
+	action = ACTION DOC ( KPLDoc OpenOnce KPLDoc "Init( ~KPL~,~Select * From KPL Where <Key> Order By Subject,Category,Item,SubItem~,~~ );" );
+	return PerformActions( action );
+}
+
+
+
+
+NUMERIC OnNewRef()
+{
+	if ( !DictionaryExists( DDNewReferenceDialog ) )
+	{
+        Dictionary: DDNewReferenceDialog 
+            Fields: Name	Subject		type text
+			Fields: Name	Category	type text
+			Fields: Name	Item		type text
+			Fields: Name	SubItem		type text
+ 	}
+
+	dlg( GetInput );
+
+	dlg( ListBox,ListBoxRefSubject,GetSelectedItem,WhichSubject );
+	dlg( ListBox,ListBoxRefCategory,GetSelectedItem,WhichCategory );
+	dlg( ListBox,ListBoxRefItem,GetSelectedItem,WhichItem );
+	dlg( ListBox,ListBoxRefSubItem,GetSelectedItem,WhichSubItem );
+
+
+	Define: NewReferenceDialogData Using DDNewReferenceDialog
+			Fields: Subject		~<WhichSubject>~
+					Category	~<WhichCategory>~
+					Item		~<WhichItem>~
+					SubItem		~<WhichSubItem>~;
+
+	DialogWidth = 300; DialogHeight = 300;
+
+	vGap = 5; hGap = 6; ButtonWidth = 50; ButtonHeight = 20; EditTextHeight = $ButtonHeight;  ButtonGap = 3;
+
+	Define: NewReferenceDialog Using DDWinDef
+		Fields:	POSITION				<Left>,<Top>,$DialogWidth,$DialogHeight 
+				TITLE					~New Reference~
+				TYPENAME				~Dialog~ 
+				OACTIONSTEXT			ACTION EXEC ( CancelNewRefDialog();   )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPLHelpFile "NewReference.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: SubjectPrompt Using DDWinCtrlDef AsSymbol SubjectPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Subject~ )
+						RightJustified	TRUE
+						POSITION		$hGap $vGap,50,$ButtonHeight
+
+			Define: SubjectField Using DDWinCtrlDef AsSymbol SubjectField 
+				Fields: TypeName		MaskedEditText  
+						Mask			RepeatStr(32,~%~)
+						PromptChar		~ ~
+						Position		SubjectPrompt(GetRight,Position) + $hGap,SubjectPrompt(GetTop,Position)-2,
+										120,<ButtonHeight> 
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save )
+						OActionsText	ACTIONS ( Save )
+						GenConName       THIS
+						GenConField		~Subject~
+						Tooltip         ~Enter the subject for the new reference~;
+
+			Define: CategoryPrompt Using DDWinCtrlDef AsSymbol CategoryPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Category~ )
+						RightJustified	TRUE
+						POSITION		SubjectPrompt(GetLeft,Position),SubjectPrompt(GetBottom,Position)+$vGap,
+										SubjectPrompt(GetWidth,Position),SubjectPrompt(GetLength,Position)
+
+			Define: CategoryField Using DDWinCtrlDef AsSymbol CategoryField 
+				Fields: TypeName		MaskedEditText  
+						Mask			RepeatStr(32,~%~)
+						PromptChar		~ ~
+						Position		CategoryPrompt(GetRight,Position) + $hGap,CategoryPrompt(GetTop,Position)-2,
+										SubjectField(GetWidth,Position),SubjectField(GetLength,Position)
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save )
+						OActionsText	ACTIONS ( Save )
+						GenConName       THIS
+						GenConField		~Category~
+						Tooltip         ~Enter the category for the new reference~;
+
+			Define: ItemPrompt Using DDWinCtrlDef AsSymbol ItemPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Item~ )
+						RightJustified	TRUE
+						POSITION		CategoryPrompt(GetLeft,Position),CategoryPrompt(GetBottom,Position)+$vGap,
+										CategoryPrompt(GetWidth,Position),CategoryPrompt(GetLength,Position)
+
+			Define: ItemField Using DDWinCtrlDef AsSymbol ItemField 
+				Fields: TypeName		MaskedEditText  
+						Mask			RepeatStr(32,~%~)
+						PromptChar		~ ~
+						Position		ItemPrompt(GetRight,Position) + $hGap,ItemPrompt(GetTop,Position)-2,
+										SubjectField(GetWidth,Position),SubjectField(GetLength,Position) 
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save )
+						OActionsText	ACTIONS ( Save )
+						GenConName       THIS
+						GenConField		~Item~
+						Tooltip         ~Enter the Item for the new reference~;
+
+
+			Define: SubItemPrompt Using DDWinCtrlDef AsSymbol SubItemPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~SubItem~ )
+						RightJustified	TRUE
+						POSITION		ItemPrompt(GetLeft,Position),ItemPrompt(GetBottom,Position)+$vGap,
+										ItemPrompt(GetWidth,Position),ItemPrompt(GetLength,Position)
+
+			Define: SubItemField Using DDWinCtrlDef AsSymbol SubItemField 
+				Fields: TypeName		MaskedEditText  
+						Mask			RepeatStr(32,~%~)
+						PromptChar		~ ~
+						Position		SubItemPrompt(GetRight,Position) + $hGap,SubItemPrompt(GetTop,Position)-2,
+										SubjectField(GetWidth,Position),SubjectField(GetLength,Position) 
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save )
+						OActionsText	ACTIONS ( Save )
+						GenConName       THIS
+						GenConField		~SubItem~
+						Tooltip         ~Enter the SubItem for the new reference~;
+
+			DialogWidth = NewReferenceDialog(GetMaxRight,Position) + $hGap * 2 ;
+
+			Define: AddReferenceItemButton Using DDWinCtrlDef AsSymbol AddReferenceItemButton 
+				Fields: TypeName		DefaultButton
+						DActionsText	ACTION EXEC ( OnNewRefButton() )
+						Text			Translate( ~New~ )
+						RightJustified	TRUE
+						POSITION		$DialogWidth / 2 - $ButtonWidth / 2,SubItemPrompt(GetBottom,Position)+$vGap,
+										$ButtonWidth,$ButtonHeight
+
+		}
+
+
+	DialogHeight = NewReferenceDialog(GetMaxBottom,Position) + $vGap + 30;
+
+	NewReferenceDialog( Set,Position,~100 100 <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( NewReferenceDlg,Definition,NewReferenceDialog,Data,NewReferenceDialogData,Document,$Doc.This,New,Temporary );
+	Global( NewReferenceDlg,NewReferenceDialogData );
+
+
+	return TRUE;
+}
+
+NUMERIC OnNewRefButton()
+{
+	NewReferenceDlg( GetInput );
+
+	if ( IsNull( ~<$con.NewReferenceDialogData[Subject]>~ ) )
+	{
+		return Warning( ~Subject cannnot be NULL~ );
+	}
+
+	if ( IsNull( ~<$con.NewReferenceDialogData[Category]>~ ) )
+	{
+		return Warning( ~Category cannnot be NULL~ );
+	}
+
+	if ( IsNull( ~<$con.NewReferenceDialogData[Item]>~ ) )
+	{
+		return Warning( ~Item cannnot be NULL~ );
+	}
+
+	if ( IsNull( ~<$con.NewReferenceDialogData[SubItem]>~ ) )
+	{
+		return Warning( ~SubItem cannnot be NULL~ );
+	}
+
+	Key = ~Subject = '<$con.NewReferenceDialogData[Subject]>' AND Category = '<$con.NewReferenceDialogData[Category]>'  AND
+			Item = '<$con.NewReferenceDialogData[Item]>' AND SubItem = '<$con.NewReferenceDialogData[SubItem]>'~;
+
+	if ( ADO( db,Connect,RecordCountFor,~Select * From KPL Where <Key>~ ) )
+	{
+		return Warning( ~Sorry that combination already exists~ );
+	}
+
+	Fields = ~Subject,Category,Item,SubItem~;
+	Values = ~'<$con.NewReferenceDialogData[Subject]>','<$con.NewReferenceDialogData[Category]>','<$con.NewReferenceDialogData[Item]>','<$con.NewReferenceDialogData[SubItem]>'~;
+
+	if ( !db( Cmd,~Insert Into KPL(<Fields>) Values(<Values>)~ ) )
+	{
+		db( GetErrorDescription,theErr );
+		return Warning( ~Insert failed.  <theErr>~ );
+	}
+
+	Queue( ~ReloadNewReference();~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ReloadNewReference()
+{
+	OnLoadRefSubject();
+
+	dlg( ListBox,ListBoxRefSubject,SelectString,0,~<$con.NewReferenceDialogData[Subject]>~ );
+	OnRefSubjectSelected();
+	dlg( ListBox,ListBoxRefCategory,SelectString,0,~<$con.NewReferenceDialogData[Category]>~ );
+	OnRefCategorySelected();
+	dlg( ListBox,ListBoxRefItem,SelectString,0,~<$con.NewReferenceDialogData[Item]>~ );
+	OnRefItemSelected();
+	dlg( ListBox,ListBoxRefSubItem,SelectString,0,~<$con.NewReferenceDialogData[SubItem]>~ );
+	OnRefSubItemSelected();
+
+	CancelNewRefDialog();
+
+	return TRUE;
+}
+
+
+VOID CancelNewRefDialog()
+{
+	NewReferenceDlg( END );
+	ForgetGlobal( NewReferenceDlg,NewReferenceDialogData );
+}
+
+
+
+
+NUMERIC OnFindButton()
+{
+	if ( <Finding> )
+	{
+		Finding = FALSE;
+
+		dlg( SetControlTitle,FindButton,~Find~ );
+
+		return TRUE;
+	}
+
+	dlg( GetInput );
+
+	dlg( GetStrings,SearchText,SearchText );
+
+	if ( IsContentsNull( SearchText ) )
+	{
+		return Warning( ~You must specify something to find~ );
+	}
+
+	dlg( SetControlTitle,FindButton,~Stop Finding~ );
+
+	dlg( SetStrings,SampleCode,~~ );
+
+	ForgetGlobal( FindThread );
+	Thread( FindThread );
+	Global( FindThread );
+
+	FindThread( New,FindExamplesThread,~SimpleSearch~,~<SearchText>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OnFindSessionLogErrorsButton()
+{
+	if ( <Finding> )
+	{
+		Finding = FALSE;
+
+		dlg( SetControlTitle,FindButton,~Find~ );
+
+		return TRUE;
+	}
+	
+	dlg( GetInput );
+
+	dlg( GetStrings,SearchText,SearchText );
+
+	if ( IsContentsNull( SearchText ) )
+	{
+		return Warning( ~You must specify something to find~ );
+	}
+
+	dlg( SetControlTitle,FindButton,~Stop Finding~ );
+	
+	dlg( SetStrings,SampleCode,~~ );
+	
+	ForgetGlobal( FindThread );
+	Thread( FindThread );
+	Global( FindThread );
+
+	FindThread( New,FindExamplesThread,~SessionLogErrors~,~<SearchText>~ );
+
+	return TRUE;
+}
+
+
+VOID IntegrateWithNotePadPlus()
+{
+	WaitCursor( Begin );
+	
+	return1 = CreateUserDefineLangForNotePadPlus();
+	
+	return2 = CreateNotePadPlusAutoComplete();
+	
+	return3 = IntegrateSnippetPlusWithNotePadPlus();
+	
+	if ( <return1> || <return2> || <return3> )
+	{
+		Warning( ~Restart Notepad++ to utilize the color coding and auto completion.~ );
+	}
+	
+	WaitCursor( End );
+}
+
+
+
+NUMERIC IntegrateSnippetPlusWithNotePadPlus()
+{
+	srcPath = ~<$App.Scripts>\Assistant\SnippetPlus.xml~;
+	dstPath = ~<$env.APPDATA>\Notepad++\plugins\config\SnippetPlus.xml~;
+	
+	if ( Files( FileExists,~<dstPath>~ ) )
+	{
+		if ( !MessageBox(~<dstPath> already exists.  Is it okay to overwrite it? ~,YESNO ) == YES )
+		{
+			ReturnOnFailure( FileDialog( Title,~Save SnippetPlus.xml as~,DefaultDirectory,~<$str.$dstPath.path>~,PATH,Path,Save ) );
+		}
+	}
+	
+	Files( ChMod,~<dstPath>~,ReadWrite );	// If it exists, it may not be writable.  It is not an error if this fails as it may not exist.
+	
+	if ( !Files( Copy,~<srcPath>~,~<dstPath>~ ) )
+	{
+		return Warning( ~Failed to copy <srcPath> to <dstPath>.  <$func.GetLastErrorMsg()>~ );
+	}
+	
+	if ( !Files( ChMod,~<dstPath>~,ReadWrite ) )
+	{
+		return Warning( ~Failed to make <dstPath> writeable.  <$func.GetLastErrorMsg()>~ );
+	}
+	
+	return TRUE;
+}
+
+
+
+NUMERIC CreateUserDefineLangForNotePadPlus()
+{	
+BeginBUFFER( prefix );
+<NotepadPlus>
+    <UserLang name="kpl" ext=".txt">
+        <Settings>
+            <Global caseIgnored="yes" />
+            <TreatAsSymbol comment="no" commentLine="no" />
+            <Prefix words1="no" words2="no" words3="no" words4="no" />
+        </Settings>
+        <KeywordLists>
+            <Keywords name="Delimiters">~0~~</Keywords>
+            <Keywords name="Folder+">{</Keywords>
+            <Keywords name="Folder-">}</Keywords>
+            <Keywords name="Operators">&apos; - ! &quot; $ % &amp; , ( ) . : ; ? @ [ ] ^ ` | ~ + &lt; = &gt;</Keywords>
+            <Keywords name="Comment">1/* 2*/ 0// 0#</Keywords>
+            <Keywords name="Words1">VOID NUMERIC STR Define Include if else while return break continue (#) Contains Dictionary CEntry c: use concat set eval :: Fields Using AsSymbol Private TRUE FALSE LOOKUPSON LOOKUPSOFF MacrosOn MacrosOff normal bold italic underline outline shadow condense strikeout extend ticks_per_sec on off Extends</Keywords>
+EndBUFFER();
+
+BeginBUFFER( postfix );          
+        </KeywordLists>
+        <Styles>
+            <WordsStyle name="DEFAULT" styleID="11" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="0" />
+            <WordsStyle name="FOLDEROPEN" styleID="12" fgColor="0000FF" bgColor="FFFFFF" fontName="" fontStyle="1" />
+            <WordsStyle name="FOLDERCLOSE" styleID="13" fgColor="0000FF" bgColor="FFFFFF" fontName="" fontStyle="1" />
+            <WordsStyle name="KEYWORD1" styleID="5" fgColor="0000FF" bgColor="FFFFFF" fontName="" fontStyle="0" />
+            <WordsStyle name="KEYWORD2" styleID="6" fgColor="FF0000" bgColor="FFFFFF" fontName="" fontStyle="0" />
+            <WordsStyle name="KEYWORD3" styleID="7" fgColor="FF00FF" bgColor="FFFFFF" fontName="" fontStyle="0" />
+            <WordsStyle name="KEYWORD4" styleID="8" fgColor="00A0A0" bgColor="FFFFFF" fontName="" fontStyle="0" />
+            <WordsStyle name="COMMENT" styleID="1" fgColor="008000" bgColor="FFFFFF" fontName="" fontStyle="0" />
+            <WordsStyle name="COMMENT LINE" styleID="2" fgColor="008000" bgColor="FFFFFF" fontName="" fontStyle="0" />
+            <WordsStyle name="NUMBER" styleID="4" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="0" />
+            <WordsStyle name="OPERATOR" styleID="10" fgColor="0000FF" bgColor="FFFFFF" fontName="" fontStyle="0" />
+            <WordsStyle name="DELIMINER1" styleID="14" fgColor="BF6000" bgColor="FFFFFF" fontName="" fontStyle="0" />
+            <WordsStyle name="DELIMINER2" styleID="15" fgColor="095971" bgColor="FFFFFF" fontName="" fontStyle="0" />
+            <WordsStyle name="DELIMINER3" styleID="16" fgColor="000000" bgColor="FFFFFF" fontName="" fontStyle="0" />
+        </Styles>
+    </UserLang>
+</NotepadPlus>
+EndBUFFER();
+
+	NotePadPlusPath = NotePadPlusPath();
+
+	if ( IsNull(~<NotePadPlusPath>~) )
+	{
+		return Warning( ~NotePad++ is not installed on your workstation~ );
+	}
+	
+	path = ~<$env.APPDATA>\Notepad++\userDefineLang.xml~;	
+	
+	if ( Files( FileOrDirectoryExists,~<path>~ ) )
+	{
+		if ( !MessageBox(~<path> already exists.  Is it okay to overwrite it? ~,YESNO ) == YES )
+		{
+			ReturnOnFailure( FileDialog( Title,~Save userDefineLang.xml as~,DefaultDirectory,~<$env.APPDATA>\Notepad++~,PATH,Path,Save ) );
+		}
+	}
+	
+	if ( !File( theFile,Open,~<path>~,Create,Write ) )	
+	{
+		return Warning( ~Could not create <path>~.  <$func.GetLastErrorMsg()>~ );
+	}
+	
+	theFile( WriteContentsOf,prefix );
+	
+	theFile( WriteString,~            <Keywords name="Words2">~ );
+		
+	StringList( list,New,GetBuiltIn,Function );
+		
+	while ( list( GetNextString,entry ) )
+	{
+		GetTokens(~<entry>~,~ ~,Name,Type,ReturnType);
+		theFile( WriteString,~ <Name>~ );
+	}
+	
+	theFile( WriteString,~ EndHTML~ );
+	theFile( WriteString,~ EndSCRIPT~ );
+	theFile( WriteString,~ EndBUFFER~ );
+		
+	theFile( WriteLine,~</Keywords>~ );
+	
+	theFile( WriteString,~            <Keywords name="Words3">~ );
+		
+	StringList( objList,New,GetBuiltIn,Object );
+		
+	while ( objList( GetNextString,entry ) )
+	{
+		GetTokens(~<entry>~,~ ~,Name,Type,ReturnType);
+		theFile( WriteString,~ <Name>~ );
+	}
+		
+	theFile( WriteLine,~</Keywords>~ );
+	
+	GenCon( KeywordList,GetFrom,KEYWORDS,~[GenCons]~ );
+	
+	theFile( WriteString,~            <Keywords name="Words4">~ );
+	
+	while ( KeywordList( GetNext,Keyword ) )
+	{
+		Keyword(GetName,Name);
+		
+		if ( String(EndsWith, ~:~, ~<Name>~) != ~~ )
+		{
+			substr( ~<Name>~,0,strlen(~<Name>~)-1,Name );
+			theFile( WriteString,~ <Name>~ );
+		}
+	}
+	
+	theFile( WriteString,~</Keywords>~ );
+	
+	theFile( WriteContentsOf,postfix );
+		
+	theFile( Close );
+	
+	return TRUE;
+}
+
+
+
+STR	SeparateThem( result,withWhat )		// SEPARATE EACH CHARACTER BY THE STRING THAT IS PASSED IN
+{	
+	index = -1; 
+	
+	substr( ~<result>~,<++index>,1,theChar );
+	newResult = ~<theChar>~;
+	
+	while ( TRUE )
+	{
+		substr( ~<result>~,<++index>,1,theChar );
+		BreakIf( IsNull(~<theChar>~) );
+		newResult = ~<newResult><withWhat><theChar>~;
+	}
+
+	return ~<newResult>~;		
+}
+
+
+NUMERIC CreateNotePadPlusAutoComplete()
+{
+	NotePadPlusPath = NotePadPlusPath();
+
+	if ( IsNull(~<NotePadPlusPath>~) )
+	{
+		return Warning( ~NotePad++ is not installed on your workstation~ );
+	}
+
+	theDirectory = ~<$Str.$NotePadPlusPath.Path>~;
+	
+	path = ~<theDirectory>\plugins\APIs\kpl.xml~;
+	
+	if ( Files( FileOrDirectoryExists,~<path>~ ) )
+	{
+		if ( !MessageBox(~<path> already exists.  Is it okay to overwrite it? ~,YESNO ) == YES )
+		{
+			ReturnOnFailure( FileDialog( Title,~Save kpl.xml as~,DefaultDirectory,~<theDirectory>\plugins\APIs~,PATH,Path,Save ) );
+		}
+	}
+	
+	if ( !File( theFile,Open,~<path>~,Create,Write ) )	
+	{
+		return Warning( ~Could not create <path>~.  <$func.GetLastErrorMsg()>~ );
+	}
+	
+	theFile( WriteLine,~<?xml version="1.0" encoding="Windows-1252" ?>~ );
+	theFile( WriteLine,~<NotepadPlus>~ );
+    theFile( WriteLine,~	<AutoComplete language="kpl">~ );
+
+	StringList( list,New,InAlphaOrder,GetBuiltIn,ObjectOrFunction );
+	
+	List( AddString,~EndHTML Function NUMERIC~ );
+	List( AddString,~EndBUFFER Function NUMERIC~ );
+	List( AddString,~EndSCRIPT Function NUMERIC~ );
+	
+	GenCon( KeywordList,GetFrom,KEYWORDS,~[GenCons]~ );
+	
+	while ( KeywordList( GetNext,Keyword ) )
+	{
+		Keyword(GetName,Name);
+		
+		if ( String(EndsWith, ~:~, ~<Name>~) != ~~ )
+		{
+			Parameters = IsNull(~<$con.Keyword[ArgTypes]>~) ? ~*~ : ~<$con.Keyword[ArgTypes]>~;
+			List( AddString,~<Name> Keyword <Parameters>~ );
+		}
+	}
+	
+	AddOtherReservedWordsTo( List );
+	
+	while ( list( GetNextString,entry ) )
+	{
+		//Log( Session,~<entry>~ );
+		
+		GetTokens(~<entry>~,~ ~,Name,Type,ReturnType);
+		
+		if  ( SimilarStr(~<Type>~,~Object~) )
+		{
+BeginBUFFER( theXML,TRUE );
+		<KeyWord name="<Name>" func="yes">
+			<Overload retVal="<ReturnType>">
+				<Param name="ObjectName" />
+				<Param name="parameters" />
+			</Overload>
+		</KeyWord>
+EndBUFFER();
+		}
+		else if  ( SimilarStr(~<Type>~,~Function~) )
+		{
+BeginBUFFER( theXML,TRUE );
+		<KeyWord name="<Name>" func="yes">
+			<Overload retVal="<ReturnType>">
+				<Param name="parameters" />
+			</Overload>
+		</KeyWord>
+EndBUFFER();
+		}	
+        else if  ( SimilarStr(~<Type>~,~Keyword~) )
+        {
+			if ( SimilarStr( ~<ReturnType>~,~LB~ ) )
+			{ 
+				ReturnType = ~Job_Or_Layout~;
+			}
+			else
+			{
+				ReturnType = SimilarStr( ~<ReturnType>~,~???~ ) ? ~M~ : ~<ReturnType>~;
+				ReturnType = SimilarStr( ~<ReturnType>~,~*~ ) ? ~~ : SeparateThem( ~<ReturnType>~,~,~ );
+				S = ~S~; QuotedString = ~<$chr.tilde><$chr.tilde>~;
+				OnContentsOf(ReturnType,Replace,S,QuotedString );
+			}
+			
+BeginBUFFER( theXML,TRUE );
+		<KeyWord name="<Name> <ReturnType>" func="no"></Keyword>
+EndBUFFER();
+		}
+		else if  ( SimilarStr(~<Type>~,~Reserved~) )
+        {
+BeginBUFFER( theXML,TRUE );
+		<KeyWord name="<Name>" func="no"></Keyword>
+EndBUFFER();
+		}
+		
+		theFile( WriteContentsOf,theXML );
+	}
+	
+    theFile( WriteLine,~	</AutoComplete>~ );
+	theFile( WriteLine,~</NotepadPlus>~ );
+	
+	theFile( Close );
+	
+	return TRUE;
+}
+
+
+VOID	AddOtherReservedWordsTo( &List )
+{
+	List( AddString,~if Reserved~ );
+	List( AddString,~else Reserved~ );
+	List( AddString,~while Reserved~ );
+	List( AddString,~return Reserved~ );
+	List( AddString,~break Reserved~ );
+	List( AddString,~continue Reserved~ );
+	List( AddString,~(#) Reserved~ );
+	List( AddString,~VOID Reserved~ );
+	List( AddString,~NUMERIC Reserved~ );
+	List( AddString,~STR Reserved~ );
+	List( AddString,~CEntry Reserved~ );
+	List( AddString,~AsSymbol Reserved~ );
+	List( AddString,~Private Reserved~ );
+	List( AddString,~TRUE Reserved~ );
+	List( AddString,~FALSE Reserved~ );
+	List( AddString,~LOOKUPSON Reserved~ );
+	List( AddString,~LOOKUPSOFF Reserved~ );
+	List( AddString,~MacrosOn Reserved~ );
+	List( AddString,~MacrosOff Reserved~ );
+	List( AddString,~normal Reserved~ );
+	List( AddString,~bold Reserved~ );
+	List( AddString,~italic Reserved~ );
+	List( AddString,~underline Reserved~ );
+	List( AddString,~outline Reserved~ );
+	List( AddString,~shadow Reserved~ );
+	List( AddString,~condense Reserved~ );
+	List( AddString,~strikeout Reserved~ );
+	List( AddString,~outline Reserved~ );
+	List( AddString,~extend Reserved~ );
+	List( AddString,~ticks_per_sec Reserved~ );
+	List( AddString,~on Reserved~ );
+	List( AddString,~off Reserved~ );
+	List( AddString,~Extends Reserved~ );
+}
+
+
+NUMERIC OnEditSelectedButton()
+{
+	if ( dlg( EditText,SampleCodeField,GetSelectedText,Path ) )
+	{
+		MakeTildeSafe( Path );
+	
+		EditFile( ~<Path>~ );
+
+		dlg( GetStrings,SearchText,SearchText );
+
+		CopyContentsToClipboard(SearchText);
+
+		return TRUE;
+	}
+
+	theLineNumber = 0;
+
+	MakeTildeSafe( Path );
+
+	if ( !Files( FileExists,~<Path>~ ) )
+	{
+		thisLine = dlg( EditText,SampleCodeField,GetLineFromPos,-1);
+		dlg( EditText,SampleCodeField,GetLineText,<thisLine>,PossibleLineNumber );
+		
+		MakeTildeSafe( PossibleLineNumber );
+		
+		substr( ~<PossibleLineNumber>~,0,6,theLineNumber );
+		
+		if ( String(EndsWith, ~:~, ~<theLineNumber>~) != ~~)
+		{
+			theLineNumber = MakeNumber( ~<theLineNumber>~ );
+		}
+		else
+		{
+			theLineNumber = 0;
+		}
+		
+		
+		line = dlg( EditText,SampleCodeField,GetLineFromPos,-1);
+		
+		while ( <Line> >= 0 )
+		{
+			dlg( EditText,SampleCodeField,GetLineText,<Line>,PossiblePath );
+
+			MakeTildeSafe( PossiblePath );
+
+			if ( !IsNull( String( BeginsWith,~----~,~<PossiblePath>~ ) ) )
+			{
+				substr( ~<PossiblePath>~,5,1024,path );
+				break;
+			}
+
+			--Line;	// WORK BACKWARDS UNTIL WE FIND A PATH LINE WHICH BEGINS WITH ----
+		}
+
+		MakeTildeSafe( Path );
+
+		if ( !Files( FileExists,~<Path>~ ) )
+		{
+			return Warning( ~<Path> does not exist as a file~ );
+		}
+	}
+
+	if ( IsContentsNull( Path ) )
+	{
+		return Warning( ~Nothing was selected~ );
+	}
+
+	EditFile( ~<Path>~,~<theLineNumber>~ );
+
+	dlg( GetStrings,SearchText,SearchText );
+
+	CopyContentsToClipboard(SearchText);
+
+	return TRUE;
+
+}
+
+
+NUMERIC OnSampleFileSelected()
+{
+	dlg( GetInput );
+
+	dlg( ListBox,ListBoxSampleCode,GetSelectedItem,WhichDirectory );
+
+	dlg( ListBox,ListBoxSampleFile,GetSelectedItem,WhichFile );
+
+	dlg( SetStrings,SampleCode,~~ );
+
+	LoadIntoSampleCode( ~<$App.Directory>\Scripts\Assistant\SampleCode\<WhichDirectory>\<WhichFile>~  );
+
+	return TRUE;
+}
+
+
+NUMERIC OnScriptBrowse()
+{
+	if ( FileDialog( Title,Translate(~Find the desired script~),PATH,Path,Open ) )
+	{
+		return dlg( SetStrings,Script,~<Path>~ );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC OnBrowseEditor()
+{
+	if ( FileDialog( Title,Translate(~Find your favorite editor~),PATH,Path,Open ) )
+	{
+		SetUserSettings( ~ProgrammerAssistant~,~Editor~,~<Path>~,TRUE );
+
+		return dlg( SetStrings,Editor,~<Path>~ );
+	}
+
+	return FALSE;
+}
+
+NUMERIC OnBrowseAddTextFiles()
+{
+	Title = Translate( ~Find the additional text files~ );
+	if ( GetFolder( ~<Title>~,~~,Path ) )
+	{
+		return dlg( SetStrings,AdditionalTextFiles,~<Path>~ );
+	}
+
+	return FALSE;
+}
+
+NUMERIC OnTextFileSelected()
+{
+	dlg( GetInput );
+
+	WhichTab = dlg( SelectedTab,TabWindow ) + 1;
+	
+	dlg( GetControlValue,CurrentFilePathField<WhichTab>,Path );
+
+	dlg( ListBox,ListBox<WhichTab>,GetSelectedItem,FileName );
+
+	dlg( SetStrings,Script,~<Path>\<FileName>~ );
+
+	ShowPrototypes( ~<Tab<WhichTab>Prototypes>~,~<Path>\<FileName>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ShowPrototypes( control,Path )
+{
+	dlg( SetStrings,<control>,~~ );
+
+	if ( FindPrototypes( ~<Path>~,Prototypes ) )
+	{
+		dlg( AppendStringsFromContents,<control>,Prototypes );
+		dlg( SetStatus,0,~Prototypes for <Path>~ );
+	}
+
+	return TRUE;
+}
+
+
+STR PathIfRunLocal( path )
+{	
+	if ( Numeric( ~<$Sym.ScriptsRunLocal>~ ) )
+	{
+		path = Lower(~<path>~);
+		share = Lower(~<$App.ShareDirectory>~);
+		local = Lower(~<$App.Directory>~);
+		
+		OnContentsOf( path,Replace,share,local );
+	}
+	
+	return ~<path>~;
+}
+
+
+VOID OnRunLocal()
+{
+	dlg( GetInput );
+
+	runLocal = dlg( GetBoolean,ScriptsRunLocal );
+	
+	SetSymbolValue( ScriptsRunLocal,~<runLocal>~ );
+	SetSymbolValue( HTTPServerRunLocal,~<runLocal>~ );
+	
+	RefreshDirectories();
+}
+
+
+VOID OnIgnoreLib()
+{
+	dlg( GetInput );
+
+	CheckFirst = dlg( GetBoolean,CheckDirectoriesFirst );
+	
+	dlg( GetControlValue,~AddTextFilesLocationField~,AdditionalTextFiles );
+
+	Debug( SetCheckDirectoriesFirst,<CheckFirst>,~<AdditionalTextFiles>~ );
+
+	if (GenCon( CICheckTextLibFirst,GetFrom,~CICheckTextLibFirst~,~[GenCons]~ ) )
+	{
+		CICheckTextLibFirst( Set, ~Long~, !<CheckFirst> ) ;
+	}
+}
+
+
+NUMERIC OnLoad()
+{
+	if ( FileDialog( DefaultDirectory,~<$App.Directory>\Scripts\Assistant~,Title,Translate(~Find the file to load into the scratch area~),PATH,Path,Open ) )
+	{
+		return LoadIntoScratch( ~<Path>~ );
+	}
+
+	return FALSE;
+}
+
+VOID SelectATab( num )
+{
+	if ( Defined( dlg ) )
+	{
+		dlg( SelectTab,TabWindow,~<num>~ );
+	}
+}
+
+NUMERIC LoadIntoScratch( Path )
+{
+	if ( !Files( FileExists,~<Path>~ ) )
+	{
+		return dlg( SetStatus,0,Translate( ~<Path> does not exist~ ) );
+	}
+
+	if ( !File( ScratchFile,Open,~<Path>~,Read,Open ) )	
+	{
+		return dlg( SetStatus,0,Translate( ~Failed to open <Path>~ ) );
+	}
+
+	ScratchFile( ReadTextFile,ScratchData );
+
+	ScratchFile( Close );
+
+	dlg( SetStringsFromContents,Scratch,ScratchData );
+
+	return TRUE;
+}
+
+
+NUMERIC CopyToScratch()
+{
+	dlg( GetInput );
+
+	DlgData( GetValues,SampleCode,ScratchData );
+
+	dlg( SetStringsFromContents,Scratch,ScratchData );
+
+	return dlg( SelectTab,TabWindow,1 );
+}
+
+
+NUMERIC CopyCodeToClipboard()
+{
+	dlg( GetInput );
+
+	DlgData( GetValues,RefCode,ScratchData );
+
+	CopyContentsToClipboard( ScratchData );
+
+	return TRUE;
+}
+
+
+
+NUMERIC LoadIntoSampleCode( Path )
+{
+	if ( !Files( FileExists,~<Path>~ ) )
+	{
+		return dlg( SetStatus,0,Translate( ~<Path> does not exist~ ) );
+	}
+
+	if ( !File( ScratchFile,Open,~<Path>~,Read,Open ) )	
+	{
+		return dlg( SetStatus,0,Translate( ~Failed to open <Path>~ ) );
+	}
+
+	ScratchFile( ReadTextFile,ScratchData );
+
+	ScratchFile( Close );
+
+	dlg( SetStringsFromContents,SampleCode,ScratchData );
+
+	return TRUE;
+}
+
+
+NUMERIC CreateBuiltInFiles()
+{
+	App( Application );
+
+	Path = ~<$App.directory>\scripts\assistant\samplecode\Builtin Functions~;
+
+	directory( Create,~<Path>~ );
+
+	i = -1;
+
+	while ( Application( Getbuiltin,<++i>,name,returns ) )
+	{
+		file( Job,Open,~<Path>\<Name>~,Create,Write );
+
+		Job( ~// <name> is of type <returns>~ );
+
+		ForgetLocal( Job );
+	}
+
+	return TRUE;
+}
+
+NUMERIC FindMethodsOfObjects()
+{
+	if ( !FileDialog( Title,Translate(~Find the cpp file~),PATH,Path,Open ) )
+	{
+		return FALSE;
+	}
+
+	if ( !file( cpp,Open,~<Path>~,Read ) )
+	{
+		return Warning( ~Failed to open <Path>~ );
+	}
+
+	while ( cpp( ReadString,aLine ) )
+	{
+		if ( !IsNull( String( StringInString,~_Builtin_Functions(~,~<aLine>~ ) ) )
+			break;
+	}
+
+	cpp( ReadString,aLine );
+	cpp( ReadString,aLine );
+	GetTokens( ~<aLine>~,~"~,First,ObjectName,Rest );
+
+	ForgetLocal( cpp );
+
+	DirPath = ~<$App.Directory>\Scripts\Assistant\SampleCode\Obj - <ObjectName>~;
+
+	Directory( Create,~<DirPath>~ );
+
+	if ( !file( cpp,Open,~<Path>~,Read ) )
+	{
+		return Warning( ~Failed to open <Path>~ );
+	}
+
+	while ( cpp( ReadString,aLine ) )
+	{
+		if ( !IsNull( String( StringInString,~::Parse(~,~<aLine>~ ) ) )
+			break;
+	}
+ 
+	while ( cpp( ReadString,aLine ) )
+	{
+		if ( IsNull( String( StringInString,~operation,_T("~,~<aLine>~ ) ) )
+			continue;
+
+		if ( !IsNull( String( StringInString,~::~,~<aLine>~ ) ) )
+			break;
+
+		GetTokens( ~<aLine>~,~"~,First,MethodName,Rest );
+
+
+		if ( !file( Job,Open,~<DirPath>\<MethodName>~,Create,Write ) )
+		{
+			Warning( ~Failed to open <$App.Directory>\Scripts\Assistant\Temp\<MethodName>~ );
+		}
+
+		Job( ~// <MethodName>~ );
+
+		ForgetLocal( Job );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnClear()
+{
+	return dlg( SetStrings,Scratch,~~ );
+}
+
+
+NUMERIC OnExecuteDebug()
+{
+	dlg( GetInput );
+
+	if ( !OnSave() )
+	{
+		return FALSE;
+	}
+
+	DlgData( GetValues,Scratch,ScratchData );
+
+	Path = ~<$App.Directory>\scripts\ScratchTempDebug.txt~;
+
+	Files( Delete,~<Path>~ );
+
+	if ( !File( ScratchFile,Open,~<Path>~,Create,Write,Close ) )	
+	{
+		return Warning( Translate( ~Failed to create <Path>~ ) );
+	}
+
+	ScratchFile( WriteLine,~;Debug(1);~ );
+
+	ScratchFile( CRLF );
+
+	ScratchFile( WriteContentsOf,ScratchData );
+
+	ScratchFile( CRLF,CRLF,WriteLine,~;Debug(1);~,CRLF );
+
+	ScratchFile( Close );
+
+	Open( Any,~<Path>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OnExecute()
+{
+	if ( !OnSave() )
+	{
+		return FALSE;
+	}
+
+	Open( Any,~<ScratchPath>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OnSave()
+{
+	dlg( GetInput );
+
+	DlgData( GetValues,Scratch,ScratchData );
+
+	Files( Delete,~<ScratchPath>~ );
+
+	if ( !File( ScratchFile,Open,~<ScratchPath>~,Create,Write,Close ) )	
+	{
+		return Warning( Translate( ~Failed to create <ScratchPath>~ ) );
+	}
+
+	ScratchFile( WriteContentsOf,ScratchData );
+
+	ScratchFile( Close );
+
+	return TRUE;
+}
+
+NUMERIC KillBackgroundTasks()
+{
+	ForgetPermanent(BackgroundOrderProcessor);
+
+	ForgetPermanent(DigitalCameraOrderProcessor);
+
+	BibbleServer(Stop);
+
+	Action = ACTION DOC ( HTTPServerDoc "ForceQuit();" );
+	PerformActions( Action );
+
+	Action = ACTION DOC ( IEPrintDoc "ThisDialog.DoCancelButton();" );
+	PerformActions( Action );
+	
+	return TRUE;
+}
+
+NUMERIC OnCMemoryState()
+{
+	action = ACTION DOC ( CMemoryStateDoc Open CMemoryStateDoc );
+	return PerformActions( action );
+}
+
+
+NUMERIC OnCRTMemState()
+{
+	action = ACTION DOC ( CRTMemStateDoc Open CRTMemStateDoc );
+	return PerformActions( action );
+}
+
+NUMERIC OnSpy()
+{
+	action = ACTION DOC ( ThreadListDoc Open ThreadListDoc );
+	return PerformActions( action );
+}
+
+NUMERIC OnTiming()
+{
+	action = ACTION DOC ( AppTimingDoc OpenOnce AppTimingDoc );
+	return PerformActions( action );
+}
+
+NUMERIC OnSQLMaintenance()
+{
+	action = ACTION DOC ( SQLDoc OpenOnce SQLDoc );
+	return PerformActions( action );
+}
+
+
+NUMERIC OnTree()
+{
+	return Debug( Tree );
+}
+
+
+NUMERIC OnSaveAs()
+{
+	if ( !FileDialog( Title,Translate(~Save the text as ~),PATH,Path,Save ) )
+	{
+		return FALSE;
+	}
+
+	DlgData( GetValues,Scratch,ScratchData );
+
+	Files( Delete,~<Path>~ );
+
+	if ( !File( ScratchFile,Open,~<Path>~,Create,Write,Close ) )	
+	{
+		return Warning( Translate( ~Failed to create <Path>~ ) );
+	}
+
+	ScratchFile( WriteContentsOf,ScratchData );
+
+	ScratchFile( Close );
+
+	return TRUE;
+}
+
+
+NUMERIC OnNewFileButton()
+{
+	WhichTab = dlg( SelectedTab,TabWindow ) + 1;
+	
+	//Path = ~<Tab<WhichTab>Directory>~;
+	
+	dlg( GetControlValue,CurrentFilePathField<WhichTab>,Path );
+	
+	NotePadPlusPath = NotePadPlusPath();
+	
+	if ( IsNull(~<NotePadPlusPath>~) )
+	{
+		ShellExecute( Open,~"<Path>\new1.txt"~ );
+		
+		return TRUE;
+	}
+	
+	ShellExecute( Open,~<NotePadPlusPath>~,~"<Path>\New1.txt"~  );
+	
+	return TRUE;
+}
+
+
+VOID OnNewSessionLogButton()
+{
+	Log( NextSessionLog );
+}
+
+
+NUMERIC OnEditButton()
+{
+	dlg( GetInput );
+
+	//if ( IsNULL( ~<$con.DlgData[Script]>~ ) )
+	//{
+	//	return Warning( ~Select a script to edit first~ );
+	//}
+	
+	WhichTab = dlg( SelectedTab,TabWindow ) + 1;
+	
+	line = dlg( EditText,PrototypesField<WhichTab>,GetLineFromPos,-1);
+
+	if ( <Line> >= 0 )
+	{
+		dlg( EditText,PrototypesField<WhichTab>,GetLineText,<Line>,theLine );
+
+		MakeTildeSafe( theLine );
+		
+		GetTokens( ~<theLine>~,~:~,desiredLine );
+		
+		desiredLine = Numeric( ~<desiredLine>~ );
+		
+		NotePadPlusPath = NotePadPlusPath();
+	
+		if ( IsNull(~<NotePadPlusPath>~) )
+		{
+			return EditFile( ~<$con.DlgData[Script]>~ );
+		}
+		
+		ShellExecute( Open,~<NotePadPlusPath>~,~ -lKPL -n<desiredLine>  "<$con.DlgData[Script]>"~  );
+		
+		return TRUE;
+	}
+
+	return EditFile(~<$con.DlgData[Script]>~);
+}
+
+STR NotePadPlusPath()
+{
+	NotePadPlusKey = ~HKEY_LOCAL_MACHINE[SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\notepad++.exe\""]~;
+		
+	NotePadPlusPath = ~<$Registry.<NotePadPlusKey>>~;
+	
+	return ~<NotePadPlusPath>~;
+}
+
+
+NUMERIC EditFile( Path,desiredLine )
+{
+	if ( !IsNULL( ~<$con.DlgData[Editor]>~ ) )
+	{
+		//ViewFileInNotepad( ~"<Path>"~ );
+		
+		ShellExecute( Open,~<$con.DlgData[Editor]>~,~"<Path>"~ );
+	}
+	else
+	{
+		NotePadPlusPath = NotePadPlusPath();
+		
+		if ( !IsNull(~<NotePadPlusPath>~) )
+		{
+			return OpenInNotePadPlus( ~<Path>~,~<desiredLine>~ );
+		}
+		
+		ShellExecute( Open,~"<Path>"~ );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnRunButton()
+{
+	dlg( GetInput );
+
+	if ( IsNULL( ~<$con.DlgData[Script]>~ ) )
+	{
+		return Warning( ~Select a script to edit first~ );
+	}
+
+	FileName = ~<$con.DlgData[Script].Filename.WithoutExt>~;
+
+	if ( IsNULL( ~<$con.DlgData[Trigger]>~ ) )
+	{
+		Action = STR ( "<FileName>" OpenOnce "<$con.DlgData[Script]>" );
+	}
+	else
+	{
+		Action = STR ( "<FileName>" OpenOnce "<$con.DlgData[Script]>" "; <$con.DlgData[Trigger]> ; " );
+	}
+
+	PerformDocActions( Action );
+
+	return TRUE;
+}
+
+
+NUMERIC OnSessionLog()
+{
+	return EditFile( ~<$App.SessionLogFile>~ );
+}
+
+
+NUMERIC OnWorkstationPrefs()
+{
+	return EditFile( ~<$App.Directory>\Workstation.Prf~ );
+}
+
+
+NUMERIC OnTreeButton()
+{
+	return Debug( Tree );
+}
+
+NUMERIC OnHttpServerButton()
+{
+	action = ACTION DOC ( HttpServerDoc OpenOnce HttpServerDoc "Init(FALSE)"  );
+	return PerformActions( action );
+}
+
+NUMERIC OnTraceDialogButton()
+{
+	action = ACTION DOC ( TraceDoc OpenOnce TraceDoc  );
+	return PerformActions( action );
+}
+
+
+
+
+
+NUMERIC OnMakeWritable( WantWritable )
+{
+	dlg( GetInput );
+
+	WhichTab = dlg( SelectedTab,TabWindow ) + 1;
+	
+	dlg( GetControlValue,CurrentFilePathField<WhichTab>,Path );
+
+	count = dlg( ListBox,ListBox<WhichTab>,GetSelectedCount );
+	
+	if ( <count> <= 0 )
+	{
+		return Warning(~Nothing was selected~);
+	}
+
+	Msg = <WantWritable> ?  ~Are you sure you want to make the <count> files writable in <Path>?~ :
+							~Are you sure you want to make the <count> files read-only in <Path>?~;
+
+
+	if ( MessageBox( ~<Msg> ~,YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	Index = 0;	count = 0;
+
+	while ( dlg( ListBox,ListBox<WhichTab>,GetNthSelectedItem,<Index++>,Item ) > 0 )
+	{
+		FullPath = ~<Path>\<Item>~;
+
+		if ( !Files( ChMod, ~<FullPath>~,<WantWritable> ? ~ReadWrite~ : ~Read~ ) )
+		{
+			err = GetLastErrorMsg();
+
+			if ( MessageBox( ~Operation failed on <FullPath>.\n\n<err>\n\nDo you wish to continue?~,YESNO ) != YES )
+			{
+				return FALSE;
+			}
+		}
+		else
+		{
+			++count;
+		}
+	}
+
+	dlg( SetStatus,0,~Completed~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnCompareFile()
+{
+	dlg( GetInput );
+
+	WhichTab = dlg( SelectedTab,TabWindow ) + 1;
+
+	Path = ~<Tab<WhichTab>Directory>~;
+
+	count = dlg( ListBox,ListBox<WhichTab>,GetSelectedCount );
+	
+	if ( <count> <= 0 )
+	{
+		return Warning(~Nothing was selected~);
+	}
+	
+	WinMergePath = ~<$Registry.<WinMergeKey>>~;
+	
+	if ( IsNull(~<WinMergePath>~) )
+	{
+		return Warning( ~WinMerge is not installed on your machine~ );
+	}
+	
+	if ( dlg( ListBox,ListBox<WhichTab>,GetNthSelectedItem,0,Item ) > 0 )
+	{	
+		SharedPath = Lower(~<Tab<WhichTab>Directory>\<Item>~);
+		LocalPath = ~<SharedPath>~;
+		
+		share = Lower(~<$App.ShareDirectory>~);
+		local = Lower(~<$App.Directory>~);
+		
+		OnContentsOf( LocalPath,Replace,share,local );
+		
+		if ( SimilarStr( ~<LocalPath>~,~<SharedPath>~ ) )
+		{
+			LocalPath = Lower(~<Tab<WhichTab>Directory>\<Item>~);
+			SharedPath = ~<SharedPath>~;
+						
+			OnContentsOf( SharedPath,Replace,local,share );
+		}
+		
+		ShellExecute( Open,~<WinMergePath>~,~ /maximize /e /x /dl "Your Local Version - <LocalPath>" /dr "The <$App.Title> Server Version - <SharedPath>" "<LocalPath>" "<SharedPath>"~ );
+		
+		return TRUE;
+	}
+	
+	return TRUE;
+}
+
+
+
+NUMERIC OnCompareDirectory()
+{
+	dlg( GetInput );
+
+	WhichTab = dlg( SelectedTab,TabWindow ) + 1;
+
+	Path = ~<Tab<WhichTab>Directory>~;
+	
+	WinMergePath = ~<$Registry.<WinMergeKey>>~;
+	
+	if ( IsNull(~<WinMergePath>~) )
+	{
+		return Warning( ~WinMerge is not installed on your machine~ );
+	}
+	
+	SharedPath = Lower(~<Tab<WhichTab>Directory>~);
+	LocalPath = ~<SharedPath>~;
+	
+	share = Lower(~<$App.ShareDirectory>~);
+	local = Lower(~<$App.Directory>~);
+	
+	OnContentsOf( LocalPath,Replace,share,local );
+	
+	if ( SimilarStr( ~<LocalPath>~,~<SharedPath>~ ) )
+	{
+		LocalPath = Lower(~<Tab<WhichTab>Directory>~);
+		SharedPath = ~<SharedPath>~;
+					
+		OnContentsOf( SharedPath,Replace,local,share );
+	}
+	
+	ShellExecute( Open,~<WinMergePath>~,~ /maximize /e /x /r /dl "Your Local Directory - <LocalPath>" /dr "The <$App.Title> Server Directory - <SharedPath>" "<LocalPath>" "<SharedPath>"~ );
+	
+	return TRUE;
+}
+
+
+
+NUMERIC OnCopyFileToServer()
+{
+	dlg( GetInput );
+
+	WhichTab = dlg( SelectedTab,TabWindow ) + 1;
+
+	Path = ~<Tab<WhichTab>Directory>~;
+
+	count = dlg( ListBox,ListBox<WhichTab>,GetSelectedCount );
+	
+	if ( <count> <= 0 )
+	{
+		return Warning(~Nothing was selected~);
+	}
+	
+	if ( dlg( ListBox,ListBox<WhichTab>,GetNthSelectedItem,0,Item ) > 0 )
+	{	
+		SharedPath = Lower(~<Tab<WhichTab>Directory>\<Item>~);
+		LocalPath = ~<SharedPath>~;
+		
+		share = Lower(~<$App.ShareDirectory>~);
+		local = Lower(~<$App.Directory>~);
+		
+		OnContentsOf( LocalPath,Replace,share,local );
+		
+		if ( Files( FileExists,~<SharedPath>~ ) )
+		{
+			ReturnOnFailure( MessageBox( ~<SharedPath> already exists.  Are you sure?~,YESNO ) == YES );
+		}
+		
+		ReturnOnFailure( MessageBox( ~Copy\n\n<LocalPath>\n\nto\n\n <SharedPath>?~,YESNO ) == YES );
+		
+		Files( Copy,~<LocalPath>~,~<SharedPath>~ );
+		
+		return TRUE;
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC OnDelete()
+{
+	dlg( GetInput );
+
+	WhichTab = dlg( SelectedTab,TabWindow ) + 1;
+
+	//Path = ~<Tab<WhichTab>Directory>~;
+	
+	dlg( GetControlValue,CurrentFilePathField<WhichTab>,Path );
+
+	count = dlg( ListBox,ListBox<WhichTab>,GetSelectedCount );
+	
+	if ( <count> <= 0 )
+	{
+		return Warning(~Nothing was selected~);
+	}
+
+	Msg = ~Are you sure you want to delete the <count> file(s) in <Path>?~ ;
+						
+	if ( MessageBox( ~<Msg> ~,YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	Index = 0;	count = 0;
+
+	while ( dlg( ListBox,ListBox<WhichTab>,GetNthSelectedItem,<Index++>,Item ) > 0 )
+	{
+		FullPath = ~<Path>\<Item>~;
+
+		if ( !Files( Delete, ~<FullPath>~ ) )
+		{
+			err = GetLastErrorMsg();
+
+			if ( MessageBox( ~Could not delete <FullPath>.\n\n<err>\n\nDo you wish to continue?~,YESNO ) != YES )
+			{
+				return FALSE;
+			}
+		}
+		else
+		{
+			Log( Session,~Programmer Assistant: <$App.UserName> deleted <FullPath>~ );
+
+			++count;
+		}
+	}
+
+	dlg( SetStatus,0,~<count> file(s) were deleted~ );
+
+	RefreshDirectories();
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnDebugBox()
+{
+	ActionsText	= ACTIONS ( ReverseCheckMenu(Debug) SetDebugFromMenu(Debug) );
+
+	PerformActions( ActionsText );
+
+	return TRUE;
+}
+
+
+NUMERIC OnDontDebugThis()
+{
+	dlg( GetInput );
+
+	Value = dlg( GetBoolean,DontDebugThis );
+
+	Debug( SetDontDebugThis,<value> );
+
+	return TRUE;
+}
+
+
+NUMERIC KillAllThreads()
+{
+	if ( !GenCon( ThreadsList,GetFrom,Threads,~[GenCons]~ ) )
+	{
+		return Warning( ~Could not find thread list~ );
+	}
+
+	while ( ThreadsList( GetNext,AnotherThread ) )
+	{
+		AnotherThread(GetName,ThreadName);
+
+		if ( !IsNull( String( StringInString,~MainThread~,~<ThreadName>~ ) ) )
+			continue;
+
+		if ( !IsNull( String( StringInString,~MSDEThread~,~<ThreadName>~ ) ) )
+			continue;
+
+		PostThreadMessage( ~<$con.AnotherThread[ThreadID]>~,0x12,0,0 );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnDistributeLibButton()
+{
+	MajorVersion = ~<$App.MajorVersion>~;
+	
+	SrcPath = ~<$App.Directory>\<$App.Title>_text.txl~;
+	
+	DstPath = ~<$App.ShareDirectory>\Scripts\Custom_ScriptLibraries\DP2\<MajorVersion>\<$App.Title>_text.txl~;
+	
+	msg = ~Do you wish to copy \n\n <SrcPath> \n\n        to \n <DstPath>. \n\n That is where other V<MajorVersion> <$App.Title> workstations will look for a new script library the next time they restart <$App.Title>.~;
+	
+	ReturnOnFailure( MessageBox( ~<msg>~,YESNO ) == YES );
+	
+	if ( !Files( Copy,~<SrcPath>~,~<DstPath>~,FALSE ) )
+	{
+		return Warning( ~Failed to copy <SrcPath> to <DstPath>~.  <$func.GetLastErrorMsg()>~ );
+	}
+	
+	return Warning( ~Copy complete.  Notify other <$App.Title> V<MajorVersion> users to restart <$App.Title>~ );
+}
+
+
+NUMERIC OnNewLibButton()
+{
+	if ( MessageBox( ~Do you wish to recreate <$App.Title>_text.txl with files from TextFiles,CommonText,KPSS?~,YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	ScriptLibrary( Close );
+
+	//Sleep( 50 );
+
+	ShellExecute( Open,~<$App.Directory>\NewLib.bat~,~~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OnUpdlibButton()
+{
+	if ( MessageBox( ~Do you wish to freshen the files in <$App.Title>_text.txl with files from TextFiles,CommonText,KPSS?~,YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	ScriptLibrary( Close );
+
+	//Sleep( 50 );
+
+	ShellExecute( Open,~<$App.Directory>\UpdLib.bat~,~~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnExtractAllButton()
+{
+	if ( MessageBox( ~This will extract all of the <$App.Title> scripts into a folder called TextFiles.  Do you wish to continue?~,YESNO ) != YES )
+	{
+		return FALSE;
+	}
+	
+	if ( Files( DirectoryExists,~<$App.Directory>\TextFiles~ ) )
+	{
+		if ( MessageBox( ~A TextFiles folder already exists.  You are about to replace the files in that folder.  Do you wish to continue?~,YESNO ) != YES )
+		{
+			return FALSE;
+		}
+	}
+
+	ScriptLibrary( Close );
+
+	//Sleep( 50 );
+
+	ShellExecute( Open,~<$App.Directory>\ExtractAllFromLib.bat~,~~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OnTabChange()
+{
+	return TRUE;
+	
+	TabIndx = 1;
+
+	while ( <++TabIndx> <= <TabIndex> )
+	{
+		if (  Defined( ~Tab<TabIndx>Directory~ ) )
+		{
+			dlg( SetStrings,CurrentFilePath,PathIfRunLocal(~<Tab<TabIndx>Directory>\*.*~) );
+		}
+	}
+	
+	return TRUE; //dlg( SetStrings,Prototypes,~~ );
+}
+
+
+VOID DoCancelButton()
+{
+	dlg( GetControlValue,~AddTextFilesLocationField~,AdditionalTextFiles );
+	SetUserSettings( ~ProgrammerAssistant~,~AdditionalTextFiles~,~<AdditionalTextFiles>~,TRUE );
+
+	dlg( End );
+	Exit();
+}
+
+
+VOID RefreshDirectories()
+{
+	TabIndx = 1;
+
+	while ( <++TabIndx> <= <TabIndex> )
+	{
+		if (  Defined( ~Tab<TabIndx>Directory~ ) )
+		{
+			dlg( ListBox,ListBox<TabIndx>,ResetContent );
+			
+			if ( SimilarStr( ~<Tab<TabIndx>Title>~,~ScriptOverridesTitle~,~ScriptLibOverridesTitle~,~ScriptsTitle~,~ClassesTitle~,~MacrosTitle~,~UserTablesTitle~ ) )
+			{
+				thisPath = PathIfRunLocal(~<Tab<TabIndx>Directory>~);
+			}
+			else
+			{
+				thisPath = ~<Tab<TabIndx>Directory>~;
+			}
+			dlg( ListBox,ListBox<TabIndx>,Dir,~<thisPath>\*.*~ );
+			dlg( SetStrings,~<Tab<TabIndx>Prototypes>~,~~ );
+			dlg( SetStrings,~<Tab<TabIndx>Title>~,~<thisPath>~ );
+		}
+	}
+
+	RefreshSampleListBox();
+}
+
+VOID RefreshSampleListBox()
+{
+	dlg( ListBox,ListBoxSampleCode,ResetContent );
+
+	path = ~<$App.Directory>\Scripts\Assistant\SampleCode\*.*~;
+
+	StringList( DirList,New );
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~<path>~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		{	
+			dlg( ListBox,ListBoxSampleCode,AddString,~<$str.$aPath.filename>~ );
+		}
+	}
+}
+
+
+VOID ReOpen()
+{
+}
+
+VOID GetStoredSettings()
+{
+	if ( GetUserSettings( ProgrammerAssistant,FontSize,DesiredFontSize ) )
+	{
+		FontSize = ~<DesiredFontSize>~;
+	}
+
+	if ( GetUserSettings( ProgrammerAssistant,Font,DesiredFont ) )
+	{
+		Font = ~<DesiredFont>~;
+	}
+}
+
+StringList( ReferenceHistory,New );
+ReferenceHistoryPos = 0;
+UpdateHistory = TRUE;
+
+InitialLoad();
+
+ScratchPath = ~<$App.Directory>\Scripts\Assistant\ScratchPad.txt~;
+
+GetStoredSettings();
+
+DefineDialog();
+
+app( ThisApp,MessagePump,100 );
+
+RefreshDirectories();
+
+OnScratchPadReload();
+
+OnLoadRefSubject();
+
+dlg( SetCheck,TRUE,DescriptionRadioButton );
+
+if ( GetUserSettings( ProgrammerAssistant,Editor,EditorPath ) )
+{
+	dlg( SetStrings,Editor,~<EditorPath>~ );
+}
+
+
+if ( GetUserSettings( ProgrammerAssistant,AdditionalTextFiles,AdditionalTextFilesPath ) )
+{
+	dlg( SetStrings,AdditionalTextFiles,~<AdditionalTextFilesPath>~ );
+}
+
+Directory( Create,~<$App.Scripts>\ScriptLibOverrides\<$App.Title>\<$App.RunVersion>~ );
+Directory( Create,~<$App.Directory>\Scripts\ScriptLibOverrides\<$App.Title>\<$App.RunVersion>~ );
+
+Debug( SetDontDebugThis,TRUE );		
+dlg( SetCheck,TRUE,DontDebugThisBox );

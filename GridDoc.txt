@@ -1,0 +1,712 @@
+
+TableName = ~Grid~;
+Include: ~ExportSelectedToFile~;
+
+NUMERIC RefreshListView()
+{
+	if ( !DataWindow(GetWindowAddress) )
+		{ return FALSE; }
+
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( StatusBar,Text,Translate(~Querying~) );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	Count = List( NumEntries );
+
+	IF 0
+	{
+		if ( <Count> > 300 )
+		{
+			if ( MessageBox( ~Your query:\n\n   <DocumentQuery>\n\nwill retrieve <Count> records\n\nAre you sure you want to continue?~,YESNO ) != YES )
+			{
+				if ( <FirstTime> ) { Exit(); }
+				return TRUE;
+			}
+		}
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+
+	return DataWindow( StatusBar,Text,~~ );
+}
+
+
+STR GetKey( &Item )
+{
+	return ~ID = '<$con.Item[ID]>' and Attr = '<$con.Item[Attr]>'~;
+}
+
+
+NUMERIC ChangeField()
+{
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,Changed,Original,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.Changed[ID]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  TableName cannot be blank.~ ); }
+
+	Key = GetKey( Original );
+	
+	Query = ~Select * From <TableName> Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,Changed,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update <TableName> record where <Key>. <theErr>~ );
+	}
+
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,ToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	if ( MessageBox( ~Are you sure you want to delete the selected items?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	StringList( RowsToDelete,New );
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	while ( ToDelete( GetNext,Item ) )
+	{
+		Key = GetKey( Item );
+
+		if ( !dBase( CMD,~Delete From <TableName> Where <Key>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			Warning( ~Could not delete where <Key>. <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,ToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	NewRow( Set,TableName,~<WhichTable>~ );
+	
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,ID );
+
+	return TRUE;
+}
+
+
+NUMERIC ShowPattern()
+{
+	ControlView( GetControlValue,IDComboBox,ID );
+
+	if ( IsNULL( ~<ID>~ ) )
+	{
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	ControlView( GetControlValue,ImagesComboBox,Images );
+
+	if ( IsNULL( ~<Images>~ ) )
+	{
+		return Warning( Translate( ~Select the number of images first~ ) );
+	}
+
+	Query = ~Select * From GridPattern Where ID = '<ID>' AND Images = <Images> Order By row,col~;
+
+	path = ~<$App.directory>\TextFiles\GridPatternDoc.txt~;
+
+	Actions = ACTIONS ( Doc( ~GridPatterns~ OpenOnce "<path>" "Init( ~<ID>,<Images>~,~<Query>~);" ) );
+
+	return PerformActions( Actions );
+}
+
+
+NUMERIC ShowPositions()
+{
+	ControlView( GetControlValue,IDComboBox,ID );
+
+	if ( IsNULL( ~<ID>~ ) )
+	{
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	ControlView( GetControlValue,ImagesComboBox,Images );
+
+	if ( IsNULL( ~<Images>~ ) )
+	{
+		return Warning( Translate( ~Select the number of images first~ ) );
+	}
+
+	Query = ~Select * From GridPosition Where ID = '<ID>' AND Images = <Images> Order By Node~;
+
+	path = ~<$App.directory>\TextFiles\GridPosition.txt~;
+
+	Actions = ACTIONS ( Doc( ~GridPosition~ OpenOnce "<path>" "Init( ~<ID>,<Images>~,~<Query>~);" ) );
+
+	return PerformActions( Actions );
+}
+
+
+
+NUMERIC AddDefaultPositions()
+{
+	ControlView( GetControlValue,IDComboBox,ID );
+
+	if ( IsNULL( ~<ID>~ ) )
+	{
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	ControlView( GetControlValue,ImagesComboBox,Images );
+
+	if ( IsNULL( ~<Images>~ ) )
+	{
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	Debug( KeyState( Control ) );
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Connection Failed. <theErr>~ );
+	}
+
+	if ( !dBase( Cmd,~Delete From GridPosition Where ID = '<ID>' And Images = <Images>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Command Failed.\n\n<Cmd>\n\n<theErr>~ );
+	}
+
+	if ( !dBase( Cmd,~Delete From GridPattern Where ID = '<ID>' And Images = <Images>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Command Failed.\n\n<Cmd>\n\n<theErr>~ );
+	}
+
+
+	Query = ~Select * From Grid Where ID = '<ID>' AND Images = <Images>~;
+
+	if ( !PGenConList( List,Connection,dBase,Query,~<Query>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Query Failed.\n\n<Query>\n\n<theErr>~ );
+	}
+
+
+	if ( !List( GetFields,Attr,Val,nRows,nCols ) )
+	{
+		return Warning( Translate( ~Could not find value for <Attr>~ ) );
+	}
+
+	
+	// Make an entry for the main node
+
+	Values = ~'<ID>',<Images>,0,0~;
+
+	Cmd = ~Insert Into GridPosition(ID,Images,Node,Countable) Values(<Values>)~;
+
+	if ( !dBase( Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Command Failed.\n\n<Cmd>\n\n<theErr>~ );
+	}
+
+
+	i = 1; row = 1; col = 1;  Positions = <Images>;
+
+	while ( <i> <= <Positions> )
+	{
+		Values = ~'<ID>',<Images>,<i>,1~;
+
+		Cmd = ~Insert Into GridPosition(ID,Images,Node,Countable) Values(<Values>)~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Command Failed.\n\n<Cmd>\n\n<theErr>~ );
+		}
+
+		Values = ~'<ID>',<Images>,<i>,<row>,<col>~;
+
+		Cmd = ~Insert Into GridPattern(ID,Images,Node,Row,Col) Values(<Values>)~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Command Failed.\n\n<Cmd>\n\n<theErr>~ );
+		}
+
+		if ( <++col> > <nCols> )
+		{
+			col = 1;
+			++row;
+		}
+
+		++i;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddDefaultAttrs()
+{
+	ControlView( GetControlValue,IDComboBox,ID );
+
+	if ( IsNULL( ~<ID>~ ) )
+	{
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	ControlView( GetControlValue,ImagesComboBox,Images );
+
+	if ( IsNULL( ~<Images>~ ) )
+	{
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	Debug( KeyState( Control ) );
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Connection Failed. <theErr>~ );
+	}
+
+	if ( !dBase( Cmd,~Delete From Grid Where ID = '<ID>' And Images = <Images>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Command Failed.\n\n<Cmd>\n\n<theErr>~ );
+	}
+
+	enum( Attr,1,nRows,nCols,Images,MaxImageWidth,MaxImageHeight,MinHorizGap,
+					MinVertGap,TextWidth,TextHeight,TextGap,PageWidth,PageHeight,
+					LeftMargin,TopMargin,RightMargin,BottomMargin );
+
+	enum( Value,1,<Images>/2,<Images>/2,<Images>,2,3,.5,.5,2,.75,.25,10,8,.5,.5,.5,.5 );
+
+	i = 1;
+
+	while ( Defined( Attr<i> ) )
+	{
+		Cmd = ~Insert Into Grid(ID,Images,Attr,Val) Values('<ID>',<Images>,'<Attr<i>>','<Value<i>>')~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Command Failed.\n\n<Cmd>\n\n<theErr>~ );
+		}
+
+		++i;
+	}
+
+	DocumentQuery = ~Select * From Grid Where ID = '<ID>' AND Images = <Images>~;
+
+	return Queue( ~RefreshListView()~ );
+
+}
+
+
+NUMERIC OnViewButton()
+{
+	ControlView( GetControlValue,IDComboBox,ID );
+
+	if ( IsNULL( ~<ID>~ ) )
+	{
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	ControlView( GetControlValue,ImagesComboBox,Images );
+
+	if ( IsNULL( ~<Images>~ ) )
+	{
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	DocumentQuery = ~Select * From Grid Where ID = '<ID>' AND Images = <Images>~;
+
+	return RefreshListView();
+}
+
+
+NUMERIC PopulateIDComboBox()
+{
+	Query = ~Select Distinct ID From Grid Order By ID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{ 
+		return Warning( Translate( ~Failed to query the Grid table~ ) );
+	}
+
+	List( MakeStringList,IDList,ID );
+
+	return ControlView( SetControlFromStringList,IDComboBox,IDList,Selection,Update );
+}
+
+
+NUMERIC PopulateImagesComboBox()
+{
+	ControlView( GetControlValue,IDComboBox,ID );
+
+	if ( IsNULL( ~<ID>~ ) )
+	{
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	Query = ~Select Distinct Images From Grid Where ID = '<ID>' Order By Images~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{ 
+		return Warning( Translate( ~Failed to query the Grid table~ ) );
+	}
+
+	List( MakeStringList,ImagesList,Images );
+
+	return ControlView( SetControlFromStringList,ImagesComboBox,ImagesList,Selection,Update );
+}
+
+
+NUMERIC SwitchID()
+{
+	ControlView( GetControlValue,IDComboBox,ID );
+
+	if ( IsNULL( ~<ID>~ ) )
+	{
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	PopulateImagesComboBox();
+
+	ControlView( GetControlValue,ImagesComboBox,Images );
+
+	if ( IsNULL( ~<Images>~ ) )
+	{
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	DocumentQuery = ~Select * From Grid Where ID = '<ID>' AND Images = <Images>~;
+
+	return RefreshListView();
+}
+
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	ActiveView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( ~<what> is not implemented yet!~ );
+	return TRUE;
+}
+
+
+
+
+FirstTime = TRUE;
+
+NUMERIC Init( Title,DocumentQuery )
+{
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		Global(DocumentQuery);
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+			{ Error( ~Failed to query the <TableName> table~ ); }
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !DataWindow( CreateWindow,~<Title>~ ) )
+			{ Error( ~Failed to create the window~ ); }
+
+		PopulateIDComboBox();
+		PopulateImagesComboBox();
+		SwitchID();
+
+	}
+	else
+	{
+		RefreshListView();
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new records that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+NUMERIC AllOptions()
+{
+	return DataView( DisplayMenu,ListViewMenu,0,0 );
+}
+
+if ( !GenCon( TableDefinition,GetFrom,<TableName>,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The <TableName> Table is not properly defined~ ); }
+	
+
+Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add ~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	NULL2 using DDMenuItemDef
+				Fields:	IDText		~NULL~
+
+		Define:	AddDefaults	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Defaults~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddDefaultAttrs(); )
+
+		Define:	AddPositions	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Add Positions~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddDefaultPositions(); )
+
+		Define:	ShowPattern	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Patterns~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ShowPattern(); )
+
+		Define:	ShowPositions	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Positions~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ShowPositions(); )
+
+		Define:	NULL3 using DDMenuItemDef
+				Fields:	IDText		~NULL~
+
+		Define:	Export	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuExport )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ExportSelectedToFile(Dataview,<TableName>) )
+	}
+
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 2; vGap = 2;
+
+Define: DataWindow Using DDWinDef
+	Fields:	Title					Translate(~Grid Layout Attributes~)
+			Position				0 0 85 25
+			IsPositionPercent		T
+			TypeName				SplitterWnd
+			SplitterRows			~2 14 90~
+			SplitterColumns			1
+
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:	ViewType				FormView
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "<TableName>Data.htm" )
+			Contains:
+			{
+				position = DefineStdGridButtons(Grid) + 10;
+
+					Define: AddFieldsForIDButton Using DDWinCtrlDef AsSymbol AddFieldsForIDButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( AddDefaultAttrs() )
+								POSITION		$position + $hGap, $vGap $ButtonWidth+35 $ButtonHeight
+								TEXT			Translate( ~Add Fields For~ )
+								TOOLTIP			Translate( ~Add all fields for the specified table~ )
+								TYPENAME		BUTTON
+
+					Define: IDField Using DDWinCtrlDef AsSymbol IDField         
+						Fields: TypeName		StaticText
+								Text			Translate(~ID~)
+								RightJustified	TRUE
+								Position        AddFieldsForIDButton(GetRight,Position) + $hGap,
+												AddFieldsForIDButton(GetTop,Position) + 2
+												25 $ButtonHeight  
+
+					Define: IDComboBox Using DDWinCtrlDef AsSymbol IDComboBox 
+						Fields: TypeName		ComboBox  
+								Position		IDField(GetRight,Position) + $hGap,
+												AddFieldsForIDButton(GetTop,Position),120,300
+								GenConName      THIS
+								GenConField		~ID~
+								DropDownActionsText ACTION CALL ( PopulateIDComboBox()  )
+								ReturnKeyActionsText ACTION EXEC ( SwitchID()  )
+								IActionsText	ACTION EXEC ( PopulateIDComboBox() )
+								DActionsText	ACTIONS  ( Save "EXEC(SwitchID())" )
+								Tooltip         ~Select the name of the Grid~ ;
+
+					Define: ImagesPrompt Using DDWinCtrlDef AsSymbol ImagesPrompt         
+						Fields: TypeName		StaticText
+								Text			Translate(~Images~)
+								RightJustified	TRUE
+								Position        IDComboBox(GetRight,Position) + $hGap,
+												AddFieldsForIDButton(GetTop,Position) + 2
+												50 $ButtonHeight  
+
+					Define: ImagesComboBox Using DDWinCtrlDef AsSymbol ImagesComboBox         
+						Fields: TypeName		ComboBox
+								Position        ImagesPrompt(GetRight,Position) + $hGap,
+												AddFieldsForIDButton(GetTop,Position) 
+												60 200  
+								GenConName      THIS
+								GenConField		~Images~   
+								DropDownActionsText ACTION CALL ( PopulateImagesComboBox()  ) 
+								ReturnKeyActionsText ACTION EXEC ( OnViewButton()  )
+								DActionsText	ACTIONS ( Save "EXEC(OnViewButton())" )
+								Tooltip			Translate( ~Select the number of images in the grid~ ) ;
+
+					Define: ViewButton Using DDWinCtrlDef AsSymbol ViewButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( OnViewButton() )
+								Position		ImagesComboBox(GetRight,Position) + $hGap*2,
+												AddFieldsForIDButton(GetTop,Position),40 $ButtonHeight
+								TEXT			Translate( ~View~ )
+								TOOLTIP			Translate( ~See the attributes for this Grid~ )
+								TYPENAME		BUTTON
+			}
+
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+					FontSize				10
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "<TableName>Data.htm" )
+					CloseActionsText		ACTION Call ( OnCloseDataView() ) ;
+	}
+	

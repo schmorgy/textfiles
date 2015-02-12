@@ -1,0 +1,510 @@
+// Global:  
+//          DocumentQuery
+//          SBADataListViewMenu
+
+Include: ~FormattingRoutines~;
+Include: ~CreateTransientDBTable~;
+
+TableName = ~SBAData~;
+
+VOID RefreshDoc()
+{
+	KillTimer( 1 );
+	RefreshListView();
+}
+
+
+NUMERIC RefreshListView()
+{
+	DataWindow( StatusBar,Text,Translate( ~Refreshing~ ) );
+
+	DropTables( gDP2DBLocal, TransientSBAData );
+	if ( !CreateTables( gDP2DBLocal, TransientSBAData ))
+	{ Error( Translate(~Failed to create the SBAData table~) ); }
+	
+	if ( !PopulateSBADataTable() )
+	{	return FALSE;	}
+
+	DocumentQuery = ~Select * From <TableName>~;
+
+	if ( !PGenConList( List,Connection,gDP2DBLocal,Cursor,Forward,Query,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(~Query Failed: <DocumentQuery>. <theErr>~) );
+	}
+
+	Count = List( NumEntries );
+	DataWindow( StatusBar,Text,Translate( ~Reading SBA data for <Count> images~ ) );
+
+	IF 0
+	{
+		if ( <Count> > 300 )
+		{
+			if ( MessageBox( Translate(~Your query:\n\n   <DocumentQuery>\n\nwill retrieve <Count> records\n\nAre you sure you want to continue?~),YESNO ) != YES )
+			{
+				if ( <FirstTime> ) { Exit(); }
+				return TRUE;
+			}
+		}
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	DataWindow( RefreshWindow );
+
+	return DataWindow( StatusBar,Text,~~ );
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if ( <key> == 0x74 )	// F5
+		{ return RefreshListView(); }
+
+	if (  !View( PerformMenuAction,SBADataListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,SBADataListViewMenu,0,0  );
+	}
+}
+
+
+VOID DelayedRefreshDoc()
+{
+	SetTimer( 1,2000,~RefreshDoc()~ );
+}
+
+
+NUMERIC OpenSelected()
+{
+	return TRUE;
+}
+
+
+
+
+NUMERIC AllOptions()
+{
+	return DataView( DisplayMenu,SBADataListViewMenu,0,0  );
+}
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( Translate(~There was no active view~) ); }
+
+	return DataView( DisplayMenu,SBADataListViewMenu );
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,SBADataListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,SBADataListViewMenu,0,0  );
+	}
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( Translate(UIMessages,NotImplemented,~<what>~) );
+	return TRUE;
+}
+
+
+VOID RememberWindowLocation( &theWindow,Item )
+{
+	theWindow( SaveWindowLocation,WindowLocation,~<Item>~ );
+}
+
+FirstTime = TRUE;
+
+NUMERIC Init( OrderID,Roll,criteriaList )
+{
+	queryFields = ~Images.BrightnessOverride, Images.RedOverride, Images.GreenOverride, Images.BlueOverride, Images.Brt, Images.Red, Images.Grn, Images.Blu, Images.Path, SBAImages.*~;
+	TheSort = ~SBAImages.OrderID, SBAImages.Roll, SBAImages.Frame~;
+	TheJoin = ~SBAImages.OrderID = Images.OrderID AND SBAImages.Roll = Images.Roll AND SBAImages.Frame = Images.Frame~;
+	if ( ~<Roll>~ != ~~ )
+	{
+		queryCriteria = ~SBAImages.OrderID = '<OrderID>' AND SBAImages.Roll = '<Roll>'~;
+	}
+	else
+	{
+		queryCriteria = ~SBAImages.OrderID = '<OrderID>'~;
+	}
+
+	if ( ~<criteriaList>~ != ~~ )
+	{
+		queryCriteria = ~<queryCriteria> AND <criteriaList>~;
+	}
+
+	joinTables = ~Images, SBAImages~;
+
+	Global( queryFields,TheSort,TheJoin,queryCriteria,joinTables );
+
+	if ( !<FirstTime> )
+	{
+		RefreshDoc();
+	}
+	else
+	{
+		if ( !PopulateSBADataTable() )
+		{	return FALSE;	}
+
+		DocumentQuery = ~Select * From <TableName>~;
+
+		if ( !PGenConList( List,Connection,gDP2DBLocal,Cursor,Dynamic,Query,~<DocumentQuery>~ ) )
+			{ Error( ~Failed to query the <TableName> table~ ); }
+
+		SetDocumentData( List(GetObject) );
+
+		WindowLocation = ~<$UserSettings.WindowLocation[SBADataList]>~;
+
+		if ( ~<WindowLocation>~ != ~~ )
+			{ DataWindow( Set,Position,~<WindowLocation>~ ); }
+
+		if ( !DataWindow( CreateWindow,~<TableName>~ ) )
+			{ Error( Translate(~Failed to create the window~) ); }
+	}
+	FirstTime = FALSE;
+
+	Document( Doc,This,SetTitle,~<OrderID>~ == ~~ ? ~SBA Data~ : ~SBA Data - OrderID <OrderID>~ );
+
+	return RefreshListView( TRUE );
+}
+
+NUMERIC OnCloseDataView()
+{
+	// Delete the temporary table
+	DropTables( gDP2DBLocal, TransientSBAData );
+	
+	DataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+NUMERIC PopulateSBADataTable()
+{
+	// Get the SBA Image data
+	DocumentQuery = ~SELECT <queryFields> FROM <joinTables> WHERE <queryCriteria> AND <TheJoin> ORDER BY <TheSort>~;
+
+	if ( !PGenConList( SbaList,Connection,gDP2DB,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		SbaList( GetErrorDescription, 0, theErr );
+		return Warning( Translate(~Query Failed <DocumentQuery>. <theErr>~) );
+	}
+	
+	Count = SbaList( NumEntries );
+	StatusBarText( Translate( ~Reading SBA data for <Count> images~ ) );
+
+	RGBToDensityScale = 0.0;
+	if ( GetSystemSettings( ~AdjustImages~,~RGBToDensityScale~,ScaleFactor,Enabled ) )
+	{
+		if ( <Enabled> )
+		{
+			RGBToDensityScale = atof( ~<ScaleFactor>~ );
+		}
+	}
+
+	AdjustInPrintDensity = 0;
+	if ( GetSystemSettings( ~AdjustImages~,~AdjustInPrintDensity~,IsOn,Enabled ) )
+	{
+		if ( <Enabled> )
+		{
+			AdjustInPrintDensity = atof( ~<IsOn>~ );
+		}
+	}
+
+	more = SbaList( GetFirst,SBARecord );
+	while ( <more> )
+	{
+		SbaR = atof(~<$pcon.SBARecord[SbaR]>~);
+		SbaG = atof(~<$pcon.SBARecord[SbaG]>~);
+		SbaB = atof(~<$pcon.SBARecord[SbaB]>~);
+		SbaFlesh = atof(~<$pcon.SBARecord[SbaFlesh]>~);
+
+		scanBrt = atof(~<$pcon.SBARecord[BrightnessOverride]>~) - truncate( <SbaFlesh>/3 );
+		ScanR = atof(~<$pcon.SBARecord[RedOverride]>~) + <scanBrt> - truncate( <SbaR>/3 );
+		ScanG = atof(~<$pcon.SBARecord[GreenOverride]>~) + <scanBrt> - truncate( <SbaG>/3 );
+		ScanB = atof(~<$pcon.SBARecord[BlueOverride]>~) + <scanBrt> - truncate( <SbaB>/3 );
+
+		adjBrt = atof(~<$pcon.SBARecord[Brt]>~);
+		AdjustR = atof(~<$pcon.SBARecord[Red]>~) - <adjBrt>;
+		AdjustG = atof(~<$pcon.SBARecord[Grn]>~) - <adjBrt>;
+		AdjustB = atof(~<$pcon.SBARecord[Blu]>~) - <adjBrt>;
+
+		OrderID = ~<$pcon.SBARecord[OrderID]>~;
+		Roll = ~<$pcon.SBARecord[Roll]>~;
+		Frame = ~<$pcon.SBARecord[Frame]>~;
+
+		AvgHue = atof(~<$pcon.SBARecord[AvgHue]>~);
+		AvgSat = atof(~<$pcon.SBARecord[AvgSat]>~);
+
+		xferDenN = atof(~<$pcon.SBARecord[xferDenN]>~);
+		xferDenGM = atof(~<$pcon.SBARecord[xferDenGM]>~);
+		xferDenI = atof(~<$pcon.SBARecord[xferDenI]>~);
+
+		AvgDenR = atof(~<$pcon.SBARecord[AvgDenR]>~);
+		AvgDenG = atof(~<$pcon.SBARecord[AvgDenG]>~);
+		AvgDenB = atof(~<$pcon.SBARecord[AvgDenB]>~);
+		AvgDenN = atof(~<$pcon.SBARecord[AvgDenN]>~);
+
+		unwtDenGM = atof(~<$pcon.SBARecord[unwtDenGM]>~);
+		unwtDenI = atof(~<$pcon.SBARecord[unwtDenI]>~);
+
+		SbaCmd = atof(~<$pcon.SBARecord[SbaCmd]>~);
+		SbaCMM = atof(~<$pcon.SBARecord[SbaCMM]>~);
+
+		PrefClass = atof(~<$pcon.SBARecord[PrefClass]>~);
+		PCWF = atof(~<$pcon.SBARecord[PCWF]>~);
+
+		IgnoreSFS = atof(~<$pcon.SBARecord[IgnoreSFS]>~);
+
+		SFSFile = ~<$pcon.SBARecord[SFSFile]>~;
+		FilmTerm = ~<$pcon.SBARecord[FilmTerm]>~;
+
+		FTBalR = atof(~<$pcon.SBARecord[FTBalR]>~);
+		FTBalG = atof(~<$pcon.SBARecord[FTBalG]>~);
+		FTBalB = atof(~<$pcon.SBARecord[FTBalB]>~);
+
+		FpoR = atof(~<$pcon.SBARecord[FpoR]>~);
+		FpoG = atof(~<$pcon.SBARecord[FpoG]>~);
+		FpoB = atof(~<$pcon.SBARecord[FpoB]>~);
+
+		FpaR = atof(~<$pcon.SBARecord[FpaR]>~);
+		FpaG = atof(~<$pcon.SBARecord[FpaG]>~);
+		FpaB = atof(~<$pcon.SBARecord[FpaB]>~);
+
+		NeuR = atof(~<$pcon.SBARecord[NeuR]>~);
+		NeuG = atof(~<$pcon.SBARecord[NeuG]>~);
+		NeuB = atof(~<$pcon.SBARecord[NeuB]>~);
+
+		NeoR = atof(~<$pcon.SBARecord[NeoR]>~);
+		NeoG = atof(~<$pcon.SBARecord[NeoG]>~);
+		NeoB = atof(~<$pcon.SBARecord[NeoB]>~);
+
+		Path = ~<$pcon.SBARecord[Path]>~;
+			
+		Fields2 = ~OrderID,Roll,Frame,SbaR,SbaG,SbaB,SbaFlesh,ScanR,ScanG,ScanB,
+				  AdjustR,AdjustG,AdjustB,AvgHue,AvgSat,xferDenN,xferDenGM,xferDenI,
+				  AvgDenR,AvgDenG,AvgDenB,AvgDenN,unwtDenGM,unwtDenI,
+				  SbaCmd,SbaCMM,PrefClass,PCWF,IgnoreSFS,
+				  SFSFile,FilmTerm,FTBalR,FTBalG,FTBalB,
+				  FpoR,FpoG,FpoB,FpaR,FpaG,FpaB,NeuR,NeuG,
+				  NeuB,NeoR,NeoG,NeoB,RGBToDensityScale,AdjustInPrintDensity,Path~;
+
+		Values = ~'<OrderID>','<Roll>','<Frame>',<SbaR>,<SbaG>,<SbaB>,<SbaFlesh>,<ScanR>,<ScanG>,<ScanB>,
+				  <AdjustR>,<AdjustG>,<AdjustB>,<AvgHue>,<AvgSat>,<xferDenN>,<xferDenGM>,<xferDenI>,
+				  <AvgDenR>,<AvgDenG>,<AvgDenB>,<AvgDenN>,<unwtDenGM>,<unwtDenI>,
+				  <SbaCmd>,<SbaCMM>,<PrefClass>,<PCWF>,<IgnoreSFS>,
+				  '<SFSFile>','<FilmTerm>',<FTBalR>,<FTBalG>,<FTBalB>,
+				  <FpoR>,<FpoG>,<FpoB>,<FpaR>,<FpaG>,<FpaB>,<NeuR>,<NeuG>,<NeuB>,<NeoR>,<NeoG>,<NeoB>,
+				  <RGBToDensityScale>,<AdjustInPrintDensity>,'<Path>'~;
+
+		Cmd = ~Insert Into SBAData(<Fields2>) Values(<Values>)~;
+		
+		if (!gDP2DBLocal( Cmd, ~<Cmd>~))
+		{
+			gDP2DBLocal( GetErrorDescription, theErr );
+			return Warning( Translate(~Cmd Failed <Cmd>. <theErr>~) );
+		}
+		more = SbaList( GetNext,SBARecord );
+	}
+	
+	return TRUE;
+}
+
+
+VOID DefineTransientSBADataTable()
+{
+	if ( !GenCon( TableDefinition,GetFrom,~TransientSBAData~,~[Database]~ ) )
+	{		
+		// Define the SBA Data table
+		WhichTable = SBAData;
+
+		Define:			<WhichTable>Fields Using DDLong
+			Contains:	InListOrder
+			{
+				Define:	OrderID		CopyOf OrderID		~[Database FieldTypes]~	Fields: Constraints	~NOT NULL~ ReadOnly ~T~
+				Define:	Roll		CopyOf Roll			~[Database FieldTypes]~	Fields: Constraints	~NOT NULL~ ReadOnly ~T~
+				Define:	Frame		CopyOf Frame		~[Database FieldTypes]~	Fields: Constraints	~NOT NULL~ ReadOnly ~T~
+
+				Define:	SbaR		CopyOf ColorOffset	~[Database FieldTypes]~	Fields: DisplayName	~SbaR~		Constraints ~Default 0~ ReadOnly ~T~
+				Define:	SbaG		CopyOf ColorOffset	~[Database FieldTypes]~	Fields: DisplayName	~SbaG~		Constraints ~Default 0~ ReadOnly ~T~
+				Define:	SbaB		CopyOf ColorOffset	~[Database FieldTypes]~	Fields: DisplayName	~SbaB~		Constraints ~Default 0~ ReadOnly ~T~
+
+				Define:	SbaFlesh	CopyOf ColorOffset	~[Database FieldTypes]~	Fields: DisplayName	~SbaFlesh~	Constraints ~Default 0~ ReadOnly ~T~
+
+				Define:	ScanR		CopyOf ColorOffset	~[Database FieldTypes]~	Fields: DisplayName	~ScanR~		Constraints ~Default 0~ ReadOnly ~T~
+				Define:	ScanG		CopyOf ColorOffset	~[Database FieldTypes]~	Fields: DisplayName	~ScanG~		Constraints ~Default 0~ ReadOnly ~T~
+				Define:	ScanB		CopyOf ColorOffset	~[Database FieldTypes]~	Fields: DisplayName	~ScanB~		Constraints ~Default 0~ ReadOnly ~T~
+
+				Define:	AdjustR		CopyOf ColorOffset	~[Database FieldTypes]~	Fields: DisplayName	~AdjustR~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	AdjustG		CopyOf ColorOffset	~[Database FieldTypes]~	Fields: DisplayName	~AdjustG~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	AdjustB		CopyOf ColorOffset	~[Database FieldTypes]~	Fields: DisplayName	~AdjustB~	Constraints ~Default 0~ ReadOnly ~T~
+
+				Define:	AvgHue		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~AvgHue~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	AvgSat		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~AvgSat~	Constraints ~Default 0~ ReadOnly ~T~
+
+				Define:	xferDenN	CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~xferDenN~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	xferDenGM	CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~xferDenGM~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	xferDenI	CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~xferDenI~	Constraints ~Default 0~ ReadOnly ~T~
+
+				Define:	AvgDenR		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~AvgDenR~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	AvgDenG		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~AvgDenG~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	AvgDenB		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~AvgDenB~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	AvgDenN		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~AvgDenN~	Constraints ~Default 0~ ReadOnly ~T~
+
+				Define:	unwtDenGM	CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~UnwtDenGM~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	unwtDenI	CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~UnwtDenI~	Constraints ~Default 0~ ReadOnly ~T~
+
+				Define:	SbaCmd		CopyOf SbaCmd		~[Database FieldTypes]~	Fields: DisplayName	~SbaCmd~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	SbaCMM		CopyOf CMMField		~[Database FieldTypes]~	Fields: DisplayName	~SbaCMM~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	PrefClass	CopyOf PrefClass	~[Database FieldTypes]~	Fields: DisplayName	~PrefClass~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	PCWF		CopyOf PCWF			~[Database FieldTypes]~	Fields: DisplayName	~PCWF~		Constraints ~Default 0~ ReadOnly ~T~
+
+				Define: IgnoreSFS	CopyOf Boolean		~[Database FieldTypes]~	Fields: DisplayName ~IgnoreSFS~ Constraints ~Default 0~ ReadOnly ~T~
+				
+				Define:	SFSFile		CopyOf Path			~[Database FieldTypes]~	Fields: DisplayName	~SFSFile~ ReadOnly ~T~
+				Define:	FilmTerm	CopyOf Path			~[Database FieldTypes]~	Fields: DisplayName	~FilmTerm~ ReadOnly ~T~
+
+				Define:	FTBalR		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~FTBalR~ Constraints ~Default 0~ ReadOnly ~T~
+				Define:	FTBalG		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~FTBalG~ Constraints ~Default 0~ ReadOnly ~T~
+				Define:	FTBalB		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~FTBalB~ Constraints ~Default 0~ ReadOnly ~T~
+
+				Define:	FpoR		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~FpoR~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	FpoG		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~FpoG~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	FpoB		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~FpoB~	Constraints ~Default 0~ ReadOnly ~T~
+
+				Define:	FpaR		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~FpaR~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	FpaG		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~FpaG~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	FpaB		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~FpaB~	Constraints ~Default 0~ ReadOnly ~T~
+
+				Define:	NeuR		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~NeuR~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	NeuG		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~NeuG~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	NeuB		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~NeuB~	Constraints ~Default 0~ ReadOnly ~T~
+
+				Define:	NeoR		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~NeoR~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	NeoG		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~NeoG~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	NeoB		CopyOf SignedInterval	~[Database FieldTypes]~	Fields: DisplayName	~NeoB~	Constraints ~Default 0~ ReadOnly ~T~
+
+				Define:	RGBToDensityScale	 CopyOf DoubleValue	~[Database FieldTypes]~	Fields: DisplayName	~RGBToDensityScale~	Constraints ~Default 1.0~ ReadOnly ~T~
+				Define:	AdjustInPrintDensity CopyOf Boolean		~[Database FieldTypes]~	Fields: DisplayName	~AdjustInPrintDensity~	Constraints ~Default 0~ ReadOnly ~T~
+				Define:	Path		CopyOf Path			~[Database FieldTypes]~ Fields: DisplayName ~Path~ ReadOnly ~T~
+			}
+
+		Define:		<WhichTable>TableConstraints Using DDLong
+			Contains:	InListOrder
+			{
+				Define: <WhichTable>PrimaryKey Using DDText
+					Fields:	Text			~Constraint <WhichTable>PrimaryKey PRIMARY KEY(OrderID,Roll,Frame)~
+			}
+
+		Define:			<WhichTable>		Using DDDatabaseTableDef
+			Fields:		TableName			<WhichTable>
+						TableConstraints	<WhichTable>TableConstraints(GetObjectReference)
+						Fields				<WhichTable>Fields(GetObjectReference)
+
+		Hang: <WhichTable> ~[DATABASE TransientSBAData]~ InListOrder;
+	}
+}
+
+if ( !Ado( gDP2DBLocal,ConnectLocal ) )
+{
+	gDP2DBLocal( GetErrorDescription,theErr );
+	return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+}
+
+if ( !Ado( gDP2DB,Connect ) )
+{
+	gDP2DB( GetErrorDescription,theErr );
+	return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+}
+
+Global( gDP2DBLocal,gDP2DB );
+DefineTransientSBADataTable();
+DropTables( gDP2DBLocal, TransientSBAData );
+
+if ( !CreateTables( gDP2DBLocal, TransientSBAData ))
+	{ Error( Translate(~Failed to create the SBA Data table~) ); }
+
+Include: ~ExportSelectedToFile~;
+
+if ( !GenCon( TableDefinition,GetFrom,<TableName>,~[DATABASE TransientSBAData]~ ) )
+	{ Error( ~The <TableName> Table is not properly defined~ ); }
+
+
+Define:	SBADataListViewMenu Using DDMenuDef AsSymbol SBADataListViewMenu  // called once
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuRefresh )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE) )
+
+		Define:	NULL1 using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+		Define:	Export	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuExport )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ExportSelectedToFile(DataView,SBAData) )
+
+		Define:	RememberWindowLoc	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,RememberWindowLoc )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RememberWindowLocation(DataWindow,SBADataList) )	
+	}
+
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+Define: DataWindow Using DDWinDef
+	Fields:		Title					Translate(~SBA Data~)
+				Position				0 0 90 35
+				IsPositionPercent		T
+				TypeName				SplitterWnd
+				SplitterRows			~2 10 90~
+				SplitterColumns			1
+				EnableStatusBar			T
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "SBAData.htm" )
+			Contains:
+			{
+				Define: ExportDataButton Using DDWinCtrlDef AsSymbol ExportDataButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( ExportSelectedToFile(DataView,SBAData) )
+							POSITION		$hGap, $vGap $ButtonWidth $ButtonHeight
+							TEXT			Translate( ~Export~ )
+							TOOLTIP			Translate( ~Export data to a text file~ )
+							TYPENAME		BUTTON
+							//HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "SBAData.htm" )
+			}
+
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition( GetReferenceTo,Fields )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView() )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					CloseActionsText		ACTION Call ( OnCloseDataView() )
+					ViewDataType			Text
+					//HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "" )
+	}
+	

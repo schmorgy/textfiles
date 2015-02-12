@@ -1,0 +1,663 @@
+IncludeClass(BaseHTML);
+IncludeClass(BaseThread);
+
+Class( CDRestore,Extends,BaseHTML,
+				Member,fOrderID,Str,~~,
+				Member,fRoll,Str,~~,
+				Member,fFrame,Str,~~ );
+				
+Class( CDRestoreThread,Extends,BaseThread );
+
+//*********************************************************//
+//************* Thread Routines ***************************//
+	
+NUMERIC CDRestoreThread::SearchForPath( OrderID, Path )
+{
+	isEjectable = Drive( IsEjectable, ~<Path>~ );
+
+	status = Files( DirectoryExists, ~<Path>\<OrderID>~ );
+	
+	if ( !<status> && !<isEjectable> )
+	{
+		// Couldn't find the directory and media is not ejectable.  Stop.
+		return FALSE;
+	}
+	
+	while ( !<status> )
+	{
+		if ( MessageBox( TR( CDRestoreTrans, UnableToFindOrder, ~<OrderID>~),OKCANCEL ) == CANCEL )
+		{
+			return FALSE;
+		}
+		
+		status = Files( DirectoryExists, ~<Path>\<OrderID>~ );
+	}
+
+	return <status>;
+}
+
+NUMERIC CDRestoreThread::SearchForFile( OrderID, FilePath )
+{
+	isEjectable = Drive( IsEjectable, ~<$str.$FilePath.Volume>~ );
+
+	status = Files( FileExists, ~<FilePath>~ );
+	
+	if ( !<status> && !<isEjectable> )
+	{
+		// Couldn't find the directory and media is not ejectable.  Stop.
+		return FALSE;
+	}
+	
+	while ( !<status> )
+	{
+		if ( MessageBox( TR( CDRestoreTrans, UnableToFindImageOnCD, ~<FilePath>~, ~<OrderID>~ ) ,OKCANCEL ) == CANCEL )
+		{
+			return FALSE;
+		}
+		
+		status = Files( FileExists, ~<FilePath>~ );
+	}
+
+	return <status>;
+}
+
+NUMERIC CDRestoreThread::GetListFromOrderID( OrderID, &ListOfOrderIDs, &dBase, TypeOfQuery )
+{
+	// TypeOfQuery = 1 - Search for ParentOrderID
+	// TypeOfQuery = 2 - Search on Order Item Images
+	
+	if ( <TypeOfQuery> == 1 )
+	{
+		Query = ~Select ID From Orders Where ParentOrderID = '<OrderID>' Order By ID~;
+		ID = ~ID~;
+	}
+	else if ( <TypeOfQuery> == 2 )
+	{
+		Query = ~Select OrderID From OrderItemImages Where ItemOrderID = '<OrderID>' Order By OrderID~;
+		ID = ~OrderID~;
+	}
+	else
+	{
+		return FALSE;
+	}
+	
+	if ( !PGenConList( OrderIDList,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		return FALSE;
+	}
+	
+	while ( OrderIDList( GetNext, OrderIDItem ) )
+	{
+		imagesOrderID = ~~;
+		dBase( GetValuesFor, ~Select ImagesOrderID From Orders Where ID = '<$pcon.OrderIDItem[ID]>'~, imagesOrderID );
+		
+		if ( IsNull( ~<imagesOrderID>~ ) )
+		{
+			imagesOrderID = ~<$pcon.OrderIDItem[<ID>]>~;
+		}
+		
+		if ( !SimilarStr( ~<OrderID>~, ~<imagesOrderID>~ ) )
+		{
+			ListOfOrderIDs( AddString, ~<imagesOrderID>~ );
+		}
+	}
+	
+	return TRUE;
+}
+
+NUMERIC	CDRestoreThread::HandleThread( OrderID, Path, RestoreAllImages )
+{ 
+	return ThreadObj.RestoreTheImages( ~<OrderID>~, ~<Path>~, <RestoreAllImages> );
+}
+	
+NUMERIC CDRestoreThread::RestoreTheImages( OrderID, Path, RestoreAllImages )
+{
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session,~Error connecting to the shared database: <theErr>~ );
+		return;
+	}
+	
+	imagesOrderID = ~~;
+	dBase( GetValuesFor, ~Select ImagesOrderID From Orders Where ID = '<OrderID>'~, imagesOrderID );
+
+	if ( IsNull( ~<imagesOrderID>~ ) )
+	{
+		imagesOrderID = ~<OrderID>~;
+	}
+
+	// Tell the user to insert the media for a specific order
+//	if ( !SearchForPath( ~<imagesOrderID>~, ~<Path>~ ) )
+//	{
+//		Invoke( ~CDRestoreObj.SetControls~ );
+//		return FALSE;
+//	}
+
+	if ( <RestoreAllImages> )
+	{
+		TotalImagesRestored = 0;
+		ReportStatus( TR( CDRestoreTrans, StartAllImages ) );
+		StringList( ListOfOrderIDs, New );
+		
+		GetListFromOrderID( ~<OrderID>~, ListOfOrderIDs, dBase, 1 );
+		GetListFromOrderID( ~<OrderID>~, ListOfOrderIDs, dBase, 2 );
+
+		// Take the contents of the string list and form a query
+		count = ListOfOrderIDs( NumEntries );
+		
+		SearchFor = ~OrderID = '<imagesOrderID>'~;
+		
+		if ( <count> > 0 )
+		{	
+			while ( ListOfOrderIDs( GetNextString, OrderIDString ) )
+			{
+				SearchFor = ~<SearchFor> OR OrderID = '<OrderIDString>'~;
+			}
+		}
+		
+		SearchFor = ~<SearchFor> Order By OrderID~;
+
+		Query = ~Select * From Images Where <SearchFor>~;
+		
+		if ( !PGenConList( ImagesList,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ 
+			Invoke( ~CDRestoreObj.SetControls~ );
+			return FALSE;
+		}
+	
+		currentImage = 0;
+		origOrderID = ~~;
+		ResetProgressBar();
+		TotalImages = ImagesList( Count );
+		While ( ImagesList( GetNext, Image ) && <fProcessing> )
+		{
+			customerID = ~~;
+			dBase( GetValuesFor, ~Select CustomerID From Orders Where ID = '<$pcon.Image[OrderID]>'~, customerID );
+			if ( !SimilarStr( ~<customerID>~, ~Product~ ) )
+			{
+		
+				if ( !SimilarStr( ~<origOrderID>~, ~<$pcon.Image[OrderID]>~ ) )
+				{
+					origOrderID = ~<$pcon.Image[OrderID]>~;
+					ReportStatus( TR( CDRestoreTrans, StartOIImages, ~<origOrderID>~ ) );
+				}
+				
+				if ( !SearchForPath( ~<$pcon.Image[OrderID]>\<$pcon.Image[Roll]>~, ~<Path>~ ) )
+				{
+					Invoke( ~CDRestoreObj.SetControls~ );
+					return FALSE;
+				}
+				
+				if ( !Files( FileExists, ~<Path><$pcon.Image[OrderID]>\<$pcon.Image[Roll]>\<$pcon.Image[Path].FileName>~ ) )
+				{
+					if ( !SearchForFile( ~<$pcon.Image[OrderID]>~, ~<Path><$pcon.Image[OrderID]>\<$pcon.Image[Roll]>\<$pcon.Image[Path].FileName>~ ) )
+					{
+						Invoke( ~CDRestoreObj.SetControls~ );
+						return FALSE;
+					}
+				}
+			
+				ReportStatus( TR( CDRestoreTrans, RestoringImage, ~<$pcon.Image[Path].FileName>~ ) );
+				++currentImage;
+				
+				if ( Files( Copy, ~<Path><$pcon.Image[OrderID]>\<$pcon.Image[Roll]>\<$pcon.Image[Path].FileName>~, ~<$pcon.Image[Path]>~ ) )
+				{
+					Files( ChMod, ~<$pcon.Image[Path]>~, ReadWrite );
+				}
+				else
+				{
+					ReportStatus( TR( CDRestoreTrans, UnableToCopyImage, ~<$pcon.Image[Path].FileName>~ ) );
+					Log( Session, ~CDRestoreThread::RestoreTheImages: Unable to restore file.  Most likely the file already exists and is write protected~ );
+				}
+
+				++TotalImagesRestored;
+				UpdateProgress( <currentImage>, <TotalImages>, <TotalImagesRestored> );
+			}
+			else
+			{
+				//Skipping artwork in product.
+				ReportStatus( ~Artwork image detected, restore of image skipped: <$pcon.Image[Path].FileName>~ );
+				++currentImage;
+				++TotalImagesRestored;
+				UpdateProgress( <currentImage>, <TotalImages>, <TotalImagesRestored> );
+			}
+		}
+	}
+	else
+	{
+		TotalImagesRestored = 0;
+		ReportStatus( TR( CDRestoreTrans, StartOIImages, ~<OrderID>~ ) );
+		if ( !RestoreOIImages( ~<OrderID>~, ~<Path>~, dBase, TotalImagesRestored ) )
+		{
+			return FALSE;
+		}
+	
+		// Check if it is a parent order.  If it is, check and restore the child order order item images
+		ParentQuery = ~Select ID From Orders Where ParentOrderID = '<OrderID>' Order By ID~;
+		if ( !PGenConList( ChildOrdersList,Connection,dBase,Cursor,Forward,QUERY,~<ParentQuery>~ ) )
+		{
+			return FALSE;
+		}
+		
+		origOrderID = ~~;
+		while ( ChildOrdersList( GetNext, ChildOrderRecord ) )
+		{
+			if ( !SimilarStr( ~<origOrderID>~, ~<$pcon.ChildOrderRecord[ID]>~ ) )
+			{
+				origOrderID = ~<$pcon.ChildOrderRecord[ID]>~;
+				ReportStatus( TR( CDRestoreTrans, StartOIImages, ~<origOrderID>~ ) );
+			}
+			
+			if ( !RestoreOIImages( ~<$pcon.ChildOrderRecord[ID]>~, ~<Path>~, dBase, TotalImagesRestored ) )
+			{
+				return FALSE;
+			}
+		}
+	
+	}  // Restore all images if.
+
+	Invoke( ~CDRestoreObj.SetControls~ );
+	ReportStatus( TR( CDRestoreTrans, RestoreComplete ) );
+
+	return TRUE;
+}
+
+NUMERIC CDRestoreThread::RestoreOIImages( OrderID, Path, &dBase, &TotalImagesRestored )
+{
+	ResetProgressBar();
+	
+	Query = ~Select DISTINCT OrderID,Roll,Frame From OrderItemImages WHERE ItemOrderID = '<OrderID>' Order By OrderID~;
+	
+	if ( !PGenConList( OIImagesList,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		return FALSE;
+	}
+
+	TotalImages = OIImagesList( NumEntries );
+	
+	currentImage = 0;
+	UpdateProgress( <currentImage>, <TotalImages>, <TotalImagesRestored> );
+
+	// Get the first image in the set and restore it.
+	status = OIImagesList( GetFirst, ImageRecord );
+	
+	while ( <status> && <fProcessing> )
+	{
+		customerID = ~~;
+		dBase( GetValuesFor, ~Select CustomerID From Orders Where ID = '<$pcon.ImageRecord[OrderID]>'~, customerID );
+		if ( !SimilarStr( ~<customerID>~, ~Product~ ) )
+		{
+	
+			pathQuery = ~Select Path From Images Where OrderID = '<$pcon.ImageRecord[OrderID]>' AND Roll = '<$pcon.ImageRecord[Roll]>' AND Frame = '<$pcon.ImageRecord[Frame]>'~;
+			
+			imagePath = ~~;
+			if ( !dBase( GetValuesFor, ~<pathQuery>~, imagePath ) )
+			{
+				ReportStatus( TR( CDRestoreTrans, UnableToFindImage, ~<$pcon.ImageRecord[Roll]>~, ~<$pcon.ImageRecord[Frame]>~ ) );
+				return FALSE;
+			}
+			
+			if ( IsNull( ~<imagePath>~ ) )
+			{
+				return FALSE;
+			}
+			
+			// First check if file exists, if it does, no need to restore and go on to next image
+			if ( !Files( FileExists, ~<imagePath>~ ) )
+			{
+				if ( !SearchForPath( ~<$pcon.ImageRecord[OrderID]>\<$pcon.ImageRecord[Roll]>~, ~<Path>~ ) )
+				{
+					Invoke( ~CDRestoreObj.SetControls~ );
+					return FALSE;
+				}
+				
+				ReportStatus( TR( CDRestoreTrans, RestoringImage, ~<$str.$imagePath.FileName>~ ) );
+				// Restore the image, it is in an order item.
+				if ( !Files( FileExists, ~<Path><$pcon.ImageRecord[OrderID]>\<$pcon.ImageRecord[Roll]>\<$str.$imagePath.FileName>~ ) )
+				{
+					if ( !SearchForFile( ~<$pcon.ImageRecord[OrderID]>~, ~<Path><$pcon.ImageRecord[OrderID]>\<$pcon.ImageRecord[Roll]>\<$str.$imagePath.FileName>~ ) )
+					{
+						Invoke( ~CDRestoreObj.SetControls~ );
+						return FALSE;
+					}
+				}
+
+				++currentImage;
+				if ( Files( Copy, ~<Path><$pcon.ImageRecord[OrderID]>\<$pcon.ImageRecord[Roll]>\<$str.$imagePath.FileName>~, ~<imagePath>~ ) )
+				{
+					Files( ChMod, ~<imagePath>~, ReadWrite );
+				}
+				else
+				{
+					ReportStatus( TR( CDRestoreTrans, UnableToCopyImage, ~<$str.$imagePath.FileName>~ ) );
+					Log( Session, ~CDRestoreThread::RestoreTheImages: Unable to restore file.  Most likely the file already exists and is write protected~ );
+				}
+			}
+			else
+			{
+				ReportStatus( ~Image Exists at final destination, not restored: <$str.$imagePath.FileName>~ );
+				++currentImage;
+			}
+
+			++TotalImagesRestored;
+			UpdateProgress( <currentImage>, <TotalImages>, <TotalImagesRestored> );
+			
+		}
+		else
+		{
+			//Skipping artwork in product.
+			ReportStatus( ~Artwork image detected, restore of image skipped.~ );
+			++currentImage;
+			++TotalImagesRestored;
+			UpdateProgress( <currentImage>, <TotalImages>, <TotalImagesRestored> );
+		}
+		
+		status = OIImagesList( GetNext, ImageRecord );
+	
+	}
+
+	return TRUE;
+}
+
+VOID CDRestoreThread::UpdateProgress( CurrentImage, TotalImages, TotalImagesRestored )
+{
+	Invoke( ~CDRestoreObj.UpdateProgressBar~, ~<CurrentImage>~, ~<TotalImages>~, ~<TotalImagesRestored>~ );
+}
+
+VOID CDRestoreThread::ResetProgressBar()
+{
+	Invoke( ~CDRestoreObj.ResetProgressBar~ );
+}
+
+VOID CDRestoreThread::ReportStatus( StatusMsg )
+{
+	Invoke( ~CDRestoreObj.ReportStatus~, ~<StatusMsg>~ );
+}
+
+VOID CDRestoreThread::CancelRestore()
+{
+	fProcessing = FALSE;
+}
+
+//************* End Thread Routines ***********************//
+
+
+VOID CDRestore::CDRestore(WantStatic,OrderID)
+{
+	
+	Static(~<WantStatic>~);
+	
+	WindowLeft = 5;
+	WindowTop = 5;
+	WindowWidth = 40;
+	WindowHeight = 85;
+	WantStatusBar = 0;
+
+}
+
+VOID CDRestore::WindowDefinition()
+{
+	Fields:	NoCloseButton		1
+			WantsMinimizeBox	1
+			NoSystemMenu		1
+
+}
+
+VOID CDRestore::DefineMessages()
+{
+	BaseHtml::DefineMessages();
+
+	LoadTranslationFile( Utilities,CDRestoreTrans,CDRestoreTrans );
+}
+
+VOID CDRestore::ViewDefinition()		
+{
+	Fields:	HTMLCloseBox	<fStatic>;
+}
+
+VOID CDRestore::OnLoadComplete()
+{	
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	fHtmlView( Execute, ~DisableControl( GetElement('CancelButton'),true )~ );
+	
+	return;
+}
+
+VOID CDRestore::InitWindow()
+{
+	CreateAndOpen( ~<$App.HTTPServer>/Utilities/CDRestore.kpl~ );
+}
+
+VOID CDRestore::SetTitle()
+{
+	SetWindowTitle( TR(CDRestoreTrans,Title) );
+}
+
+NUMERIC CDRestore::CloseCheck()
+{
+
+	// Call the BaseHTML version
+	if ( Defined( ThreadObj ) )
+	{
+	matt = ThreadObj.Processing();
+		if ( ThreadObj.Processing() )
+		{
+			Warning( TR( CDRestoreTrans, UnableToClose ) );
+			return FALSE;
+		}
+	}
+	
+	return TRUE;
+}
+
+VOID CDRestore::GetDirectory()
+{
+	ReturnOnFailure( GetActiveView() );
+
+	Title = TR( CDRestoreTrans, FindDirTitle);
+	SubTitle = ~~;
+
+	GetFolder( ~<Title>~,~<SubTitle>~,Path,~\\~ );
+	
+	fHtmlView( Set,~PathText~,0,value,~<Path>~);
+	
+	return;
+
+}
+
+VOID CDRestore::RestoreImages( OrderID, Path, RestoreAllImages )
+{
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+
+	fHtmlView( Execute, ~ResetProgressBar()~ );
+	fHtmlView( Execute, ~DisableControl( GetElement('RestoreImages'),true )~ );
+	fHtmlView( Execute, ~DisableControl( GetElement('OrderIDText'),true )~ );
+	fHtmlView( Execute, ~DisableControl( GetElement('PathText'),true )~ );
+	fHtmlView( Execute, ~DisableControl( GetElement('FindDir'),true )~ );
+	fHtmlView( Execute, ~DisableRadio( true )~ );
+	fHtmlView( Execute, ~DisableRadio( true )~ );
+
+	if ( IsNull( ~<OrderID>~ ) )
+	{
+		fHtmlView( Set, ~RestoreImages~, 0, disabled, ~false~ );
+		SetControls();
+		ReportStatus( TR( CDRestoreTrans, OrderIDNotPresent ) );
+		return;
+	}
+
+	if ( IsNull( ~<Path>~ ) )
+	{
+		fHtmlView( Set, ~RestoreImages~, 0, disabled, ~false~ );
+		SetControls();
+		ReportStatus( TR( CDRestoreTrans, NoPathSet ) );
+		return;
+	}
+
+	// Validate OrderID and Path
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session,~Error connecting to the shared database: <theErr>~ );
+		return;
+	}
+	
+	count = 0;
+	count = dBase( RecordCountFor, ~Select * From Orders Where ID = '<OrderID>'~ );
+	if ( <count> == 0 )
+	{
+	
+	}
+	
+	if ( !Defined( ThreadObj ) )
+	{
+		CDRestoreThread( New, ThreadObj );
+		Global( ThreadObj );
+		
+		//ThreadObj.DebugThread();
+	}
+	
+	// Make sure the path has a backslash at the end.
+	Path = ~<Path>\~;
+	Path = ~<$str.$Path.RemoveDoubleBackSlashes>~;
+	
+	ThreadObj.NewOneShot( ~<OrderID>~, ~<Path>~, <RestoreAllImages> );
+	fHtmlView( Execute, ~DisableControl( GetElement('CancelButton'),false )~ );
+	
+	return;
+}
+
+NUMERIC CDRestore::SearchForPath( OrderID, Path )
+{
+	isEjectable = Drive( IsEjectable, ~<Path>~ );
+
+	status = Files( DirectoryExists, ~<Path>\<OrderID>~ );
+	
+	if ( !<status> && !<isEjectable> )
+	{
+		// Couldn't find the directory and media is not ejectable.  Stop.
+		return FALSE;
+	}
+	
+	while ( !<status> )
+	{
+		if ( <isEjectable> )
+		{
+			if ( MessageBox( ~Unable to find order: <OrderID>.\nPlease insert the next volume.\nPress OK when the next volume is inserted and spun up.\nPress Cancel to exit.~,OKCANCEL ) == OK )
+			{
+				status = SearchForPath( ~<OrderID>~, ~<Path>~ );
+			}
+			else
+			{
+				// The user chose not to insert another volume and the directory was not found.
+				return FALSE;
+			}
+		}
+	}
+
+	return <status>;
+}
+
+VOID CDRestore::ReportStatus( Status )
+{
+	//StatusBarText( ~<Status>~ );
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	fHtmlView( inserthtml, StatusArea, 0, beforeEnd, ~<span><Status></span><br>~ ); 
+	
+}
+
+VOID CDRestore::UpdateProgressBar( CurrentImage, TotalImages, TotalImagesRestored)
+{
+	GetViewByName( View );
+
+	if ( <TotalImages> != 0 )		// Don't allow divide by zero
+	{
+		if ( <CurrentImage> == 0 )
+		{
+			fHtmlView( Execute,~UpdateProgressBar( 0/<TotalImages> )~ );
+		}
+		else
+		{
+			fHtmlView( Execute,~UpdateProgressBar( 1/<TotalImages> )~ );
+		}
+	}
+	
+	fHtmlView( Set,~CurrentImage~,0,value,~<CurrentImage>~ );
+	fHtmlView( Set,~TotalImages~,0,value,~<TotalImages>~ );
+	fHtmlView( Set,~TotalImagesRestored~,0,value,~<TotalImagesRestored>~ );
+	
+}
+
+VOID CDRestore::ResetProgressBar()
+{
+
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	fHtmlView( Execute, ~ResetProgressBar()~ ); 
+	
+	return;
+}
+
+VOID CDRestore::CancelRestore()
+{
+
+	if ( GetViewByName( View ) )
+	{
+		fHtmlView( Execute, ~DisableControl( GetElement('CancelButton'),true )~ );
+	}
+	
+	ThreadObj.CancelRestore();
+}
+
+VOID CDRestore::SetControls()
+{
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	fHtmlView( Execute, ~DisableControl( GetElement('RestoreImages'),false )~ );
+	fHtmlView( Execute, ~DisableControl( GetElement('OrderIDText'),false )~ );
+	fHtmlView( Execute, ~DisableControl( GetElement('PathText'),false )~ );
+	fHtmlView( Execute, ~DisableControl( GetElement('FindDir'),false )~ );
+	fHtmlView( Execute, ~DisableRadio( false )~ );
+	fHtmlView( Execute, ~DisableRadio( false )~ );
+	
+	fHtmlView( Execute, ~DisableControl( GetElement('CancelButton'),true )~ );
+}
+
+VOID InitDoc( OrderID, WantStatic )
+{
+
+	if ( !ObjectAlreadyExists( CDRestoreObj ) )
+	{
+		CDRestore( New,CDRestoreObj,~<WantStatic>~ );
+	
+		CDRestoreObj( Global );
+		CDRestoreObj.InitWindow();
+	}
+
+	CDRestoreObj.SetTitle();
+	
+}
+
+// Entry Points from other scripts
+VOID InitStatic( OrderID )	{ InitDoc(  ~<OrderID>~, TRUE ); }
+VOID Init( OrderID )			{ InitDoc( ~<OrderID>~, FALSE ); }
+
+Init(~~);

@@ -1,0 +1,614 @@
+IncludeClass(BaseHtml);
+
+BaseHtml::LoadTranslationFile(OutputSpec,XMLJobInfoTranslation,XMLJobInfo);
+
+// Template Dialog Code
+Class( TemplateDlg,Extends,BaseHTML,	
+	  Member,fNumOverrides,Numeric,0
+ );
+
+VOID TemplateDlg::TemplateDlg()
+{
+
+}
+
+VOID HelpRoutine()
+{
+	Obj.HelpRoutine();
+}
+
+VOID	TemplateDlg::OnLoadComplete()	
+{
+	GetActiveView();
+	PopulateCatagories();
+//	PopulateInventoryNames();
+	SelectInitialInventoryName();
+	DisplayChoices();
+}
+VOID TemplateDlg::DisplayWindow()									// Open a new window to show the UI
+{
+	DefineWindow();
+
+	Init();
+	Open( ~<$App.HTTPServer>/OutputSpec/XMLJobInfo.kpl~ );		// The initial HTML View
+	SetWindowTitle(TR( XMLJobInfoTranslation,WindowTitle));	// The window title
+}
+
+VOID TemplateDlg::BringToFront()
+{
+	DataWindow( SetWindowOrder,Top );
+}
+
+VOID ExtraButtonHit(Address)
+{
+//	Log(Session,~Extra Button Hit: <Address>~);
+	
+	if ( !Document(aDoc,Is,<Address>))
+	{
+		Warning( ~No Document~); exit();
+	}
+	if (!aDoc( GetRenderList,0, fRenderList))
+	{
+		Warning( ~No RenderList~); exit();
+	}
+	if (!fRenderList(GetNodebyID,-9002,0,SaveImageNode))
+	{
+		Warning(~Could not find Save Image output node~); exit();
+	}
+	
+	// To get the value of ExtraInfo
+	ExtraInfo = ~~;
+	Global(SaveImageNode);
+	if ( SaveImageNode(GetValue, ~ExtraInfo:~,y) )
+	{
+		ExtraInfo = ~<y>~;
+	}
+	Global(ExtraInfo);
+
+	if ( !Defined(Obj))
+	{
+		ForgetGlobal( Obj);
+		TemplateDlg( New,Obj );
+		Global( Obj );
+
+//		if (!Defined(SaveImageNode))
+//		{
+//			Log(Session, ~Save Image Node is not defined~);
+//		}
+
+//		SaveAddress=SaveImageNode(GetObject);
+
+//		Log(Session,~Extra Button Hit: SaveImageNode = <SaveAddress>, ExtraInfo = <ExtraInfo>~);
+
+		Obj.DisplayWindow();
+	}
+	else
+	{
+//		Log(Session,~Extra Button Hit: Bring to front because obj already defined, ExtraInfo = <ExtraInfo>~);
+		Obj.BringToFront();
+	}
+}
+
+NUMERIC OnWindowChange(Address)
+{ //new selected product/order item (if address = 0, then no item selected)
+	ReturnOnFailure(Defined(Obj));
+
+	if (<Address> == 0)
+	{
+		return FALSE;
+	}
+
+	if ( !Document(aDoc,Is,<Address>))
+	{
+		return FALSE;
+	}
+	
+	if (!aDoc( GetRenderList,0, fRenderList))
+	{
+		return FALSE; 
+	}
+
+	ForgetGlobal(SaveImageNode);
+	if (!fRenderList(GetNodebyID,-9002,0,SaveImageNode))
+	{
+		return FALSE; 
+	}
+
+	Global(SaveImageNode);
+
+	// To get the value of ExtraInfo
+
+	ExtraInfo = ~~;
+	if ( SaveImageNode(GetValue, ~ExtraInfo:~,y) )
+	{
+		ExtraInfo = ~<y>~;
+	}
+
+	Obj.SelectInitialInventoryName();
+
+	Obj.DisplayChoices();
+
+
+	return TRUE;
+}
+
+//??? add new help page here
+
+NUMERIC TemplateDlg::HelpRoutine()
+{
+	TheAction = ACTION ShowHelpPage ( KPISHelpFile "XMLJobInfo.htm" ); 
+	return PerformActions( TheAction );	
+}
+
+VOID	TemplateDlg::PopulateCatagories()
+{
+	//read the master list and get all the catagoies
+
+	xml( parser );
+	if ( !parser( load, ~<$App.ShareDirectory>\Scripts\XMLInfo\Master List Liberty DP2 products.xml~))
+	{
+		Warning(~File: "..Scripts\XMLInfo\Master List Liberty DP2 products.xml" is corrupt or missing~);
+		return;
+	}
+	NumberofNodes = Parser( SelectNodes,TheNodeList,~//@catagory_name~ );
+			
+	Log(Session,~PopulateCatories: NumberofNodes = <NumberofNodes>~);
+
+	if (<NumberofNodes> > 0)
+	{
+		i = -1;
+
+		len = fHTMLView( GetSelectOptionsLength,CatagoryListID,0 );
+		Log(Session,~PopulateCatagory: NumNodes = <NumNodes>, len = <len>~);
+		fHtmlView( SetSelectOptionsLength, CatagoryListID, 0,<len>+<NumberofNodes> );
+		while ( TheNodeList( GetNodeByIndex,ANode,<++i> )  )
+		{
+			if (ANode( GetNodeValue,TheValue ))
+			{
+				fHtmlView( SetSelectOptionFromSymbol,CatagoryListID,0,<i>,TheValue,TheValue );
+			}
+		}
+	}
+}
+
+/* not used anymore
+VOID	TemplateDlg::PopulateInventoryNames()
+{
+	//read the master list and get all the inventory names
+
+	xml( parser );
+	if ( !parser( load, ~<$App.ShareDirectory>\Scripts\XMLInfo\Master List Liberty DP2 products.xml~))
+	{
+		Warning(~File: "..Scripts\XMLInfo\Master List Liberty DP2 products.xml" is corrupt or missing~);
+		return;
+	}
+	NumberofNodes = Parser( SelectNodes,TheNodeList,~//@inventory_name~ );
+			
+	Log(Session,~PopulateInventoryNames: NumberofNodes = <NumberofNodes>~);
+
+	if (<NumberofNodes> > 0)
+	{
+		i = -1;
+		NumNodes = TheNodeList( GetLength );
+	
+		len = fHTMLView( GetSelectOptionsLength,InventoryNameListID,0 );
+		Log(Session,~PopulateInventoryNames: NumNodes = <NumNodes>, len = <len>~);
+		fHtmlView( SetSelectOptionsLength, InventoryNameListID, 0,<len>+<NumNodes> );
+
+		while ( TheNodeList( GetNodeByIndex,ANode,<++i> )  )
+		{
+			if ( ANode( GetNodeValue,TheValue ) )
+			{
+				Log(Session,~PopulateInventoryNames: TheValue = <TheValue>, i = <i>~);
+				fHtmlView( SetSelectOptionFromSymbol,InventoryNameListID,0,<i>,TheValue,TheValue );
+			}
+		}
+	}
+}
+*/
+
+VOID	TemplateDlg::DisplayInventoryChoicesForCatagory(CatagoryName)
+{
+	xml( parser );
+
+	if ( !parser( load, ~<$App.ShareDirectory>\Scripts\XMLInfo\Master List Liberty DP2 products.xml~))
+	{
+		Warning(~File: "..Scripts\XMLInfo\Master List Liberty DP2 products.xml" is corrupt or missing~);
+		return;
+	}
+
+	NumberofInventoryNames = Parser( SelectNodes,PartialInventoryList,~//catagory[@catagory_name ='<CatagoryName>']/product~ );
+	if ( <NumberofInventoryNames> )
+	{
+		i = -1;
+	
+		fHtmlView( SetSelectOptionsLength, InventoryNameListID, 0,<NumberofInventoryNames> );
+
+		while ( PartialInventoryList( GetNodeByIndex,ANode,<++i> )  )
+		{
+			ANode( GetAttributeNode, inventory_name, BNode); 
+			BNode( GetNodeText, InventoryName);
+
+			fHtmlView( SetSelectOptionFromSymbol,InventoryNameListID,0,<i>,InventoryName,InventoryName );
+		}
+	}
+
+}
+
+VOID	TemplateDlg::DisplayChoices()	
+{
+	fHtmlView( Get,InventoryNameListID, 0, value, InventoryName); //gets selected name in list
+
+	//have the desired inventory name, now look up and display choices under <UI>
+	xml( parser );
+
+	if ( !parser( load, ~<$App.ShareDirectory>\Scripts\XMLInfo\Master List Liberty DP2 products.xml~))
+	{
+		Warning(~File: "..Scripts\XMLInfo\Master List Liberty DP2 products.xml" is corrupt or missing~);
+		return;
+	}
+	found = Parser( SelectSingleNode,UINode,~//product[@inventory_name ='<InventoryName>']/UI~ );
+	if (<found>)
+	{
+		UINode( GetAttributeNode, UI_Text, UITextNode); //get the UI_Text for a general notes field above the controls
+		UITextNode( GetNodeValue, displayText);
+				
+		fHtmlView( SetInnerHTML, AllChoiceID, 0, ~
+			<br>
+			<label class="FormLabel">&nbsp;</label>
+			<span  class="" style="vertical-align:top;color:red;width:600" id="UITextID" ><displayText></span>	
+			~ );
+
+		NumberofControls = Parser( SelectNodes,UIControlList,~//product[@inventory_name ='<InventoryName>']/UI/Control~ );
+		if ( <NumberofControls> )
+		{ //if there are any controls, put them up in AllChoiceID Div
+			i=0;
+			while ( <i> < <NumberofControls> )
+			{ //put of different controls and add choices to list
+				UIControlList( GetNodeByIndex,ControlNode,<i> );
+				ControlNode( GetNodeName,TheChildNodeName );  //use this to get the text="" for list display name
+
+				ControlNode( GetAttributeNode, displayName, DisplayNode); //get the displayName for the list box
+				DisplayNode( GetNodeText, ControlTitle);
+		
+				//put up list
+				listNum = <i> + 1;
+				fHtmlView( InsertHTML, AllChoiceID, 0, beforeEnd,~
+				<br>
+				<br>
+				<label  class="FormLabel" style="vertical-align:top" id="Attr<listNum>LabelID" ><ControlTitle></label>
+				<select id="Attr<listNum>ListID"  style="vertical-align:top;width:auto;"  OnDblClick="" OnChange="KPL( 'Obj.SaveToOutputSpec(0,<listNum>, Attr<listNum>ListID)')" tabindex="-1" size = 1>
+				~ );
+
+
+				if ( ControlNode( HasChildNodes) )
+				{
+					ControlNode( GetAttributeNode, XMLtag, XMLtagNode); //get the XMLtag for the control
+					XMLtagNode( GetNodeText, XMLtagText);//save xml tag in this array for when we have to update keyword with new selection
+					Global(XMLtagAry<listNum>);
+					XMLtagAry<listNum> = <XMLtagText>;
+					ControlNode( GetChildNodes,choiceNodeList );
+					NumChoiceNodes = choiceNodeList( GetLength );
+					fHtmlView( SetSelectOptionsLength, Attr<listNum>ListID, 0,<NumChoiceNodes> );
+
+					x=0;
+					while ( <x> < <NumChoiceNodes> )
+					{ //put these into display for this list
+						choiceNodeList( GetNodeByIndex,ChildNode,<x> );
+						ChildNode( GetNodeName,TheChildNodeName );  // <choice>
+						ChildNode( GetNodeText,TheText ); //this is the choice to add to list 
+
+						fHtmlView( SetSelectOptionFromSymbol,Attr<listNum>ListID,0,<x>,TheText,TheText );
+						++x;
+					}
+
+					//now pick item in list to select - value from ExtraInfo xml, if not empty
+					if ( !(SimilarStr(~<ExtraInfo>~, ~~)) )
+					{
+						xml( parserExtraInfo );
+						if (!parserExtraInfo( LoadXML, ~<ExtraInfo>~))
+						{
+							Warning(~In Output Spec "ExtraInfo:" minor keyword data is corrupt~);
+							return;
+						}
+						found = parserExtraInfo( SelectSingleNode, TagNode, ~//product/<XMLtagText>~);
+						if (<found>)
+						{
+							TagNode( GetNodeText, TagNodeText); //text for this xml tag in ExtraInfo keyword
+
+							x=0;
+							while ( <x> < <NumChoiceNodes> )
+							{ //get these choices 
+								choiceNodeList( GetNodeByIndex,ChildNode,<x> );
+								ChildNode( GetNodeName,TheChildNodeName );  // <choice>
+								ChildNode( GetNodeText,TheText ); //this is a choice in list 
+
+								if (SimilarStr(~<TheText>~, ~<TagNodeText>~))
+								{ //found match, select choice for this control
+									fHTMLView( SetSelectedOptionByIndex,Attr<listNum>ListID,0,<x>);
+									x = <NumChoiceNodes>;
+								}
+								++x;
+							}
+							if ( <x> != <NumChoiceNodes> + 1)
+							{ 
+								fHtmlView( SetSelectedOptionByIndex, Attr<listNum>ListID, 0,0);//selects first choice
+		//??didn't find match, select first option in list and write to ExtraInfo keyword????
+							}	
+						} //if found
+					}
+					else
+					{ //ExtraInfo empty, just select first choice
+						fHtmlView( SetSelectedOptionByIndex, Attr<listNum>ListID, 0,0);//selects first choice
+					}
+				}
+				++i;
+			} //while number of controls
+		}
+	} //if(<found>)
+}
+
+VOID	TemplateDlg::SelectInitialInventoryName()	
+{  
+	// get the inventory name from the order item or product
+	// find the inventory name in InventoryNameListID
+	// select the inventory name in InventoryNameListID
+
+	if ( (SimilarStr(~<ExtraInfo>~, ~~)) )
+	{
+		//ExtraInfo keyword empty, select first item in list of catagories and first in corresponding inventory choices
+		fHTMLView( SetSelectedOptionByIndex,CatagoryListID,0,0);
+		fHtmlView( GetSelectOption,CatagoryListID, 0, 0, Text,Text);
+		DisplayInventoryChoicesForCatagory(~<Text>~);
+		fHTMLView( SetSelectedOptionByIndex,InventoryNameListID,0,0);
+		SaveToOutputSpec(1,~~,~~); //inventory name in keyword wasn't valid, save all info here into keyword
+		return;
+	}
+	else
+	{
+		xml( parser );
+		if (!parser( LoadXML, ~<ExtraInfo>~))
+		{
+			Warning(~In Output Spec "ExtraInfo:" minor keyword data is corrupt.~);
+			return;
+		}
+		found = parser( SelectSingleNode,ExtraInfoNode,~//product~ );	
+		found1 = parser( SelectSingleNode,ParentNode,~//product/..~ );
+
+		if ( !<found> )
+		{ //ExtraInfo keyword empty, select first item in list
+			fHTMLView( SetSelectedOptionByIndex,CatagoryListID,0,0);
+			fHtmlView( GetSelectOption,CatagoryListID, 0, 0, Text,Text);
+			
+			DisplayInventoryChoicesForCatagory(~<Text>~); //will fill in the InventoryNameList
+			fHTMLView( SetSelectedOptionByIndex,InventoryNameListID,0,0);
+
+			SaveToOutputSpec(1,~~,~~); //inventory name in keyword wasn't valid, save all info here into keyword
+		}
+		else
+		{ 
+			ExtraInfoNode( GetAttributeNode, inventory_name, InventoryNameNode); //get the inventory name for this product or order item
+			InventoryNameNode( GetNodeText, InventoryName);
+
+			sts = ParentNode( GetAttributeNode, catagory_name, BNode); 
+			if (  !<sts>   )
+			{ //no catagory, find in master list
+
+				//read the master list and get all the inventory names
+				xml( parser );
+				if ( !parser( load, ~<$App.ShareDirectory>\Scripts\XMLInfo\Master List Liberty DP2 products.xml~))
+				{
+					Warning(~File: "..Scripts\XMLInfo\Master List Liberty DP2 products.xml" is corrupt or missing~);
+					return;
+				}
+				NumberofNodes = Parser( SelectNodes,TheNodeList,~//@inventory_name~ );			
+				if (<NumberofNodes> > 0)
+				{
+					i = -1;	
+					while ( TheNodeList( GetNodeByIndex,ANode,<++i> )  )
+					{
+						if ( ANode( GetNodeValue,TheValue ) )
+						{ //see if this is the same inventory name
+							if (SimilarStr(~<TheValue>~, ~<InventoryName>~))
+							{ //get the parent (catagory)
+								found = parser( SelectSingleNode,ParentNode,~//product[@inventory_name ='<InventoryName>']/..~ );
+								ParentNode( GetAttributeNode, catagory_name, BNode); 
+								i = <NumberofNodes>;
+							}
+						}
+					}
+				}
+			}
+
+			BNode( GetNodeText, CatagoryName);
+		
+			//select catagory in list
+			i=0;
+			selectLength = fHtmlView(GetSelectOptionsLength,CatagoryListID,0);
+			while (<i> < <selectLength>)
+			{
+				fHtmlView( GetSelectOption,CatagoryListID, 0, <i>, Text,Text);
+				if (SimilarStr(~<Text>~, ~<CatagoryName>~))
+				{
+					fHTMLView( SetSelectedOptionByIndex,CatagoryListID,0,<i>);
+					i = <selectLength>;
+				}
+				++i;
+			}
+			if ( <i> != (<selectLength> + 1) )
+			{ //no match in list, just select the first item
+				fHTMLView( SetSelectedOptionByIndex,CatagoryListID,0,0);
+				fHtmlView( GetSelectOption,CatagoryListID, 0, 0, Text,Text);
+				
+				DisplayInventoryChoicesForCatagory(~<Text>~); //will fill in the InventoryNameList
+				fHTMLView( SetSelectedOptionByIndex,InventoryNameListID,0,0);
+
+				SaveToOutputSpec(1,~~,~~); //inventory name in keyword wasn't valid, save all info here into keyword
+			}
+
+			DisplayInventoryChoicesForCatagory(~<CatagoryName>~); //will fill in the InventoryNameList
+
+			i=0;
+			selectLength = fHtmlView(GetSelectOptionsLength,InventoryNameListID,0);
+			while (<i> < <selectLength>)
+			{
+				fHtmlView( GetSelectOption,InventoryNameListID, 0, <i>, Text,Text);
+				if (SimilarStr(~<Text>~, ~<InventoryName>~))
+				{
+					fHTMLView( SetSelectedOptionByIndex,InventoryNameListID,0,<i>);
+					i = <selectLength>;
+				}
+				++i;
+			}
+			if ( <i> != (<selectLength> + 1) )
+			{ //no match in list, just select the first item
+				fHTMLView( SetSelectedOptionByIndex,CatagoryListID,0,0);
+				fHtmlView( GetSelectOption,CatagoryListID, 0, 0, Text,Text);
+				
+				DisplayInventoryChoicesForCatagory(~<Text>~); //will fill in the InventoryNameList
+				fHTMLView( SetSelectedOptionByIndex,InventoryNameListID,0,0);
+
+				SaveToOutputSpec(1,~~,~~); //inventory name in keyword wasn't valid, save all info here into keyword
+			}
+		}
+	}
+}
+
+VOID TemplateDlg::SaveToOutputSpec(saveAllflag, listNum, attrID)
+{
+
+//Log(Session,~save to output spec, <saveAllflag>, <listNum>, <attrID>~);
+	if ( <saveAllflag> )
+	{	//save XML (everything but the <UI> tag) into ExtraInfo keyword in output spec
+		fHtmlView( Get,InventoryNameListID, 0, value, InventoryName); //gets selected name in list
+		fHtmlView( Get,CatagoryListID, 0, value, CatagoryName); //gets selected name in list
+		//have the desired inventory name, now get all the xml except <UI> to put in ExtraInfo
+		xml( parser );
+		if (!parser( load, ~<$App.ShareDirectory>\Scripts\XMLInfo\Master List Liberty DP2 products.xml~))
+		{
+			Warning(~File: "..Scripts\XMLInfo\Master List Liberty DP2 products.xml" is corrupt or missing~);
+			return;
+		}
+		
+		found = parser( SelectSingleNode,ParentNode,~//product[@inventory_name ='<InventoryName>']/..~ );
+		ParentNode( GetAttributeNode, catagory_name, BNode); 
+		BNode( GetNodeText, parent);
+			
+		found = parser( SelectSingleNode,Node,~//product[@inventory_name ='<InventoryName>']~ );
+		if (<found>)
+		{
+			//remove <UI> text, to keep ExtraInfo keyword shorter
+			found = parser( SelectSingleNode,UINode,~//catagory[@catagory_name = '<CatagoryName>']/product[@inventory_name ='<InventoryName>']/UI~ );
+			if ( <found> )
+			{
+				UINode(GetNodeText, nodetext);
+				UINode(SetNodeText, ~ ~);
+			}
+
+			nodeDPI = 300;
+			found = parser( SelectSingleNode,DPINode,~//catagory[@catagory_name = '<CatagoryName>']/product[@inventory_name ='<InventoryName>']/DPI~ );
+			if ( <found> )
+			{
+				DPINode(GetNodeText, nodeDPI);
+			}
+
+			Node(GetNodeXML, newXML); 
+			Log(Session,~SaveToOutputSpec: SaveImageNode = <SaveAddress>, ExtraInfo = <ExtraInfo>~);
+		
+			SaveImageNode(SetValue,~ExtraInfo:~,~<catagory catagory_name="<parent>"><$ContentsOf.newXML></catagory>~);
+			SaveImageNode(SetStatus,~ExtraInfo:~,12);
+			ExtraInfo = ~<catagory catagory_name="<parent>"><$ContentsOf.newXML></catagory>~;
+
+			if ( Numeric(~<nodeDPI>~) )
+			{
+				SaveImageNode( Set,~Xres:~,~<nodeDPI>~ );
+				SaveImageNode( SetStatus,~Xres:~,12 );
+			}
+		}
+		else 
+		{
+			//debug(1);
+		}
+	}
+	else
+	{ //only replace the XMLTagInfo
+
+		if ( !(SimilarStr(~<ExtraInfo>~, ~~)) )
+		{
+			xml( parser );
+			if (!parser( LoadXML, ~<ExtraInfo>~))
+			{
+				Warning(~In Output Spec "ExtraInfo:" minor keyword data is corrupt~);
+				return;
+			}
+
+			found = parser( SelectSingleNode,Node,~//product/<XMLtagAry<listNum>>~ );
+			if ( <found> )
+			{
+				fHtmlView( Get,<attrID>, 0, value, XMLValue); //get selection in dialog
+				XMLtag = ~<XMLtagAry<listNum>>~; //quantity, color....
+				Node(GetNodeText, nodetext);
+				Node(SetNodeTextFrom, XMLValue);
+
+				parser(GetXML, newXML);
+
+				SaveImageNode(SetValue,~ExtraInfo:~,~<$ContentsOf.newXML>~);
+				SaveImageNode(SetStatus,~ExtraInfo:~,12);
+				ExtraInfo = ~<$ContentsOf.newXML>~;
+
+			}
+		}
+		else
+		{ //extrainfo should never be empty here
+//			debug(1);
+		}
+	} //else only replace extrainfo tag
+}
+
+NUMERIC TemplateDlg::OnSelectInventoryName()
+{
+	fHtmlView( Get,InventoryNameListID, 0, value, InventoryName);
+	DisplayChoices();
+	SaveToOutputSpec(1,~~,~~); //new selection of inventory name, save all info in ExtraInfo keyword
+	return TRUE;
+}
+
+NUMERIC TemplateDlg::OnSelectCatagory()
+{
+	//debug(1);
+	fHtmlView( Get,CatagoryListID, 0, value, CatagoryName);
+	DisplayInventoryChoicesForCatagory(~<CatagoryName>~);
+	fHtmlView( Get,InventoryNameListID, 0, value, InventoryName);
+	DisplayChoices();
+	SaveToOutputSpec(1,~~,~~); //new selection of catagory, save all info in ExtraInfo keyword
+	return TRUE;
+}
+
+	//examples for reference
+/*			fHtmlView( InsertHTML, InventoryNameListID, 0, beforeEnd,~
+				<br>
+				<label  class="FormLabel" style="vertical-align:top" id="Attr<x>ListID" ><$tr.XMLJobInfoTranslation(InventoryName)></label>
+				<select id="Attr<x>ListID"  style="vertical-align:top;width:auto;"  OnDblClick="" OnChange="" tabindex="-1" size = 2> 
+	 			<option value="MousePad"> <$tr.XMLJobInfoTranslation(testMousePad)></option>
+ 				<option value="MousePad1"><$tr.XMLJobInfoTranslation(testMousePad1)></option>
+				<br />
+				~ );
+
+	fHtmlView(SetInnerHtml,AllChoiceID,0,~
+		<select id="AllChoiceID1"  style="vertical-align:top;width:auto;margin-left:-3"  OnDblClick="" OnChange="" tabindex="-1" size = 2>
+		<option value="MousePad"> <$tr.XMLJobInfoTranslation(testMousePad)></option>
+		<br>
+		~);
+			
+	DisplayName = ~choice attribute <x>~;
+	fHtmlView( InsertHTML, AllChoiceID, 0, beforeEnd,~
+			<br>
+			<input type=checkbox id="OverrideCheckBox<x>" style="vertical-align:top;height:22px" onclick=""> </input>  	
+			<label style= "font:  10pt" for="AttrInput<x>"> <DisplayName> </label>
+			<br />
+			~ );
+
+	fHtmlView( Get,InventoryNameListID, 0, value, InventoryName); //gets selected name in list
+
+*/
+

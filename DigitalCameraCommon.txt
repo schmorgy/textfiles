@@ -1,0 +1,339 @@
+
+// A method of logging an error in the session log, and at the same time popping up a message box if we're not running silently.
+NUMERIC DCFailure(RunSilent, msg )
+{
+	if ( ~<Msg>~ != ~~ )
+	{
+		Log( Session,~<$Job.Name> - Failed. <msg>~ );
+
+		if (!Numeric(~<RunSilent>~))
+		{
+			MessageBox(~<Msg>~);
+			Exit();
+		}
+	}
+
+	return FALSE;
+}
+
+// Queues the given Kodak Digital camera file (specified by order/roll/frame) to be processed. 
+// The caller also specifies the output folder path, the low resolution file filename (if appropriate) the input profile
+// path, the setup to be used (which in turn specifies the output file type, among other things), and a boolean
+// value (RunSilent) which specifies whether or not error messages should be reported to the GUI.
+// You want to run silently when, for example, you're queueing images through a commands script, since
+// that's not necessarily running attended.
+NUMERIC QueueDigitalFile(&dBase, OrderID, Roll, Frame, ImagePath, OutputFolderPath, LowResFileName, InputProfilePath, SetupName, RunSilent)
+{
+	Priority = ~QUEUE_FOR_LATER~;
+
+	PreviewImageSize = 0;		// Make it a full-sized image.
+
+	// First we need to get the selected Setup from the Workstation Settings
+	if (!IsNULL(~<SetupName>~))
+	{
+		// Now, for the setup, we need to get the file type and extension. 
+
+		Query = ~SELECT SaveFileType, FileExtension, JPEGQuality, EnableRawFileSharpening, OverrideDeltaSharpening, DeltaSharpeningValue, UseWorkingspaceProfile, AlternateOutputProfile FROM DigitalCameraSetups WHERE Setup = '<SetupName>' ~;
+
+		if (!dBase(GetValuesFor, ~<Query>~, SaveFileType, FileExtension, JPEGQuality, EnableRawFileSharpening, OverrideDeltaSharpening, DeltaSharpeningValue, UseWorkingspaceProfile, AlternateOutputProfile) )
+		{
+			SaveFileType = ~TIFF~;
+			FileExtension = ~.tif~;
+			JPEGQuality = 100;
+
+			EnableRawFileSharpening = 0;
+
+			OverrideDeltaSharpening = 0;
+			DeltaSharpeningValue = 0;
+
+			UseWorkingspaceProfile = 1;
+			AlternateOutputProfile = ~~;
+		}
+	} else
+	{
+			SaveFileType = ~TIFF~;
+			FileExtension = ~.tif~;
+			JPEGQuality = 100;
+
+			EnableRawFileSharpening = 0;
+
+			OverrideDeltaSharpening = 0;
+			DeltaSharpeningValue = 0;
+
+			UseWorkingspaceProfile = 1;
+			AlternateOutputProfile = ~~;
+	}
+
+	BatchID = UniqueBatchID();
+
+	FileName = ~<$Str.$ImagePath.FileName>~;
+
+	ImageName = ~<ImagePath>~;
+		
+	// If an image has been processed already and someone sets its status back to Unprocessed
+	// by hand, then there's a possibility that the Path field will be the name of an output file,
+	// rather than an output folder. This will hopefully detect that happening and adjust accordingly.
+	if (~<OutputFolderPath>~ == ~~)
+	{
+		Log(Session, ~The image '<ImageName>' has no output folder specified. Please fill in the Path field as appropriate and try again.~);
+		return FALSE;
+	} else if (Files(DirectoryExists, ~<OutputFolderPath>~))
+	{
+		OutputFileName = ~<OutputFolderPath>\<$Str.$ImageName.FileName.WithoutExt><fileExtension>~;
+	} else if (~<$Str.$OutputFolderPath.ext>~ != ~~)
+	{
+		if (Files(DirectoryExists, ~<$Str.$OutputFolderPath.Path>~))
+		{
+			OutputFileName = ~<$Str.$OutputFolderPath.Path>\<$Str.$ImageName.FileName.WithoutExt><fileExtension>~;
+		} else
+		{
+			// We do not have a valid folder to put the output image, so error out of here.
+			Log(Session, ~The output folder '<$Str.$OutputFolderPath.Path>' is not a valid destination. Please fill in the Path field as appropriate and try again.~);
+			DCFailure(<RunSilent>, Translate( ~There was an error while importing. See the session log for more information.~ ) );
+			error();
+		}
+	} else
+	{
+		if (Files(DirectoryExists, ~<OutputFolderPath>~))
+		{
+
+			OutputFileName = ~<OutputFolderPath>\<$Str.$ImageName.FileName.WithoutExt><fileExtension>~;
+		} else
+		{
+			// We do not have a valid folder to put the output image, so error out of here.
+			Log(Session, ~The output folder '<OutputFolderPath>' is not a valid destination. Please fill in the Path field as appropriate and try again.~);
+			DCFailure(<RunSilent>, Translate( ~There was an error while importing commands. See the session log for more information.~ ) );
+			error();
+		}
+	}
+
+	// Now time for a sanity check!! If the input file name == output file name, as could happen
+	// if we didn't specify a different output folder for TIFF or JPEG images, then we should
+	// stop processing right now!
+	if (~<$Str.$OutputFileName.upper>~ == ~<$Str.$ImageName.upper>~)
+	{
+		Log(Session, ~The input file name is the same as the output file name. Please change the Path field for this image in the Images table and try again.~);
+		return FALSE;
+	}
+
+	// If the output file already exists and can not be removed, notify the user about this and
+	// don't queue the file.
+	if ( Files( FileExists,~<OutputFileName>~ ) )
+	{
+		if ( !Files( Delete, ~<OutputFileName>~ ) )
+		{
+			DCFailure(<RunSilent>, Translate( ~Output file <OutputFileName> already exists and can not be deleted! Please delete the file and try converting it again.~ ) );
+			return FALSE;
+		}
+	}
+
+	WorkingSpaceProfName = ~srgb~;	// The default
+
+	// If we're not using DP2's Working Space Profile, then set WorkingSpaceProfName to the given profile (AlternateOutputProfile).
+	// If AlternateOutputProfile turns out to be empty, then the default set above (srgb) will be used. If we're using DP2's Working
+	// Space Profile, then get it.
+	if (!Numeric(~<UseWorkingspaceProfile>~))
+	{
+		if (!IsNULL(~<AlternateOutputProfile>~))
+		{
+			WorkingSpaceProfName = ~<AlternateOutputProfile>~;
+		}
+	} else
+	{
+		WorkingSpaceProfName = GetWorkingSpaceProfile(dBase);
+	}
+
+	Computer = ~<$App.ComputerName>~;
+
+	bLoadImageAttributes = FALSE;
+
+	if (GetSystemSettings( ~DigitalCamera~, ~LoadImageDescription~, LoadImageDescription, Enabled ) )
+	{
+		if ( Numeric(~<LoadImageDescription>~) )
+		{
+			bLoadImageAttributes = TRUE;
+
+			if (!GetSystemSettings( ~DigitalCamera~, ~ImageDescriptionField~, ImageDescriptionField, Enabled ) )
+			{
+				// If this fails, then we're not gonna do it, because we won't know where to put the information!
+				bLoadImageAttributes = FALSE;
+
+				Log(Session, ~Unable to determine the Image Description destination field, so we won't retrieve the Image Description at this time.~);
+			} else
+			{
+				Query = ~Select <ImageDescriptionField> From Images~;	// WILL BE A QUERY THAT RETURNS NO RECORDS
+				TruncationLength = -1;
+
+				if ( PGenConList( List,Connection,dBase,Cursor,Forward,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+				{
+					Index = -1;
+					Tab = Chr(9);
+
+					while ( List( FieldInfo,<++Index>,Name,FieldName,Length,FieldLength,Type,FieldType ) )
+					{
+						FieldName = FormatString( ~<FieldName>~,~%-31s~ );
+						FieldName = String( TrimLeftRight,~<FieldName>~ );
+						if ( SimilarStr(~<FieldName>~, ~<ImageDescriptionField>~) )
+						{
+							TruncationLength = <FieldLength>;
+						}
+					}
+				}
+
+				if (<TruncationLength> == -1)
+				{
+					// The field we got was invalid! So, forget about loading the descriptions!
+					LoadImageDescription = FALSE;
+					bLoadImageAttributes = FALSE;
+
+					Log(Session, ~An invalid Image Description destination field was specified.~);
+				}
+			}
+		}
+	}
+
+	if (<bLoadImageAttributes>)
+	{
+		if (!DigitalCamera(MyBackgroundCamera, CreatePictureProcessor))
+		{
+			Log(Session, ~There was an error creating the PICIO processor to check the image description~);
+		}
+
+		ImageDescription = ~~;
+
+		if (MyBackgroundCamera(SetAttributeValue, MyBackgroundCamera(KVTPICPROCSrcPicPathID), ~<ImageName>~))
+		{
+			if (MyBackgroundCamera(CapabilitySupported, MyBackgroundCamera(KVTPICPROCImageDescStringID)))
+			{
+				if (!MyBackgroundCamera(GetAttributeValue, MyBackgroundCamera(KVTPICPROCImageDescStringID), ImageDescription))
+				{
+					Log(Session, ~There was an error getting the Image Description!~ );
+				}
+
+				substr(~<ImageDescription>~, 0, <TruncationLength>, ImageDescription);
+			}
+		}
+
+		if (!MyBackgroundCamera(SetAttributeValue, MyBackgroundCamera(KVTPICPROCSrcPicPathID), ~c:\~))
+		{
+//			Log(Session, ~There was an error releasing the image when getting the image description!~ );
+		}
+	}
+
+
+	// Remove any old queued requests before inserting the new one, just so that we don't conflict on the
+	// primary key and cause an error.
+	SQLDelete = ~DELETE FROM DCQueue WHERE (OrderID='<OrderID>' AND Roll='<Roll>' AND Frame='<Frame>' AND Computer='<Computer>')~;
+	dBase(Cmd, ~<SQLDelete>~);	// OK if this fails
+
+ 	Parameters = ~OrderID, Roll, Frame, BatchID, OutputTypeID, JPEGQualityID, MaxOutputDimensionID, SrcPicPathID, OutputPicPathID, LowResPicPathID, ~;
+	Parameters = ~<Parameters>~ + ~Priority, Computer, InputProfPathID, WorkingSpaceProfName, EnableRawFileSharpening, ~;
+	Parameters = ~<Parameters>~ + ~OverrideDeltaSharpening, DeltaSharpeningValue~;
+
+	Values = ~'<OrderID>', '<Roll>', '<Frame>', '<BatchID>', '<SaveFileType>', <JPEGQuality>, <PreviewImageSize>,'<ImageName>','<OutputFileName>','<LowResFileName>',~;
+	Values = ~<Values>~ + ~'<Priority>','<Computer>','<InputProfilePath>','<WorkingSpaceProfName>', <EnableRawFileSharpening>, ~;
+	Values = ~<Values>~ + ~<OverrideDeltaSharpening>, <DeltaSharpeningValue>~;
+
+	SQLCommand = ~Insert Into DCQueue(<Parameters>) Values(<Values>)~;
+
+	if (!dBase(Cmd, ~<SQLCommand>~))
+	{
+		dbase(GetErrorDescription, theErr);
+		DCFailure(<RunSilent>, Translate(~Database update failed <SQLCommand>. <theErr>~));
+		return FALSE;
+	}
+
+	// Update the path and turn off Processed flag.
+	if ( !dBase( Cmd,~UPDATE RawImages SET Processed = 1 WHERE OrderID = '<OrderID>' AND Roll = '<Roll>' AND Frame = '<Frame>' AND ImageType = 0~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		DCFailure(<RunSilent>, ~Error Updating the shared database: <theErr>~);
+		Exit();
+
+		OnErrorRollback(dBase, ~<OrderID>~, ~<Roll>~, ~<Frame>~);
+	}
+
+	if (<bLoadImageAttributes>)
+	{
+		SQLQuery = ~UPDATE Images SET Reprocess = 1, Reconverting = 1, <ImageDescriptionField>='<ImageDescription>' WHERE OrderID = '<OrderID>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+	} else
+	{
+		SQLQuery = ~UPDATE Images SET Reprocess = 1, Reconverting = 1 WHERE OrderID = '<OrderID>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+	}
+
+	if ( !dBase( Cmd, ~<SQLQuery>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		DCFailure(<RunSilent>, ~Error Updating the shared database: <theErr>~ );
+		Exit();
+
+		OnErrorRollback(dBase, ~<OrderID>~, ~<Roll>~, ~<Frame>~);
+	}
+
+	Log( Session, ~Auto-Queued image '<ImageName>' with Output Type: '<SaveFileType>' Output Path: '<OutputFileName>' JPEG Quality = '<JPEGQuality>'~);
+
+	return TRUE;
+}
+
+
+
+STR GetWorkingSpaceProfile( &dBase )
+{
+	// Use the current DP2 working space profile if it's set
+	Query = ~SELECT WorkingSpaceProfile FROM ViewProfiles WHERE ComputerName = '<$app.ComputerName>' AND UserName = '<$app.UserName>'~;
+
+	if (!dBase(GetValuesFor, ~<Query>~, WorkingSpaceProfile) )
+	{
+		Log(Session, ~Unable to ID DP2's Working Space Profile. Instead using 'SRGB'~);
+		WorkingSpaceProfile = ~~;
+	} else
+	{
+		WorkingSpaceProfile = ~<WorkingSpaceProfile>~;
+	}
+
+	// If DP2 didn't have a default working space profile setting, then we use SRGB 
+	// for processing.
+	if ( (~<WorkingSpaceProfile>~ == ~None~) || (~<WorkingSpaceProfile>~ == ~~) )
+	{
+		WorkingSpaceProfile = ~srgb~;
+	}
+
+	return ~<WorkingSpaceProfile>~;
+}
+
+
+/********************************************************************************************/
+STR FormattedBatchID( Value )
+{
+	return ~<Value>~;
+}
+
+
+/********************************************************************************************/
+STR UniqueBatchID()		// Unique BatchID From the DCQueue Table
+{
+	if ( !ADO( uniqueDB,Connect ) )
+	{
+		uniqueDB( GetErrorDescription,theErr );
+		Log( Session,~Error connecting to the shared database: <theErr>~ );
+
+		ID = FormattedBatchID( UniqueID( ~B~,10 ) );
+
+		return ~<ID>~;
+	}
+
+	while ( TRUE )
+	{
+		GenerateUniqueID( OrderBatchID, UniqueOrderBatchID );
+
+		ID = FormattedBatchID( ~<UniqueOrderBatchID>~ );
+
+		Query = ~Select OrderID From DCQueue where BatchID = '<ID>'~;
+
+		if ( !uniqueDB( RecordCountFor, ~<Query>~ ) )
+			break;
+	}
+
+	return ~<ID>~;
+}
+

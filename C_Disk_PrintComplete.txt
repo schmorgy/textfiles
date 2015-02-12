@@ -1,0 +1,4294 @@
+//	C_JDF_PrintComplete.txt
+//
+//	VERSION 3.0 ADDED THE ABILITY TO CREATE PDF FILES FROM SCRATCH
+//				AND TO RESTORE IMAGES INTO AN EXISTING PDF FILE. IT
+//				WILL ALSO READ A TEMPLATE JDF FILE AND DUPLICATE AND
+//				UPDATE IT WITH SUBSTRATE, GLOSS, QUANTITY, AND URL.
+//	VERSION 3.01 ADDED THE ABILITY TO CHECK FOR THE "ForcePDFOutput"
+//				FLAG IN THE PRINT QUEUE.  THIS WILL CAUSE ALL THE JOBS
+//				OF AN ORDER TO BE PLACED IN A SINGLE PDF FILE.
+//	VERSION 3.10 ADDED THE ABILITY TO HANDLE
+//				NEXPRESS DRYINK DIMENSIONAL CLEAR.
+//	VERSION 3.20 ADDED THE ABILITY TO HANDLE
+//				NEXPRESS SCREEN TEXTURES (Lustre Photo 60, Linen 80, Linen 35,
+//										  Mesh 50, Mesh 70, Pebble 50, Smooth 110)
+//	Version 3.30 ADDED THE ABILITY TO FEED THE CREO FRONT END USING
+//				THE CREO COLOR SERVER JOB TICKET PROGRAM.
+//
+
+ExecC() ;
+
+char	*NULL ;
+int		 FALSE	= 0 ;
+int		 TRUE	= ! FALSE ;
+
+UGenCon	*gPrinterSetup	= NULL ;
+UGenCon	*gStatusGC		= NULL ;
+UGenCon	*gRELookAhead	= NULL ;
+UGenCon	*gCompletePrint = NULL ;
+long	 gLogAmount		= 0L ;
+
+UGenCon	*gOrderGC ;
+UGenCon *gPageGC ;
+
+//	PARSE XML STUFF
+char	gFSM[1536] ;	//	12 * 128 = 1536  THE FINITE STATE MACHINE
+
+int		Question	= 0x3F ;
+int		Quote		= 0x22 ;
+int		Bang		= 0x21 ;
+int		GreaterThan	= 0x3E ;
+int		LessThan	= 0x3C ;
+int		Blank		= 0x20 ;
+int		Equal		= 0x3D ;
+int		Slash		= 0x2F ;
+int		Space		= 0x20 ;
+
+
+
+int main()
+{
+	gRELookAhead = GetTreeObject(_T("RELookAhead"),_T("[GenCons]")) ;
+	gLogAmount	= gRELookAhead->GetLongValue(_T("RELogLevel")) ;
+	return( TRUE ) ;
+}
+
+
+int Advertize()
+{
+	SessionLogDirect( _T("C_Disk_PrintComplete.Advertize: (V3.30 PDF & JDF)")) ;
+	return( TRUE ) ;
+}
+
+
+int Init( UGenCon *fSOrder, UGenCon *CompletePrint )
+{
+	TCHAR	CmdPath[2048] ;
+	TCHAR	TmpPath[2048] ;
+	TCHAR	*Center = _T("FALSE");
+	TCHAR	*IDPunch = _T("FALSE");
+	TCHAR	 TextMsg[2048] ;
+	long	 Code = 0L ;
+	long	 ErrorType = 0L ;
+	
+	int		isDirectory ;
+	int		Count = 0L ;
+	int		Result = FALSE ;
+	
+//	SessionLogDirect( _T("C_Disk_PrintComplete.Init: CompletePrint(1): 0x%08lX"), CompletePrint ) ;
+
+	if( gLogAmount >= 7 )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete: fSOrder: 0x%08lX, CompletePrint1: 0x%08lX"),
+					fSOrder, CompletePrint ) ;
+	}
+	
+	gCompletePrint	= CompletePrint ;
+	gOrderGC		= fSOrder ;
+
+	gStatusGC		= fSOrder->GetLongValue(_T("StatusGC")) ;
+
+	gPrinterSetup	= fSOrder->GetLongValue(_T("PrinterSetup")) ;
+	TCHAR	*ResponseFolder	= gPrinterSetup->GetStringValue(_T("ResponseFolder")) ;
+
+	long	 PageID		= CompletePrint->GetLongValue(_T("JobID")) ;
+	
+	long	 PrintNumber = CompletePrint->GetLongValue(_T("PrintNumber")) ;
+
+	if( gLogAmount >= 2 )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.Init: P%09ld, PrintNumber: %ld"), PageID, PrintNumber ) ;
+	}
+
+	sprintf( TmpPath, _T("%s\\P%09ld"), ResponseFolder, PageID ) ;
+
+	strcpy( CmdPath, TmpPath ) ;
+	strcat( CmdPath, _T(".rsp")) ;
+	while( FileOrDirectoryExists( CmdPath, &isDirectory ))
+	{
+		Count++ ;
+		sprintf( CmdPath, _T("%s_%d.rsp"), TmpPath, Count ) ;
+	}
+
+	if( gLogAmount >= 5 )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete: PageID: P%09ld, RspPath: \"%s\""), PageID, CmdPath ) ;
+	}
+
+	TCHAR	*ImagePath	= CompletePrint->GetStringValue(_T("ImagePath")) ;
+
+	if( ImagePath == NULL )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.Init: No ImagePath for PageID: %ld"), PageID ) ;
+		DumpPage( CompletePrint ) ;
+		return( FALSE ) ;
+	}
+	
+//	SessionLogDirect( _T("C_Disk_PrintComplete.Init: CompletePrint(2): 0x%08lX"), CompletePrint ) ;
+
+
+	//	IF THE USER WANTS TO FORCE ALL THE PAGES FROM THIS ORDER INTO A SINGLE 
+	//	PDF FILE THEN DO NOT CALL HandlePDFFile HERE.
+	//	WE WILL MAKE THE PDF FILE IN THE BUILT-IN ORDER COMPLETE SCRIPT.
+	long	ForcePDFOutput = gPrinterSetup->GetLongValue( _T("ForcePDFOutput")) ;
+	
+	//	IF WE ARE RESTORING A PDF, THEN WE CANNOT FORCE PDF OUTPUT
+	TCHAR *PDFSourceFile = CompletePrint->GetStringValue( _T("PDFSourceFile")) ;
+	int	RestoringPDF = FALSE ;
+	if( PDFSourceFile )
+	{
+		if( *PDFSourceFile )
+		{
+			RestoringPDF = TRUE ;
+		}
+	}
+	
+	if( RestoringPDF && ForcePDFOutput )
+	{
+		sprintf( TextMsg, 
+					_T("MSG: \"Cannot ForcePDFOutput and Restore a PDF simultaneously. OrderID: %s\"."),
+					fSOrder->GetStringValue( _T("OrderID")) ) ;
+		Code = 201L ;
+	}
+
+//=============================================================================	
+	SaveSlugText( fSOrder, CompletePrint ) ;
+//=============================================================================	
+	
+	if( ForcePDFOutput == 0 || RestoringPDF )
+	{
+		//	AT THIS POINT, WE HAVE RENDERED THIS PAGE AND not WRITTEN THE RESPONSE FILE.
+		//	LET'S SEE IF THE USER WANTED A PDF FILE.
+		//	MOVING THIS HERE (FROM BELOW) SEEMS TO HAVE FIXED THE "PAGE LEFT BEHIND" PROBLEM.
+		Result = HandlePDFFile( fSOrder, CompletePrint ) ;
+	}
+	
+//=============================================================================	
+//	HANDLE ANIMOTO BOOK
+	UGenCon *aBookErrorGC = new UGenCon( GetDataDictionary( _T("DDText"))) ;
+	HandleBookComplete( fSOrder, CompletePrint, aBookErrorGC ) ;
+	TCHAR	*BookErrorText = aBookErrorGC->GetStringValue( _T("Text")) ;
+	if( aBookErrorGC->GetStringValue( _T("Text")))
+	{
+		Code = 202L ;
+		sprintf( TextMsg, 
+					_T("MSG: \"Cannot Create Book for OrderID: %s: \r\n%s\"."),
+					fSOrder->GetStringValue( _T("OrderID")), aBookErrorGC->GetStringValue( _T("Text")) ) ;
+		ErrorType = 7 ;
+	}
+	delete aBookErrorGC ;
+//=============================================================================	
+
+//	SessionLogDirect( _T("C_Disk_PrintComplete.Init: CompletePrint(3): 0x%08lX"), CompletePrint ) ;
+
+	//	CHECK FOR ERRORS DURING THE RENDER...
+	UList	*ErrorList  = CompletePrint->GetLongValue(_T("RenderErrorList")) ;
+	if( ErrorList )
+	{
+		Code				= 101L ;
+		UGenCon	*ErrorGC	= (UGenCon *) ErrorList->GetAt(0) ;
+		TCHAR	*ErrorText	= ErrorGC->GetStringValue(_T("Text")) ;
+		
+		if( strstr( ErrorText, _T("Could not write")) == NULL )
+		{
+			sprintf( TextMsg, _T("MSG: \"Error writing image %s to disk\nbecause %s\"\n"), ImagePath, ErrorText ) ;
+		}
+		else
+		{
+			sprintf( TextMsg, _T("MSG: \"%s\"\n"), ErrorText ) ;
+		}
+	}
+	else if( Code == 0 )
+	{
+		sprintf( TextMsg, _T("MSG: \"Success writing image: %s to disk.\"\n"), ImagePath ) ;
+	}
+	
+
+	//	WE DO NOT WANT TO WRITE THE RESPONSE FILE IF "DiskWriteResponse" IS FALSE AND THERE WERE NO ERRORS.
+	long	WriteResponse = gPrinterSetup->GetLongValue(_T("DiskWriteResponse")) ;
+	if( WriteResponse == FALSE && ErrorList == NULL )
+	{
+		return( TRUE ) ;
+	}
+	
+	TCHAR	*CmdText	= malloc( 100 * 1024 ) ;
+	if( CmdText )
+	{
+		TCHAR	theDate[64] ;			
+		GetTimeNow(theDate,  _T("%m/%d/%y %H:%M:%S")) ;
+
+		CmdText[0] = 0x00 ;
+
+		strcpy( CmdText, _T("\nTYPE: Response\n")) ;
+		AddLongLine( CmdText, _T("PAGE_ID: %ld\n"), PageID ) ;
+		AddLongLine( CmdText, _T("CODE: %ld\n"), Code ) ;
+		if( ErrorType )
+		{
+			AddLongLine( CmdText, _T("Error_Type: %ld"), ErrorType ) ;
+		}
+		AddTextLine( CmdText, _T("DATE_TIME: %s\n"), theDate ) ;
+		AddTextLine( CmdText, _T("%s"), TextMsg ) ;
+
+		if( gLogAmount >= 7 )
+		{
+			SessionLogDirect( _T("C_Disk_PrintComplete:\n%s"), CmdText ) ;
+		}
+
+		char	*fp = fopen( CmdPath, _T("wb")) ;
+		if( fp )
+		{
+			TCHAR	IOBuff[10] ;
+			IOBuff[0] = 0xFEFF ;
+			IOBuff[1] = 0x0000 ;
+			WriteUnicodeFile( fp, IOBuff ) ;
+			WriteUnicodeFile( fp, CmdText ) ;
+
+			fclose( fp ) ;
+		}
+		else
+		{
+			SessionLogDirect( _T("C_Disk_PrintComplete.Init: Could not create \"%s\"."), CmdPath ) ;
+		}
+
+		CompletePrint->SetLongValue(_T("CommandSent"), 1L ) ;
+
+//		CompletePrint->Dump(_T("C_Disk_PrintComplete: After Response Sent")) ;
+
+		free( CmdText ) ;
+
+		//	INCREMENT THE NUMBER OF JOBS AT THE PRINTER
+		long	NumPrinterJobs = gStatusGC->GetLongValue(_T("NumPrinterJobs")) + 1L ;
+		gStatusGC->SetLongValue( _T("NumPrinterJobs"), NumPrinterJobs ) ;
+
+		if( gLogAmount >= 2 )
+		{
+			SessionLogDirect( _T("C_Disk_PrintComplete.Init: NumPrinterJobs %ld."), NumPrinterJobs ) ;
+		}
+	}
+
+	if( ErrorList )		{ return( FALSE ) ; }
+	
+	return( TRUE ) ;
+}
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+HandleBookComplete( UGenCon *fSOrder, UGenCon *CompletePrint, UGenCon *aBookErrorGC )
+{
+	if( CompletePrint )
+	{
+		long	ProductPageSeqCurrent	= CompletePrint->GetLongValue( _T("ProductPageSeqCurrent")) ;
+		long	ProductPageSeqLast		= CompletePrint->GetLongValue( _T("ProductPageSeqLast")) ;
+		
+//		SessionLogDirect( _T("C_Disk_PrintComplete.HandleBookComplete: Page %ld of %ld"), ProductPageSeqCurrent, ProductPageSeqLast ) ;
+
+		if( ProductPageSeqCurrent == 0 && ProductPageSeqLast == 0 )
+			{ return ; }	//	WE DON'T HAVE A BOOK
+			
+		if( ProductPageSeqCurrent < ProductPageSeqLast )
+			{ return ; }	//	WE DON'T HAVE A COMPLETE BOOK YET
+
+		long	IsAnimoto = CompletePrint->GetLongValue( _T("IsAnimoto")) ;
+		
+		SessionLogDirect( _T("C_Disk_PrintComplete.HandleBookComplete: PageID: %s\tIsAnimoto: %ld"),
+						CompletePrint->GetStringValue( _T("PageID")), IsAnimoto ) ;
+							
+		UList	*BookPages = GetBookPages( CompletePrint ) ;
+		if( BookPages == NULL )		{ return ; }
+		
+		DumpBookPages( BookPages ) ;
+		
+		TCHAR	FuncCall[512] ;
+		sprintf( FuncCall, _T("Init( 0x%08lX, 0x%08lX, 0x%08lX, 0);"), CompletePrint->GetParent(), BookPages, aBookErrorGC ) ;
+
+		if( IsAnimoto )
+		{
+			CallKPLScript( _T("AnimotoBookComplete.txt"), FuncCall ) ;
+		}
+		else
+		{
+			CallKPLScript( _T("BookComplete.txt"), FuncCall ) ;
+		}
+		
+//		aBookErrorGC->SetAttrValue( _T("Text"), _T("Test Error Message.")) ;
+		
+		BookPages->RemoveAll() ;
+		delete BookPages ;
+	}
+}
+
+UList *GetBookPages( UGenCon *thePage )
+{
+	UGenCon	*theOrder	= thePage->GetParent() ;
+	UList	*thePages	= theOrder->GetChildren() ;
+	UGenCon	*aPage		= NULL ;
+	
+	long	 NumPages	= thePages->GetNumEntries() ;
+	long	 PageNum ;
+	
+	for( PageNum = 0 ; PageNum < NumPages ; PageNum++ )
+	{
+		aPage = thePages->GetAt( PageNum ) ;
+		if( aPage == thePage )
+		{
+			break ;
+		}
+	}
+	
+	long	 ProductPageSeqCurrent ;
+	long	 PageLocation = PageNum ;
+	
+	UList	*BookPages = new UList ;
+	
+	for( PageNum = PageLocation ; PageNum >= 0 ; PageNum-- )
+	{
+		aPage = thePages->GetAt( PageNum ) ;
+		ProductPageSeqCurrent	= aPage->GetLongValue( _T("ProductPageSeqCurrent")) ;
+		if( ProductPageSeqCurrent <= 1 )	{ break ; }
+		BookPages->InsertFront( aPage ) ;
+	}
+	
+	BookPages->InsertFront( aPage ) ;
+	return( BookPages ) ;
+}
+
+
+void DumpBookPages( UList *BookPages )
+{
+	UGenCon *aPage ;
+	UList	*AttrValuePairs ;
+	long	 ProductPageSeqCurrent ;
+	long	 ProductPageSeqLast ;
+	
+	long	 NumPages = BookPages->GetNumEntries() ;
+	long	 PageNum ;
+	
+	for( PageNum = 0 ; PageNum < NumPages ; PageNum++ )
+	{
+		aPage = BookPages->GetAt( PageNum ) ;
+		SessionLogDirect( _T("C_Disk_PrintComplete:.DumpBookPages: PageID: \"%s\"  Page: %ld of %ld  Path: \"%s\"."),
+					aPage->GetStringValue( _T("PageID")), 
+					aPage->GetLongValue( _T("ProductPageSeqCurrent")),
+					aPage->GetLongValue( _T("ProductPageSeqLast")),
+					aPage->GetStringValue( _T("ImagePath"))) ;
+					
+		AttrValuePairs = aPage->GetLongValue( _T("RenderListData")) ;
+		// DumpSavedRLData( AttrValuePairs, 0 ) ;
+	}
+}
+
+
+void DumpSavedRLData( UList *theList, int Level )
+{
+	if( theList )
+	{
+		TCHAR	Spaces[256] ;
+		int		LevelNum = Level ;
+		long	NumEntries = theList->GetNumEntries() ;
+		long	EntryNum ;
+		
+		SessionLogDirect( _T("C_Disk_PrintComplete: DumpSavedRLData: NumEntries: %ld"), NumEntries ) ;
+		for( EntryNum = 0 ; EntryNum < NumEntries ; EntryNum++ )
+		{
+			UGenCon *aGC = (UGenCon *) theList->GetAt( EntryNum ) ;
+			DebugGenCon( aGC ) ;
+		}
+	}
+}
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+
+
+
+
+//	IF THE USER REQUESTED A PDF FILE, AND THIS IS THE LAST PAGE
+//	OF A GROUP, THEN EITHER RESTORE THE IMAGES TO AN EXISTING
+//	PDF FILE OR CREATE THE PDF FILE FROM SCRATCH.
+int HandlePDFFile( UGenCon *theOrder, UGenCon *thePage )
+{
+	TCHAR	*FileFormat = thePage->GetStringValue( _T("FileFormat")) ;
+	
+//	SessionLogDirect( _T("C_Disk_PrintComplete.HandlePDF: FileFormat: 0x%08lX, \"%s\"."), FileFormat, FileFormat ) ;
+
+	if( FileFormat == NULL )						{ return( TRUE ) ; }
+	
+	if( stricmp( FileFormat, _T("PDF")) != 0 )		{ return( TRUE ) ; }
+
+	//	AT THIS POINT WE KNOW WE WANT A PDF FILE.
+	//	DO WE NEED TO CREATE ONE FROM SCRATCH OR ARE WE RESTORING IMAGES TO AN EXISTING PDF FILE ?
+
+	TCHAR *PDFSourceFile = thePage->GetStringValue( _T("PDFSourceFile")) ;
+	if( gLogAmount >= 2 )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.HandlePDFFile: PDFSourceFile: \"%s\"."), PDFSourceFile ) ;
+	}
+
+	long	ProductPageSeqCurrent	= thePage->GetLongValue( _T("ProductPageSeqCurrent")) ;
+	long	ProductPageSeqLast		= thePage->GetLongValue( _T("ProductPageSeqLast")) ;
+	
+//	SessionLogDirect( _T("C_Disk_PrintComplete.HandlePDFFile: Page %ld or %ld"), ProductPageSeqCurrent, ProductPageSeqLast ) ;
+
+	if( TRUE ) // ProductPageSeqLast > 0 )	//	ALLOW A SINGLE PAGE PDF WITHOUT SETTING UP A BOOK !
+	{
+		if( ProductPageSeqCurrent < ProductPageSeqLast )
+			{ return( TRUE ) ; }	//	NOT READY TO CREATE THE PDF FILE YET
+
+		if( PDFSourceFile == NULL )	//	WE ARE CREATING A PDF FILE FROM SCRATCH
+		{
+			return( CreateNewPDFFile( theOrder, thePage )) ;
+		}
+		else						//	WE ARE RESTORING IMAGES IN AN EXISTING PDF FILE
+		{
+			return( RestoreExistingPDFFile( theOrder, thePage )) ;
+		}
+	}
+
+	SessionLogDirect( _T("C_Disk_PrintComplete.HandlePDFFile: ERROR: No Pages available to update PDF file.") ) ;
+	SessionLogDirect( _T("C_Disk_PrintComplete.HandlePDFFile: ERROR: Were Order Item Pages contained within a book?") ) ;
+
+	return( FALSE ) ;
+}
+
+//	TO CREATE A PDF FILE FROM SCRATCH...
+//	CALL:
+//		UList *ObjectList = CreatePDFHeader( PPI ) ;
+//			REPEAT NEXT LINE FOR EACH PAGE
+//		CreatePage( FilePath, SpotColorFilePath, Qty ) ;
+//		WritePDFFile( OutputFilePath ) ;
+//
+
+
+int CreateNewPDFFile( UGenCon *theOrder, UGenCon *thePage )
+{
+	gOrderGC	= theOrder ;
+	gPageGC		= thePage ;
+	
+	
+//	thePage->Dump(_T("C_Disk_PrintComplete.CreateNewPDFFile: the Final Page")) ;
+	
+	long	GroupID					= thePage->GetLongValue( _T("GroupID")) ;
+	long	GroupQty				= thePage->GetLongValue( _T("GroupQty")) ;
+	long	ProductPageSeqCurrent	= thePage->GetLongValue( _T("ProductPageSeqCurrent")) ;
+	long	ProductPageSeqLast		= thePage->GetLongValue( _T("ProductPageSeqLast")) ;
+	double	PPI						= thePage->GetDoubleValue( _T("PPI")) ;
+	TCHAR	*InkName				= thePage->GetStringValue( _T("Inkname")) ;
+	double	Bleed					= thePage->GetDoubleValue( _T("SpillOver")) ;
+	long	Quantity				= 0L ;
+	int		isDirectory				= FALSE ;
+	TCHAR	*ImagePath				= NULL ;
+	TCHAR	*SpotColorPath			= NULL ;
+	TCHAR	*OutputPath				= thePage->GetStringValue( _T("PDFImagePath")) ;
+	int		 Result					= FALSE ;
+
+	TCHAR	 theSlugText[2048] ;
+	UGenCon *aSlugGC = GetSlugText( theOrder, GroupID, theSlugText ) ;
+	if( aSlugGC )
+	{
+		OutputPath = aSlugGC->GetStringValue( _T("PDFPath")) ;
+	}
+
+	TCHAR	 DstFilePath[2048] ;
+	TCHAR	 DstFilePathSC[2048] ;
+	TCHAR	 FilePath[2048] ;
+	TCHAR	 FileName[ 260] ;
+	TCHAR	 FileExtn[  32] ;
+	TCHAR	 TemplateType[256];
+	
+	TCHAR	*OrderID				= theOrder->GetStringValue(_T("OrderID")) ;
+	TCHAR	*GroupTmplt				= thePage->GetStringValue( _T("GroupTemplateName")) ;
+	
+	if( GroupTmplt == NULL )
+	{
+		GroupTmplt = thePage->GetStringValue( _T("Template")) ;
+	}
+
+	if( InkName )
+	{
+		if( stricmp( InkName, _T("No Override")) == 0 )
+		{
+			//	HERE WE NEED TO SEE WHAT INK IS DEFINED IN THE TEMPLATE FILE
+			InkName = GetTemplateInk( GroupTmplt ) ;
+		}
+		if( InkName[0] == '-' )		{ InkName[0] = 0x00 ; }
+		
+		SessionLogDirect( _T("C_Disk_PrintComplete: After getting original InkName: \"%s\"."), InkName ) ;
+	}
+	
+	GetTemplateType( GroupTmplt, TemplateType ) ;
+
+	UGenCon *aPage = NULL ;
+	long	 PageNum = 0L ;
+	long	 WantedPage = 0L ;
+	
+	long	 Needs_NXP_DMCL = 0 ;	//	DO ANY PAGES NEED THE Dimensional Clear Ink ?
+
+	UGenCon	*aFileGC = NULL ;
+	UList	*SourcePageList = new UList ;
+
+	PIEPDF	*PDFfer = new PIEPDF ;
+
+	UList	*ObjList = PDFfer->CreatePDFHeader( PPI, TemplateType ) ;
+
+	for( PageNum = 0L ; PageNum <= ProductPageSeqLast ; PageNum++ )
+	{
+		WantedPage = PageNum ;
+		if( GroupID == 0L && ProductPageSeqLast == 0 )
+		{
+			WantedPage = thePage->GetLongValue( _T("OrderItemSeq")) ;
+		}
+		
+		aPage = GetPage( theOrder, GroupID, WantedPage ) ;
+
+		if( aPage )
+		{
+			Quantity		= aPage->GetLongValue( _T("Quantity")) ;
+			ImagePath		= aPage->GetStringValue( _T("ImagePath")) ;
+			SpotColorPath	= aPage->GetStringValue( _T("SpotColorMaskPath")) ;
+			
+			if( aPage->GetLongValue( _T("Needs_NXP_DMCL")) )
+			{
+				Needs_NXP_DMCL++ ;
+			}
+			
+			//	ALLOW SINGLE PAGE PDFs (NOT IN A BOOK) WITH QUANTITY
+			if( GroupQty == 0 )
+			{
+				GroupQty = aPage->GetLongValue( _T("MultiPageQty")) ;
+				if( GroupQty == 0 )
+				{
+					GroupQty = Quantity ;
+					Quantity = 1 ; 
+				}
+			}
+
+			if( FileOrDirectoryExists( SpotColorPath, &isDirectory ) == FALSE )
+			{
+				TCHAR TranslatedInkName[256] ;
+				TranslateInkName( InkName, TranslatedInkName ) ;
+				SpotColorPath = NULL ;
+				Result = PDFfer->CreatePage( ImagePath, SpotColorPath, TranslatedInkName, Quantity ) ;
+				if( Result == FALSE )
+				{
+					TCHAR	Msg[2048] ;
+					sprintf( Msg, _T("Could not write %s, because %s could not be read."), OutputPath, ImagePath ) ;
+					HandleError( thePage, Msg, NULL ) ;
+					return( FALSE ) ;
+				}
+				
+				if( gLogAmount >= 2 )
+				{
+					SessionLogDirect( _T("C_Disk_PrintComplete.CreateNewPDFFile: ImagePath: \"%s\". SpotColorPath: \"%s\"."),
+										ImagePath, SpotColorPath ) ;
+				}
+			}
+			else
+			{
+				TCHAR TranslatedInkName[256] ;
+				TranslateInkName( InkName, TranslatedInkName ) ;
+				Result = PDFfer->CreatePage( ImagePath, SpotColorPath, TranslatedInkName, Quantity ) ;
+				if( Result == FALSE )
+				{
+					TCHAR	Msg[2048] ;
+					sprintf( Msg, _T("Could not write %s, because %s could not be read."), OutputPath, ImagePath ) ;
+					HandleError( thePage, Msg, NULL ) ;
+					return( FALSE ) ;
+				}
+
+				if( gLogAmount >= 2 )
+				{
+					SessionLogDirect( _T("C_Disk_PrintComplete.CreateNewPDFFile: ImagePath: \"%s\". SpotColorPath: \"%s\"."),
+									ImagePath, SpotColorPath ) ;
+				}
+
+				aFileGC = new UGenCon( GetDataDictionary( _T("DDPIEPDFObjects"))) ;
+				if( aFileGC )
+				{
+					aFileGC->SetAttrValue( _T("FileName"), SpotColorPath ) ;
+					SourcePageList->InsertBack( aFileGC ) ;
+				}
+			}
+
+			aFileGC = new UGenCon( GetDataDictionary( _T("DDPIEPDFObjects"))) ;
+			if( aFileGC )
+			{
+				aFileGC->SetAttrValue( _T("FileName"), ImagePath ) ;
+				SourcePageList->InsertBack( aFileGC ) ;
+			}
+		}
+	}
+	
+	if( InkName )
+	{
+		if( strstr( InkName, _T("dimension")) == NULL && strstr( InkName, _T("raised")) == NULL )
+		{
+			if( Needs_NXP_DMCL )
+			{
+				//	WE HAVE AN ERROR, THE PAGES ARE INCONSISTENT WITH THE SELECTED INK.
+				TCHAR	InkMessage[2048] ;
+				sprintf( InkMessage, _T("C_Disk_PrintComplete.CreateNewPDFFile: ERROR: %ld page(s) required NexPress DryInk dimensional clear ink."),
+																																		Needs_NXP_DMCL ) ;
+				HandleError( thePage, InkMessage, NULL ) ;
+				SessionLogDirect( InkMessage ) ;
+				
+				SessionLogDirect( _T("CreateNewPDFFile: Calling DeleteRenderedFiles inside InkName audit.")) ;
+				DeleteRenderedFiles( SourcePageList ) ;
+				delete SourcePageList ;
+				
+				return( FALSE ) ;
+			}
+		}
+	}
+
+	if( SourcePageList->GetNumEntries() <= 0 )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.CreateNewPDFFile: ERROR: No Pages available to update PDF file.") ) ;
+		SessionLogDirect( _T("C_Disk_PrintComplete.CreateNewPDFFile: ERROR: Were Order Item Pages contained within a book?") ) ;
+		
+		SessionLogDirect( _T("CreateNewPDFFile: Calling DeleteRenderedFiles inside No Pages audit.")) ;
+		DeleteRenderedFiles( SourcePageList ) ;
+		delete SourcePageList ;
+		
+		return( FALSE ) ;
+	}
+
+	SessionLogDirect( _T("C_Disk_PrintComplete.CreateNewPDFFile: PDF OutputPath: \"%s\"."), OutputPath ) ;
+
+	//	WRITE THE NEW PDF FILE
+	
+	TCHAR	gFilePath[1024] ;
+	TCHAR	gFileName[ 260] ;
+	TCHAR	gFileExtn[  32] ;
+	GetFilePathNameAndExt( OutputPath, gFilePath, gFileName, gFileExtn ) ;
+
+	CreateFullDirectoryPath( gFilePath ) ;
+
+	Result = PDFfer->WritePDFFile( OutputPath ) ;
+	delete PDFfer ;
+
+	if( Result == FALSE )
+	{
+		SessionLogDirect(_T("C_Dist_PrintComplete.txt: CreateNewPDFFile: Could not write \"%s\"."), OutputPath ) ;
+		HandleError( aPage, _T("Could not write %s."), OutputPath ) ;
+	}
+	
+	int UpdatedJDF = TRUE ;
+	if( Result )
+	{
+		UpdatedJDF = UpdateJDF( aPage, GroupTmplt, OutputPath, GroupQty, InkName, OrderID, GroupID, Bleed ) ;
+	}
+
+	SessionLogDirect( _T("CreateNewPDFFile: Calling DeleteRenderedFiles After writing PDFFile and updating JDF.")) ;
+	DeleteRenderedFiles( SourcePageList ) ;
+	delete SourcePageList ;
+	
+	if( Result == FALSE )
+	{
+		return( FALSE ) ;
+	}
+	
+	SessionLogDirect( _T("CreateNewPDFFile: JDF Updated: %d, GroupQty: %ld"), UpdatedJDF, GroupQty ) ;
+
+	if( UpdatedJDF == FALSE )
+	{
+		if( GroupQty > 1 )
+		{
+			CopyPDF( OutputPath, GroupQty ) ;
+		}
+	}
+
+	return( TRUE ) ;
+}
+
+int CheckForInkErrors( UGenCon *aPage, UList *theList, TCHAR *InkName )
+{
+	if( InkName == NULL )	{ return( TRUE ) ; }
+	if( *InkName == 0x00 )	{ return( TRUE ) ; }
+	
+	UGenCon	*BackClearCoatGC  = FindParameter( theList, _T("JDF ResourcePool Media(0) NXP:ClearCoatBack") ) ;
+	UGenCon	*FrontClearCoatGC = FindParameter( theList, _T("JDF ResourcePool Media(0) NXP:ClearCoatFront") ) ;
+	
+	if( strstr( InkName, _T("dimension"))   || strstr( InkName, _T("raised"))	||	//	WE HAVE DIMENSIONAL INK
+		strstr( InkName, _T("light black")) || strstr( InkName, _T("uv clear"))  )	//	strstr( InkName, _T("Fluorescent"))	 )
+	{
+		if( ClearCoatDefined( BackClearCoatGC, FrontClearCoatGC ))
+		{
+			TCHAR	InkMessage[2048] ;
+			sprintf( InkMessage, _T("ERROR: Cannot apply clear coats with %s."), InkName ) ;
+			HandleError( aPage, InkMessage, NULL ) ;
+			sprintf( InkMessage, _T("C_Disk_PrintComplete.CreateNewPDFFile: ERROR: Cannot apply clear coats with %s."), InkName ) ;
+			SessionLogDirect( InkMessage ) ;
+			return( FALSE ) ;
+		}
+	}
+	
+	if( strstr( InkName, _T("NexPress DryInk clear")) )
+	{
+		if( DimensionalCoatDefined( BackClearCoatGC, FrontClearCoatGC ))
+		{
+			TCHAR	InkMessage[2048] ;
+			sprintf( InkMessage, _T("C_Disk_PrintComplete.CreateNewPDFFile: ERROR: Cannot apply textures or dimensional coat with %s."), InkName ) ;
+			SessionLogDirect( InkMessage ) ;
+						
+			sprintf( InkMessage, _T("ERROR: Cannot apply textures or dimensional coat with %s."), InkName ) ;
+			HandleError( aPage, InkMessage, NULL ) ;
+			return( FALSE ) ;
+		}
+	}
+	return( TRUE ) ;
+}
+
+int ClearCoatDefined( UGenCon *BackClearCoatGC, UGenCon *FrontClearCoatGC )
+{
+	if( BackClearCoatGC )
+	{
+		TCHAR	Value[256] ;
+		BackClearCoatGC->GetAttrValue( _T("Value"), Value ) ;
+		
+		SessionLogDirect( _T("C_Disk_PrintComplete.CheckForInkErrors: Back Value: %s"), Value ) ;
+		
+		if( strstr( Value, _T("gloss"))   || strstr( Value, _T("protection"))	||
+			strstr( Value, _T("iqImage")) || strstr( Value, _T("iqFlood"))		 )
+		{
+			return( TRUE ) ;
+		}
+	}
+
+	if( FrontClearCoatGC )
+	{
+		TCHAR	Value[256] ;
+		FrontClearCoatGC->GetAttrValue( _T("Value"), Value ) ;
+		
+		SessionLogDirect( _T("C_Disk_PrintComplete.CheckForInkErrors: Font Value: %s"), Value ) ;
+		
+		if( strstr( Value, _T("gloss"))   || strstr( Value, _T("protection"))	||
+			strstr( Value, _T("iqImage")) || strstr( Value, _T("iqFlood"))		 )
+		{
+			return( TRUE ) ;
+		}
+	}
+	return( FALSE ) ;
+}
+
+int DimensionalCoatDefined( UGenCon *BackClearCoatGC, UGenCon *FrontClearCoatGC )
+{
+	if( BackClearCoatGC )
+	{
+		TCHAR	Value[256] ;
+		BackClearCoatGC->GetAttrValue( _T("Value"), Value ) ;
+		
+		SessionLogDirect( _T("C_Disk_PrintComplete.CheckForInkErrors: Back Value: %s"), Value ) ;
+		
+		if( strstr( Value, _T("raiseAllSimple"))	|| strstr( Value, _T("texture10"))	||
+			strstr( Value, _T("texture9"))			|| strstr( Value, _T("texture8"))	||
+			strstr( Value, _T("texture7"))			|| strstr( Value, _T("texture6"))	||
+			strstr( Value, _T("texture5"))			|| strstr( Value, _T("texture4"))	||
+			strstr( Value, _T("fromPDF"))	)
+		{
+			return( TRUE ) ;
+		}
+	}
+
+	if( FrontClearCoatGC )
+	{
+		TCHAR	Value[256] ;
+		FrontClearCoatGC->GetAttrValue( _T("Value"), Value ) ;
+		
+		SessionLogDirect( _T("C_Disk_PrintComplete.CheckForInkErrors: Font Value: %s"), Value ) ;
+		
+		if( strstr( Value, _T("raiseAllSimple"))	|| strstr( Value, _T("texture10"))	||
+			strstr( Value, _T("texture9"))			|| strstr( Value, _T("texture8"))	||
+			strstr( Value, _T("texture7"))			|| strstr( Value, _T("texture6"))	||
+			strstr( Value, _T("texture5"))			|| strstr( Value, _T("texture4"))	||
+			strstr( Value, _T("fromPDF"))	)
+		{
+			return( TRUE ) ;
+		}
+	}
+	return( FALSE ) ;
+}
+
+/*
+	UGenCon	*MediaGC = FindParameter( theList, _T("JDF ResourcePool Media(0)") ) ;
+	if( MediaGC )
+	{
+		if( BackGloss )
+		{
+			if( *BackGloss )
+			{
+				SetAGloss( MediaGC, BackGloss, _T("NXP:ClearCoatBack") ) ;
+				AddedGloss = TRUE ;
+			}
+		}
+		
+		if( FrontGloss )
+		{
+			if( *FrontGloss )
+			{
+				SetAGloss( MediaGC, FrontGloss, _T("NXP:ClearCoatFront") ) ;
+				AddedGloss = TRUE ;
+			}
+		}
+	}
+*/
+
+void TranslateInkName( TCHAR *InkName, TCHAR *TransName )
+{
+	if( InkName )
+	{
+		strcpy( TransName, InkName ) ;
+	
+		if( strstr( InkName, _T("light black spot")) || strstr( InkName, _T("light black photo")))
+		{
+			strcpy( TransName, _T("NexPress DryInk light black")) ;
+		}
+	}
+}
+
+void	DeleteRenderedFiles( UList *SourcePageList )
+{
+	long	NumPages = SourcePageList->GetNumEntries() ;
+	long	PageNum = 0L ;
+	UGenCon	*aFileGC = NULL ;
+	TCHAR	*DstFilePath = NULL ;
+	
+	SessionLogDirect( _T("INSIDE DeleteRenderedFiles")) ;
+	
+	for( PageNum = 0L ; PageNum <= NumPages ; PageNum++ )
+	{
+		aFileGC = (UGenCon *) SourcePageList->GetAt( PageNum ) ;
+		if( aFileGC )
+		{
+			DstFilePath = aFileGC->GetStringValue( _T("FileName") ) ;
+			if( *DstFilePath )
+			{
+				unlink( DstFilePath ) ; 
+			}
+		}
+	}
+}
+
+void 	ReplaceSpaces( TCHAR *OutFilePath, TCHAR *OutputPath )
+{
+	long	SPos = 0L ;
+	long	DPos = 0L ;
+	
+	while( OutputPath[SPos] )
+	{
+		if( OutputPath[SPos] == 0x20 )
+		{
+			OutFilePath[DPos] = '%' ;	DPos++ ;
+			OutFilePath[DPos] = '2' ;	DPos++ ;
+			OutFilePath[DPos] = '0' ;	DPos++ ;
+		}
+		else
+		{
+			OutFilePath[DPos] = OutputPath[SPos] ;
+			DPos++ ;
+		}
+		SPos++ ;
+	}
+}
+
+int RestoreExistingPDFFile( UGenCon *theOrder, UGenCon *thePage )
+{
+	gOrderGC	= theOrder ;
+	gPageGC		= thePage ;
+
+	TCHAR	*PDFSourceFile			= thePage->GetStringValue( _T("PDFSourceFile")) ;
+
+	if( gLogAmount >= 2 )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.RestoreExistingPDFFile: PDFSourceFile: \"%s\"."), PDFSourceFile ) ;
+	}
+
+	int		Result					= FALSE ;
+	long	GroupID					= thePage->GetLongValue( _T("GroupID")) ;
+	long	GroupQty				= thePage->GetLongValue( _T("GroupQty")) ;
+	long	ProductPageSeqCurrent	= thePage->GetLongValue( _T("ProductPageSeqCurrent")) ;
+	long	ProductPageSeqLast		= thePage->GetLongValue( _T("ProductPageSeqLast")) ;
+	double	PPI						= thePage->GetDoubleValue( _T("PPI")) ;
+	double	Bleed					= -1.0 ;	// thePage->GetDoubleValue( _T("SpillOver")) ; Don't change bleed when restoring PDF
+	long	LongestSide				= 0L ;
+	TCHAR	*ImagePath				= NULL ;
+	TCHAR	*SpotColorPath			= NULL ;
+	TCHAR	*OutputPath				= thePage->GetStringValue( _T("PDFImagePath")) ;
+
+	TCHAR	 theSlugText[2048] ;
+	UGenCon *aSlugGC = GetSlugText( theOrder, GroupID, theSlugText ) ;
+	if( aSlugGC )
+	{
+		OutputPath = aSlugGC->GetStringValue( _T("PDFPath")) ;
+	}
+
+	TCHAR	*InkName				= thePage->GetStringValue( _T("Inkname")) ;
+	TCHAR	*OrderID				= theOrder->GetStringValue(_T("OrderID")) ;
+	TCHAR	*GroupTmplt				= thePage->GetStringValue( _T("GroupTemplateName")) ;
+
+	TCHAR	 DstFilePath[2048] ;
+	TCHAR	 FilePath[2048] ;
+	TCHAR	 FileName[ 260] ;
+	TCHAR	 FileExtn[  32] ;
+
+	UGenCon *aPage = NULL ;
+	long	 PageNum = 0L ;
+	long	 WantedPage = 0L ;
+
+	UList	*ImageList = NULL ;
+
+	UGenCon	*aFileGC = NULL ;
+	UList	*SourcePageList = new UList ;
+
+	PIEPDF	*PDFfer = new PIEPDF ;
+
+	for( PageNum = 0L ; PageNum <= ProductPageSeqLast ; PageNum++ )
+	{
+		WantedPage = PageNum ;
+		if( GroupID == 0L )
+		{
+			WantedPage = thePage->GetLongValue( _T("OrderItemSeq")) ;
+		}
+		
+		aPage = GetPage( theOrder, GroupID, WantedPage ) ;
+
+		if( aPage )
+		{
+			if( gLogAmount >= 2 )
+			{
+				SessionLogDirect( _T("C_Disk_PrintComplete.RestoreExistingPDFFile: Page: \"%s\"."), aPage->GetName() ) ;
+			}
+
+			ImagePath		= aPage->GetStringValue( _T("ImagePath")) ;
+			ImageList		= aPage->GetLongValue( _T("PDFImageList")) ;
+
+			if( gLogAmount >= 2 )
+			{
+				SessionLogDirect( _T("C_Disk_PrintComplete.RestoreExistingPDFFile: ImagePath: \"%s\"."),  ImagePath ) ;
+				SessionLogDirect( _T("C_Disk_PrintComplete.RestoreExistingPDFFile: ImageList: 0x%08lX."), ImageList ) ;
+			}
+
+			if( ImageList )
+			{
+				SourcePageList->Append( ImageList ) ;
+				ImageList->RemoveAll() ;
+				delete ImageList ;
+			}
+		}
+	}
+
+	if( SourcePageList->GetNumEntries() <= 0 )
+	{
+		HandleError( aPage, _T("ERROR: No Pages available to update PDF file %s."), OutputPath ) ;
+
+		SessionLogDirect( _T("C_Disk_PrintComplete.RestoreExistingPDFFile: ERROR: No Pages available to update PDF file.") ) ;
+		SessionLogDirect( _T("C_Disk_PrintComplete.RestoreExistingPDFFile: ERROR: Were Order Item Pages contained within a book?") ) ;
+		return( FALSE ) ;
+	}
+
+	PDFfer->RestoreImages( SourcePageList, PDFSourceFile, ImagePath, LongestSide ) ;
+
+	SessionLogDirect( _T("C_Disk_PrintComplete.RestoreExistingPDFFile: DstFilePath(1): \"%s.\""), OutputPath ) ;
+
+	//	WRITE THE NEW PDF FILE
+
+	TCHAR	gFilePath[1024] ;
+	TCHAR	gFileName[ 260] ;
+	TCHAR	gFileExtn[  32] ;
+	GetFilePathNameAndExt( OutputPath, gFilePath, gFileName, gFileExtn ) ;
+
+	CreateFullDirectoryPath( gFilePath ) ;
+
+	SessionLogDirect( _T("C_Disk_PrintComplete.RestoreExistingPDFFile: DstFilePath(2): \"%s.\""), OutputPath ) ;
+
+	Result = PDFfer->Write( OutputPath ) ;
+	delete PDFfer ;
+
+	SessionLogDirect( _T("C_Disk_PrintComplete.RestoreExistingPDFFile: DstFilePath(3): \"%s.\""), OutputPath ) ;
+
+	if( Result == FALSE )
+	{
+		SessionLogDirect(_T("C_Dist_PrintComplete.txt: RestoreExistingPDFFile: Could not write \"%s\"."), OutputPath ) ;
+		HandleError( aPage, _T("Could not write %s."), OutputPath ) ;
+	}
+
+	int UpdatedJDF = TRUE ;
+	if( Result )
+	{
+		UpdatedJDF = UpdateJDF( aPage, GroupTmplt, OutputPath, GroupQty, InkName, OrderID, GroupID, Bleed ) ;
+	}
+
+	//	DELETE THE IMAGES THAT HAVE BEEN COPIED INTO THE PDF FILE.
+	SessionLogDirect( _T("RestoreExistingPDFFile: Calling DeleteRenderedFiles.")) ;
+	DeleteRenderedFiles( SourcePageList ) ;
+
+	delete SourcePageList ;
+
+	Result = TRUE ;
+	if( UpdatedJDF == FALSE )
+	{
+		if( GroupQty > 1 )
+		{
+			CopyPDF( OutputPath, GroupQty ) ;
+		}
+	}
+	return( Result ) ;
+}
+
+
+int CopyPDF( TCHAR *OutputPath, long GroupQty )
+{
+	TCHAR	FilePath[2048] ;
+	TCHAR	FileName[ 260] ;
+	TCHAR	FileExtn[  32] ;
+	TCHAR	DstName[2048] ;
+
+	GetFilePathNameAndExt( OutputPath, FilePath, FileName, FileExtn ) ;
+
+	long	CopyNum ;
+	for( CopyNum = 1L ; CopyNum < GroupQty ; CopyNum++ )
+	{
+		sprintf( DstName, _T("%s\\%s_%05ld.%s"), FilePath, FileName, CopyNum, FileExtn ) ;
+		CopyFile( OutputPath, DstName ) ;
+	}
+}
+
+int CopyFile( TCHAR *SrcFileName, TCHAR *DstFileName )
+{
+	int		 Result = TRUE ;
+	long	 bufLength = 256 * 1024 ;
+	long	 BytesWritten = 0L ;
+	long	 BytesRead = 0L ;
+	int		 doneFlag = FALSE;
+	TCHAR	*Text = NULL ;
+	TCHAR	 Msg[1024] ;
+			
+	Text = malloc( (bufLength + 32) * 2 ) ;
+	if(Text == NULL)
+	{
+		return (FALSE);
+	}
+
+	FILE	*dstfp = NULL ;
+	
+	FILE	*srcfp = fopen( SrcFileName, _T("rb")) ;
+	if(srcfp)
+	{
+		dstfp = fopen( DstFileName, _T("wb")) ;
+		if( dstfp )
+		{
+			//loop thru file
+			while(doneFlag == FALSE)
+			{
+				BytesRead = fread( Text, 2L, bufLength, srcfp ) ;
+				if(BytesRead == 0)
+				{
+					doneFlag = TRUE;
+				}
+				else
+				{
+					BytesWritten = fwrite( Text, 2L, BytesRead, dstfp ) ;
+					if( BytesWritten != BytesRead )
+					{
+						Result = errno( Msg ) ;
+						SessionLogDirect( _T("Could not write \"%s\", Error: %d, %s\r\n"), DstFileName, Result, Msg ) ;
+						Result = FALSE ;
+						doneFlag = TRUE;
+					}
+				}
+			}
+		}
+		else
+		{
+			SessionLogDirect( _T("Could not open \"%s\"\r\n"), DstFileName ) ;
+			Result = FALSE ;
+		}
+
+	}
+	else
+	{
+		SessionLogDirect( _T("Could not open \"%s\"\r\n"), SrcFileName ) ;
+		Result = FALSE ;
+	}
+
+	if(dstfp)
+	{
+		fclose( dstfp ) ;
+	}
+	if(srcfp)
+	{
+		fclose( srcfp ) ;
+	}
+
+	free( Text ) ;
+
+	return( Result ) ;
+}
+
+
+
+UGenCon *GetPage( UGenCon *theOrder, long WantedGroupID, long WantedPageNum )
+{
+	UList	*thePages = theOrder->GetChildren() ;
+	UGenCon	*aPage	  = NULL ;
+	long	 NumPages = thePages->GetNumEntries() ;
+
+	long	 ThisGroupID = 0L ;
+	long	 SequenceNum = 0L ;
+	long	 PageNum	 = 0L ;
+
+	for( PageNum = 0L ; PageNum < NumPages ; PageNum++ )
+	{
+		aPage = (UGenCon *) thePages->GetAt( PageNum ) ;
+		if( aPage )
+		{
+			if( WantedGroupID == 0L )
+			{
+				SequenceNum = aPage->GetLongValue( _T("OrderItemSeq")) ;
+			}
+			else
+			{
+				SequenceNum = aPage->GetLongValue( _T("ProductPageSeqCurrent")) ;
+			}
+			
+			ThisGroupID = aPage->GetLongValue( _T("GroupID")) ;
+			if( ThisGroupID == WantedGroupID && SequenceNum == WantedPageNum )
+				{ return( aPage ) ; }
+		}
+	}
+	return( NULL ) ;
+}
+
+
+TCHAR *AddTextLine( TCHAR *CmdText, TCHAR *Format, TCHAR *Value )
+{
+	TCHAR	Line[2048] ;
+
+	sprintf( Line, Format, Value ) ;
+	strcat( CmdText, Line ) ;
+
+	return( CmdText ) ;
+}
+
+TCHAR *AddLongLine( TCHAR *CmdText, TCHAR *Format, long Value )
+{
+	TCHAR	Line[1024] ;
+
+	sprintf( Line, Format, Value ) ;
+	strcat( CmdText, Line ) ;
+
+	return( CmdText ) ;
+}
+
+WriteUnicodeFile( char *fp, TCHAR *Text )
+{
+	long	Length = strlen( Text ) ;
+	fwrite( Text, 2, Length, fp ) ;
+
+	long	EndOfLine = 0x000A000D ;
+	fwrite( &EndOfLine, 2, 2, fp ) ;
+}
+
+void HandleError( UGenCon *thePage, TCHAR *Msg1, TCHAR *Msg2 )
+{
+	TCHAR	 TextMsg[2048] ;
+	UList	*ErrorList  = thePage->GetLongValue(_T("RenderErrorList")) ;
+	if( ErrorList == NULL )
+	{
+		ErrorList = new UList ;
+		thePage->SetLongValue(_T("RenderErrorList"), ErrorList ) ;
+	}
+	
+//	SessionLogDirect( _T("C_Disk_PrintComplete.HandleError: thePage: 0x%08lX, Msg1: 0x%08lX \"%s\", Msg2: 0x%08lX \"%s\"."),
+//								thePage, Msg1, Msg1, Msg2, Msg2 ) ;
+	
+	if( ErrorList )
+	{
+		UGenCon	*ErrorGC = new UGenCon( GetDataDictionary( _T("DDText"))) ;
+		if( ErrorGC )
+		{
+			if( Msg2 == NULL )
+			{
+				ErrorGC->SetAttrValue( _T("Text"), Msg1 ) ;
+				thePage->SetAttrValue( _T("ResponseText"), Msg1 ) ;
+			}
+			else
+			{
+				sprintf( TextMsg, Msg1, Msg2 ) ;
+				ErrorGC->SetAttrValue( _T("Text"), TextMsg ) ;
+//				SessionLogDirect( _T("C_Disk_PrintComplete.HandleError: TextMsg: \"%s\"."), TextMsg ) ;
+				thePage->SetAttrValue( _T("ResponseText"), TextMsg ) ;
+			}
+			ErrorList->InsertBack( ErrorGC ) ;
+		}
+	}
+	
+	thePage->SetLongValue( _T("ResponseCode"), 101 ) ;
+}
+
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+
+//		JDF SUPPORT
+
+//	int SetURL( UList *theList, TCHAR *theURL ) ;
+//	int SetSpotColorInk( UList *theList, TCHAR *NewSpotColor ) ;
+//	int SetGloss( UList *theList, TCHAR *MediaBrand, TCHAR *FrontGloss, TCHAR *BackGloss ) ;
+//	int SetQuantity( UList *theList, long Quantity ) ;
+//	int SetBleed( UList *theList, double Bleed ) ;
+//	int SetTheSubstrate( UList *theList, TCHAR *NewSubstrate, int Which ) ;		//	Which: 1 = Body, 2 = Cover, 3 = Insert
+//	int SetSubstrate( UList *theList, TCHAR *SubstrateName, TCHAR *NewSubstrate ) ;		//	NO LONGER USED
+//	int SetBodySubstrate( UList *theList, TCHAR *NewSubstrate ) ;						//	NO LONGER USED
+//	int SetDMCLThreshold( XMLList, Value ) ;
+//	int	SetDMCLThresholdApp( XMLList, Value ) ;
+//	int SetHotCompensation( XMLList, Value ) ;
+
+TCHAR *GetTemplateInk( TCHAR *JDFPath )
+{
+	TCHAR	FilePath[2048] ;
+	TCHAR	FileName[ 260] ;
+	TCHAR	FileExtn[  32] ;
+	TCHAR	DstFileName[2048] ;
+
+	int		LogLimit = 2 ;
+	
+	TCHAR	*FileText = GetTemplateText( JDFPath ) ;
+	if( FileText == NULL )		{ return( FALSE ) ; }
+
+	XML		*theXMLParser	=	new XML ;
+	UList	*XMLList		=	theXMLParser->ParseXML( FileText ) ;
+
+
+	//	FIND THE INK NAME HERE
+	UGenCon	*theTemplatesInkNameGC = FindParameter( XMLList,
+								_T("JDF ResourcePool ColorantControl ColorantParams SeparationSpec Name")) ;
+
+	if( gLogAmount >= LogLimit )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.GetTemplateInk: theTemplatesInkNameGC: 0x%08lX."), theTemplatesInkNameGC ) ;
+	}							
+
+	TCHAR	*InkName = _T("-") ;
+	
+	if( theTemplatesInkNameGC )
+	{
+		InkName = theTemplatesInkNameGC->GetStringValue( _T("Value")) ;
+		TCHAR	FixedName[1024] ;
+		FixName( InkName, FixedName ) ;
+		gPageGC->SetAttrValue( _T("Inkname"), FixedName ) ;
+		InkName = gPageGC->GetStringValue( _T("InkName") ) ;
+	}
+	delete theXMLParser ;
+	
+	if( gLogAmount >= LogLimit )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.GetTemplateInk: New Ink Name: \"%s\"."), InkName ) ;
+	}							
+	
+	free( FileText ) ;
+	return( InkName ) ;
+}
+
+TCHAR *GetTemplateType( TCHAR *JDFPath, TCHAR *TemplateType )
+{
+	TCHAR	FilePath[2048] ;
+	TCHAR	FileName[ 260] ;
+	TCHAR	FileExtn[  32] ;
+	TCHAR	DstFileName[2048] ;
+
+	int		LogLimit = 2 ;
+	
+	TCHAR	*FileText = GetTemplateText( JDFPath ) ;
+	if( FileText == NULL )		{ return( FALSE ) ; }
+
+	XML		*theXMLParser	=	new XML ;
+	UList	*XMLList		=	theXMLParser->ParseXML( FileText ) ;
+
+//	theXMLParser->DumpXML( XMLList ) ;
+
+//	PrintXML( _T("C:\\Temp\\Images\\XMLList.txt"), XMLList ) ;
+
+	//	FIND THE INK NAME HERE
+	UGenCon	*theTemplatesTypeNameGC = FindParameter( XMLList,
+								_T("JDF AuditPool Modified PJWP:ProductCategory")) ;
+
+	if( theTemplatesTypeNameGC == NULL )
+	{
+		SessionLogDirect( _T("GetTemplateType: PJWP:ProductCategory = NULL")) ;
+	}
+
+	if( gLogAmount >= LogLimit )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.GetTemplateType: theTemplatesTypeNameGC: 0x%08lX."), theTemplatesTypeNameGC ) ;
+	}							
+
+	TemplateType[0] = 0x00 ;
+	
+	if( theTemplatesTypeNameGC )
+	{
+		theTemplatesTypeNameGC->GetAttrValue( _T("Value"), TemplateType )  ;
+		TCHAR	FixedName[1024] ;
+		strcpy( FixedName, TemplateType ) ;
+		FixName( FixedName, TemplateType ) ;
+	}
+	delete theXMLParser ;
+	
+	free( FileText ) ;
+	return( TemplateType ) ;
+}
+
+
+int UpdateJDF( UGenCon *aPage, TCHAR *JDFPath, TCHAR *PDFPath, long Quantity, TCHAR *InkName, TCHAR *OrderID, long GroupID, double Bleed )
+{
+	int		 UpdatedJDF = FALSE ;
+	
+	if( gLogAmount >= 2 )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.UpdateJDF: JDFPath: \"%s\"."), JDFPath ) ;
+		SessionLogDirect( _T("C_Disk_PrintComplete.UpdateJDF: PDFPath: \"%s\"."), PDFPath ) ;
+	}
+	
+	TCHAR	*FileText = GetTemplateText( JDFPath ) ;
+	if( FileText == NULL )		{ return( FALSE ) ; }
+
+	XML		*theXMLParser	=	new XML ;
+	UList	*XMLList		=	theXMLParser->ParseXML( FileText ) ;
+
+	//	IS THIS FOR THE C8000 / Creo Press ?
+	UGenCon	*aGC = theXMLParser->FindObjectByValue( XMLList, _T("JTCreator") ) ;
+	
+	if( aGC )
+	{
+		UpdatedJDF = UpdateCreoJDF( JDFPath, PDFPath, Quantity ) ;
+	}
+	else
+	{
+		UpdatedJDF = UpdateNexPressJDF( aPage, JDFPath, PDFPath, Quantity, InkName, OrderID, GroupID, Bleed ) ;
+	}
+	
+	delete theXMLParser ;
+	free( FileText ) ;
+
+	return( UpdatedJDF ) ;
+}
+
+int UpdateNexPressJDF( UGenCon *aPage, TCHAR *JDFPath, TCHAR *PDFPath, long Quantity, TCHAR *InkName, TCHAR *OrderID, long GroupID, double Bleed )
+{
+	TCHAR	URLFileName[ 128] ;
+	TCHAR	FilePath[2048] ;
+	TCHAR	FileName[ 260] ;
+	TCHAR	FileExtn[  32] ;
+	TCHAR	DstFileName[2048] ;
+
+	TCHAR	*FileText = GetTemplateText( JDFPath ) ;
+	if( FileText == NULL )		{ return( FALSE ) ; }
+
+	XML		*theXMLParser	=	new XML ;
+	UList	*XMLList		=	theXMLParser->ParseXML( FileText ) ;
+	
+//	theXMLParser->DumpXMLListToFile( _T("C:\\Temp\\A_After_ParseXML.txt"), XMLList ) ;
+	
+	if( CheckForInkErrors( aPage, XMLList, InkName ) == FALSE )
+	{
+		return( -1 ) ;	//	SAY WE HAD A PROBLEM.
+	}
+
+//	theXMLParser->DumpXMLListToFile( _T("C:\\Temp\\B_After_CheckForInkErrors.txt"), XMLList ) ;
+
+	ModifyJDF( XMLList, aPage, PDFPath, URLFileName, Quantity, InkName, OrderID, GroupID, Bleed ) ;
+
+//	theXMLParser->DumpXMLListToFile( _T("C:\\Temp\\Y_After_ModifyJDF.txt"), XMLList ) ;
+
+	GetFilePathNameAndExt( PDFPath, FilePath, FileName, FileExtn ) ;
+	
+	//	WE WILL NOW PUT THE JDF FILE IN THE CONTROL FOLDER !
+	//	(THIS IS A CHANGE FROM THE FIRST TEST IMPLEMENTATION)
+	TCHAR	*ControlFolder	= gPrinterSetup->GetStringValue(_T("ControlFolder")) ;
+	if( URLFileName[0] )
+	{
+		sprintf( DstFileName, _T("%s\\%s.jdf"), ControlFolder, URLFileName ) ;
+	}
+	else
+	{
+		sprintf( DstFileName, _T("%s\\%s.jdf"), ControlFolder, FileName ) ;
+	}
+
+	ExpandFileName( DstFileName ) ;
+	
+	ChangeToBackSlashes( DstFileName ) ;
+	
+	SessionLogDirect( _T("C_Disk_PrintComplete.UpdateJDF: Writing JDF to \"%s\"."), DstFileName ) ;
+
+	theXMLParser->SetWriteXMLBinaryHeader( FALSE ) ;	//	<<<<=@#@#@#@#@#@#@#@#
+	
+//	theXMLParser->DumpXMLListToFile( _T("C:\\Temp\\Z_Before_PrettyPrint.txt"), XMLList ) ;
+	
+//	theXMLParser->WriteXML( DstFileName ) ;
+	theXMLParser->PrettyPrint( DstFileName ) ;
+
+	delete theXMLParser ;
+	
+	free( FileText ) ;
+	return( TRUE ) ;
+}
+
+int UpdateCreoJDF( TCHAR *JDFPath, TCHAR *PDFPath, long Quantity )
+{
+	TCHAR	URLFileName[ 128] ;
+	TCHAR	FilePath[2048] ;
+	TCHAR	FileName[ 260] ;
+	TCHAR	FileExtn[  32] ;
+	TCHAR	DstFileName[2048] ;
+	TCHAR	OutPathNoSpaces[2048] ;
+
+	TCHAR	*FileText = GetTemplateText( JDFPath ) ;
+	if( FileText == NULL )		{ return( FALSE ) ; }
+
+	XML		*theXMLParser	=	new XML ;
+	UList	*XMLList		=	theXMLParser->ParseXML( FileText ) ;
+	
+	int Result = SetQuantity( XMLList, Quantity ) ;
+	
+	sprintf( DstFileName, _T("file:%s"), PDFPath ) ;
+	ChangeToFowardSlashes( DstFileName ) ;
+
+	ReplaceSpaces( OutPathNoSpaces, DstFileName ) ;
+
+	Result = SetURL( XMLList, OutPathNoSpaces ) ;
+	
+	//	NEED TO SET THE "JDF RESOURCEPOOL RUNLIST PAGES" PARAMETER
+	long	ProductPageSeqLast = gPageGC->GetLongValue( _T("ProductPageSeqLast")) ;
+
+	UGenCon	*thePagesGC = FindParameter( XMLList, _T("JDF ResourcePool RunList Pages")) ;
+
+	TCHAR	NumberPages[32] ;
+	sprintf( NumberPages, _T("\"%ld\""), ProductPageSeqLast ) ;
+
+	if( thePagesGC )
+	{
+//		thePagesGC->SetAttrValue( _T("Value"), _T("All") ) ;
+//		thePagesGC->SetAttrValue( _T("Value"), NumberPages ) ;
+		Result = 1 ;
+	}
+	
+	FixCreoColorServerBug( theXMLParser, XMLList ) ;
+	
+	UpdateCreoSlug( theXMLParser, XMLList ) ;
+
+//=============================================================================
+	GetFilePathNameAndExt( PDFPath, FilePath, FileName, FileExtn ) ;
+	
+	//	WE WILL NOW PUT THE JDF FILE IN THE CONTROL FOLDER !
+	//	(THIS IS A CHANGE FROM THE FIRST TEST IMPLEMENTATION)
+	TCHAR	*ControlFolder	= gPrinterSetup->GetStringValue(_T("ControlFolder")) ;
+	sprintf( DstFileName, _T("%s\\%s.jdf"), ControlFolder, FileName ) ;
+
+	ExpandFileName( DstFileName ) ;
+	
+	ChangeToBackSlashes( DstFileName ) ;
+	
+	SessionLogDirect( _T("C_Disk_PrintComplete.UpdateCreoJDF: Writing JDF to \"%s\"."), DstFileName ) ;
+
+	theXMLParser->SetWriteXMLBinaryHeader( FALSE ) ;	//	<<<<=@#@#@#@#@#@#@#@#
+	
+	theXMLParser->PrettyPrint( DstFileName ) ;
+//=============================================================================
+
+	delete theXMLParser ;
+	
+	free( FileText ) ;
+	return( TRUE ) ;
+
+}
+
+//	THE CREO COLOR SERVER DOES NOT PUT THE DASH IN SELECTED TRAYS 
+void FixCreoColorServerBug( XML *theXMLParser, UList *XMLList )
+{
+	int		 ChangedValue = FALSE ;
+	TCHAR	 NewTrayText[64] ;
+	TCHAR	 OldTrayText[64] ;
+	UGenCon	*theTrayGC = FindParameter( XMLList, _T("JDF ResourcePool Media Location LocationName")) ;
+	if( theTrayGC )
+	{
+		TCHAR	*theValue = theTrayGC->GetStringValue( _T("Value")) ;
+		SessionLogDirect( _T("FixCreoColorServerBug: Location: \"%s\", theValue: \"%s\"."),
+					theTrayGC->GetStringValue( _T("Name")), theValue) ;
+					
+		if( strstr( theValue, _T("-")) == NULL )
+		{
+			if( strstr( theValue, _T("Tray")))
+			{	//	THEN ADD THE DASH (-)
+				GetTrayText( theValue, OldTrayText ) ;
+				sprintf( NewTrayText, _T("\"Tray-%s"), &theValue[5] ) ;
+				SessionLogDirect( _T("FixCreoColorServerBug: Location (Fixed): \"%s\", theValue: \"%s\"."),
+						theTrayGC->GetStringValue( _T("Name")), NewTrayText) ;
+				 theTrayGC->SetAttrValue( _T("Value"), NewTrayText ) ;
+				 ChangedValue++ ;
+			}
+		}
+	}
+	
+/*	Barak Patel (Creo Isreal) TELLS ME THIS SHOULD NOT BE CHANGED.  5/27/11
+	if( ChangedValue )	//	THEN WE HAVE TO LOOK FOR THE ENTRY IN THE SECOND PART OF THE FILE
+	{
+		SessionLogDirect( _T("FixCreoColorServerBug: OldTrayText: \"%s\""), OldTrayText ) ;
+		
+		UGenCon	*aGC = theXMLParser->FindObjectByValue( XMLList, OldTrayText ) ;
+		SessionLogDirect( _T("FixCreoColorServerBug: FindObjectByValue: 0x%08lX"), aGC ) ;
+		if( aGC )
+		{
+			sprintf( NewTrayText, _T("Tray-%s"), &OldTrayText[4] ) ;
+			SessionLogDirect( _T("FixCreoColorServerBug: Location (Fixed_2): \"%s\", theValue: \"%s\"."),
+					theTrayGC->GetStringValue( _T("Name")), NewTrayText) ;
+			aGC->SetAttrValue( _T("Value"), NewTrayText ) ;
+		}
+	}
+*/
+}
+
+void GetTrayText( TCHAR *OldValue, TCHAR *NewValue )
+{
+	long	OldPos = 0 ;
+	long	NewPos = 0 ;
+	TCHAR	theChar ;
+	while( OldValue[OldPos] )
+	{
+		theChar = OldValue[OldPos] ;
+		if( IsAlphaNumeric( theChar ))
+		{
+			NewValue[NewPos] = theChar ;
+			NewPos++ ;
+		}
+		OldPos++ ;
+	}
+}
+
+int IsAlphaNumeric( TCHAR aChar )
+{
+	if( aChar >= 0x30 && aChar <= 0x39 )	{ return( 1 ) ; }
+	if( aChar >= 0x41 && aChar <= 0x5A )	{ return( 1 ) ; }
+	if( aChar >= 0x61 && aChar <= 0x7A )	{ return( 1 ) ; }
+	return( 0 ) ;
+}
+
+/*
+int UpdateCreoJDF( TCHAR *JDFPath, TCHAR *PDFPath, long Quantity )
+{
+	TCHAR	FilePath[2048] ;
+	TCHAR	FileName[ 260] ;
+	TCHAR	FileExtn[  32] ;
+	TCHAR	DstFileName[2048] ;
+	TCHAR	Value[2048] ;
+
+	TCHAR	*FileText = GetTemplateText( JDFPath ) ;
+	if( FileText == NULL )		{ return( FALSE ) ; }
+	
+	long	FileLength = strlen( FileText ) ;
+	char	*AsciiText = (char *) malloc( FileLength + 1024 ) ;
+	
+	//	CONVERT TO ASCII
+	ConvertToAscii( FileText, AsciiText ) ;
+
+//=============================================================================
+	GetFilePathNameAndExt( PDFPath, FilePath, FileName, FileExtn ) ;
+	
+	//	WE WILL NOW PUT THE JDF FILE IN THE CONTROL FOLDER !
+	//	(THIS IS A CHANGE FROM THE FIRST TEST IMPLEMENTATION)
+	TCHAR	*ControlFolder	= gPrinterSetup->GetStringValue(_T("ControlFolder")) ;
+	sprintf( DstFileName, _T("%s\\%s.jdf"), ControlFolder, FileName ) ;
+
+	ExpandFileName( DstFileName ) ;
+	
+	ChangeToBackSlashes( DstFileName ) ;
+	
+	SessionLogDirect( _T("C_Disk_PrintComplete.UpdateCreoJDF: Writing JDF to \"%s\"."), DstFileName ) ;
+//=============================================================================
+
+
+	//	file://<ServerName>/sharename/.../contentfile.pdf
+	sprintf( Value, _T("file:%s"), PDFPath ) ;
+	ChangeToFowardSlashes( Value ) ;
+
+	TCHAR	OutPathNoSpaces[2048] ;
+	char	OutPathNoSpacesAscii[2048] ;
+	
+	ReplaceSpaces( OutPathNoSpaces, Value ) ;
+	
+	ConvertToAscii( OutPathNoSpaces, OutPathNoSpacesAscii ) ;
+	
+	FILE	*fp = fopen( DstFileName, _T("wb")) ;
+	if( fp )
+	{
+		long	SrcPos = 0L ;
+		
+		//	WRITE THE STUFF BEFORE THE "Amount"
+		TCHAR *URLPtr = strstr( FileText, _T("Amount")) ;
+		long   BytesToWrite = URLPtr - FileText ;
+		
+SessionLogDirect( _T("UpdateCreoJDF: Updating Amount: BytesToWrite:  %ld  SrcPos: %ld"), BytesToWrite, SrcPos ) ;
+
+		fwrite( AsciiText, 1L, BytesToWrite, fp ) ;
+		SrcPos = BytesToWrite ;
+		
+		//	WRITE OUT THE AMOUNT="#"
+		TCHAR	Amount[64] ;
+		char	AsciiAmount[64] ;
+		sprintf( Amount, _T("Amount=\"%ld\""), Quantity ) ;
+		
+SessionLogDirect( _T("UpdateCreoJDF: Updating Amount: \"%s\""), Amount ) ;
+
+		ConvertToAscii( Amount, AsciiAmount ) ;
+		fwrite( AsciiAmount, 1L, strlen( Amount ), fp ) ;
+		SrcPos += 10 ;
+
+		//	WRITE THE STUFF BETWEEN THE AMOUNT AND THE URL
+		TCHAR *URLPtr2 = strstr( &FileText[SrcPos], _T("URL=\"")) ;
+		
+SessionLogDirect( _T("UpdateCreoJDF: Updating URL: URLPtr2: 0x%08lX  FileText: 0x%08lX   Delta: %ld  SrcPos: %ld"), URLPtr2, FileText, URLPtr2 - FileText, SrcPos ) ;
+		
+		BytesToWrite = (URLPtr2 - FileText) - SrcPos + 5;
+
+SessionLogDirect( _T("UpdateCreoJDF: Updating URL: BytesToWrite:  %ld  SrcPos: %ld"), BytesToWrite, SrcPos ) ;
+
+		fwrite( &AsciiText[SrcPos], 1L, BytesToWrite, fp ) ;
+		SrcPos += BytesToWrite ;
+		
+SessionLogDirect( _T("UpdateCreoJDF: Updating URL: \"%s\""), OutPathNoSpaces ) ;
+		
+		//	WRITE THE URL
+		fwrite( OutPathNoSpacesAscii, 1L, strlen( OutPathNoSpaces ), fp ) ;
+		
+		//	WRITE THE REMAINDER OF THE FILE
+		fwrite( &AsciiText[SrcPos], 1L, strlen( &FileText[SrcPos] ), fp ) ;
+		
+		fclose( fp ) ;
+		
+		free( FileText ) ;
+		free( AsciiText ) ;
+		return( TRUE ) ;
+	}
+	
+	free( FileText ) ;
+	free( AsciiText ) ;
+	return( FALSE ) ;
+}
+*/
+
+
+TCHAR *GetTemplateText( TCHAR *JDFPath )
+{
+	TCHAR	FilePath[2048] ;
+
+	if( JDFPath == NULL )		{ return( NULL ) ; }
+	if( JDFPath[0] == 0x00 )	{ return( NULL ) ; }
+	
+//	if( gLogAmount >= 2 )
+//	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.UpdateJDF: JDFPath: \"%s\"."), JDFPath ) ;
+//	}
+	
+	TCHAR	*FileText = GetFile( JDFPath ) ;
+
+	if( FileText == NULL )	//	IF FIRST TEST, THIS SHOULD NOT BE NULL, HOWEVER
+	{						//	IF NOT FIRST TEST, THERE MIGHT BE A FILE IN THE SHAREFOLDER
+							//	THAT TELLS US WHERE TO LOOK FOR THE TEMPLATE FILE.
+		TCHAR	Token[2048] ;
+		TCHAR	TemplatePath[2048] ;
+		TCHAR	C8000TemplatePath[2048] ;
+		TCHAR	*ShareDirectory = GetShareDirectory() ;
+		sprintf( FilePath, _T("%s\\NexPressDFESetup.txt"), ShareDirectory ) ;
+		TCHAR	*SetupText = GetFile( FilePath ) ;
+		if( SetupText )
+		{
+			UParser	*aParser = new UParser ;
+			aParser->SetText( SetupText ) ;
+			aParser->GetToken( Token ) ;
+			while( *Token )
+			{
+				if( stricmp( Token, _T("TemplatePath:")) == 0 )
+				{
+					aParser->GetToken( TemplatePath ) ;
+				}
+				if( stricmp( Token, _T("C8000TemplatePath:")) == 0 )
+				{
+					aParser->GetToken( C8000TemplatePath ) ;
+				}
+				aParser->GetToken( Token ) ;
+			}
+			aParser->SetText( NULL ) ;
+			delete aParser ;
+			free( SetupText ) ;
+		}
+		
+		if( *TemplatePath )
+		{
+			sprintf( FilePath, _T("%s\\%s.jdf"), TemplatePath, JDFPath ) ;
+SessionLogDirect( _T("C_Disk_PrintComplete.UpdateJDF: JDFPath: \"%s\"."), FilePath ) ;
+			FileText = GetFile( FilePath ) ;
+		}
+		
+		if( FileText == NULL )
+		{
+			if( *C8000TemplatePath )
+			{
+				sprintf( FilePath, _T("%s\\%s.jdf"), C8000TemplatePath, JDFPath ) ;
+	SessionLogDirect( _T("C_Disk_PrintComplete.UpdateJDF: JDFPath: \"%s\"."), FilePath ) ;
+				FileText = GetFile( FilePath ) ;
+			}
+		}
+		
+		if( FileText == NULL )
+		{
+			SessionLogDirect( _T("C_Disk_PrintComplete.GetTemplateText: Warning: Could not find original JDF file.")) ;
+			SessionLogDirect( _T("C_Disk_PrintComplete.GetTemplateText: JDFPath: \"%s\"."), JDFPath ) ;
+		}
+	}
+	return( FileText ) ;
+}
+
+int SetURL( UList *theList, TCHAR *theURL )
+{
+	int		 Result			= FALSE ;
+	TCHAR	 URL[1024] ;
+
+	UGenCon	*theURLGC = FindParameter( theList,
+						_T("JDF ResourcePool RunList LayoutElement FileSpec URL")) ;
+
+	if( theURLGC )
+	{
+		sprintf( URL, _T("\"%s\"/>"), theURL ) ;
+		theURLGC->SetAttrValue( _T("Value"), URL ) ;
+		Result = TRUE ;
+	}
+	return( Result ) ;
+}
+
+
+int SetSpotColorInk( UList *theList, TCHAR *NewSpotColor )
+{
+	int		 Result			= FALSE ;
+	TCHAR	 SpotColor[1024] ;
+
+//	SessionLogDirect( _T("C_Disk_PrintComplete.SetSpotColorInk: Adding Spot Color Ink(1): \"%s\"."), NewSpotColor ) ;
+
+	if( NewSpotColor == NULL )								{ return( TRUE ) ; }
+	if( NewSpotColor[0] == 0x00 )							{ return( TRUE ) ; }	//	NEW 07/20/10
+	if( stricmp( NewSpotColor, _T("No Override") ) == 0 )	{ return( TRUE ) ; }
+
+	UGenCon	*InkNameGC = FindParameter( theList,
+						_T("JDF ResourcePool ColorantControl ColorantParams SeparationSpec Name")) ;
+
+//	SessionLogDirect( _T("C_Disk_PrintComplete.SetSpotColorInk: Adding Spot Color Ink(2): \"%s\", InkNameGC: 0x%08lX."), NewSpotColor, InkNameGC ) ;
+	
+	if( InkNameGC )
+	{
+		sprintf( SpotColor, _T("\"%s\"/>"), NewSpotColor ) ;	//	CHANGED 09/18/09
+		InkNameGC->SetAttrValue( _T("Value"), SpotColor ) ;
+		Result = TRUE ;
+	}
+	else	//	NO SPOT COLOR INK WAS DEFINED...
+	{
+//		SessionLogDirect( _T("C_Disk_PrintComplete.SetSpotColorInk: Adding Spot Color Ink(3): \"%s\"."), NewSpotColor ) ;
+	
+		UGenCon	*ColorantGC = FindParameter( theList, _T("JDF ResourcePool ColorantControl")) ;
+
+		if( ColorantGC )
+		{
+			UList	*ColorantChildren = ColorantGC->GetChildren() ;
+			if( ColorantChildren )
+			{
+				UGenCon *ColorantParamsGC = CreateGC( _T("<ColorantParams>"), _T("") ) ;
+				if( ColorantParamsGC == NULL )	{ return( FALSE ) ; }
+				ColorantChildren->InsertBack( ColorantParamsGC ) ;
+
+				UGenCon *SeparationSpecGC = CreateGC( _T("<SeparationSpec"), _T("")) ;
+				if( SeparationSpecGC == NULL )	{ return( FALSE ) ; }
+				ColorantParamsGC->AddChildBack( SeparationSpecGC ) ;
+
+				UGenCon *ClassGC = CreateGC( _T("Class"), _T("\"Parameter\"")) ;
+				if( ClassGC == NULL )	{ return( FALSE ) ; }
+				SeparationSpecGC->AddChildBack( ClassGC ) ;
+
+				sprintf( SpotColor, _T("\"%s\"/>"), NewSpotColor ) ;
+				UGenCon *InkGC = CreateGC( _T("Name"), SpotColor ) ;
+				if( InkGC == NULL )	{ return( FALSE ) ; }
+				SeparationSpecGC->AddChildBack( InkGC ) ;
+
+				UGenCon *EndColorantParamsGC = CreateGC( _T("</ColorantParams>"), _T("") ) ;
+				if( EndColorantParamsGC == NULL )	{ return( FALSE ) ; }
+				ColorantParamsGC->AddChildBack( EndColorantParamsGC ) ;
+
+				UGenCon *EndColorant = CreateGC( _T("</ColorantControl>"), _T("")) ;
+				if( EndColorant == NULL )	{ return( FALSE ) ; }
+				ColorantChildren->InsertBack( EndColorant ) ;
+			}
+		}
+
+		UGenCon *StatusGC = FindParameter( theList, _T("JDF ResourcePool ColorantControl Status")) ;
+		if( StatusGC )
+		{
+			StatusGC->SetAttrValue( _T("Value"), _T("\"Available\">")) ;
+		}
+	}
+
+	return( Result ) ;
+}
+
+int SetBodyGloss( UList *theList, TCHAR *FrontGloss, TCHAR *BackGloss, TCHAR *InkName )
+{
+	TCHAR	 FixedName[1024] ;
+	TCHAR	*ResName		= NULL ;
+	TCHAR	*MediaID		= NULL ;
+	UGenCon	*aResourceGC	= NULL ;
+	int		 AddedGloss		= FALSE ;
+
+	if( gLogAmount >= 2 )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.SetBodyGloss: Front: \"%s\", Back: \"%s\", Ink: \"%s\""), FrontGloss, BackGloss, InkName ) ;
+	}
+
+	
+	UGenCon	*MediaGC = FindParameter( theList, _T("JDF ResourcePool Media(0)") ) ;
+	if( MediaGC )
+	{
+		if( BackGloss )
+		{
+			if( *BackGloss )
+			{
+				SetAGloss( MediaGC, BackGloss, _T("NXP:ClearCoatBack") ) ;
+				AddedGloss = TRUE ;
+			}
+		}
+		
+		if( FrontGloss )
+		{
+			if( *FrontGloss )
+			{
+				SetAGloss( MediaGC, FrontGloss, _T("NXP:ClearCoatFront") ) ;
+				AddedGloss = TRUE ;
+			}
+		}
+	}
+
+	if( AddedGloss )
+	{
+		Ensure5thInkDefined( theList, InkName ) ;
+	}
+
+	return( AddedGloss ) ;
+}
+
+
+
+int SetGloss( UList *theList, TCHAR *MediaBrand, TCHAR *FrontGloss, TCHAR *BackGloss, TCHAR *InkName )
+{
+	int		 Result			= FALSE ;
+	int		 AddedGloss		= FALSE ;
+	TCHAR	 Path[2048] ;
+	TCHAR	 FixedName[1024] ;
+	long	 loop ;
+	long	 NumEntries		=   0L ;
+	UGenCon	*aMediaGC		= NULL ;
+	UGenCon	*theBrandGC		= NULL ;
+	UGenCon	*FrontGlossGC	= NULL ;
+	UGenCon *BackGlossGC	= NULL ;
+	TCHAR	*Value			= NULL ;
+	UList	*MediaChildren	= NULL ;
+
+	for( loop = 0L ; loop < 10 ; loop++ )
+	{
+		sprintf( Path, _T("JDF ResourcePool Media(%ld)"), loop ) ;
+		aMediaGC = FindParameter( theList, Path ) ;
+		if( aMediaGC )
+		{
+			MediaChildren = aMediaGC->GetChildren() ;
+			theBrandGC = FindObject( MediaChildren, _T("Brand"), 0L ) ;
+			if( theBrandGC )
+			{
+				Value = theBrandGC->GetStringValue( _T("Value")) ;
+				FixName( Value, FixedName ) ;
+				if( stricmp( FixedName, MediaBrand ) == 0 )
+				{
+					if( BackGloss )
+					{
+						if( *BackGloss )
+						{
+							SetAGloss( aMediaGC, BackGloss, _T("NXP:ClearCoatBack") ) ;
+							AddedGloss = TRUE ;
+						}
+					}
+
+					if( FrontGloss )
+					{
+						if( *FrontGloss )
+						{
+							SetAGloss( aMediaGC, FrontGloss, _T("NXP:ClearCoatFront") ) ;
+							AddedGloss = TRUE ;
+						}
+					}
+				}
+			}
+		}
+		else
+		{
+			break ;
+		}
+	}
+
+	if( AddedGloss )
+	{
+		Ensure5thInkDefined( theList, InkName ) ;
+	}
+
+	return( Result ) ;
+}
+
+
+int SetDMCLThreshold( UList *XMLList, TCHAR *Value )
+{
+	int		 Result			= FALSE ;
+	TCHAR	 FixedName[1024] ;
+	UList	*RPChildren		= NULL ;
+
+	UGenCon *RenderingParams = FindParameter( XMLList, _T("JDF ResourcePool RenderingParams") ) ;
+	if( RenderingParams )
+	{
+		RPChildren = RenderingParams->GetChildren() ;
+		UGenCon *theThreshold = FindObject( RPChildren, _T("NXP:DMCLProcessColorantThreshold"), 0L ) ;
+		if( theThreshold )
+		{
+			sprintf( FixedName, _T("\"%s\""), Value ) ;
+			theThreshold->SetAttrValue( _T("Value"), FixedName ) ;
+			Result = TRUE ;
+		}
+		else	//	THRESHOLD DOES NOT EXIST, ADD IT.
+		{
+			theThreshold = new UGenCon( GetDataDictionary( _T("DDXMLParam"))) ;
+			if( theThreshold )
+			{
+				theThreshold->SetAttrValue( _T("Name"), _T("NXP:DMCLProcessColorantThreshold")) ;
+				theThreshold->SetName( _T("NXP:DMCLProcessColorantThreshold") ) ;
+				
+				sprintf( FixedName, _T("\"%s\""), Value ) ;
+				theThreshold->SetAttrValue( _T("Value"), FixedName ) ;
+				RPChildren->InsertBefore( theThreshold ) ;
+				Result = TRUE ;
+			}
+		}
+	}
+
+	return( Result ) ;
+}
+
+
+int	SetDMCLThresholdApp( UList *XMLList, TCHAR *Value )
+{
+	int		 Result			= FALSE ;
+	TCHAR	 FixedName[1024] ;
+	UList	*RPChildren		= NULL ;
+
+	UGenCon *RenderingParams = FindParameter( XMLList, _T("JDF ResourcePool RenderingParams") ) ;
+	if( RenderingParams )
+	{
+		RPChildren = RenderingParams->GetChildren() ;
+		UGenCon *theThreshold = FindObject( RPChildren, _T("NXP:DMCLThresholdApplication"), 0L ) ;
+		if( theThreshold )
+		{
+			sprintf( FixedName, _T("\"%s\""), Value ) ;
+			theThreshold->SetAttrValue( _T("Value"), FixedName ) ;
+			Result = TRUE ;
+		}
+		else	//	THRESHOLD DOES NOT EXIST, ADD IT.
+		{
+			theThreshold = new UGenCon( GetDataDictionary( _T("DDXMLParam"))) ;
+			if( theThreshold )
+			{
+				theThreshold->SetAttrValue( _T("Name"), _T("NXP:DMCLThresholdApplication")) ;
+				theThreshold->SetName( _T("NXP:DMCLThresholdApplication") ) ;
+				
+				sprintf( FixedName, _T("\"%s\""), Value ) ;
+				theThreshold->SetAttrValue( _T("Value"), FixedName ) ;
+				RPChildren->InsertBefore( theThreshold ) ;
+				Result = TRUE ;
+			}
+		}
+	}
+
+	return( Result ) ;
+}
+
+int SetHotCompensation( UList *XMLList, TCHAR *Value )
+{
+	int		 Result			= FALSE ;
+	TCHAR	 FixedName[1024] ;
+	UList	*RPChildren		= NULL ;
+
+	UGenCon *RenderingParams = FindParameter( XMLList, _T("JDF ResourcePool ColorantControl") ) ;
+	if( RenderingParams )
+	{
+		RPChildren = RenderingParams->GetChildren() ;
+		UGenCon *HotOffset = FindObject( RPChildren, _T("NXP:HotOffsetCompensation"), 0L ) ;
+		if( HotOffset )
+		{
+			sprintf( FixedName, _T("\"%s\""), Value ) ;
+			HotOffset->SetAttrValue( _T("Value"), FixedName ) ;
+			Result = TRUE ;
+		}
+		else	//	THRESHOLD DOES NOT EXIST, ADD IT.
+		{
+			HotOffset = new UGenCon( GetDataDictionary( _T("DDXMLParam"))) ;
+			if( HotOffset )
+			{
+				HotOffset->SetAttrValue( _T("Name"), _T("NXP:HotOffsetCompensation")) ;
+				HotOffset->SetName( _T("NXP:HotOffsetCompensation") ) ;
+				
+				sprintf( FixedName, _T("\"%s\""), Value ) ;
+				HotOffset->SetAttrValue( _T("Value"), FixedName ) ;
+				RPChildren->InsertBefore( HotOffset ) ;
+				Result = TRUE ;
+			}
+		}
+	}
+
+	return( Result ) ;
+}
+
+
+void Ensure5thInkDefined( UList *theList, TCHAR *InkName )
+{
+
+//	SessionLogDirect( _T("C_Disk_PrintComplete.Ensure5thInkDefined: Adding Spot Color Ink: \"%s\"."), InkName ) ;
+
+	if( InkName == NULL )								{ return( TRUE ) ; }
+	if( InkName[0] == 0x00 )							{ return( TRUE ) ; }	//	NEW 07/20/10
+	if( stricmp( InkName, _T("No Override") ) == 0 )	{ return( TRUE ) ; }
+	
+	//	BE SURE WE HAVE THE NexPress DryInk clear DEFINED.
+	UGenCon	*InkNameGC = FindParameter( theList,
+					_T("JDF ResourcePool ColorantControl ColorantParams SeparationSpec Name")) ;
+
+	if( InkNameGC == NULL )	//	NAME NOT DEFINED
+	{
+//		SessionLogDirect( _T("C_Disk_PrintComplete.Ensure5thInkDefined: Adding Spot Color Ink: \"%s\"."), InkName ) ;
+		
+		UGenCon	*ColorantGC = FindParameter( theList, _T("JDF ResourcePool ColorantControl")) ;
+
+		if( ColorantGC )
+		{
+			UList	*ColorantChildren = ColorantGC->GetChildren() ;
+			if( ColorantChildren )
+			{
+				UGenCon *ColorantParamsGC = CreateGC( _T("<ColorantParams>"), _T("") ) ;
+				if( ColorantParamsGC == NULL )	{ return( FALSE ) ; }
+				ColorantChildren->InsertBack( ColorantParamsGC ) ;
+
+				UGenCon *SeparationSpecGC = CreateGC( _T("<SeparationSpec"), _T("")) ;
+				if( SeparationSpecGC == NULL )	{ return( FALSE ) ; }
+				ColorantParamsGC->AddChildBack( SeparationSpecGC ) ;
+
+				UGenCon *ClassGC = CreateGC( _T("Class"), _T("\"Parameter\"")) ;
+				if( ClassGC == NULL )	{ return( FALSE ) ; }
+				SeparationSpecGC->AddChildBack( ClassGC ) ;
+
+				TCHAR	FormattedInk[128] ;
+				sprintf( FormattedInk, _T("\"%s\"/>"), InkName ) ;
+				UGenCon *InkGC = CreateGC( _T("Name"), FormattedInk ) ;		// _T("\"NexPress DryInk clear\"/>")) ;	// InkName
+				if( InkGC == NULL )	{ return( FALSE ) ; }
+				SeparationSpecGC->AddChildBack( InkGC ) ;
+
+				UGenCon *EndColorantParamsGC = CreateGC( _T("</ColorantParams>"), _T("") ) ;
+				if( EndColorantParamsGC == NULL )	{ return( FALSE ) ; }
+				ColorantParamsGC->AddChildBack( EndColorantParamsGC ) ;
+
+				UGenCon *EndColorant = CreateGC( _T("</ColorantControl>"), _T("")) ;
+				if( EndColorant == NULL )	{ return( FALSE ) ; }
+				ColorantChildren->InsertBack( EndColorant ) ;
+			}
+		}
+
+		UGenCon *StatusGC = FindParameter( theList, _T("JDF ResourcePool ColorantControl Status")) ;
+		if( StatusGC )
+		{
+			StatusGC->SetAttrValue( _T("Value"), _T("\"Available\">")) ;
+		}
+	}
+}
+
+int SetAGloss( UGenCon *aMediaGC, TCHAR *theGloss, TCHAR *theOfficialName )
+{
+	TCHAR	 FixedName[1024] ;
+
+	if( aMediaGC == NULL )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete: Error: MediaGC not found for Gloss: \"%s\" and Name: \"%s\"."), theGloss, theOfficialName ) ;
+		return( FALSE ) ;
+	}
+	
+	sprintf( FixedName, _T("\"%s\""), theGloss ) ;
+
+	UList *MediaChildren = aMediaGC->GetChildren() ;
+
+	UGenCon *GlossGC  = FindObject( MediaChildren, theOfficialName, 0L ) ;
+
+	if( stricmp( theGloss, _T("None")) == 0 )
+	{
+		if( GlossGC )
+		{
+			if( MediaChildren )
+			{
+				MediaChildren->RemoveItem( GlossGC ) ;
+				delete GlossGC ;
+			}
+		}
+	}
+	else
+	{
+		if( GlossGC )
+		{
+			GlossGC->SetAttrValue( _T("Value"), FixedName ) ; 
+		}
+		else
+		{
+			GlossGC = CreateGC( theOfficialName, FixedName ) ;
+			MediaChildren->InsertBefore( GlossGC ) ;
+		}
+	}
+	return( TRUE ) ;
+}
+
+int	TranslateValue( TCHAR *Value )
+{
+	if( stricmp( _T("IQ Image Coat"), Value ) == 0 )
+	{
+		strcpy( Value, _T("iqImage")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("IQ Flood Coat"), Value ) == 0 )
+	{
+		strcpy( Value, _T("iqFlood")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("Protection Coat"), Value ) == 0 )
+	{
+		strcpy( Value, _T("protection")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("Gloss Coat"), Value ) == 0 )
+	{
+		strcpy( Value, _T("gloss")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("Dimensional Coat"), Value ) == 0 )
+	{
+		strcpy( Value, _T("raiseAllSimple")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("Lustre Photo 60"), Value ) == 0 )
+	{
+		strcpy( Value, _T("texture10")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("Linen 80"), Value ) == 0 )
+	{
+		strcpy( Value, _T("texture9")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("Linen 35"), Value ) == 0 )
+	{
+		strcpy( Value, _T("texture8")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("Mesh 50"), Value ) == 0 )
+	{
+		strcpy( Value, _T("texture7")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("Mesh 70"), Value ) == 0 )
+	{
+		strcpy( Value, _T("texture6")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("Pebble 50"), Value ) == 0 )
+	{
+		strcpy( Value, _T("texture5")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("Smooth 110"), Value ) == 0 )
+	{
+		strcpy( Value, _T("texture4")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("None"), Value ) == 0 )
+	{
+		strcpy( Value, _T("None")) ;			//	EVENTUALLY THIS NEEDS TO CHANGE TO "false"
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("low"), Value ) == 0 )
+	{
+		strcpy( Value, _T("Low")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("medium"), Value ) == 0 )
+	{
+		strcpy( Value, _T("Medium")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("high"), Value ) == 0 )
+	{
+		strcpy( Value, _T("High")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("less than"), Value ) == 0 )
+	{
+		strcpy( Value, _T("Below")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("greater than"), Value ) == 0 )
+	{
+		strcpy( Value, _T("Above")) ;
+		return( TRUE ) ;
+	}
+
+	return( FALSE ) ;
+}
+
+
+int SetQuantity( UList *theList, long Quantity )
+{
+	int		Result = FALSE ;
+
+	TCHAR	QuantityText[32] ;
+	sprintf( QuantityText, _T("\"%ld\""), Quantity ) ;
+
+	UGenCon *theParameter = FindParameter( theList, _T("JDF ResourcePool Component Amount")) ;
+	if( theParameter )
+	{
+		theParameter->SetAttrValue( _T("Value"), QuantityText ) ;
+		Result = 1 ;
+	}
+
+	theParameter = FindParameter( theList, _T("JDF ResourceLinkPool ComponentLink Amount") ) ;
+	if( theParameter )
+	{
+		theParameter->SetAttrValue( _T("Value"), QuantityText ) ;
+		Result += 2 ;
+	}
+
+	return( Result ) ;
+}
+
+int SetBleed( UList *XMLList, double Bleed )
+{
+	int		Result = FALSE ;
+	
+//	SessionLogDirect( _T("C_Disk_PrintComplete.SetBleed: Bleed: %lf"), Bleed ) ;
+
+	if( Bleed >= 0.0 )
+	{
+		TCHAR	BleedText[32] ;
+		sprintf( BleedText, _T("\"%lf\"/>"), Bleed * 72 ) ;		//	CONVERT TO POINTS
+
+		UGenCon *theParameter = FindParameter( XMLList, _T("JDF ResourcePool LayoutPreparationParams PageCell NXP:Bleed")) ;
+		
+//		SessionLogDirect( _T("C_Disk_PrintComplete.SetBleed: PageCell: 0x%08lX"), theParameter ) ;
+
+		if( theParameter )
+		{
+//			SessionLogDirect( _T("C_Disk_PrintComplete.SetBleed: PageCell: \"%s\" || \"%s\"."), 
+//				theParameter->GetStringValue( _T("Name")), theParameter->GetStringValue( _T("Value"))  ) ;
+			
+			UGenCon *theParameter1 = FindParameter( XMLList, _T("JDF ResourcePool LayoutPreparationParams PageCell TrimSize")) ;
+			if ( theParameter1)
+			{ //if there is trimsize, then bleed is not the last parameter
+				sprintf( BleedText, _T("\"%lf\""), Bleed * 72 ) ;		//	CONVERT TO POINTS			
+			}
+			theParameter->SetAttrValue( _T("Value"), BleedText ) ;
+			Result = 1 ;
+		}
+	}
+
+	return( Result ) ;
+}
+
+
+/*
+int SetSubstrate( UList *theList, TCHAR *SubstrateName, TCHAR *NewSubstrate )
+{
+	TCHAR	 FixedName[1024] ;
+
+	UGenCon *theParameter = FindParameter( theList, _T("JDF ResourcePool DigitalPrintingParams")) ;
+	if( theParameter == NULL )			{ return( FALSE ) ; }
+
+	UGenCon *ResourcePoolGC = FindParameter( theList, _T("JDF ResourcePool")) ;
+	if( ResourcePoolGC == NULL )			{ return( FALSE ) ; }
+
+	TCHAR	QuotedSubstrate[1024] ;
+	sprintf( QuotedSubstrate, _T("\"%s\""), NewSubstrate ) ;
+
+	TCHAR	*ParamName		= NULL ;
+	UGenCon	*aParamGC		= NULL ;
+	UGenCon	*RunTagGC		= NULL ;
+
+	TCHAR	*theMediaRef	= NULL ;
+
+	UList	*theDigPrntParams = theParameter->GetChildren() ;
+
+	long	Subscript	= 0 ;
+
+	long	NumEntries	= theDigPrntParams->GetNumEntries() ;
+	long	EntryNum ;
+
+	for( EntryNum = 0L ; EntryNum < NumEntries ; EntryNum++ )
+	{
+		aParamGC = FindObject( theDigPrntParams, _T("DigitalPrintingParams"), Subscript ) ;
+		if( aParamGC )
+		{
+			RunTagGC = FindObjectByGC( aParamGC, _T("RunTags"), 0 ) ;
+			if( RunTagGC )
+			{
+				ParamName = RunTagGC->GetStringValue( _T("Value")) ;
+				
+				FixName( ParamName, FixedName ) ;
+
+				if( stricmp( FixedName, SubstrateName ) == 0 )
+				{
+					aParamGC = FindObjectByGC( aParamGC, _T("MediaRef"), 0 ) ;
+					if( aParamGC )
+					{
+						aParamGC = FindObjectByGC( aParamGC, _T("rRef"), 0 ) ;
+						theMediaRef = aParamGC->GetStringValue( _T("Value")) ;
+						if( theMediaRef )
+						{
+							FixName( theMediaRef, FixedName ) ;
+							aParamGC = FindMediaByID( theList, FixedName ) ;
+							if( aParamGC )
+							{
+								aParamGC = FindObjectByGC( aParamGC, _T("Brand"), 0L ) ;
+								if( aParamGC )
+								{
+									aParamGC->SetAttrValue( _T("Value"), QuotedSubstrate ) ;
+									return( TRUE ) ;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		Subscript++ ;
+	}
+	return( FALSE ) ;
+}
+*/
+
+//	Which: 1 = Body, 2 = Cover, 3 = Insert
+int SetTheSubstrate( UList *theList, TCHAR *NewSubstrate, int Which )
+{
+	TCHAR	MediaPath[256] ;
+	sprintf( MediaPath, _T("JDF ResourcePool Media(%d)"), Which ) ;
+	
+
+	SessionLogDirect( _T("C_Disk_PrintComplete: SetTheSubstrate: MediaPath: \"%s\". NewSubstrate: \"%s\"."), MediaPath, NewSubstrate ) ;
+	
+
+	UGenCon *MediaGC = FindParameter( theList, MediaPath ) ;
+	if( MediaGC == NULL )				{ return( FALSE ) ; }
+
+
+	SessionLogDirect( _T("C_Disk_PrintComplete: SetTheSubstrate: MediaGC: 0x%08lX."), MediaGC ) ;
+
+
+	UGenCon	*aResourceGC = GetParameterGC( MediaGC->GetChildren(), _T("Brand")) ;
+	if( aResourceGC )
+	{
+		TCHAR	QuotedSubstrate[1024] ;
+		sprintf( QuotedSubstrate, _T("\"%s\""), NewSubstrate ) ;
+		aResourceGC->SetAttrValue( _T("Value"), QuotedSubstrate ) ;
+		
+		
+	SessionLogDirect( _T("C_Disk_PrintComplete: SetTheSubstrate: aResourceGC: 0x%08lX, QuotedSubstrate: %s."), aResourceGC, QuotedSubstrate ) ;
+
+
+		return( TRUE ) ;
+	}
+
+	return( FALSE ) ;
+}
+
+/*	OLD WAY
+int SetBodySubstrate( UList *theList, TCHAR *NewSubstrate )
+{
+	TCHAR	 FixedName[1024] ;
+	TCHAR	*ResName		= NULL ;
+	TCHAR	*MediaID		= NULL ;
+	UGenCon	*aResourceGC	= NULL ;
+
+	UGenCon *MediaRef = FindParameter( theList, _T("JDF ResourcePool DigitalPrintingParams MediaRef")) ;
+	if( MediaRef == NULL )				{ return( FALSE ) ; }
+
+	UGenCon	*theRef	 = FindObjectByGC( MediaRef, _T("rRef"), 0 ) ;
+	if( theRef == NULL )				{ return( FALSE ) ; }
+
+	TCHAR	*theLink = theRef->GetStringValue( _T("Value")) ;
+	if( theLink == NULL )				{ return( FALSE ) ; }
+
+	FixName( theLink, FixedName ) ;
+
+	UGenCon *MediaGC = FindMediaByID( theList, FixedName ) ;
+	if( MediaGC )
+	{
+		aResourceGC = GetParameterGC( MediaGC->GetChildren(), _T("Brand")) ;
+		if( aResourceGC )
+		{
+			TCHAR	QuotedSubstrate[1024] ;
+			sprintf( QuotedSubstrate, _T("\"%s\""), NewSubstrate ) ;
+			aResourceGC->SetAttrValue( _T("Value"), QuotedSubstrate ) ;
+			return( TRUE ) ;
+		}
+	}
+
+	return( FALSE ) ;
+}
+*/
+
+int SaveSlugText( UGenCon *OrderGC, UGenCon *PageGC )
+{
+	TCHAR	theSlugText[2048] ;
+
+	TCHAR	*OrderID = OrderGC->GetStringValue( _T("OrderID")) ;
+	long	 GroupID = PageGC->GetLongValue( _T("GroupID")) ;
+	TCHAR	*PDFPath = PageGC->GetStringValue( _T("PDFImagePath")) ;
+	
+	if( GetSlugText( OrderGC, GroupID, theSlugText ))
+	{
+		return( TRUE ) ;	//	ALREADY BEEN SET
+	}
+	
+	TCHAR	*BPString1	= PageGC->GetStringValue(_T("BackPrintMessage1")) ;
+	TCHAR	*BPString2	= PageGC->GetStringValue(_T("BackPrintMessage2")) ;
+	
+	RemoveTrailingNewLine( BPString1 ) ;
+	RemoveTrailingNewLine( BPString2 ) ;
+	
+	//	ONLY UPDATE THE UserText IF WE HAVE SOMETHING TO REPLACE IT WITH.
+	if( BPString1[0] || BPString2[0] )			// New: 02/03/10
+	{
+//		sprintf( theSlugText, _T("\"%s %s\"/>"), BPString1, BPString2 ) ;
+		sprintf( theSlugText, _T("%s %s"), BPString1, BPString2 ) ;
+		UList	*SlugList = OrderGC->GetLongValue( _T("SlugList")) ;
+		if( SlugList == NULL )
+		{
+			SlugList = new UList ;
+			OrderGC->SetLongValue( _T("SlugList"), SlugList ) ;
+		}
+
+		UGenCon	*aSlugGC = new UGenCon( GetDataDictionary( _T("DD_PDF_SlugLine"))) ;
+		aSlugGC->SetAttrValue( _T("OrderID"), OrderID ) ;
+		aSlugGC->SetLongValue( _T("GroupID"), GroupID ) ;
+		aSlugGC->SetAttrValue( _T("SlugText"), theSlugText ) ;
+		aSlugGC->SetAttrValue( _T("PDFPath"), PDFPath ) ;
+		SlugList->InsertBack( aSlugGC ) ;
+		
+		if( gLogAmount >= 2 )
+		{
+			SessionLogDirect( _T("SaveSlugText: OrderID: \"%s\", GroupID: %ld, SlugText: \"%s\"."), OrderID, GroupID, theSlugText ) ;
+		}
+	}
+	return( TRUE ) ;
+}
+
+UGenCon *GetSlugText( UGenCon *OrderGC, long GroupID, TCHAR *SlugText )
+{
+	TCHAR	*OrderID  = OrderGC->GetStringValue( _T("OrderID")) ;
+	UList	*SlugList = (UList *) OrderGC->GetLongValue( _T("SlugList")) ;
+
+	if( SlugList )
+	{
+		UGenCon	*aSlugGC ;
+		long NumSlugs = SlugList->GetNumEntries() ;
+		long SlugNum ;
+		for( SlugNum = 0L ; SlugNum < NumSlugs ; SlugNum++ )
+		{
+			aSlugGC = (UGenCon *) SlugList->GetAt( SlugNum ) ;
+			if( aSlugGC )
+			{
+				if( stricmp( OrderID, aSlugGC->GetStringValue( _T("OrderID"))) == 0 )
+				{
+					if( GroupID == aSlugGC->GetLongValue( _T("GroupID")))
+					{
+						if( gLogAmount >= 2 )
+						{
+							SessionLogDirect( _T("GetSlugText: OrderID: \"%s\", GroupID: %ld, SlugText: \"%s\"."), OrderID, GroupID, SlugText ) ;
+						}
+	
+						strcpy( SlugText, aSlugGC->GetStringValue( _T("SlugText"))) ;
+						return( aSlugGC ) ;
+					}
+				}
+			}
+		}
+	}
+	return( NULL ) ;
+}
+
+int UpdateSlug( UList *theList )
+{
+	UGenCon *UserText = FindParameter( theList, _T("JDF ResourcePool LayoutPreparationParams NXP:MarkParams NXP:UserText")) ;
+	if( UserText == NULL )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.UpdateSlug: No User Text defined.")) ;
+		return( FALSE ) ; 
+	}
+
+	TCHAR	theSlugText[2048] ;
+
+	long	GroupID = gPageGC->GetLongValue( _T("GroupID")) ;
+	UGenCon *aSlugGC = GetSlugText( gOrderGC, GroupID, theSlugText ) ;
+
+	if( aSlugGC && *theSlugText )
+	{
+		ExpandFileName( theSlugText ) ;
+
+		if( gLogAmount >= 2 )
+		{
+			SessionLogDirect( _T("C_Disk_PrintComplete.UpdateSlug: Expanded FileName: \"%s\""), theSlugText ) ;
+		}
+
+		TCHAR	FormattedSlugText[2048] ;
+		sprintf( FormattedSlugText, _T("\"%s\"/>"), theSlugText ) ;
+		UserText->SetAttrValue( _T("Value"), FormattedSlugText ) ;
+	}
+	
+	return( TRUE ) ;
+}
+
+int UpdateCreoSlug( XML *theXMLParser, UList *theList )
+{
+	UGenCon *aGC = NULL ;
+
+	TCHAR	theSlugText[2048] ;
+	long	 GroupID = gPageGC->GetLongValue( _T("GroupID")) ;
+	UGenCon *aSlugGC = GetSlugText( gOrderGC, GroupID, theSlugText ) ;
+
+	if( aSlugGC && *theSlugText )
+	{
+		ExpandFileName( theSlugText ) ;
+		StripTrailingBlanks( theSlugText ) ;
+	
+		if( gLogAmount >= 2 )
+		{
+			SessionLogDirect( _T("C_Disk_PrintComplete.UpdateSlug: Expanded FileName: \"%s\""), theSlugText ) ;
+		}
+
+		UList	*SlugList = theXMLParser->FindListByValue( theList, _T("JobNameForDisplay")) ;
+		if( SlugList )
+		{
+			int NumEntries = SlugList->GetNumEntries() ;
+			SessionLogDirect( _T("UpdateCreoSlug:(3) NumEntries: %ld"), NumEntries ) ;
+			if( NumEntries == 6 )
+			{
+				aGC = SlugList->GetAt( 4 ) ;
+				aGC->SetAttrValue( _T("Value"), theSlugText ) ;
+			}
+			else
+			{
+				aGC = CreateGC( _T(""), theSlugText ) ;
+				SlugList->InsertAt( aGC, 4L ) ;
+			}
+		}
+		return( TRUE ) ;
+	}
+
+	return( FALSE ) ;
+}
+
+RemoveTrailingNewLine( TCHAR *String )
+{
+	TCHAR	Temp[2] ;
+	long	Length = strlen( String ) - 1L ;
+	if( String[Length] == 0x0A )
+	{
+		String[Length] = *Temp ;
+	}
+}
+
+TCHAR *ExpandFileName( TCHAR *FileName )
+{
+	int		Count = 0 ;
+	TCHAR	Source[2048] ;
+	TCHAR	Temp[1024] ;
+	TCHAR	Format[1024] ;
+	int		theChar ;
+
+	TCHAR	*SPtr = FileName ;
+	TCHAR	*DPtr = Source ;
+	TCHAR	*TPtr = NULL ;
+
+	strcpy( Source, FileName ) ;
+/*	while( *SPtr )
+	{
+		if( *SPtr >= 'a' && *SPtr <= 'z' )
+			{ *DPtr = *SPtr - 32 ; }
+		else
+			{ *DPtr = *SPtr ; }
+		SPtr++ ;
+		DPtr++ ;
+	}
+	*DPtr = 0x00 ;
+*/
+	TCHAR	*TextAttr = NULL ;
+
+	SPtr = Source ;
+	DPtr = FileName ;
+
+	while( *SPtr )
+	{
+		if( *SPtr == '[' )
+		{
+			SPtr++ ;
+			while( *SPtr != ']' && *SPtr )
+			{
+				theChar = *SPtr ;
+				switch( theChar )
+				{
+					case	'-'	:
+						sprintf( Temp, _T("%s %s %04ld %04ld"), 
+							gCompletePrint->GetStringValue(_T("BatchID")),
+							gCompletePrint->GetStringValue(_T("OrderID")),
+							gCompletePrint->GetLongValue(_T("OrderItemID")),
+							gCompletePrint->GetLongValue(_T("PageNumber"))) ;
+						SPtr++ ;
+						break ;
+
+					case	'B'	:
+						strcpy( Temp, gCompletePrint->GetStringValue( _T("BatchID"))) ;
+						SPtr++ ;
+						break ;
+
+					case	'D'	:
+						sprintf( Temp, _T("%09ld"), gCompletePrint->GetLongValue(_T("JobID"))) ;
+						SPtr++ ;
+						break ;
+
+					case	'G'	:
+						Count = 0 ;
+						while( *SPtr == 'G' ) { Count++ ; SPtr++ ; }
+
+						if( Count > 1 )
+							{ sprintf( Format, _T("%%0%ldld"), Count ) ; }
+						else
+							{ sprintf( Format, _T("%%ld") ) ; }
+
+						sprintf( Temp, Format, gCompletePrint->GetLongValue(_T("PageNumber"))) ;
+//		SessionLogDirect( _T("C_Disk_PrintComplete.ExpandFileName: Temp (G): \"%s\""), Temp ) ;
+						break ;
+
+					case	'I'	:
+						Count = 0 ;
+						while( *SPtr == 'I' ) { Count++ ; SPtr++ ; }
+
+						if( Count > 1 )
+							{ sprintf( Format, _T("%%0%ldld"), Count ) ; }
+						else
+							{ sprintf( Format, _T("%%ld") ) ; }
+
+						sprintf( Temp, Format, gCompletePrint->GetLongValue(_T("OrderSeq"))) ;
+//		SessionLogDirect( _T("C_Disk_PrintComplete.ExpandFileName: Temp (I): \"%s\""), Temp ) ;
+						break ;
+
+					case	'L' :
+						Count = 0 ;
+						while( *SPtr == 'L' ) { Count++ ; SPtr++ ; }
+
+						if( Count > 1 )
+							{ sprintf( Format, _T("%%0%ldld"), Count ) ; }
+						else
+							{ sprintf( Format, _T("%%ld") ) ; }
+							
+							if( gPrinterSetup->GetLongValue( _T("ForcePDFOutput")) )
+							{
+								sprintf( Temp, Format, gOrderGC->GetNumEntries()) ;
+							}
+							else
+							{
+								sprintf( Temp, Format, gCompletePrint->GetLongValue(_T("ProductPageSeqLast"))) ;
+							}
+						
+		SessionLogDirect( _T("C_Disk_PrintComplete.ExpandFileName: Temp (L): \"%s\""), Temp ) ;
+						break ;
+					
+					case	'O'	:
+						strcpy( Temp, gCompletePrint->GetStringValue( _T("OrderID"))) ;
+						SPtr++ ;
+						break ;
+
+					case	'S'	:
+						Count = 0 ;
+						while( *SPtr == 'S' ) { Count++ ; SPtr++ ; }
+
+						if( Count > 1 )
+							{ sprintf( Format, _T("%%0%ldld"), Count ) ; }
+						else
+							{ sprintf( Format, _T("%%ld") ) ; }
+
+						sprintf( Temp, Format, gCompletePrint->GetLongValue(_T("OrderItemSeq"))) ;
+						break ;
+
+					case	'U'	:
+						Count = 0 ;
+						while( *SPtr == 'U' ) { Count++ ; SPtr++ ; }
+
+						if( Count > 1 )
+							{ sprintf( Format, _T("%%0%ldld"), Count ) ; }
+						else
+							{ sprintf( Format, _T("%%ld") ) ; }
+
+						sprintf( Temp, Format, gCompletePrint->GetLongValue(_T("OrderSeq"))) ;
+						break ;
+
+					case	'^'	:	//	THE DATETIME YYMMDDHHMMSSsss
+						GetSortableTimeNow( Temp ) ;
+						SPtr++ ;
+						break ;
+
+					default:
+						*DPtr++ = *SPtr ;
+						break ;
+				}
+			}
+
+			TPtr = Temp ;
+			while( *TPtr )
+			{
+				*DPtr++ = *TPtr++ ;
+			}
+			*DPtr = 0x00 ;
+
+			SPtr++ ;
+		}
+		else
+		{
+			*DPtr++ = *SPtr++ ;
+		}
+	}
+	*DPtr = 0x00 ;
+
+	return( FileName ) ;
+}
+
+
+UGenCon *FindMediaByID( UList *theList, TCHAR *theID )
+{
+	TCHAR	 FixedName[1024] ;
+
+	UGenCon	*aResourceGC	= NULL ;
+	TCHAR	*ResName		= NULL ;
+	TCHAR	*MediaID		= NULL ;
+
+	UGenCon *theResourcePool = FindParameter( theList, _T("JDF ResourcePool")) ;
+	if( theResourcePool == NULL )		{ return( FALSE ) ; }
+
+	UList	*theResources = theResourcePool->GetChildren() ;
+	if( theResources == NULL )			{ return( FALSE ) ; }
+
+	long	NumEntries = theResources->GetNumEntries() ;
+	long	EntryNum ;
+
+	for( EntryNum = 0L ; EntryNum < NumEntries ; EntryNum++ )
+	{
+		aResourceGC = theResources->GetAt( EntryNum ) ;
+
+		ResName = aResourceGC->GetStringValue(_T("Name")) ;
+//		ResName = aResourceGC->GetName() ;
+		FixName( ResName, FixedName ) ;
+
+
+		if( stricmp( FixedName, _T("Media")) == 0 )
+		{
+			MediaID = GetMediaID( aResourceGC->GetChildren() ) ;
+			if( MediaID )
+			{
+				FixName( MediaID, FixedName ) ;
+				if( stricmp( FixedName, theID ) == 0 )
+				{
+					return( aResourceGC ) ;
+				}
+			}
+		}
+	}
+	return( FALSE ) ;
+}
+
+TCHAR *GetMediaID( UList *theMediaParamList )
+{
+	UGenCon *ParamGC = GetParameterGC( theMediaParamList, _T("ID") ) ;
+	if( ParamGC )
+	{
+		return( ParamGC->GetStringValue( _T("Value"))) ;
+	}
+	return( NULL ) ;
+}
+
+UGenCon *GetParameterGC( UList *theList, TCHAR *ParameterName )
+{
+	TCHAR	 FixedName[1024] ;
+	TCHAR	*ParamName	= NULL ;
+	UGenCon	*ParamGC	= NULL ;
+
+	long	NumEntries = theList->GetNumEntries() ;
+	long	EntryNum ;
+
+	for( EntryNum = 0L ; EntryNum < NumEntries ; EntryNum++ )
+	{
+		ParamGC = theList->GetAt( EntryNum ) ;
+
+		ParamName = ParamGC->GetStringValue(_T("Name")) ;
+//		ParamName = ParamGC->GetName() ;
+		FixName( ParamName, FixedName ) ;
+
+		if( stricmp( FixedName, ParameterName ) == 0 )
+		{
+			return( ParamGC ) ;
+		}
+	}
+	return( NULL ) ;
+}
+
+
+int FixName( TCHAR *SrcString, TCHAR *DstString )
+{
+	int		SPos = 0L ;
+	int		DPos = 0L ;
+
+	int		aChar = 0L ;
+
+	while( SrcString[SPos] )
+	{
+		aChar = SrcString[SPos] ;
+		if( aChar != '<' && aChar != '>' &&
+			aChar != '\\' && aChar != '/' &&
+			aChar != '\"' )
+		{
+			DstString[DPos] = aChar ;
+			DPos++ ;
+		}
+		SPos++ ;
+	}
+	DstString[DPos] = 0x00 ;
+	return( TRUE ) ;
+}
+
+void PrintObject( UGenCon *anEntry, long PrintName, long Spaces )
+{
+	UList	*MoreChildren = NULL ;
+	if( PrintName )
+	{
+		PrintSpaces( Spaces ) ;
+		SessionLogDirect( _T("%s\r\n"), anEntry->GetStringValue(_T("Name")) ) ;
+//		SessionLogDirect( _T("%s\r\n"), anEntry->GetName()) ;
+	}
+
+	UList	*theChildren = anEntry->GetChildren() ;
+	if( theChildren )
+	{
+		long	loop ;
+		long	Entries = theChildren->GetNumEntries() ;
+		TCHAR	*Name ;
+		TCHAR	*Value ;
+		UGenCon	*anObj = NULL ;
+
+		Spaces += 4 ;
+
+		for( loop = 0L ; loop < Entries ; loop++ )
+		{
+			anObj = theChildren->GetAt( loop ) ;
+			if( anObj )
+			{
+				Name = anObj->GetStringValue(_T("Name")) ;
+				Value = anObj->GetStringValue( _T("Value")) ;
+
+				PrintSpaces( GetSpaces( Name, Spaces )) ;
+
+				if( Name[0] && Value[0] )
+				{
+					SessionLogDirect( _T("%s=%s\r\n"), Name, Value ) ;
+				}
+				else
+				{
+					if( Name[0] )
+					{
+						SessionLogDirect( _T("%s\r\n"), Name ) ;
+					}
+					else
+					{
+						SessionLogDirect( _T("%s\r\n"), Value ) ;
+					}
+				}
+
+				MoreChildren = anObj->GetChildren() ;
+				if( MoreChildren)
+				{
+					PrintObject( anObj, 0L, Spaces + 4 ) ;
+				}
+			}
+		}
+	}
+}
+
+void PrintSpaces( long Spaces )
+{
+	long	loop ;
+	for( loop = 0L ; loop < Spaces ; loop++ )
+	{ printf( _T(" ")) ; }
+}
+
+
+
+UGenCon *FindParameter( UList *theList, TCHAR *Path )
+{
+	long	 Subscript ;
+	UGenCon	*aGC = NULL ;
+	UList	*NextList = NULL ;
+	UParser	*theParser = new UParser ;
+	theParser->SetText( Path ) ;
+
+	TCHAR	Token[1024] ;
+	theParser->GetToken( Token ) ;
+	Subscript = GetSubScript( theParser ) ;
+	aGC = FindObject( theList, Token, Subscript ) ;
+	theParser->GetToken( Token ) ;
+	Subscript = GetSubScript( theParser ) ;
+
+	while( Token[0] && aGC )
+	{
+		if( aGC )
+		{
+			NextList = aGC->GetChildren() ;
+			if( NextList && Token[0] )
+			{
+				aGC = FindObject( NextList, Token, Subscript ) ;
+			}
+		}
+		theParser->GetToken( Token ) ;
+		Subscript = GetSubScript( theParser ) ;
+	}
+
+	theParser->SetText( NULL ) ;
+	delete theParser ;
+
+	return( aGC ) ;
+}
+
+long GetSubScript( UParser *theParser )
+{
+	TCHAR	Token[2048] ;
+	long	Subscript = 0L ;
+
+	theParser->GetToken( Token ) ;
+	if( Token[0] == '(' )
+	{
+		theParser->GetToken( Token ) ;
+		Subscript = atoi( Token ) ;
+		theParser->GetToken( Token ) ;
+	}
+	else
+	{
+		theParser->PutBack() ;
+	}
+	return( Subscript ) ;
+}
+
+UGenCon *FindObjectByGC( UGenCon *aGC, TCHAR *Name, long Subscript )
+{
+	if( aGC )
+	{
+		return( FindObject( aGC->GetChildren(), Name, Subscript )) ;
+	}
+
+	return( NULL ) ;
+}
+
+UGenCon *FindObject( UList *theList, TCHAR *Name, long Subscript )
+{
+	if( theList )
+	{
+		TCHAR	*ObjName = NULL ;
+		UGenCon	*aGC = NULL ;
+
+		long	loop ;
+		long	NumEntries = theList->GetNumEntries() ;
+
+		for( loop = 0 ; loop < NumEntries ; loop++ )
+		{
+			aGC = theList->GetAt( loop ) ;
+			if( aGC )
+			{
+				ObjName = aGC->GetStringValue(_T("Name")) ;
+//				ObjName = aGC->GetName() ;
+
+//				SessionLogDirect( _T("C_Disk_PrintComplete.FindObject: Looking For \"%s\" at \"%s\""), Name, ObjName ) ;
+
+				if( strstr( ObjName, Name ) )
+				{
+					Subscript-- ;
+					if( Subscript <= 0 )
+					{
+						return( aGC ) ;
+					}
+				}
+			}
+		}
+	}
+	return( NULL ) ;
+}
+
+UGenCon *FindObjectByValue( UList *theList, TCHAR *Value, long Subscript )
+{
+	if( theList )
+	{
+		TCHAR	*ObjValue = NULL ;
+		UGenCon	*aGC = NULL ;
+
+		long	loop ;
+		long	NumEntries = theList->GetNumEntries() ;
+
+		for( loop = 0 ; loop < NumEntries ; loop++ )
+		{
+			aGC = theList->GetAt( loop ) ;
+			if( aGC )
+			{
+				ObjValue = aGC->GetStringValue(_T("Value")) ;
+				if( strstr( ObjValue, Value ) )
+				{
+					Subscript-- ;
+					if( Subscript <= 0 )
+					{
+						return( aGC ) ;
+					}
+				}
+			}
+		}
+	}
+	return( NULL ) ;
+}
+
+
+int PrintXML( TCHAR *FileName, UList *XMLList )
+{
+	char	*fp = fopen( FileName, _T("w")) ;
+	if( fp )
+	{
+		WriteXML( fp, XMLList, 0L ) ;
+		fclose( fp ) ;
+	}
+}
+
+int WriteXML( char *fp, UList *XMLList, long Spaces )
+{
+//	SessionLogDirect( _T("C_Disk_PrintComplete.WriteXML: Spaces: %ld\n"), Spaces ) ;
+
+	UList	*AnotherList = NULL ;
+	if( XMLList )
+	{
+		long	NumEntries = XMLList->GetNumEntries() ;
+		long	Entry = 0L ;
+
+		UGenCon *aGC = NULL ;
+		TCHAR	*Name ;
+		TCHAR	*Value ;
+
+		for( Entry = 0L ; Entry < NumEntries ; Entry++ )
+		{
+			aGC = XMLList->GetAt( Entry ) ;
+			if( aGC )
+			{
+				Name	= GetName(aGC) ;
+				Value	= GetValue(aGC) ;
+
+				DoSpacing( fp, GetSpaces( Name, Spaces )) ;
+
+				if( Name && Value )
+				{
+					fprintf( fp, _T("%s=%s\n"), Name, Value ) ;
+//					fprintf( fp, _T("\"%s=%s\"\n"), Name, Value ) ;
+				}
+				else
+				{
+					if( Name )
+					{
+						fprintf( fp, _T("%s\n"), Name ) ;
+//						fprintf( fp, _T("\"%s\"\n"), Name ) ;
+					}
+					else
+					{
+						fprintf( fp, _T("%s\n"), Value ) ;
+//						fprintf( fp, _T("\"%s\"\n"), Value ) ;
+					}
+				}
+			}
+			AnotherList = aGC->GetChildren() ;
+			if( AnotherList )
+			{
+				WriteXML( fp, AnotherList, Spaces + 4 ) ;
+			}
+		}
+
+		return( TRUE ) ;
+	}
+	return( FALSE ) ;
+}
+
+long GetSpaces( TCHAR *Name, long Spaces )
+{
+	if( Name )
+	{
+		if( strchr( Name, Slash ) )
+		{
+			Spaces -= 4 ;
+		}
+	}
+	return( Spaces ) ;
+}
+
+
+TCHAR *GetName( UGenCon *aGC )
+{
+	TCHAR *Name = aGC->GetStringValue(_T("Name")) ;
+//	TCHAR *Name = aGC->GetName() ;
+	if( Name )
+	{
+		if( *Name )
+		{
+			return( Name ) ;
+		}
+	}
+	return( NULL ) ;
+}
+
+TCHAR *GetValue( UGenCon *aGC )
+{
+	TCHAR *Value = aGC->GetStringValue(_T("Value")) ;
+	if( Value )
+	{
+		if( *Value )
+		{
+			return( Value ) ;
+		}
+	}
+	return( NULL ) ;
+}
+
+/*
+UList *ParseXML( TCHAR *FileText )
+{
+	UStack	*XMLStack	= new UStack ;
+	UList	*XMLList	= new UList ;
+	UGenCon	*aGC		= NULL ;
+
+	TCHAR	Name[1024] ;
+	TCHAR	Value[10240] ;
+
+	TCHAR	NameOrFieldBuffer[10240] ;
+	long	NamePos = 0L ;
+	memset( NameOrFieldBuffer, 0, 10240 ) ;
+
+//	long	Spaces  = 0L ;
+
+	long	CharPos = 0L ;
+	long	State   = 0L ;
+
+	Debug(0) ;
+
+	char	FileChar = FileText[CharPos] ;
+	CharPos++ ;
+
+	while( FileChar > 127 || FileChar < 0 )
+	{
+		FileChar = FileText[CharPos] ;
+		CharPos++ ;
+	}
+
+	while( FileChar != 0x00 )
+	{
+		switch( State )
+		{
+			case	 0	:	//	BASE STATE
+				State = gFSM[FileChar] ;
+				if( FileChar == '<' )
+				{
+					NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+				}
+				break ;
+			case	 1	:	//	FOUND '<', LOOK FOR TITLE, ENTRY, COMMENT, OR HEADER
+				State = gFSM[State * 128 + FileChar] ;
+				if( State == 1  || State == 2 || State == 10 || State == 11 )
+				{
+					NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+				}
+				
+				if( State == 4 )	//	NO LONGER USED
+				{
+					NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+					aGC = CreateGC( NameOrFieldBuffer, _T("")) ;
+					XMLList->InsertBack( aGC ) ;
+					aGC->SetParent( XMLList ) ;
+					NamePos = ResetBuffer( NameOrFieldBuffer ) ;
+				}
+
+				if( State == 5 )
+				{
+	//				SessionLogDirect( _T("%s\r\n"), NameOrFieldBuffer ) ;
+					aGC = CreateGC( NameOrFieldBuffer, _T("")) ;
+					XMLList->InsertBack( aGC ) ;
+					aGC->SetParent( XMLList ) ;
+					DoPush( XMLStack, XMLList ) ;
+					XMLList = new UList ;
+					aGC->SetChildren( XMLList ) ;
+					NamePos = ResetBuffer( NameOrFieldBuffer ) ;
+					DumpStack( XMLStack ) ;
+				}
+				if( State == 0 )
+				{
+					NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+					aGC = CreateGC( NameOrFieldBuffer, _T("")) ;
+					XMLList->InsertBack( aGC ) ;
+					aGC->SetParent( XMLList ) ;
+					DoPush( XMLStack, XMLList ) ;
+					XMLList = new UList ;
+					aGC->SetChildren( XMLList ) ;
+					NamePos = ResetBuffer( NameOrFieldBuffer ) ;
+					DumpStack( XMLStack ) ;
+				}
+				break ;
+			case	 2	:	//	FOUND '?', WE HAVE THE HEADER
+				State = gFSM[State * 128 + FileChar] ;
+				NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+				break ;
+			case	 3	:	//	FOUND '?', FOUND END OF HEADER
+				State = gFSM[State * 128 + FileChar] ;
+				if( State == 0 )
+				{
+					NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+					aGC = CreateGC( _T(""), NameOrFieldBuffer ) ;
+					XMLList->InsertBack( aGC ) ;
+					aGC->SetParent( XMLList ) ;
+					NamePos = ResetBuffer( NameOrFieldBuffer ) ;
+				}
+				break ;
+			case	 4	:	//	NO LONGER USED
+				State = gFSM[State * 128 + FileChar] ;
+				NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+				if( State == 0 )
+				{
+					aGC = CreateGC( NameOrFieldBuffer, _T("") ) ;
+					XMLList->InsertBack( aGC ) ;
+					aGC->SetParent( XMLList ) ;
+					NamePos = ResetBuffer( NameOrFieldBuffer ) ;
+				}
+				if( State == 1 )
+				{
+					aGC = CreateGC( _T(""), NameOrFieldBuffer ) ;
+					XMLList->InsertBack( aGC ) ;
+					aGC->SetParent( XMLList ) ;
+					NamePos = ResetBuffer( NameOrFieldBuffer ) ;
+				}
+				break ;
+			case	 5	:	//	FOUND ' ', WE HAVE A PARAMETER / VALUE PAIR
+				State = gFSM[State * 128 + FileChar] ;
+				NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+				break ;
+			case	 6	:	//	HAVE PARAMETER NAME
+				State = gFSM[State * 128 + FileChar] ;
+				NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+				break ;
+			case	 7	:	//	FOUND QUOTE MARK
+				State = gFSM[State * 128 + FileChar] ;
+				NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+				break ;
+			case	 8	:	//	FOUND SECOND QUOTE
+				State = gFSM[State * 128 + FileChar] ;
+				if( State == 5 )
+				{
+					SplitParamValuePair( NameOrFieldBuffer, Name, Value ) ;
+					aGC = CreateGC( Name, Value ) ;
+					XMLList->InsertBack( aGC ) ;
+					aGC->SetParent( XMLList ) ;
+					NamePos = ResetBuffer( NameOrFieldBuffer ) ;
+				}
+				if( State == 9 )
+				{
+					NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+				}
+				if( State == 0 )
+				{
+					NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+					SplitParamValuePair( NameOrFieldBuffer, Name, Value ) ;
+					aGC = CreateGC( Name, Value ) ;
+					XMLList->InsertBack( aGC ) ;
+					aGC->SetParent( XMLList ) ;
+					NamePos = ResetBuffer( NameOrFieldBuffer ) ;
+				}
+				break ;
+			case	 9	:	//	FOUND '/' AT END OF PARAM / VALUE PAIR
+				State = gFSM[State * 128 + FileChar] ;
+				NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+				SplitParamValuePair( NameOrFieldBuffer, Name, Value ) ;
+				aGC = CreateGC( Name, Value ) ;
+				XMLList->InsertBack( aGC ) ;
+				aGC->SetParent( XMLList ) ;
+				NamePos = ResetBuffer( NameOrFieldBuffer ) ;
+				XMLList = DoPop( XMLStack ) ;
+				DumpStack( XMLStack ) ;
+				break ;
+			case	10	:	//	FOUND '/' IN LABEL
+				State = gFSM[State * 128 + FileChar] ;
+				NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+				if( State == 0 )
+				{
+					aGC = CreateGC( NameOrFieldBuffer, _T("") ) ;
+					XMLList->InsertBack( aGC ) ;
+					aGC->SetParent( XMLList ) ;
+					NamePos = ResetBuffer( NameOrFieldBuffer ) ;
+					XMLList = DoPop( XMLStack ) ;
+					DumpStack( XMLStack ) ;
+				}
+				break ;
+			case	11	:	//	FOUND '!', COMMENT 
+				State = gFSM[State * 128 + FileChar] ;
+				NameOrFieldBuffer[NamePos] = FileChar ; NamePos++ ;
+				if( State == 0 )
+				{
+					aGC = CreateGC( _T(""), NameOrFieldBuffer ) ;
+					XMLList->InsertBack( aGC ) ;
+					aGC->SetParent( XMLList ) ;
+					NamePos = ResetBuffer( NameOrFieldBuffer ) ;
+			}
+				break ;
+		}	//	END SWITCH
+
+		
+		FileChar = FileText[CharPos] ;
+		CharPos++ ;
+		while( FileChar == 0x0A || FileChar == 0x0D )
+			{ FileChar = FileText[CharPos] ; CharPos++ ; }
+
+	}	//	END WHILE
+
+	DumpStack( XMLStack ) ;
+
+	while( XMLStack->GetNumEntries() > 0 )
+	{
+		XMLList = DoPop( XMLStack ) ;
+	}
+
+	DumpStack( XMLStack ) ;
+
+	delete XMLStack ;
+
+	return( XMLList ) ;
+}
+*/
+void DoPush( UStack *theStack, UList *theList )
+{
+	if( theStack )
+	{
+		long	NumEntries = theStack->GetNumEntries() + 1 ;
+		if( theList )
+		{
+	//		SessionLogDirect( _T("\t\tDoPush: Pushing: 0x%08lX Entries: %ld\r\n"), theList, NumEntries ) ;
+			theStack->Push( theList ) ;
+		}
+	}
+}
+
+UList *DoPop( UStack *theStack )
+{
+	UList	*theList = NULL ;
+
+	if( theStack )
+	{
+		long	NumEntries = theStack->GetNumEntries() - 1 ;
+		theList = (UList *) theStack->Pop() ;
+//		SessionLogDirect( _T("DoPop: Popped: 0x%08lX Entries: %ld\r\n"), theList, NumEntries ) ;
+		return( theList ) ;
+	}
+	return( NULL ) ;
+}
+
+void DumpStack( UStack *theStack )
+{
+	return ;
+	if( theStack )
+	{
+		long	loop ;
+		long	Entries ;
+		long	NumEntries = theStack->GetNumEntries() ;
+		UList	*anXMLList = NULL ;
+
+		SessionLogDirect( _T("theStack: 0x%08lX, Entries: %ld\r\n"), theStack, NumEntries ) ;
+		for( loop = 0L ; loop < NumEntries ; loop++ )
+		{
+			anXMLList = theStack->GetAt( loop ) ;
+			if( anXMLList )
+			{
+				Entries = anXMLList->GetNumEntries() ;
+				SessionLogDirect( _T("\tXMLList: 0x%08lX, Entries: %ld\r\n"), anXMLList, Entries ) ;
+			}
+			else
+			{
+				SessionLogDirect( _T("\tNULL entry in stack !")) ;
+			}
+		}
+	}
+	else
+	{
+		SessionLogDirect( _T("theStack = NULL\r\n")) ;
+	}
+}
+
+TCHAR *SplitParamValuePair( TCHAR *ParamValue, TCHAR *Param, TCHAR *Value )
+{
+	long	PVpos	= 0L ;
+	long	Ppos	= 0L ;
+	long	Vpos	= 0L ;
+
+	while( ParamValue[PVpos] != Equal )
+	{
+		Param[Ppos] = ParamValue[PVpos] ;
+		Ppos++ ;
+		PVpos++ ;
+	}
+	Param[Ppos] = 0x00 ;
+	PVpos++ ;
+
+	while( ParamValue[PVpos] != 0x00 )
+	{
+		Value[Vpos] = ParamValue[PVpos] ;
+		Vpos++ ;
+		PVpos++ ;
+	}
+	Value[Vpos] = 0x00 ;
+}
+
+
+UGenCon *CreateGC( TCHAR *Name, TCHAR *Value )
+{
+	UGenCon *aGC = new UGenCon( GetDataDictionary( _T("DDXMLParam"))) ;
+	if( aGC )
+	{
+		StripLeadingBlanks( Name ) ;
+		StripLeadingBlanks( Value ) ;
+		StripTrailingBlanks( Name ) ;
+		StripTrailingBlanks( Value ) ;
+
+		aGC->SetName( Name ) ;
+		aGC->SetAttrValue( _T("Name"), Name ) ;
+		aGC->SetAttrValue(_T("Value"), Value )  ;
+	}
+	return( aGC ) ;
+}
+
+
+long ResetBuffer( TCHAR *Buffer )
+{
+	memset( Buffer, 0, 10240 ) ;
+	return( 0L ) ;
+}
+
+long WriteBuffer( char *fp, TCHAR *OutBuf, long Spaces )
+{
+	DoSpacing( fp, Spaces ) ;
+	fprintf( fp, _T("%s\n"), OutBuf ) ;
+	memset( OutBuf, 0, 10240 ) ;
+	return( 0L ) ;
+}
+
+void DoSpacing( char *fp, long Spaces )
+{
+	long	loop ;
+	for( loop = 0L ; loop < Spaces ; loop++ )
+		{ 	fprintf( fp, _T(" ")) ; }
+}
+
+
+//	12 states * 128 characters =
+void CreateFSM()
+{
+	memset( gFSM, 0, 1536 ) ;
+
+	int		loop ;
+	int		FSMPos ;
+
+	//	STATE 0
+	int		StateOffset = 0 ;
+	int		EndOffset = StateOffset + 128 ;
+
+	gFSM[LessThan] = 1 ;
+
+	//	STATE 1	
+	StateOffset += 128 ;
+	EndOffset    = StateOffset + 128 ;
+
+	memset( &gFSM[StateOffset], 1, 128 ) ;
+
+	gFSM[StateOffset + Question]	=  2 ;	//	HEADER
+	gFSM[StateOffset + Space]		=  5 ;	//	PARAMETER / VALUE PAIR
+	gFSM[StateOffset + Slash]		= 10 ;	//	END SECTION
+	gFSM[StateOffset + GreaterThan]	=  0 ;  //	4 ;	//	END LABEL
+	gFSM[StateOffset + Bang]		= 11 ;	//	COMMENT
+
+
+	//	STATE 2		//	WAIT FOR '?'
+	StateOffset += 128 ;
+	EndOffset    = StateOffset + 128 ;
+	memset( &gFSM[StateOffset], 2, 128 ) ;
+
+	gFSM[StateOffset + Question] = 3 ;
+
+	//	STATE 3		//	WAIT FOR '>'
+	StateOffset += 128 ;
+	EndOffset = StateOffset + 128 ;
+
+	gFSM[StateOffset + GreaterThan] = 0 ;
+
+	//	STATE 4	
+	StateOffset += 128 ;
+	memset( &gFSM[StateOffset], 4, 128 ) ;
+	gFSM[StateOffset + GreaterThan] = 1 ;
+	gFSM[StateOffset + LessThan] = 0 ;
+
+	//	STATE 5		PARAMETER / VALUE PAIR
+	StateOffset += 128 ;
+	EndOffset = StateOffset + 128 ;
+	memset( &gFSM[StateOffset], 5, 128 ) ;
+
+	gFSM[StateOffset + Equal] = 6 ;
+
+	//	STATE 6		//	GET VALUE
+	StateOffset += 128 ;
+	EndOffset = StateOffset + 128 ;
+
+	gFSM[StateOffset + Quote] = 7 ;			//	START QUOTE
+
+
+	//	STATE 7		//	GET VALUE
+	StateOffset += 128 ;
+	EndOffset = StateOffset + 128 ;
+	memset( &gFSM[StateOffset], 7, 128 ) ;
+
+	gFSM[StateOffset + Quote] = 8 ;			//	END QUOTE
+
+	//	STATE 8		//	START FIELD VALUE
+	StateOffset += 128 ;
+	EndOffset = StateOffset + 128 ;
+
+	gFSM[StateOffset + Slash]		=  9 ;	//	END SECTION
+	gFSM[StateOffset + Space]		=  5 ;	//	GET ANOTHER PARAM / VALUE PAIR
+
+	//	STATE 9								//	END SECTION
+	StateOffset += 128 ;
+	EndOffset = StateOffset + 128 ;
+
+
+	//	STATE 10							//	END SECTION
+	StateOffset += 128 ;
+	EndOffset = StateOffset + 128 ;
+
+	memset( &gFSM[StateOffset], 10, 128 ) ;
+
+	gFSM[StateOffset + GreaterThan] = 0 ;	//	END SECTION
+
+
+
+	//	STATE 11								COMMENT
+	StateOffset += 128 ;
+	EndOffset = StateOffset + 128 ;
+	memset( &gFSM[StateOffset], 11, 128 ) ;
+
+	gFSM[StateOffset + GreaterThan] = 0 ;	//	END COMMENT
+
+
+
+	int	DebugMe = 0 ;
+	if( DebugMe )
+	{
+		char	*fp = fopen( _T("C:\\Temp\\FSM.txt"), _T("w")) ;
+		if( fp )
+		{
+			for( loop = 0L ; loop < 102 ; loop++ )
+				{ fprintf( fp, _T(" ")) ; }
+			for( loop = 32 ; loop < 128 ; loop++ )
+				{ fprintf( fp, _T(" %c "), loop ) ;	}
+			fprintf( fp, _T("\r\n")) ;
+
+			long	loop2 ;
+			for( loop2 = 0 ; loop2 < 12 ; loop2++ )
+			{
+				fprintf( fp, _T("%2d   "), loop2 ) ;
+				for( loop = 0 ; loop < 128 ; loop++ )
+					{ fprintf(fp,  _T("%3d"), gFSM[loop2*128+loop] ) ;	}
+				fprintf( fp, _T("\r\n")) ;
+			}
+			fclose( fp ) ;
+		}
+	}
+}
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//	NOTE: PAGETYPE IS RETURNED
+
+
+int ModifyJDF( UList *XMLList, UGenCon *aPage, TCHAR *PDFPath, TCHAR *URLFileName,
+				long Quantity, TCHAR *InkName, TCHAR *OrderID, long GroupID, double Bleed )
+{
+	TCHAR	PDFFilePath[2048] ;
+	TCHAR	PDFFileName[ 260] ;
+	TCHAR	FileExtn[  32] ;
+	TCHAR	URLFilePath[2048] ;
+	TCHAR	thisFile[260] ;
+//	TCHAR	URLFileName[ 260] ;
+	TCHAR	DstFilePath[2048] ;
+
+	//	http://pdfhost.customerlab.com/pdfs/orderID/filename.pdf  or
+	//	file://<ServerName>/sharename/.../contentfile.pdf
+ 
+	//	GetFilePathNameAndExt( PDFPath, FilePath, FileName, FileExtn ) ;
+
+	
+	
+	SetQuantity( XMLList, Quantity ) ;
+	
+	if( aPage->GetLongValue( _T("DontOverrideTemplateBleed")) == 0 )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.ModifyJDF: Modifying Bleed: %lf"), Bleed ) ;
+		SetBleed( XMLList, Bleed ) ;
+	}
+	else
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.ModifyJDF: NOT Modifying Bleed: %lf"), Bleed ) ;
+	}
+	
+	SetSpotColorInk( XMLList, InkName ) ;
+
+	UADO	*theADO = ConnectToADO() ;
+	if( theADO )
+	{
+		TCHAR	 Attribute[1024] ;
+		TCHAR	 Value[1024] ;
+		TCHAR	 LastValue[1024] ;
+		int		 HaveURL = FALSE ;
+		int		 Result = FALSE ;
+
+		LastValue[0] = 0 ;
+
+		UPGenConList	*BookAttrs = GetBookAttributeList( theADO, OrderID, GroupID ) ;
+		if( BookAttrs )
+		{
+			UPGenCon	*aPGC = (UPGenCon *) BookAttrs->GetFirst() ;
+			while( aPGC )
+			{
+				aPGC->GetAttrValue( _T("Attribute"), Attribute ) ;
+				aPGC->GetAttrValue( _T("Value"), Value ) ;
+				StripTrailingBlanks( Attribute ) ;
+				StripTrailingBlanks( Value ) ;
+				StripLeadingBlanks( Attribute ) ;
+				StripLeadingBlanks( Value ) ;
+				
+				if( stricmp( Attribute, _T("URL")) == 0 )
+				{
+					//	WE NEED TO CHANGE THE PDF FILENAME TO MATCH THE URL.
+					GetURLFilePathNameAndExt( Value, URLFilePath, URLFileName, FileExtn ) ;
+					
+					strcpy( URLFilePath, URLFileName ) ;
+					GetLastToken( URLFilePath, thisFile, '/' ) ;
+					
+					GetFilePathNameAndExt( PDFPath, PDFFilePath, PDFFileName, FileExtn ) ;
+
+					sprintf( DstFilePath, _T("%s\\%s.pdf"), PDFFilePath, thisFile ) ;
+					
+					ExpandFileName( DstFilePath ) ;
+					
+					ChangeToBackSlashes( DstFilePath ) ;
+
+					unlink( DstFilePath ) ;	//	IF THE FILE ALREADY EXISTS, THEN DELETE IT.
+
+					Result = rename( PDFPath, DstFilePath ) ; // zero return is OK.
+					
+					if( gLogAmount >= 2 )
+					{
+						SessionLogDirect( _T("C_Disk_PrintComplete.ModifyJDF: rename: %d  \"%s\" To \"%s\""),
+											Result, PDFPath, DstFilePath ) ;
+					}
+					
+					HaveURL = TRUE ;
+				}
+
+				TranslateAttributeName( Attribute ) ;
+				ModifyXML( XMLList, Attribute, Value, LastValue, InkName ) ;
+
+				aPGC = (UPGenCon *) BookAttrs->GetNext() ;
+
+			}
+			
+			if( HaveURL == FALSE )	//	THEN LET'S CREATE ONE
+			{
+				//	file://<ServerName>/sharename/.../contentfile.pdf
+				sprintf( Value, _T("file:%s"), PDFPath ) ;
+				ChangeToFowardSlashes( Value ) ;
+				
+				TCHAR	OutPathNoSpaces[2048] ;
+				ReplaceSpaces( OutPathNoSpaces, Value ) ;
+
+				ModifyXML( XMLList, _T("URL"), OutPathNoSpaces, LastValue, InkName ) ;
+			}
+			
+			delete BookAttrs ;
+		}
+		delete theADO ;
+		
+	}
+
+	//	IF NOT USING BOOKS THEN CHECK FOR OVER-RIDES IN THE OUTPUT NODE OF THE JOB
+	HandleOutputNodeBookData( XMLList, aPage, InkName ) ;
+
+	UpdateSlug( XMLList ) ;
+
+	return( TRUE ) ;
+}
+
+int ModifyXML( UList *XMLList, TCHAR *Attribute, TCHAR *Value, TCHAR *LastSubstrate, TCHAR *InkName )
+{
+
+	if( gLogAmount >= 2 )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete.ModifyXML: Attr: \"%s\", Value: \"%s\", LastSubstrate: \"%s\", InkName: \"%s\"."),
+							Attribute, Value, LastSubstrate, InkName ) ;
+	}
+
+	if( stricmp( Attribute, _T("SubstrateTypeCover") ) == 0 )
+	{
+		if( stricmp( Value, _T("None")) != 0 )
+		{
+			SetTheSubstrate( XMLList, Value, 2 ) ;	//	Cover
+			strcpy( LastSubstrate, Value ) ;
+		}
+		return( TRUE ) ;
+	}
+	if( stricmp( Attribute, _T("SubstrateTypeBody") ) == 0 )
+	{
+		if( stricmp( Value, _T("None")) != 0 )
+		{
+			SetTheSubstrate( XMLList, Value, 1 ) ;	//	Body
+			strcpy( LastSubstrate, Value ) ;
+		}
+		return( TRUE ) ;
+	}
+
+	if( stricmp( Attribute, _T("SubstrateTypeInsert") ) == 0 )
+	{
+		if( stricmp( Value, _T("None")) != 0 )
+		{
+			SetTheSubstrate( XMLList, Value, 3 ) ;	//	Insert
+			strcpy( LastSubstrate, Value ) ;
+		}
+		return( TRUE ) ;
+	}
+
+	if( stricmp( Attribute, _T("SubstrateTypeInsert4")) == 0 )
+	{
+		if( stricmp( Value, _T("None")) != 0 )
+		{
+			SetTheSubstrate( XMLList, Value, 4 ) ;	//	Separator
+			strcpy( LastSubstrate, Value ) ;
+		}
+		return( TRUE ) ;
+	}
+
+	if( stricmp( Attribute, _T("CoverGlossFront") ) == 0  )
+	{
+		TranslateValue( Value ) ;
+		SetGloss( XMLList, LastSubstrate, Value, NULL, InkName ) ;
+		return( TRUE ) ;
+	}
+
+	if( stricmp( Attribute, _T("Body_Gloss_Front") )	== 0  )
+	{
+		TCHAR *SpotColorPath = gPageGC->GetStringValue( _T("SpotColorMaskPath")) ;
+		long Needs_NXP_DMCL  = gPageGC->GetLongValue( _T("Needs_NXP_DMCL")) ;
+		
+		
+		SessionLogDirect( _T("C_Disk_PrintComplete.ModifyXML(BodyGlossFront): Needs_NXP_DMCL: %ld, SpotColorPath: \"%s\"."), 
+						Needs_NXP_DMCL, SpotColorPath ) ;
+		
+		if( SpotColorPath )
+		{
+			if( SpotColorPath[0] && Needs_NXP_DMCL )
+			{
+				strcpy( Value, _T("fromPDF")) ;
+				SessionLogDirect( _T("C_Disk_PrintComplete.ModifyXML(2): Setting Value to fromPDF")) ;
+			}
+		}
+
+		TranslateValue( Value ) ;
+		if( gLogAmount >= 2 )
+		{
+			SessionLogDirect( _T("C_Disk_PrintComplete.ModifyXML: Attr: \"%s\", Value \"%s\", LastSubstrate \"%s\"."),
+								Attribute, Value, LastSubstrate ) ;
+		}
+		SetBodyGloss( XMLList, Value, NULL, InkName ) ;
+		return( TRUE ) ;
+	}
+
+	if( stricmp( Attribute, _T("Body_Gloss_Back") ) == 0  )
+	{
+		TCHAR *SpotColorPath = gPageGC->GetStringValue( _T("SpotColorMaskPath")) ;
+		long Needs_NXP_DMCL  = gPageGC->GetLongValue( _T("Needs_NXP_DMCL")) ;
+		
+		SessionLogDirect( _T("C_Disk_PrintComplete.ModifyXML(BodyGlossBack): Needs_NXP_DMCL: %ld, SpotColorPath: \"%s\"."), 
+						Needs_NXP_DMCL, SpotColorPath ) ;
+
+		if( SpotColorPath )
+		{
+			if( SpotColorPath[0] && Needs_NXP_DMCL )
+			{
+				strcpy( Value, _T("fromPDF")) ;
+				SessionLogDirect( _T("C_Disk_PrintComplete.ModifyXML(2): Setting Value to fromPDF")) ;
+			}
+		}
+
+		TranslateValue( Value ) ;
+		if( gLogAmount >= 2 )
+		{
+			SessionLogDirect( _T("C_Disk_PrintComplete.ModifyXML: Attr: \"%s\", Value \"%s\", LastSubstrate \"%s\"."),
+								Attribute, Value, LastSubstrate ) ;
+		}
+		SetBodyGloss( XMLList, NULL, Value, InkName ) ;
+		return( TRUE ) ;
+	}
+
+	if( stricmp( Attribute, _T("CoverGlossBack") ) == 0  )
+	{
+		TranslateValue( Value ) ;
+		SetGloss( XMLList, LastSubstrate, NULL, Value, InkName ) ;
+		return( TRUE ) ;
+	}
+
+	if( stricmp( Attribute, _T("URL") ) == 0 )
+	{
+		SetURL( XMLList, Value ) ;
+		return( TRUE ) ;
+	}
+	
+	if( stricmp( Attribute, _T("NXP:DMCLProcessColorantThreshold") ) == 0 )
+	{
+		TranslateValue( Value ) ;
+		SetDMCLThreshold( XMLList, Value ) ;
+		return( TRUE ) ;
+	}
+	
+	if( stricmp( Attribute, _T("NXP:DMCLThresholdApplication") ) == 0 )
+	{
+		TranslateValue( Value ) ;
+		SetDMCLThresholdApp( XMLList, Value ) ;
+		return( TRUE ) ;
+	}
+
+	if( stricmp( Attribute, _T("NXP:HotOffsetCompensation") ) == 0 )
+	{
+		TranslateValue( Value ) ;
+		SetHotCompensation( XMLList, Value ) ;
+		return( TRUE ) ;
+	}
+
+	return( FALSE ) ;
+}
+
+//	HANDLE THE FOLLOWING STRING:
+//	cover_substrate="white_glossy" body_substrate="white_glossy"
+
+int HandleOutputNodeBookData( UList *XMLList, UGenCon *aPage, TCHAR *InkName )
+{
+	TCHAR	*TemplateOverrides = aPage->GetStringValue( _T("TemplateOverride")) ;
+	if( TemplateOverrides == NULL )		{ return( TRUE ) ; }
+	
+	TCHAR	Token[1024] ;
+	TCHAR	Value[1024] ;
+	TCHAR	LastValue[1024] ;
+	UParser	*theParser = new UParser ;
+	theParser->SetText( TemplateOverrides ) ;
+	
+	theParser->GetToken( Token ) ;	//	GET THE FIRST KEYWORD (IF ANY)
+	while( *Token )
+	{
+		theParser->GetToken( Value ) ;	//	GET THE '=' SIGN
+		theParser->GetToken( Value ) ;	//	GET THE VALUE ;
+		
+		TranslateAttributeName( Token ) ;
+		ModifyXML( XMLList, Token, Value, LastValue, InkName ) ;
+		
+		theParser->GetToken( Token ) ;	//	GET THE NEXT KEYWORD ;
+	}
+	
+	theParser->SetText( NULL ) ;
+	delete theParser ;
+}
+
+void ChangeToFowardSlashes( TCHAR *Value )
+{
+	int		Pos = 0 ;
+	while( Value[Pos] )
+	{
+		if( Value[Pos] == '\\' )
+		{
+			Value[Pos] = '/' ;
+		}
+		Pos++ ;
+	}
+}
+
+void ChangeToBackSlashes( TCHAR *Value )
+{
+	int		Pos = 0 ;
+	while( Value[Pos] )
+	{
+		if( Value[Pos] == '/' )
+		{
+			Value[Pos] = '\\' ;
+		}
+		Pos++ ;
+	}
+}
+
+
+int	TranslateAttributeName( TCHAR *Attribute )
+{
+	if( stricmp( _T("cover_substrate"), Attribute ) == 0 )
+	{
+		strcpy( Attribute, _T("SubstrateTypeCover")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("body_substrate"), Attribute ) == 0 )
+	{
+		strcpy( Attribute, _T("SubstrateTypeBody")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("insert_substrate"), Attribute ) == 0 )
+	{
+		strcpy( Attribute, _T("SubstrateTypeInsert")) ;
+		return( TRUE ) ;
+	}
+	if( stricmp( _T("separator_substrate"), Attribute ) == 0 )
+	{
+		strcpy( Attribute, _T("SubstrateTypeInsert4")) ;
+		return( TRUE ) ;
+	}
+	return( FALSE ) ;
+}
+
+UPGenConList *GetBookAttributeList( UADO *theADO, TCHAR *OrderID, long GroupID )
+{
+	TCHAR			 theQuery[2048] ;
+	TCHAR			*theQueryTemplate = _T("SELECT * FROM BookAttributes WHERE OrderID = '%s' AND GroupID = %d Order By Sequence") ;
+
+	sprintf( theQuery, theQueryTemplate, OrderID, GroupID ) ;
+	
+	UPGenConList *gOrderItems = new UPGenConList( theADO ) ;
+	if( gOrderItems )
+	{
+		int Result = gOrderItems->Query( theQuery, _T("ReadOnly"), _T("Static") ) ;
+		if( Result != 1 )
+		{
+			HandleDBError( theADO ) ;
+			delete gOrderItems ;
+			return( NULL ) ;
+		}
+	}
+	return( gOrderItems ) ;
+}
+
+void GetURLFilePathNameAndExt( TCHAR *Source, TCHAR *FilePath, TCHAR *FileName, TCHAR *FileExtn )
+{
+	TCHAR	Src[2048] ;
+	TCHAR	Folder[2048] ;
+	TCHAR	FName[2048] ;
+	
+	strcpy( Src, Source ) ;
+
+	FileExtn[0] = 0 ;
+	FileName[0] = 0 ;
+	FilePath[0] = 0 ;
+
+	if( strchr( Src, 0x2E ) )
+	{
+		GetLastToken( Src, FileExtn, 0x2E ) ;	//	"." GET THE EXTENSION
+	}
+
+	if( strchr( Src, '/' ) )
+	{
+		GetLastToken( Src, FName, '/' ) ;		//	"\" GET THE BASE FILE NAME
+//		strcpy( FilePath, Src ) ;				//		GET THE PATH
+	}
+//	else
+//	{
+//		strcpy( FileName, Src ) ;
+//	}
+
+	if( strchr( Src, '/' ) )
+	{
+		GetLastToken( Src, Folder, '/' ) ;		//	"\" GET THE BASE FILE NAME
+		strcpy( FilePath, Src ) ;				//		GET THE PATH
+		sprintf( FileName, _T("%s/%s"), Folder, FName ) ;
+	}
+	else
+	{
+		strcpy( FileName, Src ) ;
+	}
+
+}
+
+void GetLastToken( TCHAR *Source, TCHAR *Dst, int SrchChar )
+{
+	long	SrcPos = strlen( Source ) - 1L ;
+	long	DstPos = 0L ;
+
+	Dst[DstPos] = 0x00 ;
+
+	while( SrcPos >= 0L && Source[SrcPos] != SrchChar )
+	{
+		SrcPos-- ;
+	}
+
+	if( SrcPos >= 0L )
+	{
+		Source[SrcPos] = 0x00 ;
+		SrcPos++ ;
+
+		while( Source[SrcPos] )
+		{
+			Dst[DstPos] = Source[SrcPos] ;
+			SrcPos++ ;
+			DstPos++ ;
+		}
+		Dst[DstPos] = 0x00 ;
+	}
+}
+
+
+char *ConvertToAscii( TCHAR *UText, char *AText )
+{
+	//	CONVERT TO ASCII
+	TCHAR	*TPtr = UText ;
+	char	*APtr = AText ;
+	
+	while( *TPtr )
+	{
+		*APtr = *TPtr ;
+		APtr++ ; TPtr++ ;
+	}
+	*APtr = 0x00 ;
+	return( AText ) ;
+}
+
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+//=============================================================================
+/	CONNECT TO THE ACCESS DATA OBJECT (THE DATABASE)
+UADO *ConnectToADO()
+{
+	int		 result ;
+
+	UADO	*theADO = new UADO ;
+
+	if( theADO == NULL )
+	{
+		return(NULL) ;
+	}
+
+	result = ConnectKPIS( theADO ) ;
+	if( result )
+	{
+		delete theADO ;
+		return(NULL) ;
+	}
+
+	return( theADO ) ;
+}
+
+
+//	GET ENGLISH LANGUAGE TRANSLATION OF DATABASE ERROR
+void HandleDBError(UADO *anADO)
+{
+	long	ErrorCount, ErrorIndex ;
+	TCHAR	ADOErrDesc[2048] ;
+	TCHAR	theMsg[4096] ;
+	long	StopHere = 0 ;
+
+	Debug(StopHere) ;
+
+	ErrorCount = GetErrorCount( anADO ) ;
+	if( ErrorCount == 0L )
+	{
+		SessionLogDirect( _T("Lost Database Connection.") ) ;
+		MessageBox( _T("Lost Database Connection."), _T("MB_OK")) ;
+//		ShowDialog( _T("Lost Database Connection."), 0L ) ;
+	}
+	else
+	{
+		for( ErrorIndex = 0L ; ErrorIndex < ErrorCount ; ErrorIndex++ )
+		{
+			GetErrorDescription( anADO, ErrorIndex, ADOErrDesc ) ;
+			sprintf( theMsg, "Database Error: %s", ADOErrDesc ) ;
+			SessionLogDirect( theMsg ) ;
+			MessageBox( theMsg, _T("MB_OK")) ;
+//			ShowDialog( theMsg, 0L ) ;
+		}
+	}
+}
+
+void StripTrailingZeros( TCHAR *Source )
+{
+	long	Pos = strlen( Source ) - 1L ;
+
+	while(	Source[Pos]	== 0x30 )	{ Pos-- ; }
+	if(		Source[Pos] == 0x2E )	{ Pos-- ; }
+	Pos++ ;
+	Source[Pos] = 0x00 ;
+}
+
+void StripTrailingBlanks( TCHAR *Source )
+{
+	long	Pos = strlen( Source ) - 1L ;
+
+	while( Source[Pos] == 0x20 )	{ Pos-- ; }
+	Pos++ ;
+	Source[Pos] = 0x00 ;
+}
+
+void StripLeadingBlanks( TCHAR *Source )
+{
+	long	Pos = 0 ;
+	long	len = strlen( Source ) - 1L ;
+
+	while( Source[Pos] == 0x20 )	{ Pos++ ; }
+	long x=0;
+	while( Pos <= len)
+	{
+		Source[x] = Source[Pos] ;
+		x++;
+		Pos++;
+	}
+	Source[x] = 0x00;
+}
+
+int DebugGenCon( UGenCon *aGC )
+{
+	TCHAR		*AttrName ;
+	TCHAR		 AttrValue[2048] ;
+
+	if( aGC == NULL )
+	{
+		SessionLogDirect( _T("C_Disk_PrintComplete: DebugGenCon: aGC == NULL !")) ;
+		return( FALSE ) ;
+	}
+	
+	UDataDict	*theDict = aGC->GetDataDict() ;
+
+	TCHAR		*GCName = aGC->GetName() ;
+	TCHAR		*DDName = theDict->GetName() ;
+
+	SessionLogDirect( _T(" ") ) ;
+	SessionLogDirect( _T("Create \"%s\" Using \"%s\""), GCName, DDName ) ;
+	SessionLogDirect( _T("%c"), 0x7B ) ;
+	UListIterator	*anIter = new UListIterator( theDict ) ;
+	UAttribute		*anAttr = (UAttribute *) anIter->GetFirst() ;
+	while( anAttr )
+	{
+		AttrName = anAttr->GetName() ;
+		if( aGC->AttrChanged( AttrName ))
+		{
+			aGC->GetAttrValue( AttrName, AttrValue ) ;
+			SessionLogDirect( _T("\t%s\t\t\"%s\""), AttrName, AttrValue ) ;
+		}
+		anAttr = (UAttribute *) anIter->GetNext() ;
+	}
+	SessionLogDirect( _T("%c ;"), 0x7D) ;
+	SessionLogDirect( _T(" ") ) ;
+	delete anIter ;
+	return( TRUE ) ;
+}
+
+
+long CallKPLScript( TCHAR *ScriptName, TCHAR *FuncCall )
+{
+	TCHAR	ScriptPath[2048] ;
+
+	GetScriptPath( ScriptName, ScriptPath ) ;
+
+	UIC		*aUIC = new UIC ;
+	if( aUIC )
+	{
+		TCHAR	*JobText = GetFile( ScriptPath ) ;
+		if( JobText )
+		{
+			//	CALL THE FUNCTION WITH THE PARAMETERS DEFINED IN THE CALL
+			//										CheckLib IsJob	Unicode	  Trigger
+			aUIC->ParseFile( _T("Exec"), JobText,		0,		0,		1,	  FuncCall ) ;
+			free( JobText ) ;
+		}
+
+		//	DELETE THE INSTRUCTION CLASS OBJECT SO WE HAVE NO MEMORY LEAKS.
+		delete aUIC ;
+	}
+	return( TRUE ) ;
+}
+
+TCHAR	*GetScriptPath( TCHAR *ScriptName, TCHAR *Path )
+{
+	int		 IsDirectory ;
+
+	TCHAR	*ShareDirectory = GetShareDirectory() ;
+
+	sprintf( Path, _T("%s\\Scripts\\%s"), ShareDirectory, ScriptName ) ;
+
+	if( FileOrDirectoryExists( Path, &IsDirectory ) )
+	{
+		return( Path ) ;
+	}
+
+	TCHAR	*ExeDirectory = GetExeDirectory() ;
+
+	sprintf( Path, _T("%s\\Scripts\\%s"), ExeDirectory, ScriptName ) ;
+
+	if( FileOrDirectoryExists( Path, &IsDirectory ) )
+	{
+		return( Path ) ;
+	}
+
+	Path[0] = 0x00 ;
+	return( NULL ) ;
+}
+
+TCHAR	*GetShareDirectory()
+{
+	TCHAR	*ShareDir = NULL ;
+	UGenCon	*Symbols_ShareDir = GetTreeObject( _T("ShareDirectory"), _T("[Symbols]")) ;
+	if( Symbols_ShareDir )
+	{
+		ShareDir = Symbols_ShareDir->GetStringValue(_T("Value")) ;
+	}
+	return( ShareDir ) ;
+}

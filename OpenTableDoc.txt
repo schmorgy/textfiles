@@ -1,0 +1,483 @@
+// OpenTableDoc.txt
+//
+// Globals:	WhichTable
+//			DocumentQuery
+//			WhichPrimaryKeys = Comma separted string of Primary Keys.  Used for adding and deleting records
+
+// To copy and start with this file for a new *Doc.txt
+// Just Define WhichTable, DocumentQuery (or pass in Init()), and WhichPrimaryKeys; remove as params into Init()
+//    For more efficient code, find all occurances (3) which use WhichPrimaryKeys and Put in specific Key and Field (Token)
+
+Define:	OpenTableMessages Using DDSymbol
+	Fields:	Value	~These strings are OpenTable related strings used by the user interface.~
+	Contains:
+	{
+		Define: Title				using DDText	Fields: Text ~%1 Data~
+		Define: ReadingRecords		using DDText	Fields: Text ~Reading %1 Records~
+		Define: ReadRecords			using DDText	Fields: Text ~Read %1 Records in %2 seconds~
+		Define: DeletingRecord		using DDText	Fields: Text ~Deleting record %1~
+		Define: RemovingAllFor		using DDText	Fields:	Text ~Are you sure you want to delete the %1 selected Record(s)?~
+		Define: MenuChangeField		using DDText	Fields:	Text ~Change Field~
+	}
+
+// Hang:	OpenTableMessages	~[STRINGS]~ ;	No need to hang these
+
+
+Include: ~FormattingRoutines~;
+
+//** [Refresh], "Refresh", Refresh Action, F5
+NUMERIC RefreshListView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	Start = Ticks();
+
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	Count = List( NumEntries );
+
+	if ( FALSE )
+	{
+		if ( MessageBox( Translate(DBMessages,LargeQuery,~<DocumentQuery>~,~<Count>~),YESNO ) != YES )
+		{
+			return TRUE;
+		}
+	}
+
+	DataWindow( StatusBar,Text,Translate( OpenTableMessages,ReadingRecords,<Count> ) );
+
+	SetDocumentData( List(GetObject) );	
+	DataWindow( RefreshWindow );
+
+	Duration = (Ticks() - <Start>) / 1000;
+
+	return DataWindow( StatusBar,Text,Translate(OpenTableMessages,ReadRecords,~<Count>~,~<Duration>~) );
+}
+
+
+//** [Options]
+NUMERIC AllOptions()
+{
+	return DataView( DisplayMenu,ListViewMenu,0,0 );
+
+}
+
+
+//** [New], "New"
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+if (0)  // this needed only if want to copy data from selected record(theRecord) into new record
+{
+	if ( DataView( GetSelectedRows,SelectedRows ) )		
+	{
+		SelectedRows( GetFirst,theRecord );
+	}
+}
+
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate(UIMessages,AddRowFailed) ); }
+
+	NumTokens = GetTokens( ~<WhichPrimaryKeys>~,~,~);
+	DataView( SetActiveCell,<RowBeingAdded>,<Token1> );
+
+	return TRUE;
+}
+
+
+if (0)
+{
+//** [Find], "Find"
+NUMERIC Search()
+{
+	Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( <WhichTable> );" ) );
+	return PerformActions( Actions );
+}
+}
+
+
+//** [Save], "Save Changes"
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+//** [Cancel], "Cancel Changes"
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( Translate(UIMessages,CancelChanges),YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+//** [Delete], "Delete", DeleteRecords Action
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,RecordsToDelete ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	count = RecordsToDelete( ChildCount );
+
+	if ( MessageBox( Translate(OpenTableMessages,RemovingAllFor,~<count>~),YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	num = 1;
+	while ( RecordsToDelete( GetNext,theRecord ) )
+	{
+		DataWindow( StatusBar,Text,Translate(OpenTableMessages,DeletingRecord,~~) );
+
+		//** if making table specific this piece can be replaced with specific Key =~...~
+		NumTokens = GetTokens( ~<WhichPrimaryKeys>~,~,~);
+		i=0;
+		Key = ~~;
+		while (<i> < <NumTokens>)
+		{
+			++i;
+			if (~<Key>~ == ~~)
+			{
+				Key = ~<Token<i>> = '<$con.theRecord[<Token<i>>]>'~;
+			}
+			else
+			{
+				Key = ~<Key> And <Token<i>> = '<$con.theRecord[<Token<i>>]>'~;
+			}
+		}
+		//** end generic create Key
+
+		Cmd = ~Delete From <WhichTable> Where <Key>~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate( DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+		}
+
+		RowsToDelete( AddString,RecordsToDelete(GetCurrentPosition) );
+
+//		dBase( LogActivity,Msg,~Deleted <WhichTable> <$con.theRecord[OrderID]> - <$con.theRecord[Choice]~,Type,Info );
+
+		++num;
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+
+Include: ~ChgFldDlg~;
+NUMERIC SeeChangeField()
+{
+	return DisplayChangeFieldDlg(DataView);
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,ListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,ListViewMenu,0,0  );
+	}
+}
+
+
+//** ChangeRecord Action, (and result of [Save])
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,ChangedOpenTable,OrigOpenTable,ChangedRow,IsNewRow ) )
+		{ return Warning(  Translate(UIMessages,NoRowsSelected) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	NumTokens = GetTokens( ~<WhichPrimaryKeys>~,~,~);
+	i=0;
+	Key = ~~;
+	while (<i> < <NumTokens>)
+	{
+		++i;
+		if (~<Key>~ == ~~)
+		{
+			Key = ~<Token<i>> = '<$con.OrigOpenTable[<Token<i>>]>'~;
+		}
+		else
+		{
+			Key = ~<Key> And <Token<i>> = '<$con.OrigOpenTable[<Token<i>>]>'~;
+		}
+	}
+
+	Query = ~Select * From <WhichTable> Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( UpdateFrom,ChangedOpenTable,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+	}
+
+	DataView( CommitChanges );
+
+	return TRUE;
+}
+
+
+//** Close Action
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+//** RightClick Action
+NUMERIC RightClickInListView()
+{
+	return DataView( DisplayMenu,ListViewMenu );
+}
+
+
+
+
+FirstTime = TRUE;
+
+NUMERIC Init(WhichTable,DocumentQuery,WhichPrimaryKeys)
+{
+
+	Global( WhichTable,DocumentQuery,WhichPrimaryKeys);
+
+	theTitle = Translate(OpenTableMessages,Title,~<WhichTable>~);
+
+	if ( !<FirstTime> )
+	{
+	}
+
+	if ( <FirstTime> )
+	{
+		DefineWindow();
+		DataWindow( Set,Title,~<theTitle>~ );
+
+		FirstTime = FALSE;
+
+
+		if ( !PGenConList( List,Connect,CursorLocation,Client,Lock,ReadOnly,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{ 
+			List(GetErrorDescription,0,theErr);
+			Error( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+		}
+
+		Count = List( NumEntries );
+
+		StatusBarText( Translate(OpenTableMessages,ReadingRecords,<Count>) );
+
+		Start = Ticks();
+
+		SetDocumentData( List(GetObject) );
+
+		WindowLocation = ~<$User.WindowLocation[List]>~;
+
+		if ( ~<WindowLocation>~ != ~~ )
+			{ DataWindow( Set,Position,~<WindowLocation>~ ); }
+
+		DefineMenu( );
+
+		if ( !DataWindow( CreateWindow,~OpenTable~ ) )
+			{ Error( Translate(UIMessages,CreateWindowFailed,~OpenTable <WhichTable>~) ); }
+
+		Duration = (Ticks() - <Start>) / 1000;
+
+		return DataWindow( StatusBar,Text,Translate(OpenTableMessages,ReadRecords,~<Count>~,~<Duration>~) );
+	}
+
+	Document( Doc,This,SetTitle,~<theTitle>~ );
+	return RefreshListView();
+}
+
+
+
+Include: ~ExportSelectedToFile~;
+
+
+VOID DefineMenu()
+{
+	Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+		Fields:		Position	(-1)		
+		Contains:	INLISTORDER
+		{
+			Define:	AddRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuAdd )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( AddRecord() )
+						AcceleratorKey	~N~
+
+if (0)
+{
+			Define:	Search	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuFind )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( Search() )
+						//AcceleratorKey	~S~
+}
+
+			Define:	NULL1 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	SaveAllChanges	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuSaveChanges )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SaveAllChanges() )
+
+			Define:	ForgetAllChanges	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuCancelChanges )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+			Define:	DeleteRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuDelete )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DeleteRecord() )
+
+			Define:	Refresh	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuRefresh )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RefreshListView() )
+
+			Define:	NULL2 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	SeeChangeField	using	DDMenuItemDef
+				Fields:	Text		Translate( OpenTableMessages,MenuChangeField )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeChangeField() )
+
+			Define:	NULL4 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+			Define:	Export	using	DDMenuItemDef
+				Fields:	Text		Translate( UIMenuText,MenuExport )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( ExportSelectedToFile(DataView,<WhichTable>) )
+
+		}
+
+	Global( ListViewMenu );
+}
+
+
+// These values need to be public and these defined values for DefineStdGridButtons()
+ButtonHeight = 20;
+hGap = 1; vGap = 2;
+
+Include: ~DefineStdGridButtons~;
+VOID DefineWindow()
+{
+	if ( !GenCon( TableDefinition,GetFrom,<WhichTable>,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The <WhichTable> Table is not properly defined~ ); }
+
+	ButtonWidth = 55; 
+
+	Define: DataWindow Using DDWinDef
+		Fields:	Title					Translate(OpenTableMessages,Title)
+				Position				0 0 90 35
+				IsPositionPercent		T
+				EnableStatusBar			F
+				TypeName				SplitterWnd
+				SplitterRows			~2 10 90~
+				SplitterColumns			1
+
+		Contains: INLISTORDER
+		{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "OpenTableData.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons( <WhichTable> ) + 10;
+				}
+			
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition( GetReferenceTo,Fields )
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView() )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					CloseActionsText		ACTION Call ( OnCloseDataView() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "OpenTableData.htm" )
+					ViewDataType			Text
+
+		}
+
+		Global(DataWindow,DataView);
+}
+

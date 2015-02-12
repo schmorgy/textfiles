@@ -1,0 +1,685 @@
+IncludeClass(BaseHTML);
+
+Class( CMSetup,Extends,BaseHTML );
+
+
+VOID CMSetup::CMSetup(WantStatic,OrderID)
+{
+	WindowLeft = WindowTop = 0;
+	WindowWidth = 80;
+	WindowHeight = 100;
+
+	Static(~<WantStatic>~);
+}
+
+
+VOID CMSetup::DefineMessages()
+{
+	BaseHtml::DefineMessages();
+	LoadTranslationFile( Setup,CMSetupTrans,CMSetupTrans );
+	LoadTranslationFile( Engine,FieldTypesTrans,FieldTypes );
+}
+
+VOID CMSetup::ViewDefinition()		
+{
+	Fields:	HTMLCloseBox	<fStatic>;
+}
+
+VOID CMSetup::OnLoadComplete()
+{
+
+	if ( !Ado( dBase, Connect ) )
+	{
+		Warning( TR( CMSetupTrans, DBConnectFailed ) );
+		return;
+	}
+
+	// Load the profile select lists.
+	LoadColorProfiles( dBase );
+	
+	// Load add and remove profile sections of the page.
+	// Set options for profile type select.
+	SetProfileTypeOptions();
+	SetDeviceTypeOptions();
+	
+	// Load Profiles to remove based on profile type
+	UpdateProfileList( ~Input~ );
+
+}
+
+VOID CMSetup::LoadColorProfiles( &dBase )
+{
+	if ( !Defined( ImageViewingParameters ) )
+	{
+		if ( !GenCon( ImageViewingParameters,GetGenCon,ImageViewingParameters ) )
+		{ Exit( ~Could not find ImageViewingParameters~ ); }
+		Global( ImageViewingParameters );
+	}
+	
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	// Empty the select lists before re-populating
+	fHtmlView( Execute, ~ResetList( GetElement('MonitorProfile'))~ );
+	fHtmlView( Execute, ~ResetList( GetElement('OutputProfile'))~ );
+	fHtmlView( Execute, ~ResetList( GetElement('WorkingSpaceProfile'))~ );
+	fHtmlView( Execute, ~ResetList( GetElement('InputProfile'))~ );
+	fHtmlView( Execute, ~ResetList( GetElement('ColorProfile'))~ );
+	
+	GetProfiles( ~Monitor~, dBase );
+	GetProfiles( ~WorkingSpace~, dBase );
+	GetProfiles2( Output,WorkingSpace,~~, dBase );
+	GetProfiles2( Input, WorkingSpace, ~~, dBase );
+	GetProfiles2( Color, WorkingSpace, ~Input~, dBase );
+	
+	// Get the Saved Application Profile
+	GetApplicationProfiles();
+	
+	// Set the current profile in each list.
+	SetCurrentProfile( ~MonitorProfileName~, ~Monitor~ );
+	SetCurrentProfile( ~WorkingSpaceProfileName~,~WorkingSpace~ );
+	SetCurrentProfile( ~ViewingProfileName~,~Output~ );
+	SetCurrentProfile( ~DefaultInputProfileName~,~Input~ );
+	SetCurrentProfile( ~DefaultColorProfileName~,~Color~ );
+	
+	return;
+}
+
+VOID CMSetup::GetApplicationProfiles()
+{
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	app( Application );
+
+	if ( WantOutputProfileEnabled = Application( GetMonitorProfileName,MonitorProfileName ) )
+	{ 
+		ImageViewingParameters( Set,MonitorProfileName,~<MonitorProfileName>~ );
+		fHtmlView( Execute, ~DisableControl( GetElement('OutputProfile'),false )~ );
+		WantOutputProfileEnabled = ~<MonitorProfileName>~ != TR(CMSetupTrans,None) && ~<MonitorProfileName>~ != ~~;
+	}
+	else
+	{	
+		ImageViewingParameters( Set,MonitorProfileName,TR(CMSetupTrans,None) );
+		fHtmlView( Execute, ~DisableControl( GetElement('OutputProfile'),true )~ );
+	}
+
+	if ( Application( GetViewingProfileName,ProfileName ) )
+		{ ImageViewingParameters( Set,ViewingProfileName,~<ProfileName>~ ); }
+	else
+		{ ImageViewingParameters( Set,ViewingProfileName,TR(CMSetupTrans,None) ); }
+
+	if ( Application( GetWorkingSpaceProfileName,ProfileName ) )
+		{ ImageViewingParameters( Set,WorkingSpaceProfileName,~<ProfileName>~ ); }
+	else
+		{ ImageViewingParameters( Set,WorkingSpaceProfileName,TR(CMSetupTrans,None) ); }
+
+	if ( Application( GetDefaultInputProfileName,ProfileName ) )
+		{ ImageViewingParameters( Set,DefaultInputProfileName,~<ProfileName>~ ); }
+	else
+		{ ImageViewingParameters( Set,DefaultInputProfileName,TR(CMSetupTrans,None) ); }
+
+	if ( Application( GetDefaultColorProfileName,ProfileName ) )
+		{ ImageViewingParameters( Set,DefaultColorProfileName,~<ProfileName>~ ); }
+	else
+		{ ImageViewingParameters( Set,DefaultColorProfileName,TR(CMSetupTrans,None) ); }
+		
+}
+
+VOID CMSetup::SetCurrentProfile( GenConName, Type )
+{
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+
+	ImageViewingParameters( Get,~<GenConName>~,Name );
+	fHtmlView( Execute,~SelectCurrentValue( '<Type>Profile','<Name>')~ );
+}
+
+VOID CMSetup::GetProfiles( Type, &dBase )
+{
+
+	Query = ~Select * From Profiles Where Type = '<Type>' And Path IS NOT NULL~;
+
+	if ( !PGenConList( ProfilesList,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		ProfilesList( GetErrorDescription,0,theErr );
+		Log( Session, ~GetProfiles: Failed to query the Profiles table.  <theErr>~ );
+		Warning( TR( CMSetupTrans, FailedtoLoadProfiles ) ); 
+		return;
+	}
+
+	ProfilesList( MakeStringList,<Type>Profiles,Name );
+	<Type>Profiles( AddString,TR(CMSetupTrans,None) );
+	
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	fHtmlView( CreateOptionsFromStringList, ~<Type>Profile~, 0, <Type>Profiles );
+	
+	return;
+
+}
+
+// Makes a stringlist of <Type1>Profiles
+VOID CMSetup::GetProfiles2( Type1, Type2, Type3, &dBase )
+{
+	if ( IsNull( ~<Type1>~ ) )
+	{
+		return;
+	}
+
+	TypeClause = ~(Type = '<Type1>'~;
+
+	if ( !IsNull( ~<Type2>~ ) )
+	{
+		TypeClause = ~<TypeClause> OR Type = '<Type2>'~;
+	}
+
+	if ( !IsNull( ~<Type3>~ ) )
+	{
+		TypeClause = ~<TypeClause> OR Type = '<Type3>'~;
+	}
+
+	TypeClause = ~<TypeClause>)~;
+
+	Query = ~Select * From Profiles Where <TypeClause> And Path IS NOT NULL~;
+
+	if ( !PGenConList( ProfilesList,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		ProfilesList( GetErrorDescription,0,theErr );
+		Log( Session, ~GetProfiles2: Failed to query the Profiles table.  <theErr>~ );
+		Warning( TR( CMSetupTrans, FailedtoLoadProfiles ) ); 
+		return;
+	}
+
+	ProfilesList( MakeStringList,<Type1>Profiles,Name );
+
+	<Type1>Profiles( AddString,TR(CMSetupTrans,None) );
+
+	fHtmlView( CreateOptionsFromStringList, ~<Type1>Profile~, 0, <Type1>Profiles );
+
+	return;
+}
+
+VOID CMSetup::InitWindow()
+{
+	CreateAndOpen( ~<$App.HTTPServer>/Setup/CMSetup.kpl~ );
+}
+
+VOID CMSetup::SetTitle()
+{
+	SetWindowTitle( TR( CMSetupTrans, Title) );
+}
+
+VOID CMSetup::UpdateProfile( Type, Value )
+{
+
+	if ( SimilarStr( ~<Type>~, ~Monitor~ ) )
+	{
+		if ( SimilarStr( ~<Value>~, TR(CMSetupTrans,None) ) )
+		{
+			ImageViewingParameters( Set,MonitorProfileName,TR(CMSetupTrans,None) );
+		}
+		else
+		{
+			ImageViewingParameters( Set,MonitorProfileName,~<Value>~ );
+		}
+	}
+	else if ( SimilarStr( ~<Type>~, ~Output~ ) )
+	{ 
+		if ( SimilarStr( ~<Value>~, TR(CMSetupTrans,None) ) )
+		{
+			ImageViewingParameters( Set,ViewingProfileName,TR(CMSetupTrans,None) );
+		}
+		else
+		{
+			ImageViewingParameters( Set,ViewingProfileName,~<Value>~ );
+		}
+	}
+	else if ( SimilarStr( ~<Type>~, ~WorkingSpace~ ) )
+	{
+		if ( SimilarStr( ~<Value>~, TR(CMSetupTrans,None) ) )
+		{
+			ImageViewingParameters( Set,WorkingSpaceProfileName,TR(CMSetupTrans,None) );
+		}
+		else
+		{
+			ImageViewingParameters( Set,WorkingSpaceProfileName,~<Value>~ );
+		}
+	}	
+	else if ( SimilarStr( ~<Type>~, ~Input~ ) )
+	{
+		if ( SimilarStr( ~<Value>~, TR(CMSetupTrans,None) ) )
+		{
+			ImageViewingParameters( Set,DefaultInputProfileName,TR(CMSetupTrans,None) );
+		}
+		else
+		{
+			ImageViewingParameters( Set,DefaultInputProfileName,~<Value>~ );
+		}
+	}	
+	else if ( SimilarStr( ~<Type>~, ~Color~ ) )
+	{
+		if ( SimilarStr( ~<Value>~, TR(CMSetupTrans,None) ) )
+		{
+			ImageViewingParameters( Set,DefaultColorProfileName,TR(CMSetupTrans,None) );
+		}
+		else
+		{
+			ImageViewingParameters( Set,DefaultColorProfileName,~<Value>~ );
+		}
+	}
+
+}
+
+VOID CMSetup::OnUpdateProfiles()
+{
+	
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	app( Application );
+	
+	mprofileName = TR(CMSetupTrans,None);
+	fHtmlView( Get, MonitorProfile, 0, value , mprofileName );
+
+	if ( SimilarStr( ~<mprofileName>~, TR(CMSetupTrans,None) ) )
+	{
+		Application( SetMonitorProfile,~~ );
+		ImageViewingParameters( Set,MonitorProfileName,TR(CMSetupTrans,None) );
+		mprofileName = ~None~;
+	}
+	else
+	{
+		Application( SetMonitorProfile,~<mprofileName>~ );
+		ImageViewingParameters( Set,MonitorProfileName,~<mprofileName>~ );
+	}
+	
+	oprofileName = TR(CMSetupTrans,None);
+	fHtmlView( Get, OutputProfile, 0, value , oprofileName );
+	
+	if ( SimilarStr( ~<oprofileName>~, TR(CMSetupTrans,None) ) )
+	{
+		Application( SetViewingProfile,~~ );
+		ImageViewingParameters( Set,ViewingProfileName,TR(CMSetupTrans,None) );
+		oprofileName = ~None~;
+	}
+	else
+	{
+		Application( SetViewingProfile,~<oprofileName>~ );
+		ImageViewingParameters( Set,ViewingProfileName,~<oprofileName>~ );
+	}
+	
+	wsprofileName = TR(CMSetupTrans,None);
+	fHtmlView( Get, WorkingSpaceProfile, 0, value , wsprofileName );
+	
+	if ( SimilarStr( ~<wsprofileName>~, TR(CMSetupTrans,None) ) )
+	{
+		Application( SetWorkingSpaceProfile,~~ );
+		ImageViewingParameters( Set,WorkingSpaceProfileName,TR(CMSetupTrans,None) );
+		wsprofileName = ~None~;
+	}
+	else
+	{
+		Application( SetWorkingSpaceProfile,~<wsprofileName>~ );
+		ImageViewingParameters( Set,WorkingSpaceProfileName,~<wsprofileName>~ );
+	}
+	
+	iprofileName = TR(CMSetupTrans,None);
+	fHtmlView( Get, InputProfile, 0, value , iprofileName );
+	
+	if ( SimilarStr( ~<iprofileName>~, TR(CMSetupTrans,None) ) )
+	{
+		Application( SetDefaultInputProfile,~~ );
+		ImageViewingParameters( Set,DefaultInputProfileName,TR(CMSetupTrans,None) );
+		iprofileName = ~None~;
+	}
+	else
+	{
+		Application( SetDefaultInputProfile,~<iprofileName>~ );
+		ImageViewingParameters( Set,DefaultInputProfileName,~<iprofileName>~ );
+	}
+	
+	csprofileName = TR(CMSetupTrans,None);
+	fHtmlView( Get, ColorProfile, 0, value , csprofileName );
+	
+	if ( SimilarStr( ~<csprofileName>~, TR(CMSetupTrans,None) ) )
+	{
+		Application( SetDefaultColorProfile,~~ );
+		ImageViewingParameters( Set,DefaultColorProfileName,TR(CMSetupTrans,None) );
+		csprofileName = ~None~;
+	}
+	else
+	{
+		Application( SetDefaultColorProfile,~<csprofileName>~ );
+		ImageViewingParameters( Set,DefaultColorProfileName,~<csprofileName>~ );
+	}
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		return;
+	}
+
+	Query = ~Select ComputerName,UserName From ViewProfiles Where ComputerName = '<$app.ComputerName>' AND UserName = '<$app.UserName>'~;
+	Found = dBase(GetValuesFor,~<Query>~,ComputerName,UserName );
+	
+	if ( <Found> )
+	{
+		Values = ~MonitorProfile = '<mprofileName>', OutputProfile = '<oprofileName>', 
+				WorkingSpaceProfile = '<wsprofileName>', DefaultInputProfile = '<iprofileName>', DefaultColorProfile = '<csprofileName>'~;
+		SQLCommand = ~Update ViewProfiles Set <Values> Where ComputerName = '<$app.ComputerName>' AND UserName = '<$app.UserName>'~;
+	}
+	else
+	{
+		Values = ~'<mprofileName>', '<oprofileName>','<wsprofileName>','<iprofileName>','<csprofileName>','<$app.ComputerName>','<$app.UserName>'~;
+		Parameters = ~MonitorProfile,OutputProfile,WorkingSpaceProfile,DefaultInputProfile,DefaultColorProfile,UserName,ComputerName~;
+		SQLCommand = ~Insert Into Products(<Parameters>) Values(<Values>)~;
+	}
+	
+	if ( !dBase( Cmd, ~<SQLCommand>~ ) )
+	{
+		dBase( GetErrorDescription, theErr );
+		return;		
+	}
+
+	fHtmlView( Execute, ~DisableControl( GetElement('applyButton'),true )~ );
+
+}
+
+VOID CMSetup::OnFindProfiles( ProfilePathName, ButtonEleName )
+{
+	Title = TR( CMSetupTrans, FindFileTitle);
+	FileFilter = TR( CMSetupTrans, FileFilter);
+
+	if ( !FileDialog( Title,~<Title>~,Filter,~<FileFilter>~, Path, theProfile,OPEN) )
+	{
+		return;
+	}
+	
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+
+	fHtmlView( Set, ~<ProfilePathName>~, 0, value, ~<theProfile>~ ); 
+	
+	if ( SimilarStr( ~<ButtonEleName>~, ~addremButton~ ) )
+	{
+		fHtmlview( Execute, ~EnableAddButton();~ );
+	}
+	else
+	{
+		fHtmlview( Execute, ~EnableRemButton();~ );
+	}
+
+	return;
+}
+
+VOID CMSetup::SetProfileTypeOptions()
+{
+	// Load both remove and add profile type selects.
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	StringList( ProfileStringList, New );
+	
+	//ProfileStringList( AddString, TR( FieldTypesTrans, Type_Input ) );
+	//ProfileStringList( AddString, TR( FieldTypesTrans, Type_Monitor ) );
+	//ProfileStringList( AddString, TR( FieldTypesTrans, Type_Output ) );
+	//ProfileStringList( AddString, TR( FieldTypesTrans, Type_WorkingSpace ) );
+	
+	//fHtmlView( CreateOptionsFromStringList, ~profileType~, 0, ProfileStringList );
+	//fHtmlView( CreateOptionsFromStringList, ~remProfileType~, 0, ProfileStringList );
+	
+	// Load from script so that we can load the value different than the text.
+	fHtmlView( Execute,~AddListOption( GetElement('profileType'),'Input','<$TR.FieldTypesTrans(Type_Input)>')~ );
+	fHtmlView( Execute,~AddListOption( GetElement('profileType'),'Monitor','<$TR.FieldTypesTrans(Type_Monitor)>')~ );
+	fHtmlView( Execute,~AddListOption( GetElement('profileType'),'Output','<$TR.FieldTypesTrans(Type_Output)>')~ );
+	fHtmlView( Execute,~AddListOption( GetElement('profileType'),'WorkingSpace','<$TR.FieldTypesTrans(Type_WorkingSpace)>')~ );
+	
+	fHtmlView( Execute,~AddListOption( GetElement('remProfileType'),'Input','<$TR.FieldTypesTrans(Type_Input)>')~ );
+	fHtmlView( Execute,~AddListOption( GetElement('remProfileType'),'Monitor','<$TR.FieldTypesTrans(Type_Monitor)>')~ );
+	fHtmlView( Execute,~AddListOption( GetElement('remProfileType'),'Output','<$TR.FieldTypesTrans(Type_Output)>')~ );
+	fHtmlView( Execute,~AddListOption( GetElement('remProfileType'),'WorkingSpace','<$TR.FieldTypesTrans(Type_WorkingSpace)>')~ );
+
+	
+	return;
+}
+
+VOID CMSetup::SetDeviceTypeOptions()
+{
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	if ( !StringList( DevicesStringList,New,Is,~<$[DATABASE FieldTypes].Devices[ChoiceList]>~ ) )
+	{
+		return;
+	}
+
+	status = DevicesStringList( GetFirstString, DeviceString );
+
+	while ( <status> )
+	{
+		numTokens = GetTokens( ~<DeviceString>~, ~ ~ );
+		counter = 1;
+		theText = ~~;
+		while ( <counter> <= <numTokens> )
+		{
+			theText = ~<theText>~ + ~<Token<counter>>~;
+			++counter;
+		}
+
+		if ( !SimilarStr( ~<DeviceString>~, ~Kodak LFCRT~ ) && !SimilarStr( ~<DeviceString>~, ~KPDM~ ) && 
+			 !SimilarStr( ~<DeviceString>~, ~Kodak CRT~ ) && !SimilarStr( ~<DeviceString>~, ~KPDM II~ ) )
+		{
+			fHtmlView( Execute, ~AddListOption( GetElement('deviceType'),'<DeviceString>','<$TR.CMSetupTrans(<theText>)>')~ );
+		}
+
+		status = DevicesStringList( GetNextString, DeviceString );
+	}
+
+//	fHtmlView( CreateOptionsFromStringList, ~deviceType~, 0, DevicesStringList );
+	
+	return;
+}
+
+VOID CMSetup::OnAddProfile( ProfilePath, ProfileType, Device )
+{
+
+	if ( IsNull( ~<ProfilePath>~ ) )
+	{
+		return;
+	}
+
+	ProfileType = ~<$Str.$ProfileType.NoSpaces>~;
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		Warning( TR( CMSetupTrans, DBConnectFailed ) );
+		return;
+	}
+	
+	ProfilePathUNC = MakePath( Type,UNC,~<ProfilePath>~);
+
+	if ( !Files( IsUNC,~<ProfilePathUNC>~ ) && NetworkOperation() )
+	{
+		Msg = TR( CMSetupTrans,UnsharedFile,~<ProfilePathUNC>~ );
+
+		if ( MessageBox( ~<Msg>~,YESNO ) != YES )
+			{ return; }
+	}
+	
+	if ( SimilarStr( ~<ProfileType>~, ~WorkingSpace~ ) )
+	{
+		EditableSpace = 1;
+	}
+	else
+	{
+		EditableSpace = 0;
+	}
+	
+	Parameters = ~Name,Type,Path,Device,EditableSpace~;
+	substr( ~<$Str.$ProfilePathUNC.FileName.WithoutExt>~, 0, 30, iccName);
+	if ( IsNull(~<iccName>~ ) )
+	{
+		iccName = ~<$Str.$ProfilePathUNC.FileName.WithoutExt>~;
+	}
+
+	Values = ~'<iccName>','<ProfileType>', '<ProfilePathUNC>','<Device>', <EditableSpace>~;
+	SQLCommand = ~Insert Into Profiles(<Parameters>) Values(<Values>)~;
+
+	if ( !dBase( Cmd, ~<SQLCommand>~ ) )
+	{
+		dBase( GetErrorDescription, theErr );
+		Log( Session, ~Unable to insert profile (will update instead): <ProfilePathUNC> into the database.\n\n<SQLCommand>\n\n<theErr>~ );	
+		
+		SQLCommand = ~Update Profiles Set Path = '<ProfilePathUNC>', Type = '<ProfileType>', Device = '<Device>', EditableSpace = <EditableSpace> 
+											Where Name = '<$Str.$ProfilePathUNC.FileName.WithoutExt>'~;
+		if ( !dBase( Cmd, ~<SQLCommand>~ ) )
+		{
+			dBase( GetErrorDescription, theErr );
+			Log( Session, ~Unable to update profile info: <ProfilePathUNC> into the database.\n\n<SQLCommand>\n\n<theErr>~ );
+			Warning( TR( CMSetupTrans, UnableToUpdateProfile ) );	
+			return;		
+		}
+		
+		successMessage = TR(CMSetupTrans,SuccessModify, ~<$Str.$ProfilePathUNC.FileName.WithoutExt>~ );
+	}
+	else
+	{
+		successMessage = TR(CMSetupTrans,SuccessAdd, ~<$Str.$ProfilePathUNC.FileName.WithoutExt>~ );
+	}
+	
+	if ( GetViewByName( View ) )
+	{
+		fHtmlView( Execute, ~StatusMessage( 'UpdateStatus', '<successMessage>' )~ );
+	}
+	
+	// Reload profile select lists
+	LoadColorProfiles( dBase );
+	
+	return;
+}
+
+VOID CMSetup::UpdateProfileList( ProfileType )
+{
+	if ( !ADO( dBase, connect ) )
+	{
+		return;
+	}
+	
+	Query = ~Select * From Profiles Where Type = '<$str.$ProfileType.NoSpaces>'~;
+	
+	if ( !PGenConList( ProfilesList,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		ProfilesList( GetErrorDescription,0,theErr );
+		Log( Session, ~UpdateProfilesList: Failed to query the Profiles table.  <theErr>~ );
+		Warning( TR( CMSetupTrans, FailedtoLoadProfiles ) );  
+		return;
+	}
+
+	ProfilesList( MakeStringList,ProfilesStringList,Name );
+	
+	if ( !GetViewByName( View ) )
+	{
+		return;
+	}
+	
+	fHtmlView( Execute, ~ResetList( GetElement('remProfileName'))~ );
+	fHtmlView( CreateOptionsFromStringList, ~remProfileName~, 0, ProfilesStringList );
+	
+	return;
+}
+
+VOID CMSetup::OnRemoveProfile( ProfileName )
+{
+
+	if ( !ADO( dBase, connect ) )
+	{
+		return;
+	}
+	
+	if ( MessageBox( TR( CMSetupTrans, DeleteProfile, ~<ProfileName>~ ), YESNO ) == NO )
+	{
+		return;
+	}
+	
+	Query = ~Select * From DigitalCameraSetups Where Setup = 'Default_<$App.ComputerName>' AND AlternateOutputProfile = '<ProfileName>'~;
+	NumRecs = dBase( RecordCountFor,~<Query>~ ); 
+	
+	if ( <NumRecs> > 0 )
+	{
+		if ( MessageBox( TR( CMSetupTrans, ProfileUsedInDigitalCam, ~<ProfileName>~ ), YESNO ) == NO )
+		{
+			return;
+		}
+	}
+	
+	SQLCommand = ~delete From Profiles Where Name = '<ProfileName>'~;
+	if ( !dBase( Cmd, ~<SQLCommand>~ ) )
+	{
+		dBase( GetErrorDescription, theErr );
+		Log( Session, ~Unable to remove profile : <ProfileName> from the database.\n\n<SQLCommand>\n\n<theErr>~ );
+		Warning( ~TR(CMSetupTrans,UnabletoRemove)~ );	
+		return;		
+	}
+	
+	// Remove the profile from the list.
+	if ( GetViewByName( View ) )
+	{
+		fHtmlView( Execute, ~DeleteByValue('remProfileName','<ProfileName>')~ );
+		fHtmlView( Execute, ~DeleteByValue('MonitorProfile','<ProfileName>')~ );
+		fHtmlView( Execute, ~DeleteByValue('OutputProfile','<ProfileName>')~ );
+		fHtmlView( Execute, ~DeleteByValue('WorkingSpaceProfile','<ProfileName>')~ );
+		fHtmlView( Execute, ~DeleteByValue('InputProfile','<ProfileName>')~ );
+		fHtmlView( Execute, ~DeleteByValue('ColorProfile','<ProfileName>')~ );
+		
+		fHtmlView( Execute, ~StatusMessage( 'RemUpdateStatus', '<$TR.CMSetupTrans(RemUpdateStatus,`<ProfileName>`)>')~ );
+	}
+	
+}
+
+VOID CMSetup::HelpRoutine()					
+{ 
+	
+	OpenHelpPage(~/ColorManagement/ColorManagement.kpl#Setup~,TR(CMSetupTrans,Title));
+	
+}
+
+//STR	CMSetup::ShortCuts()			{ return F1ShortCuts(); }
+
+VOID InitDoc( WantStatic )
+{
+
+	if ( !ObjectAlreadyExists( CMSetupObj ) )
+	{
+		CMSetup( New,CMSetupObj,~<WantStatic>~ );
+
+		CMSetupObj( Global );
+
+		CMSetupObj.InitWindow();
+	}
+
+	CMSetupObj.SetTitle();
+
+}
+
+// Entry Points from other scripts
+
+VOID InitStatic( )	{ InitDoc( TRUE ); }
+
+VOID Init( )		{ InitDoc( FALSE ); }

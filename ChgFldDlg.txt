@@ -1,0 +1,323 @@
+// ChgFldDlg.txt
+
+// Routines for Change Column Field Dialog.
+// Dialog which enables the operator to change all the column values of the
+// selected rows to a value at one time.
+//
+// To Use:
+// 1.  Inlcude this file into view that want this functionality.
+// 2.  Create the button and/or option to allow the operator to select the function
+// 3.  When the button or option is selected call passing the in the Data View.
+//       DisplayChangeFieldDlg(DataView);
+//
+
+Define:	ChgFldMessages Using DDSymbol
+	Fields:	Value	~These strings are ChangeField related strings used by the user interface.~
+	Contains:
+	{
+		Define: Title				using DDText	Fields: Text ~Change Column~
+		Define: ReplaceChkBox		using DDText	Fields: Text ~Replace~
+		Define: FieldTxt			using DDText	Fields: Text ~Field~
+		Define: FieldValueTxt		using DDText	Fields: Text ~Value~
+		Define: FieldFindTxt		using DDText	Fields: Text ~Find~
+		Define: FieldReplaceTxt		using DDText	Fields: Text ~Replace With~
+		Define: NoneTxt				using DDText	Fields: Text ~None~
+		Define: OKToolTip			using DDText	Fields: Text ~Change the fields~
+		Define: ReplaceToolTip		using DDText	Fields: Text ~Replace partial string of the fields~
+		Define: CancelToolTip		using DDText	Fields: Text ~Exit this function~
+		Define: ChangeForMsg		using DDText	Fields: Text ~Are you sure you want to change %1 for the %2 selected row(s) to: %3?~
+		Define: ReplaceForMsg		using DDText	Fields: Text ~Are you sure you want to replace partial text in column %1 for the %2 selected row(s)\n from: %3 to %4?~
+		Define: ReplaceCantBeBlank	using DDText	Fields: Text ~Value being replaced can not be blank~
+	}
+
+NUMERIC GenerateColumnList(&DataView)
+{
+	ColumnCount = DataView( GetColumnCount,Dummy );
+	ColumnNumber = 0;
+	StringList(ColList,New);		
+
+	while ( <++ColumnNumber> <= <ColumnCount> )
+	{
+		DataView( GetColumnDisplayName,<ColumnNumber>,ColumnName );
+		ColList( AddString,~<ColumnName>~);
+	}
+
+	Global(ColList);
+	ChangeDlg(SetControlFromStringList,ChgFieldComboBox,ColList);
+
+	return TRUE;
+}
+
+
+NUMERIC ChangeFldCloseDialog()
+{
+	ChangeDlg( end );
+
+	return TRUE;
+}
+
+
+NUMERIC ToggleReplace()
+{
+	 DlgChgFldData(GetValues,doReplace,doReplace);
+
+	if (<doReplace>)
+	{
+		ChangeDlg( EnableControls,TRUE,ReplaceBox );
+		// change text from "Value" to "Find"
+		ChangeDlg(SetControlValue,ValueTxt,Translate(ChgFldMessages,FieldFindTxt));
+			
+	}
+	else
+	{
+		ChangeDlg( EnableControls,FALSE,ReplaceBox );	
+		// change text from "Find" to "Value"
+		ChangeDlg(SetControlValue,ValueTxt,Translate(ChgFldMessages,FieldValueTxt));
+			
+	}
+
+	// Put cursor in Value field
+	ChangeDlg( SetControlFocus,ValueBox );
+
+	return TRUE;
+}
+
+
+NUMERIC OnOKButton(ViewAddr)
+{
+	DlgChgFldData(GetValues,doReplace,doReplace);
+	if (<doReplace>)
+	{
+		OnReplaceFldOKButton(<ViewAddr>);
+	}
+
+	else
+	{
+		OnChangeFldOKButton(<ViewAddr>);
+	}
+
+	return TRUE;
+
+}
+
+
+NUMERIC OnChangeFldOKButton(ViewAddr)
+{
+	GenCon( Dataview,Is,~<ViewAddr>~ );
+
+	if ( !DataView( GetSelectedRows,SelectedRows ) ) 
+	{ return Warning( Translate( UIMessages,NoRowsSelected ) ); }
+
+	count = SelectedRows( ChildCount );
+
+	ChgFld = ~<$con.DlgChgFldData[theField]>~;
+	ChgValue = ~<$con.DlgChgFldData[theValue]>~;
+	
+	if ( MessageBox( Translate(ChgFldMessages,ChangeForMsg,~<ChgFld>~,~<count>~,~<ChgValue>~),YESNO ) != YES )
+		{ return FALSE; }
+
+	while (SelectedRows(GetNext, theRecord))
+	{
+		DataView( SetCellValueByColDisplayName, theRecord(GetRow), ~<ChgFld>~,~<ChgValue>~ );
+	}
+
+	ChangeDlg( end );
+	return TRUE;
+}
+
+
+NUMERIC OnReplaceFldOKButton(ViewAddr)
+{
+	GenCon( Dataview,Is,~<ViewAddr>~ );
+
+	if ( !DataView( GetSelectedRows,SelectedRows ) ) 
+	{ return Warning( Translate( UIMessages,NoRowsSelected ) ); }
+
+	count = SelectedRows( ChildCount );
+
+	ChgFld = ~<$con.DlgChgFldData[theField]>~;
+	ChgValue = ~<$con.DlgChgFldData[theValue]>~;
+	Index = ChangeDlg( ComboBox,ChgFieldComboBox,GetSelectedIndex ) + 1;
+	ReplaceValue = ~<$con.DlgChgFldData[theReplace]>~;
+
+	// Check that replace value is not blank
+	if (~<ChgValue>~ == ~~)
+	{	return Warning( Translate(ChgFldMessages,ReplaceCantBeBlank));
+	}
+
+	if ( MessageBox( Translate(ChgFldMessages,ReplaceForMsg,~<ChgFld>~,~<count>~,~<ChgValue>~,~<ReplaceValue>~),YESNO ) != YES )
+		{ return FALSE; }
+
+	Log(Session,~Replacing in Column <ChgFld>, the value <ChgValue> with <ReplaceValue>.~);
+	while (SelectedRows(GetNext, theRecord))
+	{
+		// GetCellValue(), can't send ChgValue, as is needs field name, not display name
+		DataView( GetCellValue,CurrentValue,theRecord(GetRow),~<Index>~);
+		NewValue = String( Replace,~<CurrentValue>~,~<ChgValue>~,~<ReplaceValue>~);
+		DataView( SetCellValueByColDisplayName, theRecord(GetRow), ~<ChgFld>~,~<NewValue>~ );
+	}
+
+	ChangeDlg( end );
+	return TRUE;
+}
+
+
+// Entry point for the dialog
+NUMERIC DisplayChangeFieldDlg(&DataView)
+{
+
+	ForgetGlobal(DlgChgFieldDefinition,DlgChgFldData,ChangeDlg);
+
+	if (!DictionaryExists(ChangeColDialog) )
+	{
+		Dictionary: ChangeColDialog
+			Fields: Name	theField	type text;
+			Fields: Name	theValue	type text;
+			Fields: Name	theReplace	type text;
+			Fields: Name	doReplace	type long;
+
+		StringList: Name FieldChoices
+			Fields: String Translate(ChgFldMessages,NoneTxt)
+		Hang: FieldChoices ~[STRINGS]~
+	}
+
+	Define: DlgChgFldData Using ChangeColDialog;
+
+	ViewAddr = DataView(GetObject);
+
+	FieldBoxWidth = 100;		BoxHeight = 20;
+	ValueBoxWidth = 150;
+	StaticTextWidth = 100;	StaticTextHeight = 20;
+	x = 4;					y = 5;
+	vGap = 2;				hGap = 4;
+	ButtonWidth = 55;		ButtonHeight = 20;
+
+	Define: DlgChgFieldDefinition	Using	DDWinDef
+            Fields: Position			180 180 200 200
+                    Title				Translate( ChgFldMessages,Title )
+                    TypeName			~Dialog~
+					WantsMinimizeBox	TRUE
+					StatusBar			~1 100~
+					HACTIONSTEXT		ACTION SHOWHELPPAGE ( KPISHelpFile "ChangeSubjInfoCol.htm" ) 
+                    OACTIONSTEXT		ACTION EXEC ( ChangeFldCloseDialog() ) ;
+
+		Contains: InListOrder
+		{
+			
+			Define: ReplaceCheckBox	Using	DDWinCtrlDef	AsSymbol	ReplaceCheckBox
+				Fields:	TypeName	CheckBox
+						Text		Translate( ChgFldMessages, ReplaceChkBox )
+						Position	$x,$y,$StaticTextWidth, $StaticTextHeight
+						GenConName	THIS
+						GenConField ~doReplace~
+						DActionsText	ACTIONS ( Save "Exec(ToggleReplace())" )
+						IsTabStop	1
+						Tooltip		Translate(ChgFldMessages,ReplaceToolTip);
+
+			Define: ChgFieldTxt	Using	DDWinCtrlDef	AsSymbol	ChgFieldTxt
+				Fields: TypeName	StaticText
+						Text		Translate( ChgFldMessages, FieldTxt )
+						Position	ReplaceCheckBox(GetLeft,Position),
+									ReplaceCheckBox(GetBottom,Position) + $vGap,
+									$StaticTextWidth, $StaticTextHeight ;
+			
+			Define: ChgFieldComboBox	Using	DDWinCtrlDef AsSymbol ChgFieldComboBox
+				Fields:	TypeName	SComboBox
+						Position	ChgFieldTxt(GetLeft,Position),
+									ChgFieldTxt(GetBottom,Position) + $vGap,
+									$FieldBoxWidth, $BoxHeight*9
+						GenConName	THIS
+						GenConField ~theField~
+						IActionsText	~[GetList(FieldChoices) Get]~
+						DActionsText	~[Save]~
+						OActionsText	~[Save]~;
+
+			Define: ValueTxt	Using	DDWinCtrlDef	AsSymbol	ValueTxt
+				Fields: TypeName	StaticText
+						Text		Translate(ChgFldMessages,FieldValueTxt)
+						Position	ChgFieldComboBox(GetRight,Position) + $hGap,
+									ChgFieldTxt(GetTop,Position),
+									$StaticTextWidth, $StaticTextHeight ;
+			
+			Define: ValueBox	Using	DDWinCtrlDef AsSymbol ValueBox
+				Fields:	TypeName	EditText
+						Position	ValueTxt(GetLeft,Position),
+									ValueTxt(GetBottom,Position) + $vGap,
+									$ValueBoxWidth, $BoxHeight
+						GenConName	THIS
+						GenConField ~theValue~
+						IActionsText	~[Get]~
+						DActionsText	~[Save]~
+						OActionsText	~[Save]~;
+
+
+			Define: ReplaceTxt	Using	DDWinCtrlDef	AsSymbol	ReplaceTxt
+				Fields: TypeName	StaticText
+						Text		Translate(ChgFldMessages,FieldReplaceTxt)
+						Position	ValueBox(GetRight,Position) + $hGap,
+									ValueTxt(GetTop,Position),
+									$StaticTextWidth, $StaticTextHeight ;
+			
+			Define: ReplaceBox	Using	DDWinCtrlDef AsSymbol ReplaceBox
+				Fields:	TypeName	EditText
+						Position	ReplaceTxt(GetLeft,Position),
+									ReplaceTxt(GetBottom,Position) + $vGap,
+									$ValueBoxWidth, $BoxHeight
+						GenConName	THIS
+						GenConField ~theReplace~
+						IsEnabled		F
+						IActionsText	~[Get]~
+						DActionsText	~[Save]~
+						OActionsText	~[Save]~;
+
+			Define: ChgFldButton	Using	DDWinCtrlDef AsSymbol	ChgFldButton
+				Fields: TypeName	DefaultButton
+						Text		Translate(GenButtonText,OK)
+						Position	ChgFieldComboBox(GetLeft, Position),
+									ValueBox(GetBottom,Position) + $vGap*6,
+									$ButtonWidth, $ButtonHeight
+						DActionsText	ACTION EXEC ( OnOKButton(<ViewAddr>) )
+						IsTabStop	1
+						IsEnabled	T
+						Tooltip		Translate(ChgFldMessages,OKToolTip);
+
+			Define: ChgFldCancelButton	Using	DDWinCtrlDef AsSymbol	ChgFldCancelButton
+				Fields: TypeName	Button
+						Text		Translate(GenButtonText,Cancel)
+						Position	ReplaceBox(GetLeft, Position),
+									ChgFldButton(GetTop,Position) ,
+									$ButtonWidth, $ButtonHeight
+						DActionsText	ACTION EXEC ( ChangeFldCloseDialog() )
+						IsTabStop	2
+						IsEnabled	T 
+						Tooltip		Translate(ChgFldMessages,CancelToolTip);
+		};
+
+	DialogWidth = ReplaceBox(GetRight,Position) + $hGap*3;
+	DialogLength = ChgFldCancelButton(GetBottom, Position) + $vGap + 35;
+
+	DlgChgFieldDefinition(Set,Position, ~180 180 <DialogWidth> <DialogLength>~);
+
+	GenDlg(ChangeDlg, Definition, DlgChgFieldDefinition, Data,DlgChgFldData,Document,$Doc.This,New,Temporary);
+	Global(ChangeDlg,DlgChgFieldDefinition,DlgChgFldData);
+
+	// Update the dialog with the data for the current window
+	GenerateColumnList(DataView);
+
+	if ( DataView( GetSelectedColumns,Columns ) )
+	{
+		if ( Columns( GetNextString,ColumnNumber ) )
+		{
+			DataView( GetColumnDisplayName,<ColumnNumber>,Name );
+			// Set First selected column
+			ChangeDlg(SetControlValue, ChgFieldComboBox, ~<Name>~);
+			ChangeDlg(GetInput);
+		}
+	}
+
+	// Put cursor in Value field
+	ChangeDlg( SetControlFocus,ValueBox );
+
+	return TRUE;
+}
+

@@ -1,0 +1,316 @@
+//	CTestGrfxViewRoutines.cpp
+
+//	THIS PROGRAM WILL HANDLE THE GRFXVIEW WHILE IT IS OPEN
+
+ExecC() ;
+
+unsigned char	*NULL ;
+int				 FALSE = 0 ;
+int				 TRUE  = ! FALSE ;
+
+UGraphics		*gGrfx			= NULL ;
+long			 gWidth			= 500 ;
+long			 gHeight		= 500 ;
+long			 gDepth			= 3 ;
+double			 gResolution	= 500.0 ;
+double			 gHImgPos		= 300.0 ;
+double			 gVImgPos		=  10.0 ;
+unsigned char	*gView			= NULL ;
+long			 gImaXForm		= 0L ;
+unsigned char	*gFrameBuffer	= NULL ;
+TCHAR			 gFileName[1024] ;
+long			 gRed[260] ;
+long			 gGrn[260] ;
+long			 gBlu[260] ;
+
+int gMouseMoved	= 0 ;
+
+int	MK_LBUTTON	= 0x0001 ;
+int	MK_RBUTTON	= 0x0002 ;
+int MK_SHIFT	= 0x0004 ;
+int MK_CONTROL	= 0x0008 ;
+int MK_MBUTTON	= 0x0010 ;
+int WM_PAINT	= 0x000F ;
+
+main()
+{
+	Debug(0) ;
+}
+
+term()
+{
+	if( gGrfx ) { gGrfx = delete gGrfx ; }
+}
+
+
+OnInitialUpdate(unsigned char *theView)
+{
+	gView = theView ;
+
+	FileDialog( 1, NULL, gFileName, "", NULL, "Select Image for histogram:" ) ;
+
+	gGrfx = new UGraphics ;
+	int result	= gGrfx->Initialize( gWidth, gHeight, gDepth ) ;	
+	
+	return( result ) ;
+}
+
+
+GetDocumentImageSize( double *Width, double *Height )
+{
+//	*Width	= 450.0 ;
+//	*Height = 450.0 ;
+
+	*Width	= gWidth ;
+	*Height = gHeight ;
+}
+
+OnDraw(UIma *Ima)
+{
+	long	ImaXForm ;
+
+	char *theCWnd = GetParentFrame( gView ) ;
+	SetWindowText( theCWnd, gFileName ) ;
+
+	if( gFrameBuffer == NULL )
+	{
+		ImaXForm = CreateImage(Ima) ;
+
+		gGrfx->GrfxSave("F:\\Apps\\DisplayList.txt", "DisplayList") ;
+		
+		gGrfx->GrfxRender() ;
+
+		gFrameBuffer = gGrfx->GetFrameBuffer() ;
+		gImaXForm = Ima->ImaMemorySource( gFrameBuffer, "U8",
+					gWidth, gHeight, gDepth, "PIXEL_INTERLEAVED", FALSE ) ;
+
+		gImaXForm = Ima->ImaComposite( gImaXForm, ImaXForm, 0L,
+						gHImgPos, gVImgPos, "PIXELS", 0, 0, 1.0 ) ;
+
+	}
+
+	return( gImaXForm ) ;
+}
+
+//	THIS IS WHERE ONE PUTS THE LOGIC TO CREATE THE IMAGE.
+CreateImage(UIma *Ima)
+{
+//	DrawMultipleSegments() ;
+	int		Width, Height ;
+	long	numEntries ;
+	long	ImaSrcPtr ;
+	double	ResizeFactor ;
+	double  dWidth, dHeight ;
+
+	Debug(0) ;
+	ImaSrcPtr = Ima->ImaNewImageSource( "ANY", gFileName ) ;
+	if( ImaSrcPtr )
+	{
+		numEntries = Ima->GetHistogram( ImaSrcPtr, gRed, gGrn, gBlu ) ;
+	}
+
+	Ima->GetMaxResolution( ImaSrcPtr, &Width, &Height ) ;
+
+	if( Width == 0L || Height == 0L )
+	{
+		Width = 100L ;
+		Height = 100L ;
+	}
+
+	if( Width > Height )
+	{
+		ResizeFactor = 128.0 / Width ;
+	}
+	else
+	{
+		ResizeFactor = 128.0 / Height ;
+	}
+
+	dWidth  = Width  * ResizeFactor ;
+	dHeight = Height * ResizeFactor ;
+
+	if( dWidth < 128.0 )
+	{
+		gHImgPos = 300.0 + (128.0 - dWidth) / 2 ;
+	}
+	if( dHeight < 128.0 )
+	{
+		gVImgPos =  10.0 + (128.0 - dHeight) / 2 ;
+	}
+
+	ImaSrcPtr = Ima->ImaResample( ImaSrcPtr, dWidth, dHeight, "PIXELS", "BILINEAR", "SHRINK" ) ;
+
+	BuildHistogramImage(numEntries) ;
+
+	return( ImaSrcPtr ) ;
+}
+
+
+BuildHistogramImage(long numEntries)
+{
+	SetResolution( gGrfx, gResolution ) ;
+
+	SetLineColor( gGrfx,  128, 128, 128 ) ;
+	ShowGraphArea( 10.0, 362.0 ) ;
+	SetLineColor( gGrfx,  255,  64,  64 ) ;
+	DrawHistogram( 10.0, 362.0, gRed, gRed[256] ) ;
+
+	SetLineColor( gGrfx,  128, 128, 128 ) ;
+	ShowGraphArea( 10.0, 212.0 ) ;
+	SetLineColor( gGrfx,   64, 255,  64 ) ;
+	DrawHistogram( 10.0, 212.0, gGrn, gGrn[256] ) ;
+
+	SetLineColor( gGrfx,  128, 128, 128 ) ;
+	ShowGraphArea( 10.0, 62.0 ) ;
+	SetLineColor( gGrfx,   64,  64, 255 ) ;
+	DrawHistogram( 10.0, 62.0, gBlu, gBlu[256] ) ;
+}
+
+
+DrawHistogram( double X, double Y, long *Color, long numEntries )
+{
+	int		result ;
+	long	loop ;
+	double	dColor, Entries = numEntries ;
+
+	if( numEntries != 0L )
+	{
+		for( loop = 0 ; loop < 256 ; loop++ )
+		{
+			result = gGrfx->MoveABS( X + loop, Y ) ;
+			dColor = Color[loop] / Entries * 125.0 ;
+			result = gGrfx->LineABS(  X + loop, Y + dColor ) ;
+		}
+	}
+}
+
+
+ShowGraphArea( double X, double Y )
+{
+	double	XArray[4], YArray[4] ;
+	double	X1, Y1 ;
+
+	XArray[0] = X - 2 ;		YArray[0] = Y - 2 ;
+	XArray[1] = X + 258 ;	YArray[1] = Y - 2 ;
+	XArray[2] = X + 258 ;	YArray[2] = Y + 128 ;
+	XArray[3] = X - 2;		YArray[3] = Y + 128 ;
+
+	gGrfx->SetFillColor( 64, 64, 64 ) ;
+	gGrfx->SetFillPoly( TRUE ) ;
+	int result = gGrfx->PolyABS( 4L, XArray, YArray ) ;
+
+	//	DO THE HORIZONTAL GRID LINES
+	SetLineColor( gGrfx, 92, 92, 92 ) ;
+
+	gGrfx->MoveABS( XArray[0], YArray[0] + 32 ) ;
+	gGrfx->LineABS( XArray[1], YArray[0] + 32 ) ;
+
+	gGrfx->MoveABS( XArray[0], YArray[0] + 64 ) ;
+	gGrfx->LineABS( XArray[1], YArray[0] + 64 ) ;
+
+	gGrfx->MoveABS( XArray[0], YArray[0] + 96 ) ;
+	gGrfx->LineABS( XArray[1], YArray[0] + 96 ) ;
+
+	gGrfx->MoveABS( XArray[0] +  64, YArray[0] ) ;
+	gGrfx->LineABS( XArray[0] +  64, YArray[2] ) ;
+
+	gGrfx->MoveABS( XArray[0] + 128, YArray[0] ) ;
+	gGrfx->LineABS( XArray[0] + 128, YArray[2] ) ;
+
+	gGrfx->MoveABS( XArray[0] + 192, YArray[0] ) ;
+	gGrfx->LineABS( XArray[0] + 192, YArray[2] ) ;
+}
+
+
+OnMouseMove( long flags, long X, long Y )
+{
+/*	double	 dX, dY ;
+	char	*theCWnd ;
+	int		 result ;
+	int		 Stop = 1 ;
+
+//	Debug(Stop) ;
+
+	if( flags )
+	{
+		switch( flags )
+		{
+			case	MK_LBUTTON	:
+				if( gMouseMoved )
+				{
+					dX = X ;
+					dY = Y ;
+					LineABS( gGrfx, dX, dY ) ;
+				}
+				else
+				{
+					gMouseMoved = 1 ;
+					dX = X ;
+					dY = Y ;
+
+					SetLineColor( gGrfx, 255, 255, 92 ) ;
+
+					MoveABS( gGrfx, dX, dY ) ;
+				}
+				break ;
+		}
+	}
+	else
+	{
+		gMouseMoved = 0 ;
+	}
+*/
+}
+
+OnLButtonDown( long flags, long X, long Y )
+{
+	if( X >= 300 && X <= 400 && Y >= 10 && Y <= 110 )
+	{
+		//	OPEN FILE DIALOG FOR NEW FILE
+		if(FileDialog( 1, NULL, gFileName, "", NULL, "Select Image for histogram:" ))
+		{
+			gGrfx = delete gGrfx ;
+			gFrameBuffer = NULL ;
+			gGrfx = new UGraphics ;
+			gGrfx->Initialize( gWidth, gHeight, gDepth ) ;
+			char *theCWnd = GetParentFrame( gView ) ;
+			SetWindowText( theCWnd, gFileName ) ;
+			Invalidate( gView, 0 ) ;
+		}
+	}
+}
+
+
+OnLButtonUp( long flags, long X, long Y )
+{
+//	Invalidate( gView, 0 ) ;
+}
+
+DrawMultipleSegments()
+{
+	double		XArray[10] ;
+	double		YArray[10] ;
+
+	gGrfx->SetResolution( gResolution ) ;
+
+	XArray[0] =  10.0 ;		YArray[0] =  10.0 ;
+	XArray[1] =  10.0 ;		YArray[1] =  90.0 ;
+	XArray[2] =  90.0 ;		YArray[2] =  90.0 ;
+	XArray[3] =  90.0 ;		YArray[3] =  10.0 ;
+	XArray[4] =  50.0 ;		YArray[4] =  10.0 ;
+	XArray[5] =  50.0 ;		YArray[5] =  30.0 ;
+	XArray[6] =  70.0 ;		YArray[6] =  30.0 ;
+	XArray[7] =  70.0 ;		YArray[7] =  70.0 ;
+	XArray[8] =  30.0 ;		YArray[8] =  70.0 ;
+	XArray[9] =  30.0 ;		YArray[9] =  10.0 ;
+
+	gGrfx->SetFillColor( 255, 255,  64 ) ;
+	gGrfx->SetLineColor(  64, 255, 255 ) ;
+
+	gGrfx->SetFillPoly( TRUE ) ;
+
+	int result = gGrfx->PolyABS( 10L, XArray, YArray ) ;
+}
+
+
+

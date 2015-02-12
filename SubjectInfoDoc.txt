@@ -1,0 +1,3021 @@
+//SubjectInfoDoc.txt
+
+// Globals: OrderID - single SubjectInfos OrderID of data in DataView
+//			InfoType - Type of SubjectInfo data
+//			LastOrderID -
+//			DocumentQuery - Query which produced the data in the DataView
+//			TableName	- Full SubjectInfo table name of DataView i.e. SubjectInfo<InfoType>
+
+// NOTE:  ? Global OrderID MUST be the exact name of the field in the SubjectInfo db
+//        so that defined "Queries" work from Search/Find.
+
+// Init(OrderID,DocumentQuery) - Order's OrderID and SubjectInfo's OrderID are the same - gets InfoType from Order
+// Init2(OrderID,InfoType,DocumentQuery) - Orders & SubjectInfo's OrderID not necesarily the same
+
+TableName = ~SubjectInfo~;
+
+MaxQueryLength = 1024;
+
+Define:	SubjectInfoMessages Using DDSymbol
+	Fields:	Value	~SubjectInfo related strings used by the user interface.~
+	Contains:
+	{
+		Define: Querying			using DDText	Fields: Text ~Querying SubjectInfo~
+		Define: ReadingRecords		using DDText	Fields: Text ~Reading %1 SubjectInfo records~
+		Define: ReadRecords			using DDText	Fields: Text ~Read %1 SubjectInfo records in %2 seconds~
+		Define: NoSortsDefined		using DDText	Fields: Text ~You don't have any SubjectInfo Sorts defined.  Create a Sort of type SubjectInfo.~
+		Define: NoOrdersDefined		using DDText	Fields: Text ~You don't have any Orders defined to use this SubjectInfo~
+		Define: OrdersNoLongerExist using DDText	Fields: Text ~Orders %1 no longer exist in the Orders table~
+		Define: MaxOpenImages		using DDText	Fields: Text ~You can only have %1 images open at a time~
+		Define: ErrorCreatingList	using DDText	Fields: Text ~Error creating list of OrderItems~
+		Define: NoCustomers			using DDText	Fields: Text ~Orders %1 has no Customer associated with it~
+		Define: CantShowAllOrders	using DDText	Fields: Text ~You will only see the first %1 Orders of %2 associated with this SubjectInfo table.~;
+	}
+
+
+Include: ~Utilities2.txt~;
+Include: ~KPARSSubjectInfo.txt~;
+
+
+VOID RefreshDoc()
+{
+	RefreshListView();
+}
+
+
+NUMERIC RefreshListView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate( UIMessages,SaveChanges ),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	Start = Ticks();
+
+	WaitCursor( Begin );
+
+	StatusBarText( Translate( SubjectInfoMessages,Querying ) );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		WaitCursor( End );
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	Count = List( NumEntries );
+
+	StatusBarText( Translate( SubjectInfoMessages,ReadingRecords,<Count> ) );
+
+	SetDocumentData( List(GetObject) );
+	
+	DataWindow( RefreshWindow );
+
+	Duration = (Ticks() - <Start>) / 1000;
+
+	WaitCursor( End );
+
+	return StatusBarText( Translate(SubjectInfoMessages,ReadRecords,~<Count>~,~<Duration>~) );
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,Changed,Original,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate( ~There was no changed row~ ) ); }
+
+	if ( ~<$Con.Changed[OrderID]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Order ID cannot be blank.~ ) ); }
+
+	if ( !IsNull( ~<LastOrderID>~ ) )
+	{
+		if ( !SimilarStr( ~<$Con.Changed[OrderID]>~,~<LastOrderID>~ ) ) 
+		{ return Warning( Translate( ~You can't change the OrderID~ ) ); }
+	}
+
+	if ( ~<$Con.Changed[SubjectID]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  Subject ID cannot be blank.~ ); }
+
+	Key = ~SubjectID = '<$Con.Original[SubjectID]>' AND OrderID = '<$Con.Original[OrderID]>'~;	
+
+	Query = ~Select * From <TableName> Where <Key>~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( UpdateFrom,Changed,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,GetErrorNumber,0,errNum,CancelUpdate );
+
+		if ( <errNum> == -2147467259 )	// DUPLICATE RECORD?
+		{
+			List( GetConnection,db );
+
+			if ( !<IsNewRow> )	// JUST CHANGING THE SUBJECTID
+			{
+				msg = Translate( ~A record with OrderID <$Con.Changed[OrderID]> and SubjectID <$Con.Changed[SubjectID]> already exists.  Swap Them?~ );
+			
+				if ( MessageBox( ~<msg>~,YESNO ) != YES )
+					{ return FALSE; }
+
+				Cmd = ~Update <TableName> Set SubjectID = '-1' Where <Key>~;
+
+				if ( !db( Cmd,~<Cmd>~ ) )
+				{
+					db( GetErrorDescription,theErr );
+					return Warning( Translate( ~Update Failed: <Cmd>. <theErr>~ ) );
+				}
+
+				OtherKey = ~SubjectID = '<$Con.Changed[SubjectID]>' AND  OrderID = '<$Con.Changed[OrderID]>'~;
+
+				Cmd = ~Update <TableName> Set SubjectID = '<$Con.Original[SubjectID]>' Where <OtherKey>~;
+
+				if ( !db( Cmd,~<Cmd>~ ) )
+				{
+					db( GetErrorDescription,theErr );
+					return Warning( Translate( ~Update Failed: <Cmd>. <theErr>~ ) );
+				}
+
+				TempKey =  ~SubjectID = '-1' AND  OrderID = '<$Con.Original[OrderID]>'~;
+
+				Cmd = ~Update <TableName> Set SubjectID = '<$Con.Changed[SubjectID]>' Where <TempKey>~;
+
+				if ( !db( Cmd,~<Cmd>~ ) )
+				{
+					db( GetErrorDescription,theErr );
+					return Warning( Translate( ~Update Failed: <Cmd>. <theErr>~ ) );
+				}
+
+				TempSubjectID = ~<$Con.Changed[SubjectID]>~;
+				Changed( Set,SubjectID,~<$Con.Original[SubjectID]>~ );
+				Original( Set,SubjectID,~<TempSubjectID>~ );
+			}
+			else	// NEW ROW .... MUST RESEQUENCE ABOVE THIS RECORD TO MAKE ROOM
+			{
+				msg = Translate( ~A record with OrderID <$Con.Changed[OrderID]> and SubjectID <$Con.Changed[SubjectID]> already exists.  Make room for it?~ );
+				
+				if ( MessageBox( ~<msg>~,YESNO ) != YES )
+					{ return FALSE; }
+
+				Query = ~Select SubjectID From <TableName> Where OrderID = '<$Con.Changed[OrderID]>'~;
+
+				
+				
+				if ( !PGenConList( AllList,Connection,db,Cursor,Keyset,Query,~<Query>~ ) )
+				{
+					List( GetErrorDescription,0,theErr );
+					return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+				}
+
+				if ( !AllList( ResequenceForInsert,SubjectID,~<$Con.Changed[SubjectID]>~,strlen(~<$Con.Changed[SubjectID]>~) ) )
+				{
+					return Warning( Translate( ~Failed to resequence records to make room for <$Con.Changed[SubjectID]>~ ) );
+				}
+			}
+
+			Query = ~Select * From <TableName> Where <Key>~;
+			
+			if ( !List( Query,~<Query>~ ) )
+			{
+				List( GetErrorDescription,0,theErr );
+				return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+			}
+
+			if ( !List( UpdateFrom,Changed,~<Key>~,<IsNewRow> ) )
+			{
+				List( GetErrorDescription,0,theErr );
+				return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+			}
+
+			DataView( CommitChanges );
+
+			Queue( ~RefreshListView()~ );
+
+			return TRUE;		
+		}
+
+		return Warning( Translate( ~Could not update Subject Info record where <Key>. <theErr>~ ) );
+	}
+	
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+NUMERIC HandleConflictingInsert( Order,SubjectID )
+{
+	msg = Translate( ~A record with OrderID <Order> and SubjectID <SubjectID> already exists.  Make room for it?~ );
+	
+	if ( MessageBox( ~<msg>~,YESNO ) != YES )
+		{ return FALSE; }
+
+	Query = ~Select SubjectID From <TableName> Where OrderID = '<Order>'~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( ResequenceForInsert,SubjectID,~<SubjectID>~,12 ) )
+	{
+		return Warning( Translate( ~Failed to resequence records to make room for <SubjectID>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	WaitCursor( Begin );
+
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+	{ 
+		WaitCursor( End );
+		return Warning( Translate(UIMessages,NoRowsSelected) );
+	}
+
+	count = SelectedRows( ChildCount );
+
+	if ( MessageBox( Translate(~Are you sure you want to delete the <count> selected rows(s)?~),YESNO ) != YES )
+	{ 
+		WaitCursor( End );
+		return FALSE;
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		WaitCursor( End );
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( SelectedRows( GetNext,SubjectInfo ) )
+	{
+		if ( IsNULL( ~<$con.SubjectInfo[OrderID]>~ ) )
+		{
+			Warning( ~OrderID cannot be null~ );
+			break;
+		}
+
+		if ( IsNULL( ~<$con.SubjectInfo[SubjectID]>~ ) )
+		{
+			Warning( ~SubjectID cannot be null~ );
+			break;
+		}
+
+		Key =  ~OrderID = '<$con.SubjectInfo[OrderID]>' AND SubjectID = '<$con.SubjectInfo[SubjectID]>'~;
+
+		Cmd = ~Delete From <TableName> Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Database update failed. <theErr>~ );
+			break;
+		}
+
+		StatusBarText( ~Deleting <$con.SubjectInfo[SubjectID]>~ );
+
+		RowsToDelete( AddString,SelectedRows(GetCurrentPosition) );
+	}
+		
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+STR CalcNextSubjectID( AnOrderID )	// NOT DEBUGGED YET
+{
+	if ( !GenCon( FieldsList,Is,TableDefinition(GetReferenceTo,Fields) ) )  { return ~~; }
+
+	if ( !FieldsList( GetByName,SubjectID,SubjectIDField ) )	{ return ~~; }
+
+	SubjectIDField( Get,Definition,FieldType );
+
+	NextSequence = 0;
+
+	if ( Ado( dbase,Connect,CMD,~Select MAX(SubjectID) From <TableName> Where OrderID = '<AnOrderID>'~,MaxSequence ) )
+	{ 
+		NextSequence = ~<$rs.MaxSequence[#0]>~ == ~~ ? ~0~ : ~<$rs.MaxSequence[#0]>~; 
+	}
+
+	NextSequence += 1;
+
+	return ~<NextSequence>~;
+}
+
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	if ( DataView( GetSelectedRows,ItemToImitate ) )		
+	{
+		ItemToImitate( GetFirst,Item );
+		ThisOrderID = ~<$con.Item[OrderID]>~;
+	}
+
+	//SubjectID = CalcNextSubjectID( ThisOrderID );
+
+	NewRow( Set,OrderID,~<OrderID>~ );
+	//NewRow( Set,SubjectID,~<SubjectID>~ );
+
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,SubjectID );
+
+	return TRUE;
+}
+
+
+NUMERIC DuplicateRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	if ( !DataView( GetSelectedRows,RowsToImitate ) )	
+	{
+		return Warning( Translate(UIMessages,NoRecordToDup ) );	
+	}
+
+	RowsToImitate( GetFirst,RowToImitate );
+
+	RowToImitate( Set,SubjectID,~~ );
+
+	RowBeingAdded = DataView( AddRow, RowToImitate );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate(UIMessages, AddRowFailed) ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,SubjectID );
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	if ( !Defined(SubjectInfoListViewMenu) )
+	{
+		if ( !DefineMenus() )
+		{
+			return FALSE;
+		}
+	}
+
+	DataView( DisplayMenu,SubjectInfoListViewMenu );
+
+	return TRUE;
+}
+
+
+
+VOID CreateResequenceDialog()
+{
+	if ( Defined( resequenceDlg ) )
+	{
+		return Warning( Translate( ~Resequence dialog is already open~ ) );
+	}
+
+	if ( !DictionaryExists( DDResequenceDialog ) )
+	{
+		Dictionary: DDResequenceDialog
+			Fields:	Name SubjectID		Type Text
+			Fields: Name Increment		Type Long
+	}
+
+	Define: ResequenceDialogData Using DDResequenceDialog
+		Fields: SubjectID	~001~
+				Increment	1;
+
+	PromptWidth = 90;	PromptHeight = 20;
+	EditWidth = 150;	EditHeight = $PromptHeight;
+	ButtonWidth = 70;	ButtonHeight = $PromptHeight;
+	OtherWidth = 70;
+	hGap = 5;			vGap = 5;
+
+	Define: ResequenceDialog Using DDWinDef
+		Fields:	POSITION				100, 100, 100, 100
+				TITLE					~Resequence <TableName>~
+				TYPENAME				~Dialog~
+				STATUSBAR				~1 100~
+				OACTIONSTEXT			ACTION EXEC ( OnResequenceCancel() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "ReSubInfo.htm" );
+
+		Contains: INLISTORDER
+		{
+			Define: SubjectIDPrompt Using DDWinCtrlDef AsSymbol SubjectIDPrompt 
+				Fields: TypeName		StaticText  
+						Position		$hGap,$vGap,$PromptWidth,$PromptHeight
+						Text			Translate( ~SubjectID~ );
+
+			Define: SubjectIDField Using DDWinCtrlDef AsSymbol SubjectIDField 
+				Fields: TypeName		MaskedEditText  
+						Position		SubjectIDPrompt(GetRight,Position)+$hGap,SubjectIDPrompt(GetTop,Position),
+										$EditWidth,$EditHeight
+						DActionsText	ACTIONS ( Save )
+						OActionsText	ACTIONS ( Save )
+						GenConName      THIS
+						IsTabStop		TRUE
+						GenConField		~SubjectID~
+						Mask			~######~
+						PromptChar		~ ~
+						Tooltip         ~Enter the starting Subject ID~ ;
+	
+			Define: IncrementByPrompt Using DDWinCtrlDef AsSymbol IncrementByPrompt 
+				Fields: TypeName		StaticText  
+						Position		SubjectIDPrompt(GetLeft,Position),SubjectIDPrompt(GetBottom,Position)+$vGap,
+										$PromptWidth,$PromptHeight
+						Text			Translate( ~Increment~ );
+
+			Define: IncrementByField Using DDWinCtrlDef AsSymbol IncrementByField 
+				Fields: TypeName		MaskedEditText  
+						Position		IncrementByPrompt(GetRight,Position)+$hGap,IncrementByPrompt(GetTop,Position),
+										$EditWidth,$EditHeight
+						DActionsText	ACTIONS ( Save )
+						OActionsText	ACTIONS ( Save  )
+						IActionsText	ACTIONS ( Get )
+						GenConName      THIS
+						GenConField		~Increment~
+						Mask			~###~
+						PromptChar		~ ~
+						Tooltip         ~Increment by this amount for each successive image~ ;
+
+			DialogWidth = IncrementByField(GetRight,Position) + $hGap * 2;
+
+			Define: ResequenceButton Using DDWinCtrlDef AsSymbol ResequenceButton 
+				Fields: TypeName		DefaultButton
+						Text			Translate( ~&Resequence~ )
+						Position		($DialogWidth/2)-($ButtonWidth+$hGap),IncrementByPrompt(GetBottom,Position)+$vGap*3,
+										$ButtonWidth,$ButtonHeight
+						DActionsText	ACTION EXEC  ( OnResequence() ) 
+						Tooltip			Translate( ~Resequence all records using the above data~ )  ;
+
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton 
+				Fields: TypeName		Button
+						Text			Translate( ~Cancel~ )
+						Position		ResequenceButton(GetRight,Position)+$hGap,ResequenceButton(GetTop,Position),
+										$ButtonWidth,$ButtonHeight
+						DActionsText	ACTION EXEC  ( OnResequenceCancel() ) 
+						Tooltip			Translate( ~Cancel without changes~ )  ;
+		}
+
+	if ( GenCon( CallersWindow,GetWindow,~~ ) )		// LOCATE NEAR THE ACTIVE WINDOW
+	{
+		CallersWindow( GetWindowPosition,Left,Top,Right,Bottom );
+		x = <Left> - <DialogWidth> - 5;
+		y = <Top>;
+		if ( <x> < 0 ) { x = 0; }
+		if ( <y> < 0 ) { y = 0; }
+	}
+
+	DialogHeight = CancelButton(GetBottom,Position) + $PromptHeight + 20;
+	ResequenceDialog( Set,Position,~<x> <y>  <DialogWidth>  <DialogHeight>~ );
+
+	GenDlg( resequenceDlg,Definition,ResequenceDialog,Data,ResequenceDialogData,Document,$Doc.This,New,Temporary );
+	Global( resequenceDlg,ResequenceDialog,ResequenceDialogData );
+}
+
+VOID OnResequenceCancel()
+{
+	if ( Defined( resequenceDlg ) )
+	{
+		resequenceDlg( End );	
+	}
+
+	ForgetGlobal( ResequenceDialogData,ResequenceDialog,resequenceDlg );
+}
+
+
+NUMERIC OnResequence()
+{
+	resequenceDlg( GetInput );
+
+	count = ~<$con.ResequenceDialogData[SubjectID]>~;
+	increment = Numeric( ~<$con.ResequenceDialogData[Increment]>~ );
+
+	if ( <count> < Numeric( ~<count>~ ) )
+	{
+		return Warning( Translate( ~Count must be >= 0~ ) );
+	}
+
+	if ( <increment> < 1 )
+	{
+		return Warning( Translate( ~Increment must be >= 1~ ) );
+	}
+
+	if ( !SaveAllChanges() )
+	{
+		return FALSE;
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{ 
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Failed to connect to the database.  <theErr>~ ) ) );
+	}
+
+	Query = ~Select * From <TableName> Where OrderID = '<LastOrderID>' Order By SubjectID~;
+
+	NumRecs = dBase( RecordCountFor,~<Query>~ ); 
+
+	if ( <NumRecs> <= 0 )
+	{
+		return Warning( Translate( ~There are no <TableName> records for Order <LastOrderID>~ ) );
+	}
+
+	len = strlen( ~<count>~ );
+
+	lastcount = Format( <count> + ((<NumRecs>-1) * <increment>),~%0<len>ld~ );
+
+	if ( MessageBox( Translate(~Are you sure you want to resequence all <NumRecs> records from <count> to <lastcount> for Order <LastOrderID>~),YESNO ) != YES )
+	{
+		return FALSE;	
+	}
+
+	if ( !PGenConList( CheckList,Connection,dBase,Cursor,Keyset,BeginTransaction,Query,~<Query>~ ) )
+	{
+		CheckList( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	while ( CheckList( GetNext,Record ) )
+	{
+		resequenceDlg( SetStatus,0,Translate( ~Checking SubjectID <$pcon.Record[SubjectID]>~ ) );
+
+		if ( !IsNumeric( ~<$pcon.Record[SubjectID]>~ ) )
+		{
+			dBase( RollBackTransaction );
+			return Warning( Translate( ~Found a non-numeric SubjectID (<$pcon.Record[SubjectID]>).  Can't resequence.~ ) );
+		}
+
+		value = Format( ~-<$pcon.Record[SubjectID]>~,~%0<len>ld~ );
+
+		if ( !Record( Set,SubjectID,~<value>~ ) )
+		{
+			UpdateList( GetErrorDescription,0,theErr,RollBackTransaction );
+			return Warning( Translate( ~Failed to set SubjectID to <value>. <theErr>~ ) );
+		}
+	}
+
+	ForgetLocal( CheckList );
+
+	num  = 0;
+
+	if ( !PGenConList( UpdateList,Connection,dBase,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		UpdateList( GetErrorDescription,0,theErr,RollBackTransaction );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	count = Format( ~<$con.ResequenceDialogData[SubjectID]>~,~%0<len>ld~ );
+
+	while ( UpdateList( GetNext,Record ) )
+	{
+		resequenceDlg( SetStatus,0,Translate( ~Setting SubjectID <count>~ ) );
+
+		if ( !Record( Set,SubjectID,~<count>~ ) )
+		{
+			UpdateList( GetErrorDescription,0,theErr,RollBackTransaction );
+			return Warning( Translate( ~Failed to set SubjectID to <count>. <theErr>~ ) );
+		}
+
+		count = Format( <count> + <increment>,~%0<len>ld~ );
+
+		++num;
+	}
+
+	if ( !dBase( CommitTransaction ) )
+	{ 
+		dBase( GetErrorDescription,theErr,RollBackTransaction );
+		return Warning( Translate( ~Commit Transaction Failed.  <theErr>~ ) );
+	}
+
+	resequenceDialog( SetStatus,0,Translate( ~Resequenced <num> records~ ) );
+
+	OnResequenceCancel();
+
+	return Queue(  ~AllForOrder()~ );
+}
+
+
+NUMERIC DisplayProductCategories()
+{
+	Query = ~Select Distinct Category From Products Order By Category~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Products table: <Query>. <theErr>~ );
+	}
+
+	GenCon( ListMenu,New,DDMenuDef,SetValue,Position,-1 );
+
+			Count = 0;
+
+			while ( List( GetNext,Item ) )
+			{
+		GenCon( ProductCategory<++Count>,New,DDMenuItemDef,AddTo,ListMenu,SetValues,
+				Text,	~<Count>)  <$pcon.Item[Category]>~,
+				IDText,	~ID~ );
+
+		ActionsText = ACTION EXEC ( WantCategory(~<$pcon.Item[Category]>~); );
+
+		ProductCategory<Count>( SetValuesFrom,ActionsText,ActionsText );
+		}
+
+	if ( !GenCon( View,GETACTIVEVIEW ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	View( DisplayMenu,ListMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC WantCategory( which )
+{
+	//ProductsWindow( ChangeView,~<which>~ );
+
+	return DisplayProductListMenu( ~<Which>~ );
+}
+
+
+
+NUMERIC DisplayCurrentProductListMenu()
+{
+	if ( GenCon( View,GETACTIVEVIEW,GETNAME,Category ) )
+	{ 
+		return DisplayProductListMenu( ~<Category>~ );
+	}
+
+	return DisplayProductCategories();
+}
+
+
+
+NUMERIC DisplayProductListMenu( WhichCategory )
+{
+	Query = ~Select ID,LayoutName From Products~;
+	
+	if ( ~<WhichCategory>~ != ~~ )
+	{
+		 Query = ~<Query> Where Category = '<WhichCategory>'~;
+	}
+
+	Query = ~<Query> Order By Category,Sequence,ID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Products table: <Query>. <theErr>~ );
+	}
+
+	GenCon( ListMenu,New,DDMenuDef,SetValue,Position,-1 );
+
+	GenCon( Product0,New,DDMenuItemDef,AddTo,ListMenu,SetValues,
+			Text,		~&0   Categories~,
+			IDText,		~ID~ );
+
+	ActionsText = ACTION Exec ( DisplayProductCategories() ) ;
+
+	Product0( SetValuesFrom,ActionsText,ActionsText );
+
+			Count = 0;
+
+			while ( List( GetNext,Product ) )
+			{
+		GenCon( Product<++Count>,New,DDMenuItemDef,AddTo,ListMenu,SetValues,
+				Text,		~&<Count>   <$pcon.Product[ID]>   <$pcon.Product[LayoutName]>~,
+				IDText,		~ID~ );
+
+		ActionsText = ACTION Exec ( WantProduct(~<$pcon.Product[ID]>~,~<$pcon.Product[LayoutName]>~) );
+
+		Product<Count>( SetValuesFrom,ActionsText,ActionsText );
+		}
+	
+
+	if ( GenCon( View,GetActiveView ) )
+	{
+		View( DisplayMenu,ListMenu );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC WantProduct( ProductID,LayoutName )
+{
+	DataView( GetActiveCell,Row,Col );
+
+	if ( <Row> <= 0 )
+	{
+		return Warning( Translate( ~You must select a row first~ ) );
+	}
+
+	if ( <Row> <= 0 )
+	{
+		return Warning( Translate( ~You must select a row first~ ) );
+	}
+
+	if ( <Col> <= 2 )
+	{
+		return Warning( Translate( ~You must select the proper column for the product~ ) );
+	}
+
+	DataView( SetCellValue,<Row>,<Col>,~<ProductID>~ );
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC SetImagesSubjectID()
+{
+	if ( !DataView( GetSelected,SelectedRows ) )
+	{
+		return Warning( Translate(UIMessages,NoRowsSelected) );
+	}
+
+	if ( !SelectedRows( ChildCount ) )
+	{
+		return Warning( Translate(UIMessages,NoRowsSelected) );
+	}
+
+	ForgetGlobal( SetImagesDlg,SetImagesDlgDefinition,SetImagesDlgData );
+
+	if ( !DictionaryExists( DDSetImagesDlgData ) )
+	{
+		Dictionary: DDSetImagesDlgData
+			Fields: Name	PathField		type text
+			Fields: Name	OrderField		type text
+			Fields:	Name	IgnoreExtension	type long;
+	}
+
+	Define: SetImagesDlgData Using DDSetImagesDlgData
+		Fields: IgnoreExtension TRUE;
+
+	StaticTextWidth			= 200;	StaticTextHeight		= 20;
+	TextWidth				= 100;	TextHeight				= 20;
+	x						= 4;	y						= 15;
+	vGap					= $y;	hGap					= $x;
+	ButtonWidth				= 55;	ButtonHeight			= 20;
+
+	Define: SetImagesDlgDefinition	Using	DDWinDef
+            Fields:	TypeName			Dialog
+					Position			180, 180, 240, 200
+                    Title				Translate( ~Set SubjectID For Images Based On Filename~ )
+					WantsMinimizeBox	FALSE
+                    OACTIONSTEXT		ACTION EXEC ( SetImagesDlgCloseDialog(); )
+					HACTIONSTEXT		ACTION SHOWHELPPAGE ( KPISHelpFile "SetImagesDlg.htm" );
+
+		Contains: InListOrder
+		{
+			if ( doNewWay() )
+			{
+			Define: OrderFieldPrompt	Using	DDWinCtrlDef	AsSymbol	OrderFieldPrompt
+				Fields: TypeName		StaticText
+						Text			~Order to process~
+						RightJustified	TRUE
+						Position		$x,$y,$StaticTextWidth,$ButtonHeight ;
+
+			Define: OrderFieldComboBox Using DDWinCtrlDef AsSymbol OrderFieldComboBox 
+				Fields: TypeName		SComboBox  
+						Position		OrderFieldPrompt(GetRight,Position) + $hGap,OrderFieldPrompt(Gettop,Position),
+										160 ,$ButtonHeight*10
+						IActionsText	ACTION EXEC ( RefreshOrderComboBox(SetImagesDlg) )
+						DActionsText	ACTIONS ( SAVE )
+						OActionsText    ACTIONS ( SAVE )
+						GenConName       THIS
+						GenConField      ~OrderField~
+						Tooltip          ~Select the field that contains the filename of the image~;
+
+				y = OrderFieldPrompt(GetBottom,Position) + $vGap;
+			}
+			
+			Define: PathFieldPrompt	Using	DDWinCtrlDef	AsSymbol	PathFieldPrompt
+				Fields: TypeName		StaticText
+						Text			~Select the field that contains the filename~
+						RightJustified	TRUE
+						Position		$x,$y,$StaticTextWidth,$ButtonHeight ;
+
+			Define: PathFieldComboBox Using DDWinCtrlDef AsSymbol PathFieldComboBox 
+				Fields: TypeName		SComboBox  
+						Position		PathFieldPrompt(GetRight,Position) + $hGap,PathFieldPrompt(Gettop,Position),160 ,$ButtonHeight*10
+						IActionsText	ACTION EXEC ( RefreshPathComboBox(SetImagesDlg) )
+						DActionsText	ACTIONS ( SAVE )
+						OActionsText    ACTIONS ( SAVE )
+						GenConName       THIS
+						GenConField      ~PathField~
+						Tooltip          ~Select the field that contains the filename of the image~;
+
+			DialogWidth = SetImagesDlgDefinition(GetMaxRight,Position) + $hGap * 2;
+
+			IF 0
+			{
+
+				Define: IgnoreExtensionBox Using DDWinCtrlDef AsSymbol IgnoreExtensionBox
+					Fields:	GENCONNAME		THIS
+							POSITION		PathFieldComboBox(GetLeft,Position),PathFieldPrompt(Getbottom,Position)+$vGap, 130, $ButtonHeight
+							TYPENAME		CheckBox
+							GENCONFIELD		IgnoreExtension
+							IACTIONSTEXT	ACTIONS ( Get )
+							DACTIONSTEXT	ACTIONS ( Save )
+							OACTIONSTEXT	ACTIONS ( Save )
+							IsShown			FALSE
+							TEXT			Translate( ~Ignore File Extension~ )
+							TOOLTIP			Translate( ~If checked, the file extension will not be included in the SubjectID~ );
+			}
+
+			Define: GoButton	Using	DDWinCtrlDef	AsSymbol	GoButton
+				Fields: TypeName		DefaultButton
+						Text			Translate(~Set~)
+						Position		$DialogWidth/2 - $ButtonWidth - $hGap/2,
+										PathFieldPrompt(GetBottom,Position) + $vGap*2,
+										$ButtonWidth, $ButtonHeight
+						DActionsText	ACTION EXEC ( OnSetImagesOKButton() )
+						IsTabStop		TRUE
+						IsEnabled		TRUE
+						Tooltip			Translate( ~Set the SubjectID in the images table where the filename of the image matches the specified field of the SubjectInfo~ );
+
+			Define: CancelButton	Using	DDWinCtrlDef	AsSymbol	CancelButton
+				Fields: TypeName		Button
+						Text			Translate(GenButtonText,Cancel)
+						Position		GoButton(GetRight, Position) + $hGap*2,
+										GoButton(GetTop,Position) ,
+										$ButtonWidth, $ButtonHeight
+						DActionsText	ACTION EXEC ( SetImagesDlgCloseDialog() )
+						IsTabStop		TRUE
+						IsEnabled		TRUE
+						Tooltip			Translate( ~Close this dialog~ );
+		};
+
+	DialogHeight = CancelButton(GetBottom,Position) + 50;
+
+	DataWindow( GetWindowPosition,Left,Top,Right,Bottom );
+	x = <Left> - <DialogWidth> - 5;
+	y = <Top> + 10;
+	if ( <x> < 0 ) { x = 0; }
+	if ( <y> < 0 ) { y = 0; }
+
+
+	SetImagesDlgDefinition( Set,Position,~<x> <y> <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( SetImagesDlg, Definition, SetImagesDlgDefinition, Data, SetImagesDlgData,Document, $Doc.This, New, Temporary );
+
+	Global( SetImagesDlg, SetImagesDlgDefinition, SetImagesDlgData );
+
+	DataWindow( EnableWindow, FALSE );
+
+	return TRUE;
+}
+
+
+NUMERIC RefreshPathComboBox( WhichDialog )
+{
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	StringList( FieldList,New );
+
+	while ( List( FieldInfo,<Position++>,Name,FieldName,Length,FieldLength,Type,FieldType ) )
+	{
+		if ( SimilarStr( ~<FieldName>~,~OrderID~ ) )
+			continue;
+
+		FieldList( AddString,~<FieldName>~ );
+	}
+
+	<WhichDialog>( SetControlFromStringList,PathFieldComboBox,FieldList,Selection,Update );
+
+	List( GetConnection,dBase );
+
+//*	if ( dBase( GetValuesFor,~Select InfoType From Orders Where ID = '<OrderID>'~,InfoType ) )
+//*	{
+		if ( GetSystemSettings( ~SubjectInfoFileNameField~,~<InfoType>~,WhichField,Enabled ) )
+		{
+			if ( !IsNULL( ~<WhichField>~ ) && <Enabled> )
+			{
+				<WhichDialog>( SetControlValue,PathFieldComboBox,~<WhichField>~);
+			}
+		}
+//*	}
+
+	return TRUE;
+}
+
+
+NUMERIC RefreshOrderComboBox( WhichDialog )
+{
+	StringList(OrderIDList,New);
+	count = GetOriginalOrderIDsForSubjectInfo(~<OrderID>~,~<InfoType>~,OrderIDList,FALSE);  // FALSE - not SQL List
+
+	if ( <count> < 1 )
+	{	return Warning(~No Orders assigned to this table.~);	}
+
+	if ( <count> > 1 )
+	{
+//		FieldList( OrderIDList,~ALL~ );
+	}
+
+	<WhichDialog>( SetControlFromStringList,OrderFieldComboBox,OrderIDList,Selection,Update );
+
+	return TRUE;
+}
+
+
+NUMERIC FilenameFieldChanged( WhichField )
+{
+	if ( !IsNull( ~<WhichField>~ ) )
+	{
+//*		if ( ADO( dbase,Connect,GetValuesFor,~Select InfoType From Orders Where ID = '<OrderID>'~,InfoType ) )
+//*		{
+			SetSystemSettings( ~SubjectInfoFileNameField~,~<InfoType>~,~<WhichField>~,TRUE );
+//*		}
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC OnSetImagesOKButton()
+{
+	SetImagesDlg( GetInput);
+
+	IgnoreExtension = SetImagesDlgData(GetNumeric,IgnoreExtension );
+
+	Action = STR ( ProcessSetImagesSubjectID( ~<$con.SetImagesDlgData[OrderField]>~,~<$con.SetImagesDlgData[PathField]>~,~<IgnoreExtension>~ ) );
+	QueueContentsAfter( Action,50 );
+
+	FilenameFieldChanged( ~<$con.SetImagesDlgData[PathField]>~ );
+
+	SetImagesDlgCloseDialog();
+
+	return TRUE;
+}
+
+
+VOID SetImagesDlgCloseDialog()
+{
+	DataWindow( EnableWindow, TRUE );
+
+	if ( Defined( SetImagesDlg ) )
+	{
+		ForgetGlobal( SetImagesDlg );
+	}
+}
+
+
+NUMERIC ProcessSetImagesSubjectID( theOrderID,PathField,IgnoreExtension )
+{
+	if ( !DataView( GetSelected,SelectedRows ) )
+	{
+		return Warning( Translate(UIMessages,NoRowsSelected) );
+	}
+
+	if ( !Ado( dbase,Connect ) )
+	{ 
+		return Warning( Translate( ~Failed to connect to the shared database~ ) ) );
+	}
+
+	count = 0;  affected = 0;
+
+	while ( SelectedRows( GetNext,Item ) )
+	{
+		if (~<theOrderId>~ == ~~)
+		{	theOrderId = ~<$Con.Item[OrderID]>~;	}
+
+		MultipleFiles = NumFiles = 1;
+
+		if ( <MultipleFiles> )
+		{
+			NumFiles = GetTokens(~<$Con.Item[<PathField>]>~,~,~);
+		}
+		else	// might we want to ask the user whether there are multiple files?
+		{
+			Token1 = ~<$Con.Item[<PathField>]>~;
+		}
+
+		ThisFile = 0;
+
+		while ( <++ThisFile> <= <NumFiles> )
+		{
+			if ( TRUE || <IgnoreExtension> ) // LET'S IGNORE THE EXTENSION IN ALL CASES
+			{
+				Filename = ~<$str.<Token<ThisFile>>.FileName.WithoutExt>~;
+			}
+			else
+			{
+				Filename = ~\<$str.<Token<ThisFile>>.FileName>~;
+			}
+
+			if ( IsNull( ~<FileName>~ ) )
+				continue;
+
+			cmd = ~Update Images Set SubjectID = '<$Con.Item[SubjectID]>' Where OrderID = '<theOrderId>' And Path Like '%\<FileName>.%'~;
+
+			if ( !dbase( Cmd,~<Cmd>~ ) )
+			{ 
+				dBase( GetErrorDescription,theErr );
+				return Warning( Translate( ~Cmd failed.  <Cmd>.  <theErr>~ ) );
+			}
+
+			++count;
+			
+			RecordsAffected = dBase( RecordsAffected );
+			
+			if ( <RecordsAffected> == 0 ) 
+			{
+				dbase(logactivity,type,~warning~,msg,~Image Missing: <filename>, Subject: <$Con.Item[SubjectID]>~);
+			}
+			
+			affected += <RecordsAffected>;
+		}
+	}
+
+	if ( <count> )
+	{
+		Warning( ~<affected> images were updated for <count> SubjectInfo records processed.~ );
+		NotifyAffectedDocuments( Roll );
+		return TRUE;
+	}
+
+	return Warning( ~No SubjectInfo records were processed~ );
+}
+
+
+NUMERIC DupeAboveCell()
+{
+	DataView( GetActiveCell,Row,Col );
+
+	if ( <Row> > 1 )
+	{
+		DataView( GetCellValue,Value,<Row>-1,<Col> );
+		DataView( SetCellValue,<Row>,<Col>,~<Value>~ );
+	}
+
+	return TRUE;
+}
+
+
+
+VOID OnKeydown()
+{
+	if ( !Defined(SubjectInfoListViewMenu) )
+	{
+		if ( !DefineMenus() )
+		{
+			return;
+		}
+	}
+
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+
+	if ( ~<KeyString>~ == ~t~ )
+	{
+	}
+	
+	if (  !View( PerformMenuAction,SubjectInfoListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,SubjectInfoListViewMenu,0,0  );
+	}
+}
+
+
+// NOT CALLED
+NUMERIC OpenExistingImage( Path )
+{
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == ImageEditView || ~<ViewType>~ == ImageView )
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<Path>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+		}
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC CloseAllImages()
+{
+	Count = Index = 0;
+
+	app( ThisApp,MessagePump,3 );
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( Window( GETNEXT,aView ) )
+		{
+			aView( GET,ViewType,ViewType );
+
+			if ( ~<ViewType>~ == ~ImageView~ || ~<ViewType>~ == ~ImageEditView~ )
+			{
+				aView( GetDocumentPath,DocumentPath );
+				Window( CloseWindow );
+				ThisApp( MessagePump,3 );
+				++Count;
+				Index = 0;
+			}
+		}
+	}
+
+	ThisApp( MessagePump,0 );
+
+	return TRUE;
+}
+
+
+NUMERIC SwapID()
+{
+	if ( !DataView( GetSelected,SelectedSubjects ) )
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	Count = SelectedSubjects( ChildCount );
+
+	if ( <count> != 2 )
+	{
+		return Warning( Translate( ~You must select exactly two rows to use this feature~ ) );
+	}
+
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate( UIMessages,SaveChanges ),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	SelectedSubjects( GetNext,Item1 );
+	SelectedSubjects( GetNext,Item2 );
+
+	UnusedKey = ~x1fjsldfjfsdgasdf~;
+
+	Cmd = ~Update SubjectInfo<InfoType> Set SubjectID = '<UnusedKey>' Where OrderID = '<OrderID>' AND SubjectID = '<$con.Item1[SubjectID]>'~;
+	
+	if ( !Ado( dbase,Connect,BeginTransaction,CMD,~<Cmd>~ ) )
+	{ 
+		dBase( RollBackTransaction );
+		return Warning( Translate( ~Cmd failed.  <Cmd>.  <theErr>~ ) ) );
+	}
+
+	Cmd = ~Update SubjectInfo<InfoType> Set SubjectID = '<$con.Item1[SubjectID]>' Where OrderID = '<OrderID>' AND SubjectID = '<$con.Item2[SubjectID]>'~;
+
+	if ( !dbase( CMD,~<Cmd>~ ) )
+	{ 
+		dBase( RollBackTransaction );
+		return Warning( Translate( ~Cmd failed.  <Cmd>.  <theErr>~ ) ) );
+	}
+
+	Cmd = ~Update SubjectInfo<InfoType> Set SubjectID = '<$con.Item2[SubjectID]>' Where OrderID = '<OrderID>' AND SubjectID = '<UnusedKey>'~;
+
+	if ( !dbase( CMD,~<Cmd>~ ) )
+	{ 
+		dBase( RollBackTransaction );
+		return Warning( Translate( ~Cmd failed.  <Cmd>.  <theErr>~ ) ) );
+	}
+
+	dBase( CommitTransaction );
+
+	DataView( SetCellValue,Item1(GetRow),SubjectID,~<$con.Item2[SubjectID]>~ );
+	DataView( CommitChanges );
+	DataView( SetCellValue,Item2(GetRow),SubjectID,~<$con.Item1[SubjectID]>~ );
+	DataView( CommitChanges );
+
+	return TRUE;
+}
+
+
+// [Open], "Open", double click
+NUMERIC ViewImageForSubject()
+{
+	if ( !DataView( GetSelected,SelectedSubjects ) )
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	Count = GetOriginalOrderIDsForSubjectInfo(~<OrderID>~,~<InfoType>~,OrderIDList,TRUE);  // TRUE => SQL List
+	if ( !<Count> )
+		{ return Warning( Translate(SubjectInfoMessages,NoOrdersDefined) ); }
+
+	while ( SelectedSubjects( GetNext,Subject ) )
+	{
+//		Query = STR ( Select Path,OrderID,Roll,Frame From Images Where OrderID IN (<OrderIDList>) AND SubjectID = '<$con.Subject[SubjectID]>' );
+		Query = ~Select Path,OrderID,Roll,Frame From Images Where OrderID IN (<OrderIDList>) AND SubjectID = '<$con.Subject[SubjectID]>'~;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		}
+
+		Count = SelectedSubjects( ChildCount );
+
+		MultipleImagesForSubject = List( NumEntries ) > 1;
+
+		MaxOpenImages = ~<$[Symbols].MaxOpenImages[Long]>~;
+
+		if ( <MaxOpenImages> < 1 )
+		{ 
+			MaxOpenImages = 1;
+		}
+
+		while ( List( GetNext,Image ) )
+		{
+			if ( NumWindows( SingleImageEdit ) >= <MaxOpenImages> )
+				break;
+
+
+			if ( <Count> > 1 || <MultipleImagesForSubject> )
+			{
+				OpenMultipleImages( ~<$pcon.Image[Path]>~,~<$pcon.Image[OrderID]>~,~<$pcon.Image[Roll]>~,~<$pcon.Image[Frame]>~ );
+			}
+			else
+			{
+				OpenAnImage( ~<$pcon.Image[Path]>~,~<$pcon.Image[OrderID]>~,~<$pcon.Image[Roll]>~,~<$pcon.Image[Frame]>~ );
+			}
+		}
+
+		if ( NumWindows( SingleImageEdit ) >= <MaxOpenImages> )
+		{
+			Warning( Translate( SubjectInfoMessages,MaxOpenImages,~<MaxOpenImages>~ ) );
+			break;
+		}
+
+		ForgetLocal( List );
+	}
+
+	return TRUE;
+}
+
+NUMERIC OpenAnImage( Path,OrderID,Roll,Frame )
+{
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( ~Could not create document info for <Path>~ ); }
+
+	Info( SetValues,OrderID,~<OrderID>~,Roll,~<Roll>~,Frame,~<Frame>~ );
+
+	Document( Doc );
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == ImageView || ~<ViewType>~ == ImageEditView )
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<Path>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+			
+			if ( KeyState( LSHIFT ) || KeyState( RSHIFT ) )
+			{
+				if ( !Doc( Open,~<Path>~,Image,~~,Info ) )
+				{ 
+					return Warning( ~Could not open <Path>~ );
+				}
+
+				return TRUE;		//Window( CloseWindow );
+			}
+
+			if ( Doc( FindByPath,~<DocumentPath>~ ) )
+			{
+				//ImageCorrections( Free,~<LastImagePath>~ );
+				//ImageCorrections( Get,~<Path>~ );	// NEED THIS TO RECEIVE CROP UPDATES
+				//LastImagePath = ~<Path>~;
+				return Doc( ReplaceImage,~<Path>~,Info );
+			}
+		}
+	}
+
+	//ImageCorrections( Free,~<LastImagePath>~ );
+
+	if ( !Doc( Open,~<Path>~,Image,~~,Info ) )
+	{ 
+		return Warning( ~Could not open <Path>~ );
+	}
+
+	//ImageCorrections( Get,~<Path>~ );	// NEED THIS TO RECEIVE CROP UPDATES
+
+	LastImagePath = ~<Path>~;
+
+	return TRUE;
+}
+
+
+NUMERIC OpenMultipleImages( Path,OrderID,Roll,Frame )
+{
+	if ( ~<Path>~ == ~~ )
+		{ return StatusBarText( Translate( ~No image exists for <OrderID>, <Roll>, <Frame>~ ) ); }
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == ImageView || ~<ViewType>~ == ImageEditView )
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<Path>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+		}
+	}
+
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( ~Could not create document info for <Path>~ ); }
+
+	Info( SetValues,OrderID,~<OrderID>~,Roll,~<Roll>~,Frame,~<Frame>~ );
+
+	if (!Document( aLayout,Open,~<Path>~,Image,~~,Info ) )
+		{ return Warning( ~Could not open <Path>~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC AllForOrder()
+{
+	return Init( ~<OrderID>~,~Select * From <TableName> Where OrderID = '<OrderID>' Order By OrderID,SubjectID~ );
+}
+
+
+NUMERIC InfoWithNoImages()
+{	
+	Count = GetOriginalOrderIDsForSubjectInfo(~<OrderID>~,~<InfoType>~,OrderIDList,TRUE);  
+	if ( !<Count> )
+		{ return Warning( Translate(SubjectInfoMessages,NoOrdersDefined) ); }
+
+	Query = ~select * from <TableName> where OrderID='<OrderID>' and SubjectID Not In (Select SubjectID from Images where OrderID In (<OrderIDList>))~;
+	return Init( ~<OrderID>~,~<Query>~ );
+}
+
+
+NUMERIC InfoWithMultipleImages()
+{	
+	Count = GetOriginalOrderIDsForSubjectInfo(~<OrderID>~,~<InfoType>~,OrderIDList,TRUE);  
+	if ( !<Count> )
+		{ return Warning( Translate(SubjectInfoMessages,NoOrdersDefined) ); }
+
+	Query = ~select * from <TableName> where OrderID='<OrderID>' and SubjectID Not In (Select SubjectID from Images where OrderID In (<OrderIDList>))~;
+	return Init( ~<OrderID>~,~<Query>~ );
+}
+
+
+// [Images] (selected), "View images for selected", "View all Images"
+NUMERIC ViewSelectedAsThumbNails( Selected )
+{
+	Count = GetOriginalOrderIDsForSubjectInfo(~<OrderID>~,~<InfoType>~,OrderIDList,TRUE);  // TRUE => SQL List
+	if ( !<Count> )
+		{ return Warning( Translate(SubjectInfoMessages,NoOrdersDefined) ); }
+
+	if ( !<Selected> )
+	{
+		Query = STR ( Select * From Images Where OrderID IN (<OrderIDList>) Order By OrderID, Roll, Frame );
+
+		Actions = ACTION Doc ( SubjectImages OpenOnce ImagesDoc "Init( ~<OrderIDList>~,TRUE,~<Query>~,0 );" );
+
+		return PerformActions( Actions );
+	}
+
+	if ( !DataView( GetSelected,SelectedSubjects ) )
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	Count = SelectedSubjects(ChildCount);
+
+	if ( <Count> == 0 )												// JUST SHOW THE SELECTED ORDERITEMS?
+		{ return Warning( Translate(~UIMessages,NoRowsSelected~) ); }
+
+	if ( <Count> > 1 )
+	{
+		WaitCursor( Begin );
+		
+		remaining = <count>;
+		
+		SelectedSubjects( GetNext,Subject );
+					
+		Actions = ACTION Doc ( SubjectImages OpenOnce ImagesDoc "Init( ~<OrderIDList>~,TRUE,~Select * From Images Where OrderID IN (<OrderIDList>) AND SubjectID = '<$con.Subject[SubjectID]>'~,0 );" );
+		PerformActions( Actions );
+		
+		while ( SelectedSubjects( GetNext,Subject ) )
+		{
+			Actions = ACTION Doc ( ImagesDoc "AddImageThumbnailsFromQuery( ~Select * From Images Where OrderID IN (<OrderIDList>) AND SubjectID = '<$con.Subject[SubjectID]>'~ );" );
+			PerformActions( Actions );
+			
+			ContinueIf( <--remaining> % 10 );
+			
+			StatusBarText( ~<remaining> Subjects~ );
+			MessagePump();
+		}
+		
+		Actions = ACTION Doc ( ImagesDoc "RefreshTheThumbnails();" );
+		PerformActions( Actions );
+		
+		StatusBarText( ~Opened Images for <count> Subjects~ );
+		
+		return WaitCursor( End );
+	}
+	else
+	{
+		if ( !SelectedSubjects( MakeSQLList,List,TRUE,SubjectID ) )
+			{ return Warning( Translate(SubjectInfoMessages,ErrorCreatingList ); }
+
+		Query = STR ( Select * From Images Where OrderID IN (<OrderIDList>) AND SubjectID In (<List>) ); // Order By OrderID, Roll, Frame
+	}
+
+	Actions = ACTION Doc ( SubjectImages OpenOnce ImagesDoc "Init( ~<OrderIDList>~,TRUE,~<Query>~,0 );" );
+
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+
+NUMERIC GangQueries( OrderIDList,&Selected,&Query,more )	// NOT USED ANY MORE
+{
+	ReturnOnFailure( ~<more>~ );
+	
+	more = Selected( GetNext,Subject );
+	
+	count = 1;  Query = ~~;		// WOULD HAVE BEEN NICE TO GANG THESE UP FOR BETTER SPEED, BUT JET COULDN'T HANDLE IT.
+	
+	while ( <more> )
+	{
+		UnionAll = IsNull(~<Query>~) ? ~~ : ~Union All~;
+		
+		Query = ~<Query> <UnionAll> Select * From Images Where OrderID IN (<OrderIDList>) AND SubjectID = '<$con.Subject[SubjectID]>'~;
+		
+		BreakIf( <--count> <= 0 );
+		
+		more = Selected( GetNext,Subject );
+	}
+	
+	return <more>;
+}
+
+
+// "View Order Items"
+NUMERIC ViewOrderItems()
+{
+	// tested 3/1/07
+//	Query = ~Select OrderItems.*,Products.LayoutName From OrderItems,Products Where OrderID In (<OrderIDList>) And OrderItems.ProductID = Products.ID ORDER BY OrderID,OrderItems.Sequence,OrderItems.Subsequence~;
+	Query = ~Select OrderItems.*,Products.LayoutName From OrderItems LEFT OUTER JOIN Products On OrderItems.ProductID = Products.ID Where OrderID In (<OrderIDList>) Order By OrderID,OrderItems.Sequence,OrderItems.Subsequence~;
+	lenQ = strlen(~<Query>~);
+
+	Count = GetOrderIDsForSubjectInfo(~<OrderID>~,~<InfoType>~,OrderIDList,TRUE);  // TRUE => SQL List
+	if ( !<Count> )
+		{ return Warning( Translate(SubjectInfoMessages,NoOrdersDefined) ); }
+
+	// Check the Action param with Init won't be too big?
+	maxIDListLen = (<MaxQueryLength>-<lenQ>-12)/2;
+	if (strlen(~<OrderIDList>~) > <maxIDListLen>)
+	{
+		num = TrimCommaString(OrderIDList,<maxIDListLen>);
+		Warning( Translate(SubjectInfoMessages,CantShowAllOrders,~<num>~,~<Count>~) );
+	}
+
+//	Query = ~Select OrderItems.*,Products.LayoutName From OrderItems,Products Where OrderID In (<OrderIDList>) And OrderItems.ProductID = Products.ID ORDER BY OrderID,OrderItems.Sequence,OrderItems.Subsequence~;
+	Query = ~Select OrderItems.*,Products.LayoutName From OrderItems LEFT OUTER JOIN Products On OrderItems.ProductID = Products.ID Where OrderID In (<OrderIDList>) Order By OrderID,OrderItems.Sequence,OrderItems.Subsequence~;
+
+	Actions = ACTION Doc ( ~OrderItems~ OpenOnce OrderItemsDoc "Init( ~<OrderIDList>~,~<Query>~,TRUE );" );
+
+	return PerformActions( Actions );
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	OnResequenceCancel();
+
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate( UIMessages,SaveChanges ),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	ForgetKparsDefaults();
+
+	DataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+NUMERIC OnCloseSIView( siTable )
+{
+	if ( SimilarStr( ~<TableName>~, ~<siTable>~ ) )
+	{
+		return OnCloseDataView();
+	}
+	return TRUE;
+}
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new subject information that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateOrderID( &List )	// NOT USED
+{
+	if ( ~<OrderID>~ == ~~ )
+	{
+		if ( List( GetFirst,Subject ) )
+		{
+			OrderID = ~<$pcon.Subject[OrderID]>~;
+		}
+	}
+
+	return ~<OrderID>~ != ~~ ? TRUE : FALSE;
+}
+
+
+NUMERIC AddNew( AnOrderID )  // NOT CALLED
+{
+	if ( !GenCon( List,RemoveFrom,ImagesToAddSubjectInfoFor,~[GenCons]~ ) )
+	{
+		return Warning( Translate( ~No list of images was available~ ) );
+	}
+
+	Query = ~Select * From <TableName> Where OrderID = '<AnOrderID>'~;
+
+	Init( ~<AnOrderID>~,~<Query>~ );
+
+	while ( List( GetNext,Item ) )
+	{
+		AddRecord();
+	}
+
+	return TRUE;
+}
+
+NUMERIC HandleDrop()
+{
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+		{ return Warning( ~There was no DragDropInfo for the item dragged into the Order Items window~ ); }
+
+	if ( !GenCon( SrcView,Is,~<$CON.DragDropInfo[SrcView]>~ ) ) 
+		{ return ExternalDrop(DragDropInfo); }
+
+	if ( !GenCon( DstView,Is,~<$CON.DragDropInfo[DstView]>~ ) ) 
+		{ GenCon( DstView,GetActiveView ); }
+
+	if ( !SrcView( GETSELECTED,SelectedItems ) )
+	{ 
+		GenCon( SelectedItems,Is,SrcView(GetCopyOf) );
+	}
+
+	count = SelectedItems( ChildCount );
+
+	if ( <count> <= 0 )
+	{
+		return Warning( ~No items were selected~ );
+	}
+
+
+	if ( ~<$con.SrcView[ViewDataType]>~ == ~Text~ )		// IS THE ITEM A LIST OF GENCONS CONTAINING TEXT?
+		{ return HandleTextDrop( SelectedItems,SrcView,DstView,~<$CON.DragDropInfo[DropLocation]>~ ); }
+	
+	return Warning( ~Data you are pasting is not of a valid type~ );
+}
+
+
+NUMERIC HandleTextDrop( &SelectedData,&SrcView,&DstView,DropLocation )
+{
+	Count = SelectedData( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( ~There was not data to paste~ ); }
+
+	SubjectID = 0;
+
+	if ( Ado( dbase,Connect,CMD,~Select MAX(SubjectID) From <TableName> Where OrderID = '<OrderID>'~,MaxSequence ) )
+	{ 
+		SubjectID = ~<$rs.MaxSequence[#0]>~ == ~~ ? ~0~ : ~<$rs.MaxSequence[#0]>~; 
+	}
+
+	SubjectID = MakeNumber(~<SubjectID>~) + 1;
+
+	WaitCursor( Begin );
+
+	pos = 0;
+	while ( SelectedData( GetNext,Item ) )
+	{
+		if ( !AddARecord( dBase,~<OrderID>~,~<SubjectID++>~,Item ) )
+		{
+			break;
+		}
+	}
+
+//*	InfoType = ~~;	
+
+//*	ADO( dBase,Connect,GetValuesFor,~Select InfoType From Orders Where ID = '<OrderID>'~,InfoType );
+
+	DocumentQuery = STR ( Select * From SubjectInfo<InfoType> Where OrderID = '<OrderID>' Order By OrderID,SubjectID );
+
+//*	Global( InfoType );
+//*	TableName = Upper(~SubjectInfo<InfoType>~);
+	DocumentQuery = Upper(~<DocumentQuery>~);
+
+	RefreshListView();
+
+	SelectedData( NotifyAffectedDocuments,~SubjectID~ );
+
+	return WaitCursor( END );
+}
+
+
+NUMERIC AddARecord( &dBase,AnOrderID,SubjectID,&Item )
+{
+	Query = ~Select * From <TableName> Where OrderID = '<AnOrderID>' AND SubjectID = '<SubjectID>'~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,KeySet,GetRecordFor,~<Query>~,Record ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return UserWarning( ~Error querying the database. <Query>  <theErr>~ );
+	}
+
+	Record( Set,OrderID,~<AnOrderID>~ );
+	Record( Set,SubjectID,IsNumeric(~<SubjectID>~) ? Format(~<SubjectID>~,~<$[Symbols].FrameFormat[Value]>~ ) : ~<SubjectID>~ );
+
+	if ( !Record(UpdateFrom,Item) )
+	{
+		return FALSE;
+	}
+
+	if ( !List( Update ) )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+// Only show original orders customers, as when create items, reference table for ImagesOrderID Customer
+NUMERIC SeeCustomersProducts()
+{
+	Count = GetOriginalOrderIDsForSubjectInfo(~<OrderID>~,~<InfoType>~,OrderIDList,TRUE);  // TRUE => SQL List
+	if ( !<Count> )
+		{ return Warning( Translate(SubjectInfoMessages,NoOrdersDefined) ); }
+
+	Query = ~Select Distinct CustomerID From Orders Where ID IN (<OrderIDList>)~;
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	Count = List(NumEntries);
+	if (<Count> < 1)
+	{
+		return Warning( Translate( SubjectInfoMessages,OrdersNoLongerExist,~<OrderIDList>~ ) ) ;
+	}
+
+	List( MakeSQLList,CustomerIDList,TRUE,CustomerID );  // TRUE - make list quoted ''
+	if (~<CustomerIDList>~ == ~~)
+	{
+		return Warning( Translate( SubjectInfoMessages,NoCustomers,~<OrderIDList>~ ) ) ;
+	}
+
+	Query = ~Select * From CustomerProducts Where CustomerID IN (<CustomerIDList>) Order By CustomerID,ProgramID,ID,Sequence~;
+
+	CustList = String(Replace,~<CustomerIDList>~,~'~,~~);  // remove quotes from string
+	Actions = ACTION DOC ( ~CustomerProducts~ Open CustomerProductsDoc "Init( ~<CustList>~,~<Query>~);" );
+
+	return PerformActions( Actions );
+}
+
+
+NUMERIC IdentifyProductColumns()
+{
+	ColumnCount = DataView( GetColumnCount,Dummy );
+
+	if ( <ColumnCount> <= 0 )
+	{
+		return Warning( Translate( ~There are no columns in the table~ ) );
+	}
+
+	TheList = ~~;
+
+	ColumnNumber = 0;
+		
+	while ( <++ColumnNumber> <= <ColumnCount> )
+	{
+		DataView( GetColumnDisplayName,<ColumnNumber>,ColumnName );
+
+		TheList = ~<TheList>~ == ~~ ? ~<ColumnName>~ : ~<TheList>,<ColumnName>~;
+	}
+
+	Action = ACTION DOC ( SubjectInfoColumns Open SubjectInfoColumnsDoc "Init(~SubjectInfoColumns~,~<TableName>~,~<TheList>~);" );
+	
+	return PerformActions( Action );
+}
+
+
+NUMERIC IdentifyKparsColumns()
+{
+	ColumnCount = DataView( GetColumnCount,Dummy );
+
+	if ( <ColumnCount> <= 0 )
+	{
+		return Warning( Translate( ~There are no columns in the table~ ) );
+	}
+
+	TheList = ~~;
+
+	ColumnNumber = 0;
+		
+	while ( <++ColumnNumber> <= <ColumnCount> )
+	{
+		DataView( GetColumnDisplayName,<ColumnNumber>,ColumnName );
+
+		TheList = ~<TheList>~ == ~~ ? ~<ColumnName>~ : ~<TheList>,<ColumnName>~;
+	}
+
+	Action = ACTION DOC ( SubjectInfoKparsColumns Open SubjectInfoKparsColumnsDoc "Init(~SubjectInfoKparsColumns~,~<TableName>~,~<TheList>~);" );
+	
+	return PerformActions( Action );
+}
+
+
+// Following 3 Routines NOT CALLED
+// Seem to have been if selected a column of rows, could created Items for just the column
+if (0)
+{
+NUMERIC DisplayGroups( ActivatedByButton,CustomerID )  // NOT CALLED
+{
+	Query = ~Select Unique CustomerID,ProgramID From CustomerProducts Where CustomerID = '<CustomerID>' Order By ProgramID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the CustomerProducts table: <Query>. <theErr>~ );
+	}
+
+	if ( !List( NumEntries ) )
+		{ return FALSE; }
+
+	GenCon(ListMenu,New,DDMenuDef,SetValue,Position,-1 );
+
+			Count = 0;
+
+			while ( List( GetNext,Item ) )
+			{
+		GenCon( MenuItem<++Count>,New,DDMenuItemDef,AddTo,ListMenu,SetValues,
+				Text,		~&<Count>)  Customer: <CustomerID>  Group: <$pcon.Item[ProgramID]>~,
+				IDText,		~ID~ );
+
+		ActionsText = ACTION Exec ( SelectGroup( ~<CustomerID>~,~<$pcon.Item[ProgramID]>~); );
+
+		MenuItem<Count>( SetValuesFrom,ActionsText,ActionsText );
+		}
+
+
+	if ( <ActivatedByButton> )
+	{
+		DataView( DisplayMenu,ListMenu,CreateOrderItemsButton(GetLeft,Position),0 );
+	}
+	else
+	{
+		DataView( GetLastMousePosition,mouseX,mouseY );
+		DataView( DisplayMenu,ListMenu,<mouseX>,<mouseY> );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SelectGroup( CustomerID,ProgramID )  // NOT CALLED
+{
+	return TRUE;
+}
+
+NUMERIC OnCreateOrderItemsButton()  // NOT CALLED
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) ) 
+	{ 
+		return Warning( Translate(UIMessages,NoRowsSelected) );
+	}
+
+	count = SelectedRows( ChildCount );
+
+	if ( DataView( GetSelectedColumns,Columns ) )
+	{
+		while ( Columns( GetNextString,ColumnNumber ) )
+		{
+			DataView( GetColumnDisplayName,<ColumnNumber>,Name );
+		}
+	}
+
+	return TRUE;
+
+	OrderID = ~<$con.SubjectInfo[OrderID]>~;
+
+	if ( !ADO( dBase,Connect,GetValuesFor,~Select CustomerID,ProgramID From Orders Where ID = '<OrderID>'~,CustomerID,ProgramID ) )
+	{
+		return Warning( Translate( ~Could not find Order <OrderID> in the Orders table~ ) ) ;
+	}
+
+	if ( dBase( RecordCountFor,~Select CustomerID From CustomerProducts Where CustomerID = '<CustomerID>'~ ) )
+	{
+		if ( ~<ProgramID>~ == ~~ )
+		{
+		}
+	}
+
+	if ( DisplayGroups( TRUE,~<CustomerID>~ ) )
+	{
+	}
+
+	return TRUE;
+
+}
+}  // end 3 routines not called for running items for selected column
+
+
+Include: ~CreatePackages.txt~;
+
+// [Create Items]
+NUMERIC DisplayOrderIDsForCreate(ActivatedByButton)
+{
+	StringList(OrderIDList,New);
+
+	Count = GetOrderIDsForSubjectInfo(~<OrderID>~,~<InfoType>~,OrderIDList,FALSE);  // FALSE => ScannerUStringList
+
+	if ( !<Count> )
+		{ return Warning( Translate(SubjectInfoMessages,NoOrdersDefined) ); }
+
+	Define:	ListMenu Using DDMenuDef AsSymbol ListMenu
+		Fields:		Position	(-1)		
+		Contains:	INLISTORDER
+		{
+			Count = 0;
+			while ( OrderIDList( GetNext,theID ) )
+			{
+				Define:	OrderList<++Count> using	DDMenuItemDef
+					Fields:	Text		~&<Count>)  <theID> ~
+							IDText		~ID~
+							ActionsText  ACTION Exec ( CreateOrderItemsForSubject(~<theID>~) )
+			}
+		}
+
+	if ( <ActivatedByButton> )
+	{
+		ControlView(GetByName,CreateOrderItemsButton,theButton);
+		DataView( DisplayMenu,ListMenu,theButton(GetLeft,Position),0 );
+	}
+	else
+	{
+		DataView( GetLastMousePosition,mouseX,mouseY );
+		DataView( DisplayMenu,ListMenu,<mouseX>,<mouseY> );
+	}
+
+	return TRUE;
+
+}
+
+// After choose Order ID when [Create Items]
+NUMERIC CreateOrderItemsForSubject(OrderItemsOrderID)
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) ) 
+	{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	count = SelectedRows( ChildCount );
+	
+	if (<count> > 5)
+	{
+
+		if ( MessageBox( Translate(~Are you sure you want to create OrderItems for the <count> selected rows(s)?~),YESNO ) != YES )
+		{ return FALSE; }
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	RecordCount = 0;
+
+	WhichScript = ~~;
+	Index = ControlView( ComboBox,JobPopulationScriptsListBox,GetSelectedIndex );
+	if (<index> >= 0)
+	{
+		PopScripts( GetStringAt,<Index>,WhichScript );
+		WhichScript = ~<$Str.$WhichScript>~;
+	}
+	
+	// SubjectInfo DataView is always only for one subjectinfo orderid
+	
+	ProcessingOrderDeliverables = FALSE;
+	Global(ProcessingOrderDeliverables);
+	
+	retValue = CreateItemsForSubjectList(dBase,~<OrderItemsOrderID>~,SelectedRows,~<TableName>~,RecordCount,Stop,WhichImage,~~,~<WhichScript>~);
+
+	StatusBarText( Translate( ~Processed <RecordCount> records~ ) );
+
+	return <retValue>;
+}
+
+
+
+NUMERIC AddSubjectToKPARS( )
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) ) 
+	{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	count = SelectedRows( ChildCount );
+
+	if ( MessageBox( Translate(~Are you sure you want to add the <count> selected rows(s) to KPARS batch?~),YESNO ) != YES )
+		{ return FALSE; }
+
+	// SubjectInfo DataView is always only for one subjectinfo orderid
+
+	Global( SelectedRows );
+
+	AddSubjectInfoToKPARS();
+
+	return TRUE;
+}
+
+
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+LastOrderID = ~~;
+
+
+//** NEW WAY
+// AnOrderID - one order id, of the SubjectInfo table.  Used for table updates, etc
+// AnInfoType - InfoType of the table want to display.
+// DocumentQuery - As input parameter does NOT specify type of SubjectInfo.  Query
+//                 specifies generic "SubjectInfo"
+NUMERIC Init2( AnOrderID,AnInfoType,DocumentQuery )
+{
+	if ( ~<AnOrderID>~ == ~~ )
+	{
+		Warning( ~You must specify an OrderID to see the SubjectInfo~ );
+		
+		if ( <FirstTime> )
+		{
+			Exit();
+		}
+		
+		return FALSE;				
+	}
+
+	if ( ~<AnOrderID>~ != ~<LastOrderID>~ && ~<LastOrderID>~ != ~~ )
+	{
+		return TRUE;
+	}
+
+	if ( ~<AnInfoType>~ != ~<InfoType>~ && !<FirstTime> )
+	{
+		return TRUE;
+	}
+
+	OrderID = ~<AnOrderID>~;
+
+
+	if ( <FirstTime> )
+	{
+		WaitCursor( Begin );
+
+		GetKparsDefaults();
+
+		InfoType = ~<AnInfoType>~;	
+
+//		ADO( dBase,Connect,GetValuesFor,~Select InfoType From Orders Where ID = '<OrderID>'~,InfoType );
+
+		Global( InfoType );
+		TableName = Upper(~SubjectInfo<InfoType>~);
+		DocumentQuery = Upper(~<DocumentQuery>~);
+
+		DocumentQuery = String( Replace,Upper(~<DocumentQuery>~),~ SUBJECTINFO ~,~ SubjectInfo<InfoType> ~ );
+
+		LastOrderID = ~<OrderID>~;
+		FirstTime = FALSE;
+
+		if ( !DefineMenus() )
+		{
+			WaitCursor( End );
+			Exit();
+		}
+
+		DefineWindow();
+
+		Title = ~<OrderID>~ == ~~ ? ~<TableName> Data~ : ~<TableName> Data - <OrderID>~;
+		DataWindow( Set,Title,~<Title>~ );
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{ 
+			WaitCursor( End );
+			List( GetErrorDescription,0,theErr );
+			Error( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+		}
+
+		Count = List(NumEntries);
+		StatusBarText( Translate(SubjectInfoMessages,ReadingRecords,<Count>) );
+		Start = Ticks();
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !DataWindow( CreateWindow,~<TableName>~ ) )
+		{ 
+			WaitCursor( End );
+			Error( ~Failed to create the window~ );
+		}
+
+		Global( OrderID,DocumentQuery );
+
+		Duration = (Ticks() - <Start>) / 1000;
+
+		WaitCursor( End );
+
+		PopulateJobPopListBox();	
+		return StatusBarText( Translate(SubjectInfoMessages,ReadRecords,~<Count>~,~<Duration>~) );
+	}
+
+	PopulateJobPopListBox();	
+	Global( OrderID,DocumentQuery );
+		
+	DocumentQuery = String( Replace,Upper(~<DocumentQuery>~),~ SUBJECTINFO ~,~ SubjectInfo<InfoType> ~ );
+	
+	Title = ~<OrderID>~ == ~~ ? ~<TableName> Data~ : ~<TableName> Data - <OrderID>~;
+
+	Document( Doc,This,SetTitle,~<Title>~ );
+
+	RefreshListView();
+	
+	return TRUE;
+}
+
+//** OLD WAY
+// AnOrderID - one order id.  Used to get the SubjectInfo  Order OrderID = SubjectInfo OrderID
+// DocumentQuery - As input parameter does NOT specify type of SubjectInfo.  Query
+//                 specifies generic "SubjectInfo"
+NUMERIC Init( AnOrderID,DocumentQuery )
+{
+	if ( ~<AnOrderID>~ == ~~ )
+	{
+		Warning( ~You must specify an OrderID to see the SubjectInfo~ );
+		
+		if ( <FirstTime> )
+		{
+			Exit();
+		}
+		
+		return FALSE;				
+	}
+
+	if ( ~<AnOrderID>~ != ~<LastOrderID>~ && ~<LastOrderID>~ != ~~ )
+	{
+		Action = ACTION DOC ( SubjectInfo Open SubjectInfoDoc "Init(~<AnOrderID>~,~<DocumentQuery>~);" );
+		return QueueContentsAfter( Action,50 );
+	}
+
+	OrderID = ~<AnOrderID>~;
+
+	if ( <FirstTime> )
+	{
+		WaitCursor( Begin );
+
+		InfoType = ~~;	
+
+		ADO( dBase,Connect,GetValuesFor,~Select InfoType From Orders Where ID = '<OrderID>'~,InfoType );
+
+		Global( InfoType );
+		TableName = Upper(~SubjectInfo<InfoType>~);
+		DocumentQuery = Upper(~<DocumentQuery>~);
+
+		DocumentQuery = String( Replace,Upper(~<DocumentQuery>~),~ SUBJECTINFO ~,~ SubjectInfo<InfoType> ~ );
+
+		LastOrderID = ~<OrderID>~;
+		FirstTime = FALSE;
+
+		if ( !DefineMenus() )
+		{
+			WaitCursor( End );
+			Exit();
+		}
+
+		DefineWindow();
+
+		Title = ~<OrderID>~ == ~~ ? ~<TableName> Data~ : ~<TableName> Data - <OrderID>~;
+		DataWindow( Set,Title,~<Title>~ );
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{ 
+			WaitCursor( End );
+			List( GetErrorDescription,0,theErr );
+			Error( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+		}
+
+		Count = List(NumEntries);
+		StatusBarText( Translate(SubjectInfoMessages,ReadingRecords,<Count>) );
+		Start = Ticks();
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !DataWindow( CreateWindow,~<TableName>~ ) )
+		{ 
+			WaitCursor( End );
+			Error( ~Failed to create the window~ );
+		}
+
+		Global( OrderID,DocumentQuery );
+
+		Duration = (Ticks() - <Start>) / 1000;
+
+		WaitCursor( End );
+
+		PopulateJobPopListBox();	
+		return StatusBarText( Translate(SubjectInfoMessages,ReadRecords,~<Count>~,~<Duration>~) );
+	}
+
+	Global( OrderID,DocumentQuery );
+		
+	DocumentQuery = String( Replace,Upper(~<DocumentQuery>~),~ SUBJECTINFO ~,~ SubjectInfo<InfoType> ~ );
+	
+	Title = ~<OrderID>~ == ~~ ? ~<TableName> Data~ : ~<TableName> Data - <OrderID>~;
+
+	Document( Doc,This,SetTitle,~<Title>~ );
+
+	RefreshListView();
+	
+	return TRUE;
+}
+
+
+NUMERIC Search()
+{
+	Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( ~<TableName>~,OrderID,~<OrderID>~ );" ) );
+	return PerformActions( Actions );
+}
+
+NUMERIC AllOptions()
+{
+	if ( !Defined(SubjectInfoListViewMenu) )
+	{
+		if ( !DefineMenus() )
+		{
+			return FALSE;
+		}
+	}
+
+	return DataView( DisplayMenu,SubjectInfoListViewMenu,0,0  );
+}
+
+NUMERIC OpenSelected()
+{
+	ViewImageForSubject();
+	return TRUE;
+}
+
+
+
+NUMERIC PerformSort(theSort)
+{
+	NewQuery = String( GetStringBeforeString, ~ORDER BY~, ~<DocumentQuery>~);
+	if (~<NewQuery>~ != ~~)
+	{
+		DocumentQuery = ~<NewQuery> ORDER BY <theSort>~;
+	}
+	else
+	{
+		DocumentQuery = ~<DocumentQuery> ORDER BY <theSort>~;
+	}
+	RefreshListView();
+	return TRUE;
+}
+
+
+NUMERIC PerformReload( Query )
+{
+	Log( Session,~Reloading SubjectInfo Window Using <Query>~ );
+	DocumentQuery = ~<Query>~;
+	return RefreshListView();
+}	
+
+
+
+NUMERIC DisplaySortRestrictionsList()
+{
+	theQuery = ~Select * From Sorts Where Type in ('Any SubjectInfo','<TableName>') Order by Sequence,Name~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	Count = List( NumEntries );
+
+	if ( !<Count> )
+		{ return Warning( Translate(SubjectInfoMessages,NoSortsDefined) ); }
+
+	Define:	ListMenu Using DDMenuDef AsSymbol ListMenu
+		Fields:		Position	(-1)		
+		Contains:	INLISTORDER
+		{
+			Count = 0;
+			while ( List( GetNext,Item ) )
+			{
+				Query = ~Select * From <TableName> Where OrderID = '<OrderID>' ~;
+				
+				Restriction = ~<$pcon.Item[Restriction]>~;	// these are variable length fields ... can only by read once.
+				Sort = ~<$pcon.Item[Sort]>~;
+				
+				if ( !IsNull(~<Restriction>~) )
+				{
+					Query = ~<Query> AND <Restriction> ~;
+				}
+				
+				if ( !IsNull(~<Sort>~) )
+				{
+					Query = ~<Query> ORDER BY <Sort>~;
+				}
+				
+				Define:	SortList<++Count> using	DDMenuItemDef
+					Fields:	Text		~&<Count>)  <$pcon.Item[Name]> ~
+							IDText		~ID~
+							ActionsText  ACTION Exec ( PerformReload(~<Query>~) )
+			}
+		}
+
+	
+	DataView( GetLastMousePosition,mouseX,mouseY );
+	return DataView( DisplayMenu,ListMenu,<mouseX>,<mouseY> );
+}
+
+
+NUMERIC FindSubjectsWithMoreThanOneImage(RespectRejected)
+{
+	Count = GetOriginalOrderIDsForSubjectInfo(~<OrderID>~,~<InfoType>~,OrderIDList,TRUE); 
+	 
+	if ( !<Count> )
+	{ 
+		return Warning( Translate(SubjectInfoMessages,NoOrdersDefined) );
+	}
+	
+	RejectedClause = <RespectRejected> ? ~AND (rejected = 0 OR rejected is NULL)~ : ~~;
+
+	Query = ~SELECT * FROM subjectinfo WHERE OrderID='sampleorder' AND 
+				SubjectID IN (select subjectid FROM images WHERE orderid IN (<OrderIDList>) <RejectedClause>
+				GROUP BY SubjectID HAVING count(*) > 1)~;
+				
+	return PerformReload( ~<Query>~ );
+}
+
+
+NUMERIC FindDuplicates()
+{
+	msg = ~To find duplicates, you must first select the column(s) that you would like to check for duplicates.  Click on the header for the desired column.  Hold down control to select multiple columns.  OrderID and SubjectID are ignored.~ ;
+ 
+	if ( !DataView( GetSelectedColumns,SelectedColumns ) ) 
+	{
+		return Warning(~<msg>~ );
+	}
+	
+	if ( SelectedColumns(Empty) )
+	{
+		return Warning(~<msg>~ );
+	}
+	
+	Fields = ~~;	Tests = ~~;		comma = ~~;  And = ~~;  count = 0;
+		
+	more = SelectedColumns(GetFirst,ColNumber );
+	
+	while ( <more> )
+	{
+		DataView( GetColumnName,<ColNumber>,ColumnName );
+	
+		if ( !SimilarStr( ~<ColumnName>~,~OrderID~,~SubjectID~ ) )
+		{
+			Fields = ~<Fields><comma><ColumnName>~;
+			comma = ~,~;
+			
+			Tests = ~<Tests> <And> a.<ColumnName> = b.<ColumnName>~;	// ex. WHERE a.FirstName = b.FirstName and a.LastName = b.LastName
+			And = ~AND~;
+			
+			++count;
+		}
+		
+		more = SelectedColumns(GetNext,ColNumber );
+	}
+	
+	if ( <count> == 0 )
+	{
+		return Warning(~<msg>~ );
+	}
+		
+	Query = ~SELECT * FROM <TableName> AS a WHERE OrderID='<OrderID>' AND 
+				EXISTS (SELECT <Fields>
+						FROM  <TableName> AS b
+						WHERE <Tests>
+						GROUP BY <Fields>
+						HAVING COUNT(*) > 1 )
+				ORDER BY <Fields>~;
+				
+	return PerformReload( ~<Query>~ );
+}
+
+
+
+// [Sort] button and Options-Sortby
+NUMERIC DisplaySortList(ActivatedByButton)
+{
+	theQuery = ~Select * From Sorts Where Type in ('Any SubjectInfo','<TableName>') Order by Sequence,Name~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	Count = List( NumEntries );
+
+	if ( !<Count> )
+		{ return Warning( Translate(SubjectInfoMessages,NoSortsDefined) ); }
+
+	Define:	ListMenu Using DDMenuDef AsSymbol ListMenu
+		Fields:		Position	(-1)		
+		Contains:	INLISTORDER
+		{
+			Count = 0;
+			while ( List( GetNext,Item ) )
+			{
+				Define:	SortList<++Count> using	DDMenuItemDef
+					Fields:	Text		~&<Count>)  <$pcon.Item[Name]> ~
+							IDText		~ID~
+							ActionsText  ACTION Exec ( PerformSort(~<$pcon.Item[Sort]>~) )
+			}
+		}
+
+	if ( <ActivatedByButton> )
+	{
+		ControlView(GetByName,SortByButton,theSortButton);
+		DataView( DisplayMenu,ListMenu,theSortButton(GetLeft,Position),0 );
+	}
+	else
+	{
+		DataView( GetLastMousePosition,mouseX,mouseY );
+		DataView( DisplayMenu,ListMenu,<mouseX>,<mouseY> );
+	}
+
+	return TRUE;
+
+}
+
+Include: ~ChgFldDlg.txt~;
+// Options list - Change Field, and [ChangeField] button
+NUMERIC ChangeSelectedColumn()
+{
+	return DisplayChangeFieldDlg(DataView);
+
+}
+
+
+
+
+NUMERIC GenerateDummyImage( &dbase,OrderID,SubjectID,Path )
+{		
+	Frame = ~S<SubjectID>~;
+	
+	Document( Job,New,Job,6,6 );
+	
+	Job( GetRenderList,0,RenderList );
+
+	RenderList(AddNode,~10000~,~IL:~,TheNode );
+	
+	TheNode( Set,~ILocation:~,~.5 .5  5 5~ );
+	TheNode( Set,~TLocation:~,~0 0 5 5~ );
+	TheNode( Set,~Text:~,~Subject<$chr.CRLF><SubjectID><$chr.CRLF>No Image~ );
+	TheNode( Set,~TColor:~,~0 0 0 0~ );
+	TheNode( Set,~TSize:~,~3000~ );
+	
+	Directory( Create,~<Path>~ );
+		
+	RenderList( RenderToDisk,~<Path>\<Frame>.jpg~,6*72 );
+	
+	dbase( cmd,~Insert into images(OrderID,Roll,Frame,SubjectID,Path) Values('<OrderID>','NoImages','<Frame>','<SubjectID>','<Path>\<Frame>.jpg')~ );
+	
+	StatusBarText( ~Created Image for Subject <SubjectID>~  );
+	
+	return TRUE;
+}
+
+
+NUMERIC GenerateImageDestination( &dbase,&Order,&Roll,&Frame,&Path)
+{	
+	OrderIDList = ~~;
+	
+	Row = 0;
+	
+	while ( DataView(GetARow,theRow,<++Row>) )
+	{				
+		if ( IsNull(~<OrderIDList>~) )
+		{			
+			if ( !GetOriginalOrderIDsForSubjectInfo(~<$con.theRow[OrderID]>~,~<InfoType>~,OrderIDList,TRUE) )
+				continue;
+		}
+
+		ContinueIf( !dbase( GetValuesFor,~Select OrderID,Roll,Frame,Path From Images Where OrderID IN (<OrderIDList>) And SubjectID='<$con.theRow[SubjectID]>'~,Order,Roll,Frame,Path ) );
+			
+		ContinueIf( IsNull(~<Path>~) );
+			
+		Path = ~<$str.$Path.Path>\NoImages~;
+		
+		return TRUE;		
+	}
+	
+	return Warning( ~Failed to find any images for this Subject Information~ );
+}
+
+
+VOID PopulateJobPopListBox()
+{
+	ControlView( ComboBox,JobPopulationScriptsListBox,ResetContent );
+	ForgetGlobal(PopScripts);
+	StringList(PopScripts,New);
+	Global(PopScripts);
+	MoreFiles = findfile( aDirectoryEntry,Find,~<$App.ShareDirectory>\Scripts\JobPopulationScripts\*.txt~ );
+	FilesCount = 0;
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+			continue;
+					
+		FuncNoExtension = ~<$Str.$aPath.filename.WithoutExt.StripLeadingNumerics>~;
+		DisplayThis = 1;
+		
+		if (FunctionDefined(~R<$Str.$FuncNoExtension.InstanceString>_SIDisplay~)) 
+		{
+			Routine = ~R<$Str.$FuncNoExtension.InstanceString>_SIDisplay~;
+			DisplayThis = <Routine>();
+		}
+		else if (FunctionDefined(~<$Str.$FuncNoExtension>_SIDisplay~))
+		{
+			DisplayThis = <FuncNoExtension>_SIDisplay();
+		}
+
+		if (!Numeric(~<DisplayThis>~))
+		{
+			continue;
+		}
+
+		ControlView( ComboBox,JobPopulationScriptsListBox,AddString,~<$Str.$aPath.filename.WithoutExt>~ );
+		PopScripts(AddString,~<$Str.$aPath.filename.WithoutExt>~);
+		++FilesCount;
+
+	}
+	
+	
+	ControlView(ComboBox,JobPopulationScriptsListBox,SetSelectedIndex,0);
+	
+	
+
+}
+
+
+NUMERIC CreateImagesForSubjects()
+{
+	msg = ~To create dummy images for subjects that have no images, you must first select the column that contains filenames. 
+ Click on the header of the column that contains the filenames.   Subjects that have no filename will have a dummy image created.~;
+	if ( !DataView( GetSelectedColumns,SelectedColumns ) ) 
+	{
+		return Warning(~<msg>~ );
+	}
+	
+	if ( SelectedColumns(Empty) )
+	{
+		return Warning(~<msg>~ );
+	}
+	
+	if ( SelectedColumns(Count) > 1 )
+	{
+		return Warning(~<msg>~ );
+	}
+	
+	SelectedColumns(GetFirst,ColNumber );
+	DataView( GetColumnDisplayName,<ColNumber>,ColumnDisplayName );
+	DataView( GetColumnName,<ColNumber>,ColumnName );
+	
+	if ( SimilarStr( ~<ColumnName>~,~OrderID~,~SubjectID~ ) )
+	{
+		return Warning(~<msg>~ );
+	}
+	
+	ADO( dbase,Connect );
+		
+	ReturnOnFailure( GenerateImageDestination( dBase,Order,Roll,Frame,Path) );
+	
+	msg = ~You are about to create dummy images for the subjects that have nothing in the <ColumnName> Column.  Continue? ~;
+	
+	ReturnOnFailure( MessageBox( ~<msg>~,YESNO ) == ~YES~ );
+	
+	WaitCursor( Begin );
+	
+	Changed = Row = 0;
+	
+	while ( DataView(GetARow,theRow,<++Row>) )
+	{				
+		ContinueIf( !IsNull(~<$con.theRow[<ColumnName>]>~) );
+			
+		DataView( GetCellValue,OrderID,<Row>,~OrderID~ );
+		DataView( GetCellValue,SubjectID,<Row>,~SubjectID~ );
+		DataView( GetCellValue,FirstName,<Row>,~FirstName~ );
+		DataView( GetCellValue,LastName,<Row>,~LastName~ );
+		
+		WhereClause = ~OrderID = '<$con.theRow[OrderID]>' And SubjectID = '<SubjectID>'~;
+		
+		cmd = ~Update SubjectInfo<InfoType> Set <ColumnName> = 'S<SubjectID>.jpg' Where <WhereClause>~;
+		
+		dbase( cmd,~<cmd>~ );
+		
+		DataView( SetCellValueByColName, <Row>,~<ColumnName>~,~S<SubjectID>.jpg~,FALSE );
+
+		GenerateDummyImage( dBase,~<Order>~,~<SubjectID>~,~<Path>~ );
+
+		++Changed;
+	}
+	
+	StatusBarText( ~Created Images for <Changed> Images~  );
+
+	WaitCursor( End );
+	
+	return TRUE;
+}
+
+
+VOID	CustomReloads()		// a chance for customers to add their own reloads without changing DP2 scripts
+{
+	return;
+	
+	Define:	AUniqueMenuID	using	DDMenuItemDef
+		Fields:	Text		~The Menu Text~
+				IDText		~ID~
+				ActionsText  ACTION Exec ( SomeUserWrittenRoutine() );
+}
+
+
+VOID	CustomMenuItems()		// a chance for customers to add their own menu items without changing DP2 scripts
+{
+	return;
+	
+	Define:	AUniqueMenuID	using	DDMenuItemDef
+		Fields:	Text		~The Menu Text~
+				IDText		~ID~
+				ActionsText  ACTION Exec ( SomeUserWrittenRoutine() );
+}
+
+
+NUMERIC DefineMenus()
+{
+	ForgetGlobal( SubjectInfoListViewMenu,TableDefinition );
+
+	if ( !GenCon( TableDefinition,GetFrom,<TableName>,~[DATABASE TableDefinitions]~ ) )
+	{ 
+		return Warning( Translate(~The <TableName> Table is not properly defined~) );
+	}
+
+	Define:	SubjectInfoListViewMenu Using DDMenuDef AsSymbol SubjectInfoListViewMenu
+		Fields:		Position	(-1)		
+		Contains:	INLISTORDER
+		{
+			Define:	AddRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Add Subject I&nfo~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( AddRecord() )
+
+			Define:	DuplicateRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Duplicate Subject Info~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DuplicateRecord() )
+
+			Define:	SwapIDs	using	DDMenuItemDef
+				Fields:	Text		Translate( ~S&wap IDs~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SwapID() )
+
+			Define:	DupeAboveCell	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Yank Va&lue From Above~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DupeAboveCell() )
+
+			Define:	OpenImages	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Open~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( ViewImageForSubject() )
+						
+			Define:	NULL0 using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+						
+			Define:	ReloadChoices using DDMenuItemDef	
+				Fields:	Text		~Re-load~
+						IDText		~ID~
+				Contains: INLISTORDER
+				{
+					Define:	DisplaySortRestrictionsList	using	DDMenuItemDef
+						Fields:	Text		Translate( ~using Sort/Restriction ...~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( DisplaySortRestrictionsList() )
+								
+					Define:	FindDuplicates	using	DDMenuItemDef
+						Fields:	Text		Translate( ~just the duplicates based on selected columns~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( FindDuplicates() )
+								
+					Define:	FindSubjectsWithMultipleImages	using	DDMenuItemDef
+						Fields:	Text		Translate( ~just subjects with more than one image~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( FindSubjectsWithMoreThanOneImage(FALSE) )
+
+					Define:	FindSubjectsWithMultipleImages2	using	DDMenuItemDef
+						Fields:	Text		Translate( ~just subjects with more than one image ignoring rejected images~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( FindSubjectsWithMoreThanOneImage(TRUE) );
+								
+					CustomReloads();
+				}
+			
+
+
+
+			IF 1 
+			{
+				Define:	Resequence	using	DDMenuItemDef
+					Fields:	Text		Translate( ~&Resequence~ )
+							IDText		~ID~
+							ActionsText  ACTION Exec ( CreateResequenceDialog() )
+			}
+
+			Define:	CloseAll	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Close~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( CloseAllImages() )
+
+			Define:	NULL1 using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+			Define:	SaveAllChanges	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Save Changes~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SaveAllChanges() )
+
+			Define:	ForgetAllChanges	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Cancel Changes~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+			Define:	DeleteRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Delete (DEL)~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DeleteRecord() )
+
+			Define:	Refresh	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Refresh (F5)~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RefreshListView() )
+
+			Define:	NULL2 using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+			Define:	SearchItem	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Find~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( Search() )
+
+			Define:	AllForOrder	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Find All For Order~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( AllForOrder() )
+
+			if ( RunningVersion( 9.2 ) )
+			{
+				Define:	InfoWithNoImages	using	DDMenuItemDef
+					Fields:	Text		Translate( ~&Find All With No Image~ )
+							IDText		~ID~
+							ActionsText  ACTION Exec ( InfoWithNoImages() )
+			}
+
+			Define:	ViewAsThumbNails	using	DDMenuItemDef
+				Fields:	Text		Translate( ~View I&mages For Selected Subjects~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( ViewSelectedAsThumbNails(TRUE) )
+
+			Define:	ViewAllAsThumbNails	using	DDMenuItemDef
+				Fields:	Text		Translate( ~View All Images~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( ViewSelectedAsThumbNails(FALSE) )
+
+			Define:	ViewOrderItems	using	DDMenuItemDef
+				Fields:	Text		Translate( ~View Order Items~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( ViewOrderItems() )
+
+			Define:	CreateOrderItems	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Create Order Items~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DisplayOrderIDsForCreate(FALSE) )
+
+			Define:	DisplayProducts	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Produc&ts~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DisplayProductCategories() )
+
+			Define:	NULLA using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+			Define:	CreateImagesForMissing	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Create Images For Subjects With No Images~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( CreateImagesForSubjects() )
+
+			Define:	SetImagesSubjectID	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Set SubjectID For Images Based On Matching Filenames~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SetImagesSubjectID() )
+
+			Define:	NULLB using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+						
+			Define:	DisplaySortList	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Sort by ...~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DisplaySortList(FALSE) )
+
+			Define:	ChangeColValue	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Change Field~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( ChangeSelectedColumn() )
+
+			Define:	NULL3 using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+			Define:	IdentifyProductColumns	using	DDMenuItemDef
+				Fields:	Text		Translate( ~ID Product Columns~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( IdentifyProductColumns() )
+
+			Define:	SeeCustomersProducts	using	DDMenuItemDef
+				Fields:	Text		Translate( Translate( CustomersMessages,CustomersProducts ) )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SeeCustomersProducts() )
+
+			Define:	NULL4 using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+			Define:	Export	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Export~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( ExportSelectedToFile(DataView,~<TableName>~) );
+
+
+			if ( <EnableKpars> )
+			{
+				Define:	NULL5 using DDMenuItemDef
+					Fields:	Text		~~
+							IDText		~NULL~
+
+				Define:	IdentifyKparsColumns	using	DDMenuItemDef
+					Fields:	Text		Translate( ~ID Kpars Columns~ )
+							IDText		~ID~
+							ActionsText  ACTION Exec ( IdentifyKparsColumns() )
+
+				Define:	SetKparsSubjectID	using	DDMenuItemDef
+					Fields:	Text		Translate( ~Add to KPARS Batch~ )
+							IDText		~ID~
+							ActionsText  ACTION Exec ( AddSubjectToKPARS() )
+			}
+			
+			CustomMenuItems();
+		}
+
+	Global( SubjectInfoListViewMenu,TableDefinition );
+
+	return TRUE;
+}
+
+
+
+Include: ~ExportSelectedToFile~;
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+VOID DefineWindow()
+{
+	ForgetGlobal( DataWindow );
+
+	Define: DataWindow Using DDWinDef
+		Fields:		Title					~Subject Info~
+					Position				0 75 100 22
+					IsPositionPercent		T
+					EnableStatusBar			F
+					TypeName				SplitterWnd
+					SplitterRows			~2 14 90~
+					SplitterColumns			1
+
+		Contains:	INLISTORDER
+		{
+			Define: ControlView Using DDViewDef AsSymbol ControlView
+				Fields:			ViewType				FormView
+								KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+								HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "SUBJECTINFO.htm" )
+					Contains:
+					{
+						position = DefineStdGridButtons(SubjectInfo) + 10;
+
+						Define: AllForOrderButton Using DDWinCtrlDef AsSymbol AllForOrderButton
+							Fields:	GENCONNAME		This
+									DACTIONSTEXT	ACTION EXEC ( AllForOrder() )
+									POSITION		$position + $hGap, $vGap $ButtonWidth $ButtonHeight
+									TEXT			Translate( ~All~ )
+									TOOLTIP			Translate( ~View all records for the entire Order~ )
+									TYPENAME		BUTTON
+
+						Define: ViewImagesButton Using DDWinCtrlDef AsSymbol ViewImagesButton
+							Fields:	GENCONNAME		This
+									DACTIONSTEXT	ACTION EXEC ( ViewSelectedAsThumbNails(TRUE) )
+									POSITION		AllForOrderButton(GetRight,Position) + $hGap, $vGap $ButtonWidth $ButtonHeight
+									TEXT			Translate( ~I&mages~ )
+									TOOLTIP			Translate( ~View thumbnails for the selected images~ )
+									TYPENAME		BUTTON
+
+						Define: DuplicateButton Using DDWinCtrlDef AsSymbol DuplicateButton
+							Fields:	GENCONNAME		This
+									DACTIONSTEXT	ACTION EXEC ( DuplicateRecord() )
+									POSITION		ViewImagesButton(GetRight,Position) + $hGap, $vGap $ButtonWidth $ButtonHeight
+									TEXT			Translate( ~D&uplicate~ )
+									TOOLTIP			Translate( ~Duplicate the selected row~ )
+									TYPENAME		BUTTON
+
+
+						Define: CreateOrderItemsButton Using DDWinCtrlDef AsSymbol CreateOrderItemsButton
+							Fields:	GENCONNAME		This
+									DACTIONSTEXT	ACTION EXEC ( DisplayOrderIDsForCreate(TRUE) )
+									POSITION		DuplicateButton(GetRight,Position) + $hGap, $vGap $ButtonWidth*2 $ButtonHeight
+									TEXT			Translate( ~Create Order Items~ )
+									TOOLTIP			Translate( ~Create Order Items for the selected subjects~ )
+									TYPENAME		BUTTON
+
+						Define: SortByButton Using DDWinCtrlDef AsSymbol SortByButton
+							Fields:	GENCONNAME		This
+									DACTIONSTEXT	ACTION EXEC ( DisplaySortList(TRUE) )
+									POSITION		CreateOrderItemsButton(GetRight,Position) + $hGap, $vGap $ButtonWidth $ButtonHeight
+									TEXT			Translate( ~Sort~ )
+									TOOLTIP			Translate( ~Sort records in view by ...~ )
+									TYPENAME		BUTTON
+
+						Define: ChangeFieldButton Using DDWinCtrlDef AsSymbol ChangeFieldButton
+							Fields:	GENCONNAME		This
+									DACTIONSTEXT	ACTION EXEC ( ChangeSelectedColumn() )
+									POSITION		SortByButton(GetRight,Position) + $hGap, $vGap $ButtonWidth*1.5 $ButtonHeight
+									TEXT			Translate( ~ChangeField~ )
+									TOOLTIP			Translate( ~Change all values in column to one value~ )
+									TYPENAME		BUTTON
+
+						 Define: CustomStaticText Using DDWinCtrlDef AsSymbol CustomStaticText 
+							Fields: TypeName        StaticText
+									Text            ~Population Technique~
+									RightJustified	TRUE
+									Position		ChangeFieldButton(Getright,Position)+$hGap+10, ChangeFieldButton(gettop,Position)+$vGap + 3,120, 20 
+
+
+
+						Define: JobPopulationScriptsListBox Using DDWinCtrlDef AsSymbol JobPopulationScriptsListBox Private
+						Fields:	
+							TypeName				SComboBox
+							Position				CustomStaticText(Getright,Position)+$hGap+10, ChangeFieldButton(gettop,Position)+$vGap-2,
+													205, 180 
+							GenConName				this
+							IActionsText			ACTIONS ( Get )
+							OActionsText			ACTIONS ( Save )
+							InfoTip					TRUE
+							Tooltip					Translate( ~How to handle more than one image having the same Subject ID when you Create Order Items.~)
+					}
+
+			Define: DataView Using DDViewDef AsSymbol DataView
+				Fields:	ViewType				~ListView~
+						ViewDataType			Text
+						GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+						ChangeRecordActionsText ACTION Exec ( ChangeRecord(); )
+						DeleteRecordActionsText ACTION Exec ( DeleteRecord(); )
+						DoubleClickActionsText	ACTION Exec ( ViewImageForSubject() )
+						RClickUpActionsText		ACTION Exec ( RightClickInListView(); )
+						RefreshActionsText		ACTION Exec ( RefreshListView() )
+						KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+						DropActionsText			ACTION Exec ( HandleDrop() )
+						HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "SubjectInfo.htm" )
+						CloseActionsText		ACTION Call ( OnCloseDataView() ) ;
+		}
+
+	Global( DataWindow,ControlView,DataView );
+}
+		
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\SubjectInfoDoc.txt~ );
+
+

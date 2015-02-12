@@ -1,0 +1,291 @@
+IncludeClass(BaseDialog);
+
+
+Class( MyDialog,Extends,BaseDialog );
+
+VOID MyDialog::MyDialog()
+{
+	Left = 200;
+	DialogWidth = 500;
+	ButtonWidth = 60;
+	Dictionary = ~DDSetScanFromOrderItem~;
+	Title = ~Mark Images For Rescan~;
+	HelpPage = ~MarkImagesForRescan.htm~;
+}
+
+
+
+NUMERIC MyDialog::OnSetAllButton(Value)
+{
+	if ( IsNULL( ~<$con.DlgData[OrderID]>~ ) )
+	{
+		return Warning( ~You must enter an OrderID first~ );
+	}
+
+	WaitCursor( BEGIN );
+
+	StatusBar( 0,~Searching ....~ );
+
+	ItemOrderID = ~<$con.DlgData[OrderID]>~;
+
+	ExistsClause = ~Select * From OrderItemImages Where OrderItemImages.ItemOrderID='<ItemOrderID>' AND Images.OrderID=OrderItemImages.OrderID AND Images.Roll=OrderItemImages.Roll AND Images.Frame=OrderItemImages.Frame~;
+
+	Cmd = ~Update Images Set Scan=<Value> WHERE EXISTS (<ExistsClause>)~ ;
+
+	if (  !ADO( dBase,Connect,Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		StatusBar( 0,~Failed.~ );
+		WaitCursor( END );
+		return Warning( ~Update Failed.  <Cmd>.  <theErr>~ );
+	}
+
+	RecordsAffected = dBase( RecordsAffected );
+
+	StatusBar( 0,~<RecordsAffected> Images were affected~ );
+
+	WaitCursor( END );
+
+	return TRUE;
+}
+
+
+NUMERIC MyDialog::OnGoButton()
+{
+	if ( IsNULL( ~<$con.DlgData[OrderID]>~ ) )
+	{
+		return Warning( ~You must enter an OrderID first~ );
+	}
+
+	if ( IsNULL( ~<$con.DlgData[Margin]>~ ) )
+	{
+		return Warning( ~You must enter the margin first~ );
+	}
+
+	StatusBar( 0,~Searching ....~ );
+
+	SetSystemSettings( ~ResizeMarginForRescan~,~Default~,~<$con.DlgData[Margin]>~,TRUE );
+
+	if (  !ADO( dBase,Connect ) )
+	{
+		StatusBar( 0,~Failed.~ );
+		dBase( GetErrorDescription, theErr );
+		return Warning( Translate(DBMessages, ConnectionFailed, ~<theErr>~) );
+	}
+
+	Count = UpdateScanFlag(dBase,~<$con.DlgData[OrderID]>~,DlgData(GetNumeric,Margin));
+
+	Warning( ~<Count> images were marked for rescanning~ );
+
+	StatusBar( 0,~<Count> Images were affected~ );
+
+	return TRUE;
+}
+
+STR MyDialog::GetWidthMarginClause(Margin)
+{
+	Factor = <Margin>/100;
+	return ~(OrderItemImages.NeededWidth > 0) AND (OrderItemImages.NeededWidth > (Images.Width + (Images.Width * <Factor>)))~;  
+
+}
+
+STR MyDialog::GetLengthMarginClause(Margin)
+{
+	Factor =  <Margin>/100;
+	return ~(OrderItemImages.NeededLength > 0) AND (OrderItemImages.NeededLength > (Images.Length + (Images.Length * <Factor>)))~;  
+}
+
+
+STR MyDialog::CreateWhereClause(OrderID,Margin)
+{
+	WidthMarginClause = GetWidthMarginClause(<Margin>);  
+
+	LengthMarginClause = GetLengthMarginClause(<Margin>);  
+	
+	ExistsClause = ~Select * From OrderItemImages Where OrderItemImages.ItemOrderID='<OrderID>' AND Images.OrderID=OrderItemImages.OrderID AND Images.Roll=OrderItemImages.Roll AND Images.Frame=OrderItemImages.Frame~;
+
+	WhereClause = ~EXISTS (<ExistsClause> AND <WidthMarginClause> AND <LengthMarginClause> )~ ;
+
+	return ~<WhereClause>~;
+}
+
+
+NUMERIC MyDialog::UpdateScanFlag(&dBase,OrderID,Margin)
+{
+	WhereClause = CreateWhereClause(~<OrderID>~,~<Margin>~);  
+
+	Cmd = ~UPDATE Images SET Scan=1 WHERE <WhereClause>~ ;
+
+	if (  !dBase( Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Update Failed.  <Cmd>.  <theErr>~ );
+	}
+
+	return dBase( RecordsAffected );
+}
+
+
+NUMERIC MyDialog::OnMarginDetail()
+{
+	if ( IsNULL( ~<$con.DlgData[OrderID]>~ ) )
+	{
+		return Warning( ~You must enter an OrderID first~ );
+	}
+
+	if ( IsNULL( ~<$con.DlgData[Margin]>~ ) )
+	{
+		return Warning( ~You must enter the margin first~ );
+	}
+
+	WhereClause = CreateWhereClause(~<$con.DlgData[OrderID]>~,~<$con.DlgData[Margin]>~);  
+	
+	Query = ~Select * from Images WHERE <WhereClause>~ ;
+
+	Actions = ACTION Doc ( ImagesDoc OpenOnce ImagesDoc "Init( ~<$con.DlgData[OrderID]>~,TRUE,~<Query>~,0 );" );
+
+	return PerformActions( Actions );
+}
+
+
+VOID MyDialog::DefineControls()
+{
+	Define: OrderPrompt Using DDWinCtrlDef AsSymbol OrderPrompt Private
+			Fields: GENCONNAME			THIS
+					RightJustified		TRUE
+					Position			<hgap> <vGap> 70 <ButtonHeight>
+					Text				~Order ID~
+					TypeName			StaticText
+				
+	Define: OrderField Using DDWinCtrlDef AsSymbol OrderField Private
+			Fields:	TypeName			MaskedEditText
+					Mask				~<$[DATABASE FieldTypes].OrderID[Mask]>~
+					PromptChar			~<$[DATABASE FieldTypes].OrderID[PromptChar]>~
+					AllowedChars		~<$[DATABASE FieldTypes].OrderID[AllowedChars]>~
+					DisallowedChars		~<$[DATABASE FieldTypes].OrderID[DisallowedChars]>~
+					GENCONNAME			THIS
+					GENCONFIELD			OrderID
+					IACTIONSTEXT		ACTIONS ( Get )
+					DACTIONSTEXT		ACTIONS ( Save )
+					OACTIONSTEXT		ACTIONS ( Save )
+					Position			OrderPrompt(GetRight,Position)+$hGap OrderPrompt(GetTop,Position) 180 <ButtonHeight>
+					Text				~Initial Value~;
+
+	Define: RangePrompt Using DDWinCtrlDef AsSymbol RangePrompt Private
+			Fields:	TYPENAME			STATICTEXT
+					GENCONNAME			THIS
+					RightJustified		TRUE
+					Position			OrderPrompt(GetLeft,Position) OrderPrompt(GetBottom,Position)+$hGap*4  OrderPrompt(GetWidth,Position) <ButtonHeight>
+					Text				~Resize Margin~
+					ToolTip				~How much are you willing to re-size up?  Enter a percentage.~
+
+	Define: MarginField Using DDWinCtrlDef AsSymbol MarginField Private
+			Fields:	TYPENAME			MaskedEditText
+					Mask				~###~
+					GENCONNAME			THIS
+					GENCONFIELD			Margin
+					IACTIONSTEXT		ACTIONS ( Get )
+					DACTIONSTEXT		ACTIONS ( Save )
+					OACTIONSTEXT		ACTIONS ( Save )
+					Position			RangePrompt(GetRight,Position)+$hGap RangePrompt(GetTop,Position) 50 <ButtonHeight>
+					Text				~Initial Value~
+					ToolTip				~How much are you willing to re-size up?  Enter a percentage.~
+
+	Define: MarginDetailButton Using DDWinCtrlDef AsSymbol MarginDetailButton Private
+			Fields:	TYPENAME			Button
+					DACTIONSTEXT		ACTION EXEC ( <THIS>.OnMarginDetail() )
+					Position			MarginField(GetRight,Position)+$hGap MarginField(GetTop,Position) 20 <ButtonHeight>
+					Text				~?~
+					ToolTip				~See which images will be marked for re-scan~;
+
+	Define: GoButton Using DDWinCtrlDef AsSymbol GoButton Private
+		Fields:		GENCONNAME			THIS
+					DACTIONSTEXT		ACTION EXEC ( <THIS>.OnGoButton() )
+					POSITION			$hGap,MarginDetailButton(GetBottom,Position)+$vGap*4, $ButtonWidth, $ButtonHeight
+					TEXT				Translate( ~Set~ )
+					TOOLTIP				Translate( ~Press to set the scan flag for images that are to small to make the OrderItems~ )
+					TYPENAME			BUTTON
+					ISTABSTOP			TRUE;
+
+	Define: SetAllButton Using DDWinCtrlDef AsSymbol SetAllButton Private
+		Fields:		GENCONNAME			THIS
+					DACTIONSTEXT		ACTION EXEC ( <THIS>.OnSetAllButton(1) )
+					POSITION			GoButton(GetRight,Position)+$hGap,GoButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+					TEXT				Translate( ~Set All~ )
+					TOOLTIP				Translate( ~Press to set the scan flag for images that are used by the OrderItems of the selected Order~ )
+					TYPENAME			BUTTON
+					ISTABSTOP			TRUE;
+
+	Define: ClearAllButton Using DDWinCtrlDef AsSymbol ClearAllButton Private
+		Fields:		GENCONNAME			THIS
+					DACTIONSTEXT		ACTION EXEC ( <THIS>.OnSetAllButton(0) )
+					POSITION			SetAllButton(GetRight,Position)+$hGap,SetAllButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+					TEXT				Translate( ~Clear All~ )
+					TOOLTIP				Translate( ~Press to clear the scan flag for images that are used by the OrderItems of the selected Order~ )
+					TYPENAME			BUTTON
+					ISTABSTOP			TRUE;
+
+	Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton Private
+		Fields:		GENCONNAME			THIS
+					DACTIONSTEXT		ACTION EXEC ( <THIS>.DoCancelButton() )
+					POSITION			ClearAllButton(GetRight,Position)+$hGap,ClearAllButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+					TEXT				Translate( ~<CancelButtonText>~ )
+					TOOLTIP				Translate( ~<CancelButtonToolTip>~ )
+					TYPENAME			BUTTON
+					ISTABSTOP			TRUE;
+}
+
+
+VOID MyDialog::DefineDictionary()
+{
+		Dictionary: ~<Dictionary>~ 
+			Fields: Name OrderID 	type text
+			Fields: Name Margin 	type long
+}
+
+VOID MyDialog::SetOrderID( OrderID )
+{
+	dlg( SetStrings,OrderID,~<OrderID>~ );
+}
+
+VOID MyDialog::Initialize()
+{
+	ResizeMargin = 100;
+
+	if ( GetSystemSettings( ~ResizeMarginForRescan~,~Default~,Margin,Enabled ) )
+	{
+		if ( <Enabled> )
+		{
+			ResizeMargin = ~<Margin>~;
+		}
+	}
+
+	dlg( SetStrings,Margin,~<ResizeMargin>~ );
+}
+
+
+
+VOID Init( OrderID )
+{
+	if ( !Defined( ThisDialog ) )
+	{
+		MyDialog( New,thisDialog );	// Instantiate an object of class MyDialog
+
+		ThisDialog.DefineDialog();
+
+		Global( ThisDialog );
+	}
+
+	if ( DefinedAndNotNull( OrderID ) )
+	{
+		ThisDialog.SetOrderID( ~<OrderID>~ );
+	}
+
+	ThisDialog.Initialize();
+}
+
+
+
+
+
+

@@ -1,0 +1,1783 @@
+
+
+	LeftX = hGap = vGap = 7;
+	PromptHeight = 20;		PromptWidth = 90;		ValueWidth = 150;
+	ButtonWidth = 90;		ButtonHeight = 20;	
+	LeftX = $hGap;			CurrentY = $vGap;		
+	TabWidth = 600;			TabHeight = 200;
+	RadioWidth = 170;		SmallTextWidth = 30;
+
+
+VOID DefineDialog()
+{
+	if ( !DictionaryExists( DDBackupRestore ) )
+	{
+		Dictionary:		DDBackupRestore
+			Fields:		Name Server					Type Text
+			Fields:		Name Version				Type Text
+			Fields:		Name DatabaseName			Type Text
+			Fields:		Name Path					Type Text
+			Fields:		Name DBPath					Type Text
+			Fields:		Name LogPath				Type Text
+			Fields:		Name RestoreType			Type Text
+			Fields:		Name LastRestore			Type Long
+			Fields:		Name FileNumber				Type Long
+			Fields:		Name PointInTime			Type Text		// like 'Jul 1, 1998 10:00 AM'
+			Fields:		Name Operation				Type Text
+			Fields:		Name TransactionRecovery	Type Long
+			Fields:		Name DatabaseStatus			Type Text
+			Fields:		Name CurrentSize			Type Double
+			Fields:		Name SpaceAvailable			Type Double
+			Fields:		Name LogSize				Type Double
+			Fields:		Name LogSpaceAvailable		Type Double
+			Fields:		Name GetCreateDate			Type Text
+			Fields:		Name LastBackupTime			Type Text
+			Fields:		Name TransactSQL			Type Text
+	}
+
+	Define: DlgData Using DDBackupRestore
+		Fields: Operation	~FullBackup~
+				//PointInTime	~<$Date.%b %d,%Y %I:%M:%S %p>~
+				FileNumber	1
+
+
+	Define: aDialog Using DDWinDef
+		Fields:	POSITION				100, 100, 600,600 
+				TITLE					~Backup and Restore SQLServer or MSDE Databases~
+				TYPENAME				Dialog 
+				WantsMinimizeBox		TRUE
+				STATUSBAR				~1 100~
+				OACTIONSTEXT			ACTION EXEC ( CloseDialog(FALSE) )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "BackupRestoreMSDE.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: ServerPrompt Using DDWinCtrlDef AsSymbol ServerPrompt
+				Fields:	TypeName		Button
+						Text			~Select Server~
+						RightJustified	1
+						DActionsText	ACTION EXEC ( OnChangeServer() )
+						TOOLTIP			Translate(~Connect to the selected server and see a list of databases~)
+						Position		$hGap $vGap,$PromptWidth $ButtonHeight
+
+			Define: ServerComboBox Using DDWinCtrlDef AsSymbol ServerComboBox
+				Fields:	TypeName		EComboBox
+						Position		ServerPrompt(GetRight,Position) + $hGap,ServerPrompt(GetTop,Position),
+										$ValueWidth*1.5, ($ButtonHeight * 10)
+						GenConName		THIS
+						GenConField		Server
+						TOOLTIP			Translate(~Specify the server that contains the desired database~)
+						IActionsText	ACTIONS ( Get )
+						//DActionsText	ACTIONS ( Save "Exec(OnChangeServer();)" )
+						OActionsText	ACTIONS ( Save )
+						ReturnKeyActionsText	ACTION EXEC ( OnChangeServer() )
+						//DropDownActionsText ACTION CALL ( UpdateServerComboBox()  )
+						OActionsText	ACTIONS ( Save )
+
+			Define: RefreshPrompt Using DDWinCtrlDef AsSymbol RefreshPrompt
+				Fields:	TypeName		Button
+						Text			~Refresh~
+						DActionsText	ACTION EXEC ( UpdateServerComboBox() )
+						Position		ServerComboBox(GetRight,Position)+$hGap,ServerComboBox(Gettop,Position),$ButtonWidth*.6 $ButtonHeight
+
+			Define: DatabaseVersionPrompt Using DDWinCtrlDef AsSymbol DatabaseVersionPrompt
+				Fields:	TypeName		StaticText
+						Text			~Version~
+						Position		RefreshPrompt(GetRight,Position)+$hGap,RefreshPrompt(GetTop,Position)+2,40 $ButtonHeight
+
+			Define: DatabaseVersionText Using DDWinCtrlDef AsSymbol DatabaseVersionText
+				Fields:	TypeName		StaticText
+						GenConName		THIS
+						GenConField		Version
+						IACTIONSTEXT	ACTIONS ( Get )
+						Position		DatabaseVersionPrompt(GetRight,Position)+$hGap,DatabaseVersionPrompt(GetTop,Position),50 $ButtonHeight
+	
+			Define: DatabasePrompt Using DDWinCtrlDef AsSymbol DatabasePrompt
+				Fields:	TypeName		StaticText
+						Text			~Database~
+						RightJustified	1
+						Position		ServerPrompt(GetLeft,Position),ServerPrompt(GetBottom,Position)+$vGap,$PromptWidth $ButtonHeight
+
+			Define: DatabaseComboBox Using DDWinCtrlDef AsSymbol DatabaseComboBox
+				Fields:	TypeName		SComboBox
+						Position		DatabasePrompt(GetRight,Position) + $hGap,DatabasePrompt(GetTop,Position),$ValueWidth,($ButtonHeight * 10)
+						GenConName		THIS
+						GenConField		DatabaseName
+						TOOLTIP			Translate(~Specify which database you wish to backup or restore~)
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTION EXEC ( OnChangeDatabase() )
+						DropDownActionsText ACTION CALL ( UpdateDatabaseComboBox(0) )
+						OActionsText	ACTIONS ( Save )
+
+			Define: RefreshButton Using DDWinCtrlDef AsSymbol RefreshButton
+				Fields:	TypeName		Button
+						Text			~Refresh~
+						DActionsText	ACTION EXEC ( OnRefreshButton() )			
+						Position		DatabaseComboBox(GetRight,Position)+$hGap,DatabaseComboBox(GetTop,Position),$ButtonWidth*.6 $ButtonHeight
+
+			Define: DatabaseStatusPrompt Using DDWinCtrlDef AsSymbol DatabaseStatusPrompt
+				Fields:	TypeName		StaticText
+						Text			~Status~
+						RightJustified	TRUE
+						Position		RefreshButton(GetRight,Position)+$hGap,RefreshButton(GetTop,Position)+2,DatabaseVersionPrompt(GetWidth,Position) $ButtonHeight
+
+			Define: DatabaseStatusText Using DDWinCtrlDef AsSymbol DatabaseStatusText
+				Fields:	TypeName		StaticText
+						GenConName		THIS
+						GenConField		DatabaseStatus
+						IACTIONSTEXT	ACTIONS ( Get )
+						Position		DatabaseStatusPrompt(GetRight,Position)+$hGap,DatabaseStatusPrompt(GetTop,Position),DatabaseVersionText(GetWidth,Position) $ButtonHeight
+
+			Define: DBPathPrompt Using DDWinCtrlDef AsSymbol DBPathPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Database File:~ )
+						RightJustified	TRUE
+						Position		DatabasePrompt(GetLeft,Position),DatabaseStatusPrompt(GetBottom,Position)+$vGap*2,$PromptWidth,$PromptHeight
+
+			Define: DBPathField Using DDWinCtrlDef AsSymbol DBPathField 
+				Fields: TypeName		StaticText
+						GenConField		DBPath
+						GenConName		THIS
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						Position		DBPathPrompt(GetRight,Position) + $hGap,DBPathPrompt(GetTop,Position),480,$PromptHeight
+
+			Define: DatabaseSizePrompt Using DDWinCtrlDef AsSymbol DatabaseSizePrompt
+				Fields:	TypeName		StaticText
+						Text			~Size (MB)~
+						RightJustified	TRUE
+						Position		DBPathField(GetRight,Position)+$hGap,DBPathField(GetTop,Position),70 $ButtonHeight
+
+			Define: DatabaseSizeText Using DDWinCtrlDef AsSymbol DatabaseSizeText
+				Fields:	TypeName		StaticText
+						GenConName		THIS
+						GenConField		CurrentSize
+						IACTIONSTEXT	ACTIONS ( Get )
+						Position		DatabaseSizePrompt(GetRight,Position)+$hGap,DatabaseSizePrompt(GetTop,Position),40 $ButtonHeight
+
+			Define: DatabaseAvailPrompt Using DDWinCtrlDef AsSymbol DatabaseAvailPrompt
+				Fields:	TypeName		StaticText
+						Text			~Available (MB)~
+						RightJustified	TRUE
+						Position		DatabaseSizeText(GetRight,Position)+$hGap,DatabaseSizeText(GetTop,Position),DatabaseSizePrompt(GetWidth,Position) $ButtonHeight
+
+			Define: DatabaseSpaceAvailableText Using DDWinCtrlDef AsSymbol DatabaseSpaceAvailableText
+				Fields:	TypeName		StaticText
+						GenConName		THIS
+						GenConField		SpaceAvailable
+						IACTIONSTEXT	ACTIONS ( Get )
+						Position		DatabaseAvailPrompt(GetRight,Position)+$hGap,DatabaseAvailPrompt(GetTop,Position),$SmallTextWidth $ButtonHeight
+
+			Define: LogPathPrompt Using DDWinCtrlDef AsSymbol LogPathPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Log File:~ )
+						RightJustified	TRUE
+						Position		DBPathPrompt(GetLeft,Position),DatabaseSizePrompt(GetBottom,Position),$PromptWidth,$PromptHeight
+
+			Define: LogPathField Using DDWinCtrlDef AsSymbol LogPathField 
+				Fields: TypeName		StaticText
+						GenConField		LogPath
+						GenConName		THIS
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						Position		LogPathPrompt(GetRight,Position) + $hGap,LogPathPrompt(GetTop,Position),DBPathField(GetWidth,Position),$PromptHeight
+
+			Define: LogFileSizePrompt Using DDWinCtrlDef AsSymbol LogFileSizePrompt
+				Fields:	TypeName		StaticText
+						Text			~Size (MB)~
+						RightJustified	TRUE
+						Position		DatabaseSizePrompt(GetLeft,Position),LogPathField(GetTop,Position),DatabaseSizePrompt(GetWidth,Position),$PromptHeight
+
+			Define: LogSizeText Using DDWinCtrlDef AsSymbol LogSizeText
+				Fields:	TypeName		StaticText
+						GenConName		THIS
+						GenConField		LogSize
+						IACTIONSTEXT	ACTIONS ( Get )
+						Position		LogFileSizePrompt(GetRight,Position)+$hGap,LogFileSizePrompt(GetTop,Position),DatabaseSizeText(GetWidth,Position) $ButtonHeight
+
+
+			Define: LogSpaceAvailPrompt Using DDWinCtrlDef AsSymbol LogSpaceAvailPrompt
+				Fields:	TypeName		StaticText
+						Text			~Available (MB)~
+						RightJustified	TRUE
+						Position		LogSizeText(GetRight,Position)+$hGap,LogSizeText(GetTop,Position),DatabaseSizePrompt(GetWidth,Position) $ButtonHeight
+
+			Define: LogSpaceAvailableText Using DDWinCtrlDef AsSymbol LogSpaceAvailableText
+				Fields:	TypeName		StaticText
+						GenConName		THIS
+						GenConField		LogSpaceAvailable
+						IACTIONSTEXT	ACTIONS ( Get )
+						Position		LogSpaceAvailPrompt(GetRight,Position)+$hGap,LogSpaceAvailPrompt(GetTop,Position),DatabaseSpaceAvailableText(Getwidth,Position) $ButtonHeight
+
+			Define: LastTransactionBackupPrompt Using DDWinCtrlDef AsSymbol LastTransactionBackupPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Last Log Backup:~ )
+						RightJustified	TRUE
+						Position		LogPathPrompt(GetLeft,Position),LogPathPrompt(GetBottom,Position),$PromptWidth,$PromptHeight
+
+			Define: LastTransactionBackupField Using DDWinCtrlDef AsSymbol LastTransactionBackupField 
+				Fields: TypeName		StaticText
+						GenConField		LastBackupTime
+						GenConName		THIS
+						IActionsText	ACTIONS ( Get )
+						Position		LastTransactionBackupPrompt(GetRight,Position) + $hGap,LastTransactionBackupPrompt(GetTop,Position),700,$PromptHeight
+
+			Define: EnableLoggingBox Using DDWinCtrlDef AsSymbol EnableLoggingBox
+				Fields:	TypeName		CheckBox
+						Text			~Enable Transaction Recovery up to the point of failure~
+						IsEnabled		T
+						GenConName		THIS
+						GenConField		TransactionRecovery
+						DActionsText	ACTION EXEC ( OnTransactionRecoveryBox() )
+						ToolTip			Translate( ~If enabled, the log file can recover your database up to the point of failure.  If not checked, the log file is truncated on every checkpoint~ )
+						Position		LastTransactionBackupField(GetLeft,Position),LastTransactionBackupField(GetBottom,Position)+$vGap,400 $ButtonHeight
+
+			Define: FullBackupRadio Using DDWinCtrlDef AsSymbol FullBackupRadio 
+				Fields: TypeName		RadioButton
+						Position		DatabaseComboBox(GetLeft,Position)+20 EnableLoggingBox(GetBottom,Position)+$vGap*4, $RadioWidth,  <ButtonHeight>
+						GenConName		THIS
+						GenConField		~Operation~	
+						IActionsText    ACTIONS (  Get  )
+						DActionsText	ACTIONS ( CheckButton(FullBackupRadio)
+													UncheckButton(DifferentialBackupRadio) UncheckButton(LogFileBackupRadio)
+													UncheckButton(FullRestoreRadio) UncheckButton(DifferentialRestoreRadio) UncheckButton(LogFileRestoreRadio) UncheckButton(VerifyRadio)
+													UncheckButton(VerifyRadio)
+													UnCheckButton(CompactRadio) UnCheckButton(RepairRadio)
+													Save "Exec(OnUpdateRadioButton();)" )
+						OActionsText	ACTIONS ( Save )
+						RadioTrueValue	~FullBackup~
+						Text			~Full Backup~
+						Tooltip         Translate(~Perform a full backup of the database~)
+
+			Define: DifferentialBackupRadio Using DDWinCtrlDef AsSymbol DifferentialBackupRadio 
+				Fields: TypeName		RadioButton
+						Position		FullBackupRadio(GetLeft,Position) FullBackupRadio(GetBottom,Position)+$vGap, $RadioWidth,  <ButtonHeight>
+						GenConName		THIS
+						GenConField		~Operation~	
+						IActionsText    ACTIONS (  Get  )
+						DActionsText	ACTIONS ( CheckButton(DifferentialBackupRadio)
+													UncheckButton(FullBackupRadio) UncheckButton(LogFileBackupRadio)
+													UncheckButton(FullRestoreRadio) UncheckButton(DifferentialRestoreRadio) UncheckButton(LogFileRestoreRadio) 
+													UncheckButton(VerifyRadio)
+													UnCheckButton(CompactRadio) UnCheckButton(RepairRadio)
+													Save "Exec(OnUpdateRadioButton();)" )
+						OActionsText	ACTIONS ( Save )
+						RadioTrueValue	~DifferentialBackup~
+						Text			~Differential Backup~
+						Tooltip         Translate(~Perform a differential backup of the database~)
+
+			Define: LogFileBackupRadio Using DDWinCtrlDef AsSymbol LogFileBackupRadio 
+				Fields: TypeName		RadioButton
+						Position		DifferentialBackupRadio(GetLeft,Position) DifferentialBackupRadio(GetBottom,Position)+$vGap, $RadioWidth,  <ButtonHeight>
+						GenConName		THIS
+						GenConField		~Operation~	
+						IActionsText    ACTIONS (  Get  )
+						DActionsText	ACTIONS ( CheckButton(LogFileBackupRadio)
+													UncheckButton(DifferentialBackupRadio) UncheckButton(FullBackupRadio)
+													UncheckButton(FullRestoreRadio) UncheckButton(DifferentialRestoreRadio) UncheckButton(LogFileRestoreRadio) 
+													UncheckButton(VerifyRadio)
+													UnCheckButton(CompactRadio) UnCheckButton(RepairRadio)
+													Save "Exec(OnUpdateRadioButton();)" )
+						OActionsText	ACTIONS ( Save )
+						RadioTrueValue	~TransactionLogBackup~
+						Text			~Transaction Log Backup~
+						Tooltip         Translate(~Perform a backup of the transaction log~)
+
+			Define: VerifyRadio Using DDWinCtrlDef AsSymbol VerifyRadio 
+				Fields: TypeName		RadioButton
+						Position		LogFileBackupRadio(GetLeft,Position) LogFileBackupRadio(GetBottom,Position)+$vGap, $RadioWidth,  <ButtonHeight>
+						GenConName		THIS
+						GenConField		~Operation~	
+						IActionsText    ACTIONS (  Get  )
+						DActionsText	ACTIONS ( CheckButton(VerifyRadio)
+													UncheckButton(DifferentialBackupRadio) UncheckButton(FullBackupRadio) UncheckButton(LogFileBackupRadio)
+													UncheckButton(FullRestoreRadio) UncheckButton(DifferentialRestoreRadio)
+													UncheckButton(LogFileRestoreRadio) 
+													UnCheckButton(CompactRadio) UnCheckButton(RepairRadio)
+													Save "Exec(OnUpdateRadioButton();)" )
+						OActionsText	ACTIONS ( Save )
+						RadioTrueValue	~Verify~
+						Text			~Verify Backup~
+						Tooltip         Translate(~Verify a full, differential, or transaction log backup~)
+
+			Define: FullRestoreRadio Using DDWinCtrlDef AsSymbol FullRestoreRadio 
+				Fields: TypeName		RadioButton
+						Position		FullBackupRadio(GetRight,Position)+$hGap*5 FullBackupRadio(GetTop,Position), $RadioWidth,  <ButtonHeight>
+						GenConName		THIS
+						GenConField		~Operation~	
+						IActionsText    ACTIONS (  Get  )
+						DActionsText	ACTIONS ( CheckButton(FullRestoreRadio) UncheckButton(DifferentialBackupRadio) UncheckButton(LogFileBackupRadio)
+													UncheckButton(FullBackupRadio) UncheckButton(DifferentialRestoreRadio) UncheckButton(LogFileRestoreRadio) 
+													UncheckButton(VerifyRadio)
+													UnCheckButton(CompactRadio) UnCheckButton(RepairRadio)
+													Save "Exec(OnUpdateRadioButton();)" )
+						OActionsText	ACTIONS ( Save )
+						RadioTrueValue	~FullRestore~
+						Text			~Full Restore~
+						ISENABLED		F
+						Tooltip         Translate(~Perform a full restore of the database.  You must have exclusive access to the database.~)
+
+			Define: DifferentialRestoreRadio Using DDWinCtrlDef AsSymbol DifferentialRestoreRadio 
+				Fields: TypeName		RadioButton
+						Position		FullRestoreRadio(GetLeft,Position) FullRestoreRadio(GetBottom,Position)+$vGap, $RadioWidth,  <ButtonHeight>
+						GenConName		THIS
+						GenConField		~Operation~	
+						IActionsText    ACTIONS (  Get  )
+						DActionsText	ACTIONS ( CheckButton(DifferentialRestoreRadio) UncheckButton(DifferentialBackupRadio) UncheckButton(LogFileBackupRadio)
+													UncheckButton(FullRestoreRadio) UncheckButton(FullBackupRadio) UncheckButton(LogFileRestoreRadio) 
+													UncheckButton(VerifyRadio)
+													UnCheckButton(CompactRadio) UnCheckButton(RepairRadio)
+													Save "Exec(OnUpdateRadioButton();)" )
+						OActionsText	ACTIONS ( Save )
+						RadioTrueValue	~DifferentialRestore~
+						Text			~Differential Restore~
+						ISENABLED		F
+						Tooltip         Translate(~Perform a differential restore of the database.  You only need to restore the last differential backup.  You must have exclusive access to the database.~)
+
+			Define: LogFileRestoreRadio Using DDWinCtrlDef AsSymbol LogFileRestoreRadio 
+				Fields: TypeName		RadioButton
+						Position		DifferentialRestoreRadio(GetLeft,Position) DifferentialRestoreRadio(GetBottom,Position)+$vGap, $RadioWidth,  <ButtonHeight>
+						GenConName		THIS
+						GenConField		~Operation~	
+						IActionsText    ACTIONS (  Get  )
+						DActionsText	ACTIONS ( CheckButton(LogFileRestoreRadio) UncheckButton(DifferentialBackupRadio) UncheckButton(LogFileBackupRadio)
+													UncheckButton(FullRestoreRadio) UncheckButton(DifferentialRestoreRadio) UncheckButton(FullBackupRadio) 
+													UncheckButton(VerifyRadio)
+													UnCheckButton(CompactRadio) UnCheckButton(RepairRadio)
+													Save "Exec(OnUpdateRadioButton();)" )
+						OActionsText	ACTIONS ( Save )
+						RadioTrueValue	~TransactionLogRestore~
+						Text			~Transaction Log Restore~
+						ISENABLED		F
+						Tooltip         Translate(~Perform a restore of the transaction log. You must have exclusive access to the database.~)
+
+			Define: EnableRestoreText Using DDWinCtrlDef AsSymbol EnableRestoreText
+				Fields: Position		LogFileRestoreRadio(GetLeft,Position) LogFileRestoreRadio(GetBottom,Position)+3, 370,  <ButtonHeight>*3
+						TypeName		StaticText
+						Text			~If you can't enable these functions by pressing Exclusive Database Access, restart DP2 holding down both shift keys and press Restore Database to return to here.  Then select your database and press Exclusive Database Access.~
+
+			Define: RepairRadio Using DDWinCtrlDef AsSymbol RepairRadio 
+				Fields: TypeName		RadioButton
+						Position		FullRestoreRadio(GetRight,Position)+$hGap*5 FullRestoreRadio(GetTop,Position), $RadioWidth,  <ButtonHeight>
+						GenConName		THIS
+						GenConField		~Operation~	
+						IActionsText    ACTIONS (  Get  )
+						DActionsText	ACTIONS ( Save CheckButton(RepairRadio) UncheckButton(DifferentialBackupRadio) UncheckButton(LogFileBackupRadio)
+													UncheckButton(FullBackupRadio) UncheckButton(DifferentialRestoreRadio) UncheckButton(LogFileRestoreRadio) 
+													UncheckButton(VerifyRadio) UnCheckButton(FullRestoreRadio) UnCheckButton(CompactRadio)
+													 "Exec(OnUpdateRadioButton();)" )
+						OActionsText	ACTIONS ( Save )
+						RadioTrueValue	~Repair~
+						Text			~Repair~
+						ISENABLED		F
+						Tooltip         Translate(~Repair the selected database.  You must have exclusive access to the database.~)
+
+			Define: CompactRadio Using DDWinCtrlDef AsSymbol CompactRadio 
+				Fields: TypeName		RadioButton
+						Position		RepairRadio(GetLeft,Position) RepairRadio(GetBottom,Position)+$vGap, $RadioWidth,  <ButtonHeight>
+						GenConName		THIS
+						GenConField		~Operation~	
+						IActionsText    ACTIONS (  Get  )
+						DActionsText	ACTIONS ( Save CheckButton(CompactRadio) UncheckButton(DifferentialBackupRadio) UncheckButton(LogFileBackupRadio)
+													UncheckButton(FullRestoreRadio) UncheckButton(FullBackupRadio) UncheckButton(LogFileRestoreRadio) 
+													UncheckButton(VerifyRadio) UnCheckButton(DifferentialRestoreRadio)
+													UnCheckButton(RepairRadio)
+													 "Exec(OnUpdateRadioButton();)" )
+						OActionsText	ACTIONS ( Save )
+						RadioTrueValue	~Compact~
+						Text			~Compact~
+						ISENABLED		F
+						Tooltip         Translate(~Recover unused space in the database.  You must have exclusive access to the database.~)
+
+			Define: ActionGroupBox Using DDWinCtrlDef AsSymbol ActionGroupBox
+				Fields:	TypeName		GroupBox
+						Text			~Database Action~
+						Position		FullBackupRadio(GetLeft,Position) - 20,
+										FullBackupRadio(GetTop,Position) - 20,
+										CompactRadio(GetRight,Position) - FullBackupRadio(GetLeft,Position) + 30,
+										EnableRestoreText(GetBottom,Position) - FullBackupRadio(Gettop,Position) + 10 
+
+			Define: PathPrompt Using DDWinCtrlDef AsSymbol PathPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Path~ )
+						RightJustified	TRUE
+						Position		DatabasePrompt(GetLeft,Position),ActionGroupBox(GetBottom,Position)+$vGap*2,$PromptWidth,$PromptHeight
+
+			Define: PathField Using DDWinCtrlDef AsSymbol PathField 
+				Fields: TypeName		MaskedEditText
+						GenConField		Path
+						GenConName		THIS
+						Mask			RepeatStr(255,~%~)
+						PromptChar		~ ~
+						DisallowedChars ~*~
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						Position		PathPrompt(GetRight,Position) + $hGap,PathPrompt(GetTop,Position),700,$PromptHeight
+
+			Define: BrowsePathButton Using DDWinCtrlDef AsSymbol BrowsePathButton
+				Fields:	TypeName		Button
+						Text			~?~
+						DActionsText	ACTION EXEC ( OnBrowsePath() )
+						Position		PathField(GetRight,Position)+$hGap, PathField(GetTop,Position),20, $ButtonHeight
+
+			Define: HeaderPrompt Using DDWinCtrlDef AsSymbol HeaderPrompt 
+				Fields: TypeName		button
+						Text			Translate( ~Header~ )
+						DActionsText	ACTION EXEC ( ReadTheHeader(TRUE) )
+						Position		BrowsePathButton(Getright,Position)+$hGap,BrowsePathButton(GetTop,Position),50,$PromptHeight
+
+			Define: RecoverToPrompt Using DDWinCtrlDef AsSymbol RecoverToPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Recover up to~ )
+						GenConName		THIS
+						IActionsText	ACTIONS ( Get )
+						IsHidden		T
+						RightJustified	TRUE
+						Position		PathPrompt(GetLeft,Position),BrowsePathButton(GetBottom,Position)+$vGap,$PromptWidth,$PromptHeight;
+
+			Define: RecoverToField Using DDWinCtrlDef AsSymbol RecoverToField 
+				Fields: TypeName		EditText
+						GenConName		THIS
+						GenConField		PointInTime
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						DActionsText	ACTIONS ( Save )
+						IsHidden		T
+						ToolTip			Translate( ~Leave blank to recover entire transaction log.  Enter a time/date to stop recovering at a specific point in time~ )
+						Position		RecoverToPrompt(GetRight,Position)+$hGap,RecoverToPrompt(GetTop,Position),$PromptWidth*3,$PromptHeight;
+
+			Define: NowButton Using DDWinCtrlDef AsSymbol NowButton 
+				Fields: TypeName		Button
+						Text			Translate( ~Now~ )
+						DActionsText	ACTION EXEC ( SetTimeToNow() )
+						IsHidden		T
+						Position		RecoverToField(GetRight,Position)+$hGap,RecoverToField(GetTop,Position),40,$PromptHeight;
+
+			Define: FileNumberPrompt Using DDWinCtrlDef AsSymbol FileNumberPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~File Number (Tape Devices)~ )
+						IsHidden		T
+						RightJustified	TRUE
+						Position		NowButton(GetRight,Position),NowButton(GetTop,Position)+2,$PromptWidth*2,$PromptHeight;
+
+			Define: FileNumberField Using DDWinCtrlDef AsSymbol FileNumberField 
+				Fields: TypeName		EditText
+						GenConName		THIS
+						GenConField		FileNumber
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						DActionsText	ACTIONS ( Save )
+						IsHidden		T
+						ToolTip			~This should be 1 for Disk Devices.  For tape devices, specify the sequence of this log on the media~
+						Position		FileNumberPrompt(GetRight,Position)+$hGap,NowButton(GetTop,Position),30,$PromptHeight;
+
+			Define: LastRestoreBox Using DDWinCtrlDef AsSymbol LastRestoreBox 
+				Fields: TypeName		CheckBox
+						Text			Translate( ~This is the last file to restore~ )
+						GenConName		THIS
+						GenConField		LastRestore
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						DActionsText	ACTIONS ( Save )
+						IsHidden		T
+						Position		FileNumberField(GetRight,Position)+$hGap*3,NowButton(GetTop,Position),$PromptWidth+160,$PromptHeight;
+
+			DialogWidth = HeaderPrompt(GetRight,Position) + $hGap * 1.5;
+
+	
+			Define:  AskUsersButton Using DDWinCtrlDef AsSymbol AskUsersButton
+				Fields:	TypeName		Button
+						Text			~Ask Users To Quit <$App.Title>~
+						DActionsText	ACTION EXEC ( AskUsersToExit() )
+						Position		ServerPrompt(GetLeft,Position),RecoverToPrompt(GetBottom,Position)+$vGap*2,$ButtonWidth*1.7 $ButtonHeight
+
+			Define:  ExclusiveAccessButton Using DDWinCtrlDef AsSymbol ExclusiveAccessButton
+				Fields:	TypeName		Button
+						Text			~Exclusive Database Access~
+						DActionsText	ACTION EXEC ( OnExclusiveAccessButton() )
+						IsEnabled		F
+						Position		AskUsersButton(GetRight,Position)+$hGap,AskUsersButton(GetTop,Position),$ButtonWidth*1.7 $ButtonHeight
+
+			Define: StartButton Using DDWinCtrlDef AsSymbol StartButton
+				Fields:	TypeName		Button
+						Text			~Start~
+						IsEnabled		T
+						DActionsText	ACTION EXEC ( OnStart() )
+						Position		ExclusiveAccessButton(GetRight,Position)+$hGap,AskUsersButton(GetTop,Position),$ButtonWidth*1.0 $ButtonHeight
+
+			Define: StopButton Using DDWinCtrlDef AsSymbol StopButton
+				Fields:	TypeName		Button
+						Text			~Stop~
+						IsEnabled		F
+						DActionsText	ACTION EXEC ( OnStopButton() )
+						Position		StartButton(GetRight,Position) + $hGap,AskUsersButton(GetTop,Position),$ButtonWidth*1.0 $ButtonHeight;
+
+			Define:  MultiUserAccessButton Using DDWinCtrlDef AsSymbol MultiUserAccessButton
+				Fields:	TypeName		Button
+						Text			~Multi-User Database Access~
+						DActionsText	ACTION EXEC ( ReturnToMultiUserMode() )
+						IsEnabled		F
+						Position		StopButton(GetRight,Position)+$hGap,StopButton(GetTop,Position),$ButtonWidth*1.7 $ButtonHeight
+
+			Define:  OKToUseDatabaseButton Using DDWinCtrlDef AsSymbol OKToUseDatabaseButton
+				Fields:	TypeName		Button
+						Text			~Tell Users they can use <$App.Title>~
+						DActionsText	ACTION EXEC ( TellUsersWereDone() )
+						Position		MultiUserAccessButton(GetRight,Position)+$hGap,StopButton(GetTop,Position),$ButtonWidth*1.7 $ButtonHeight
+
+			Define: TransactSQLPrompt Using DDWinCtrlDef AsSymbol TransactSQLPrompt
+				Fields:	TypeName		StaticText
+						Text			~SQL:~
+						FontWeight		600
+						RightJustified	1
+						Position		ServerPrompt(GetLeft,Position),AskUsersButton(GetBottom,Position)+$vGap*4,$PromptWidth $ButtonHeight
+
+			Define: TransactSQLField Using DDWinCtrlDef AsSymbol TransactSQLField 
+				Fields: TypeName		MLEDITTEXT
+						GenConField		TransactSQL
+						GenConName		THIS
+						IActionsText	ACTIONS ( Get )
+						OActionsText	ACTIONS ( Save )
+						Position		TransactSQLPrompt(GetRight,Position) + $hGap,TransactSQLPrompt(GetTop,Position),630,$PromptHeight*5;
+
+			Define:  TransactSQLGoButton Using DDWinCtrlDef AsSymbol TransactSQLGoButton
+				Fields:	TypeName		Button
+						Text			~Go~
+						DActionsText	ACTION EXEC ( OnTransactSQLGo() )
+						Position		TransactSQLField(GetRight,Position)+$hGap,TransactSQLField(GetTop,Position),$ButtonWidth $ButtonHeight
+
+
+		}
+
+	DialogHeight = StartButton(GetBottom,Position) + $vGap + 25;
+
+	DialogHeightWithSQL = TransactSQLField(GetBottom,Position) + $vGap + 25;
+
+	aDialog( Set,Position,~20  20  <DialogWidth>  <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,aDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+	Global( dlg,aDialog,DlgData,DialogHeight,DialogHeightWithSQL );
+}
+
+
+
+NUMERIC OnTransactionRecoveryBox()
+{
+	dlg( GetInput );
+
+	WantRecovery = DlgData( GetNumeric,TransactionRecovery );
+
+	if ( IsNull( ~<$con.DlgData[DatabaseName]>~ ) )
+	{
+		return Warning(	~Select a database first first.~ );
+	}
+
+	if ( !SQLServer( SetDatabaseOptions,~<$con.DlgData[DatabaseName]>~,TruncateLogOnCheckpoint,!<WantRecovery> ) )
+	{
+		return ShowWarning( ~Failed to enable transaction recovery.~ );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnUpdateRadioButton()
+{
+	dlg( GetInput );
+
+	if ( !SimilarStr( ~<$con.DlgData[Operation]>~,Verify ) )
+	{
+		dlg( SetStrings,Path,~~ );
+	}
+
+	restoring = SimilarStr( ~<$con.DlgData[Operation]>~,FullRestore,DifferentialRestore,TransactionLogRestore );
+
+	IsTransactionLog = SimilarStr( ~<$con.DlgData[Operation]>~,TransactionLogRestore );
+
+	dlg( ShowControls,<IsTransactionLog> && KeyState( Control ),RecoverToField,RecoverToPrompt,NowButton );
+		
+	return dlg( ShowControls,<restoring>,LastRestoreBox,FileNumberPrompt,FileNumberField );
+}
+
+
+
+NUMERIC UpdateServerComboBox()
+{
+	WaitCursor( Begin );
+
+	ShowProgress( ~Searching for servers ... ~ );
+
+	StringList( ServerList,New,NoDuplicateValues );
+
+	MakeServersList( ServerList,Type,SQLServer );
+
+	SQLServer( GetServers,ServerList,TRUE );
+
+	Count = ServerList( Count );
+
+	if ( <Count> == 0 )
+	{
+		ServerList( AddString,~<$App.ComputerName>~ );
+	}
+
+	dlg( SetControlValue,ServerComboBox,~~ );
+	dlg( SetControlFromStringList,ServerComboBox,ServerList );
+
+	ShowProgress( ~Found <Count> servers~ );
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateDatabaseComboBox( WantSelection )
+{
+	WaitCursor( Begin );
+
+	dlg( GetInput,GetStrings,Server,Server );
+
+	dlg( SetStatus,0,~Searching Server <Server> for databases~ );
+
+	StringList( DatabaseList,New );
+
+	if ( SQLServer( GetDatabasesList,DatabaseList,0 ) )
+	{
+		Count = DatabaseList( Num );
+
+		if (<WantSelection> == 0)
+		{
+			dlg( SetControlFromStringList,DatabaseComboBox,DatabaseList,NoSelection );
+		}
+		else
+		{
+			dlg( SetControlValue,DatabaseComboBox,~~ );
+			dlg( SetControlFromStringList,DatabaseComboBox,DatabaseList );	
+		}
+
+		dlg( SetStatus,0,~Found <Count> databases on Server <Server>~ );
+
+		return OnChangeDatabase();
+	}
+
+	dlg( SetStatus,0,~No databases found on Server <Server>~ );
+
+	WaitCursor( End );
+
+	return FALSE;
+}
+
+NUMERIC OnChangeServer()
+{
+	dlg( GetInput,GetStrings,Server,Server );
+
+	WaitCursor( Begin );
+
+	dlg( SetStatus,0,~Connecting to server <Server>~ );
+
+	InSingleUserMode = FALSE;
+
+	SQLServer( Disconnect );
+
+	if ( !SQLServer( Connect,~<Server>~ ) )
+	{
+		dlg( SetStatus,0,~Failed to connect to server <Server>~ );
+
+		WaitCursor( End );
+
+		return FALSE;
+	}
+
+	SQLServer( Version,Major,Minor );
+
+	DlgData( Set,Version,~<Major>.<Minor>~ );
+
+	dlg( Update );
+
+	UpdateDatabaseComboBox( TRUE );
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC OnRefreshButton()
+{
+	return OnChangeDatabase();
+}
+
+
+VOID SetTimeToNow()
+{
+	dlg( SetStrings,PointInTime,~<$Date.%b %d,%Y %I:%M:%S %p>~ );
+
+}
+
+
+NUMERIC OnChangeDatabase()
+{
+	dlg( EnableControls,FALSE,ExclusiveAccessButton,MultiUserAccessButton );
+
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DlgData[DatabaseName]>~ ) )
+	{
+		return FALSE;
+	}
+
+	if ( !SQLServer( GetDatabaseOptions,~<$con.DlgData[DatabaseName]>~,SingleUser,SingleUserMode ) )
+	{
+		return FALSE;
+	}
+
+	Log( Session,~User selected database:  <$con.DlgData[DatabaseName]>~ );
+
+	InSingleUserMode = ~<SingleUserMode>~;
+
+	dlg( EnableControls,!<InSingleUserMode>,ExclusiveAccessButton );
+	dlg( EnableControls,<InSingleUserMode>,MultiUserAccessButton );
+
+	Log( Session,~Single User Mode = <InSingleUserMode>~ );
+
+	if ( !SQLServer( GetDatabaseOptions,~<$con.DlgData[DatabaseName]>~,TruncateLogOnCheckpoint,CantRecover ) )
+	{
+		return FALSE;
+	}
+
+	Log( Session,~Database <$con.DlgData[DatabaseName]>: TruncateLogOnCheckpoint = <CantRecover>~ );
+
+	if ( !SQLServer( GetStatus,~<$con.DlgData[DatabaseName]>~,Status ) )
+	{
+		return FALSE;
+	}
+
+	Log( Session,~Database <$con.DlgData[DatabaseName]>: Status = <Status>~ );
+
+	if ( !SQLServer( GetDatabaseSizes,~<$con.DlgData[DatabaseName]>~,CurrentSize,SpaceAvailable,LogSize,LogSpaceAvailable ) )
+	{
+		return FALSE;
+	}
+
+	CurrentSize = Format( ~<CurrentSize>~,~%10.2lf~ );
+	SpaceAvailable = <SpaceAvailable> / 1000.0;
+	SpaceAvailable = Format( ~<SpaceAvailable>~,~%10.2lf~ );
+	LogSize = Format( ~<LogSize>~,~%10.2lf~ );
+	LogSpaceAvailable = Format( ~<LogSpaceAvailable>~,~%10.2lf~ );
+
+	Log( Session,~Database <$con.DlgData[DatabaseName]>: CurrentSize=<CurrentSize>,SpaceAvailable=<SpaceAvailable>,LogSize=<LogSize>,LogSpaceAvailable=<LogSpaceAvailable>~ );
+
+	if ( !SQLServer( GetLastBackupTime,~<$con.DlgData[DatabaseName]>~,LastBackupTime ) )
+	{
+		return FALSE;
+	}
+
+	Log( Session,~Database <$con.DlgData[DatabaseName]>: LastBackupTime = <LastBackupTime>~ );
+
+	if ( !SQLServer( GetCreateDate,~<$con.DlgData[DatabaseName]>~,CreateDate ) )
+	{
+		return FALSE;
+	}
+
+	Log( Session,~Database <$con.DlgData[DatabaseName]>: CreateDate = <CreateDate>~ );
+
+	if ( !SQLServer( Log,DatabaseName,~<$con.DlgData[DatabaseName]>~,GetPath,LogPath ) )
+	{
+		return FALSE;
+	}
+
+	Log( Session,~Database <$con.DlgData[DatabaseName]>: LogPath = <LogPath>~ );
+
+	if ( !SQLServer( GetDatabasePath,~<$con.DlgData[DatabaseName]>~,DBPath ) )
+	{
+		return FALSE;
+	}
+
+	Log( Session,~Database <$con.DlgData[DatabaseName]>: DBPath = <DBPath>~ );
+
+	DlgData( Set,TransactionRecovery,!<CantRecover> );
+	DlgData( Set,DatabaseStatus,~<Status>~ );
+	DlgData( Set,CurrentSize,~<CurrentSize>~ );
+	DlgData( Set,SpaceAvailable,<SpaceAvailable> );
+	DlgData( Set,LogSize,~<LogSize>~ );
+	DlgData( Set,LogSpaceAvailable,<LogSpaceAvailable> );
+	DlgData( Set,LastBackupTime,~<LastBackupTime>~ );
+	DlgData( Set,GetCreateDate,~<GetCreateDate>~ );
+	DlgData( Set,LogPath,~<LogPath>~ );
+	DlgData( Set,DBPath,~<DBPath>~ );
+
+	dlg( Update );
+
+	Log( FlushSessionLog );
+
+	return TRUE;
+}
+
+
+VOID ShowProgress( msg )	// RUNS ON THE USER INTERFACE THREAD WHEN 'INVOKED' USING INVOKE()
+{
+	Log( Session,~<msg>~ );
+	dlg( SetStatus,0,~<msg>~ );
+}
+
+
+NUMERIC ShowWarning( msg )		// RUNS ON THE USER INTERFACE THREAD WHEN 'INVOKED' USING INVOKE()
+{
+	dlg( SetStatus,0,~<msg>~ );
+	return Warning( ~<msg>~ );
+}
+
+
+NUMERIC OnStart()
+{
+	dlg( GetInput );
+
+	Operation = ~<$con.DlgData[Operation]>~;
+
+	if ( IsNull( ~<Operation>~ ) )
+	{
+		return Warning( ~You must select one of the backup or restore options above~ );
+	}
+
+	dlg( EnableControls,FALSE,StartButton );
+	dlg( EnableControls,TRUE,StopButton );
+
+	if ( !On<Operation>() )
+	{
+		OnStop();
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC  ThreadIsStillActive()
+{
+	if ( !Defined( MSDEThread ) )
+	{
+		return FALSE;
+	}
+
+	if ( MSDEThread( IsActive ) )
+	{
+		Warning( ~There is still a database operation active.  Please wait.~ ) ;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+
+
+
+NUMERIC OnFullBackUp()
+{
+	if ( ThreadIsStillActive() )
+	{
+		return FALSE ;
+	}
+
+	dlg( GetStrings,Path,Path,DatabaseName,DatabaseName );
+
+	if ( IsNull( ~<Path>~ ) )
+	{
+		return Warning( Translate( ~You must select the path to save the backup to~ ) );
+	}
+
+	if ( MessageBox( Translate( ~Are you sure you want to perform a full backup of <DatabaseName> to <Path>?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~Performing a full backup of database <DatabaseName> to <Path> ~ );
+
+	MSDEThread( New,BackupThread,~<DatabaseName>~,~Full~,~<Path>~,TRUE,Truncate,~Full backup of database <DatabaseName> to <Path> is complete.~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OnDifferentialBackup()	
+{
+	if ( ThreadIsStillActive() )
+	{
+		return FALSE ;
+	}
+
+	dlg( GetStrings,Path,Path,DatabaseName,DatabaseName );
+
+	if ( IsNull( ~<Path>~ ) )
+	{
+		return Warning( Translate( ~You must select the path to save the backup to~ ) );
+	}
+
+	if ( MessageBox( Translate( ~Are you sure you want to perform a differential backup of <DatabaseName> to <Path>?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~Performing a differential backup of database <DatabaseName> to <Path> ~ );
+
+	MSDEThread( New,BackupThread,~<DatabaseName>~,~Differential~,~<Path>~,FALSE,NoTruncate,~Differential backup of database <DatabaseName> to <Path> is complete.~ );
+
+	return TRUE;
+
+}
+
+
+NUMERIC OnTransactionLogBackup()
+{
+	if ( ThreadIsStillActive() )
+	{
+		return FALSE ;
+	}
+
+	dlg( GetStrings,Path,Path,DatabaseName,DatabaseName );
+
+	if ( IsNull( ~<Path>~ ) )
+	{
+		return Warning( Translate( ~You must select the path to save the transaction log backup to~ ) );
+	}
+
+	if ( MessageBox( Translate( ~Are you sure you want to backup the current transaction log of <DatabaseName> to <Path>?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~Performing a transaction log backup  to <Path> ~ );
+
+	MSDEThread( New,BackupThread,~<DatabaseName>~,~Log~,~<Path>~,FALSE,Truncate,~Transaction log backup for database <DatabaseName> to <Path> is complete.~ );
+	
+	return TRUE;
+}
+
+
+NUMERIC BackupThread( DatabaseName,BackupType,Path,Initialize,LogAction,CompletionMsg )
+{
+	ReadTheHeader( FALSE );
+
+	if ( !SQLServer( Backup,DatabaseName,~<DatabaseName>~,Type,~<BackupType>~,Path,~<Path>~,Initialize,<Initialize>,LogAction,~<LogAction>~,Start ) )
+	{
+		Invoke( ShowWarning,Translate( ~Failed to do a <BackupType> backup to <Path>~ ) );
+
+		OnStop();
+
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~<CompletionMsg>~ );
+
+	return OnStop();
+}
+
+
+NUMERIC OnVerify()
+{
+	if ( ThreadIsStillActive() )
+	{
+		return FALSE ;
+	}
+
+	dlg( GetInput,GetStrings,Path,Path,DatabaseName,DatabaseName );
+
+	if ( IsNull( ~<Path>~ ) )
+	{
+		return Warning( Translate( ~You must select the file you wish to verify~ ) );
+	}
+
+	if ( MessageBox( Translate( ~Are you sure you want to verify <Path>?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~Verifying <Path> ~ );
+
+	ReadTheHeader( FALSE );
+
+	MSDEThread( New,VerifyThread,~<DatabaseName>~,~<Path>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC VerifyThread( DatabaseName,Path )
+{
+	if ( !SQLServer( Verify,DatabaseName,~<DatabaseName>~,Path,~<Path>~,Start ) )
+	{
+		Invoke( ShowWarning,Translate( ~Verify failed on <Path>~ ) );
+
+		OnStop();
+
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~<Path> is ok ~ );
+
+	return OnStop();
+}
+
+
+NUMERIC OnRepair()
+{
+	if ( ThreadIsStillActive() )
+	{
+		return FALSE ;
+	}
+
+	dlg( GetInput,GetStrings,DatabaseName,DatabaseName );
+
+	if ( IsNull( ~<DatabaseName>~ ) )
+	{
+		return Warning( Translate( ~You must select the database you wish to repair~ ) );
+	}
+
+	if ( MessageBox( Translate( ~Are you sure you want to repair the database <DatabaseName>?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~Repairing <DatabaseName> ~ );
+
+	MSDEThread( New,RepairThread,~<DatabaseName>~ );
+
+	return TRUE;
+}
+
+NUMERIC RepairThread( DatabaseName )
+{
+	if ( !SQLServer( Repair,DatabaseName,~<DatabaseName>~,Start ) )
+	{
+		Invoke( ShowWarning,Translate( ~Failed to repair database <DatabaseName>~ ) );
+
+		OnStop();
+
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~<DatabaseName> has been repaired~ );
+
+	return OnStop();
+}
+
+
+NUMERIC OnCompact()
+{
+	if ( ThreadIsStillActive() )
+	{
+		return FALSE ;
+	}
+
+	dlg( GetInput,GetStrings,DatabaseName,DatabaseName );
+
+	if ( IsNull( ~<DatabaseName>~ ) )
+	{
+		return Warning( Translate( ~You must select the database you wish to compact~ ) );
+	}
+
+	if ( MessageBox( Translate( ~Are you sure you want to compact the database <DatabaseName>?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~Compacting <DatabaseName> ~ );
+
+	MSDEThread( New,CompactThread,~<DatabaseName>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC CompactThread( DatabaseName )
+{
+	if ( !SQLServer( Compact,DatabaseName,~<DatabaseName>~,Size,2,ShrinkType,Default,Start ) )
+	{
+		Invoke( ShowWarning,Translate( ~Failed to compact database <DatabaseName>~ ) );
+
+		OnStop();
+
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~<DatabaseName> has been compacted~ );
+
+	return OnStop();
+}
+
+
+
+NUMERIC KillAllThreads()
+{
+	if ( !GenCon( ThreadsList,GetFrom,Threads,~[GenCons]~ ) )
+	{
+		return Warning( ~Could not find thread list~ );
+	}
+
+	while ( ThreadsList( GetNext,AnotherThread ) )
+	{
+		AnotherThread(GetName,ThreadName);
+
+		if ( !IsNull( String( StringInString,~MainThread~,~<ThreadName>~ ) ) )
+			continue;
+
+		if ( !IsNull( String( StringInString,~MSDEThread~,~<ThreadName>~ ) ) )
+			continue;
+
+		PostThreadMessage( ~<$con.AnotherThread[ThreadID]>~,0x12,0,0 );
+	}
+
+	return TRUE;
+}
+
+
+InSingleUserMode = FALSE;
+
+
+NUMERIC TryToGetSingleUser( Database )
+{
+	if ( <InSingleUserMode> )
+	{
+		return TRUE;
+	}
+
+	if ( !SQLServer( GetDatabaseOptions,~<Database>~,SingleUser,SingleUser ) )
+	{
+
+		return FALSE;
+	}
+
+	InSingleUserMode = ~<SingleUser>~;
+
+	dlg( EnableControls,!<InSingleUserMode>,ExclusiveAccessButton );
+	dlg( EnableControls,<InSingleUserMode>,MultiUserAccessButton );
+
+	if ( <InSingleUserMode> )
+	{
+		log( Session,~The <$con.DlgData[DatabaseName]> database is in multi-user mode~ );
+		return TRUE;
+	}
+
+	if ( Defined(BackgroundOrderProcessor) || Defined(DigitalCameraOrderProcessor) )
+	{
+		if ( MessageBox( Translate( ~Restoring requires exclusive access to the database.  Is it okay to shut down all processing?~ ),YESNO ) != YES )
+		{
+			return FALSE;
+		}
+
+		ForgetPermanent( BackgroundOrderProcessor );
+		ForgetPermanent( DigitalCameraOrderProcessor );
+		BibbleServer( Stop );
+	}
+
+	WaitCursor( Begin );
+
+	KillAllThreads();
+
+	Sleep( 1000 );	// Give em time to die
+
+	MessagePump();
+
+	ADO( tempDB,ReleasePoolConnections );
+
+	Sleep( 1000 );
+
+	NumOpenConnections = tempDB( NumOpenConnections );
+
+	if ( <NumOpenConnections> )
+	{
+		WaitCursor( End );
+		return ShowWarning( ~Sorry there are still <NumOpenConnections> connection(s) to the database. Close everything but this window, wait a few seconds, and try again.~ );
+	}
+
+	if ( !SQLServer( SetDatabaseOptions,<Database>,SingleUser,TRUE ) )
+	{
+		WaitCursor( End );
+
+		log( Session,~The <$con.DlgData[DatabaseName]> database is in multi-user mode~ );
+
+		return ShowWarning( ~Failed to gain single user access. Please close all windows and have all users exit from <$App.Title>.\n\nIf you can't gain exclusive access after several tries, press F1 for help~ );
+	}
+
+	log( Session,~The <$con.DlgData[DatabaseName]> database is in single user mode~ );
+
+	WaitCursor( End );
+
+	return TRUE;	
+}
+
+
+NUMERIC OnFullRestore()	
+{
+	if ( ThreadIsStillActive() )
+	{
+		return FALSE ;
+	}
+
+	if ( !DoubleCheckLastRestore() )
+	{
+		return FALSE;
+	}
+
+	LastRestore = DlgData( GetNumeric,LastRestore );
+	FileNumber = DlgData( GetNumeric,FileNumber );
+
+	dlg( GetStrings,Path,Path,DatabaseName,DatabaseName );
+
+	if ( IsNull( ~<Path>~ ) )
+	{
+		return Warning( Translate( ~You must select the path of the file to restore from~ ) );
+	}
+
+	if ( MessageBox( Translate( ~Are you sure you want to perform a full restore from File Number <FileNumber>\n\nof <Path>\n\nto <DatabaseName>?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~Performing a full restore from <path> to database <DatabaseName>~ );
+
+	ReadTheHeader( FALSE );
+
+	MSDEThread( New,RestoreThread,~<DatabaseName>~,~Database~,~<Path>~,TRUE,<FileNumber>,~<LastRestore>~,~~,~Full restore from <Path> is complete~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnDifferentialRestore()	
+{
+	if ( ThreadIsStillActive() )
+	{
+		return FALSE ;
+	}
+
+	if ( !DoubleCheckLastRestore() )
+	{
+		return FALSE;
+	}
+
+	LastRestore = DlgData( GetNumeric,LastRestore );
+	FileNumber = DlgData( GetNumeric,FileNumber );
+
+	dlg( GetStrings,Path,Path,DatabaseName,DatabaseName );
+
+	if ( IsNull( ~<Path>~ ) )
+	{
+		return Warning( Translate( ~You must select the path of the file to restore from~ ) );
+	}
+
+	if ( MessageBox( Translate( ~Are you sure you want to perform a differential restore from File Number <FileNumber>\n\nof <Path>\n\nto <DatabaseName>?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~Performing a differential restore from <path> to database <DatabaseName>~ );
+
+	ReadTheHeader( FALSE );
+
+	MSDEThread( New,RestoreThread,~<DatabaseName>~,~Database~,~<Path>~,FALSE,<FileNumber>,~<LastRestore>~,~~,~Differential restore from <Path> is complete~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OnTransactionLogRestore()		// LOG FILE RESTORE
+{
+	if ( ThreadIsStillActive() )
+	{
+		return FALSE ;
+	}
+
+	if ( !DoubleCheckLastRestore() )
+	{
+		return FALSE;
+	}
+
+	LastRestore = DlgData( GetNumeric,LastRestore );
+	FileNumber = DlgData( GetNumeric,FileNumber );
+
+	dlg( GetStrings,Path,Path,DatabaseName,DatabaseName,PointInTime,PointInTime );
+
+	if ( IsNull( ~<Path>~ ) )
+	{
+		return Warning( Translate( ~You must select the path of the file to restore from~ ) );
+	}
+
+	if ( MessageBox( Translate( ~Are you sure you want to restore the transactions from File Number <FileNumber>\n\nof <Path>\n\nto <DatabaseName>?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~Performing a transaction log restore from <path> to  database <DatabaseName>~ );
+
+	ReadTheHeader( FALSE );
+
+	MSDEThread( New,RestoreThread,~<DatabaseName>~,~Log~,~<Path>~,FALSE,<FileNumber>,~<LastRestore>~,~<PointInTime>~,~Transaction log restore from log at <Path> is complete~ );
+
+	return TRUE;
+}	
+
+
+NUMERIC RestoreThread( DatabaseName,Type,Path,Replace,FileNum,IsLastRestore,ToPointInTime,CompletionMsg )
+{
+	if ( !SQLServer( Restore,DatabaseName,~<DatabaseName>~,Type,~<Type>~,ReplaceDatabase,~<Replace>~,Path,~<Path>~,
+						SetLastRestore,~<IsLastRestore>~,ToPointInTime,~<ToPointInTime>~ ) )
+	{
+		Invoke( ShowWarning,Translate( ~Failed to restore from <Path>~ ) );
+
+		OnStop();
+
+		return FALSE;
+	}
+
+	if ( <FileNum> > 0 )
+	{
+		if ( !SQLServer( Restore,SetFileNumber,<FileNum> ) )
+		{
+			Invoke( ShowWarning,Translate( ~Failed to restore from <Path>~ ) );
+
+			OnStop();
+
+			return FALSE;
+		}
+	}
+
+	if ( !SQLServer( Restore,Start ) )
+	{
+		Invoke( ShowWarning,Translate( ~Failed to restore from <Path>~ ) );
+
+		OnStop();
+
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,~<CompletionMsg>~ );
+
+	return OnStop();
+}
+
+
+NUMERIC DoubleCheckLastRestore( LastRestore )
+{
+	dlg( GetInput );
+
+	if ( dlg( GetBoolean,LastRestore ) )
+	{
+		if ( MessageBox( Translate( ~Are you sure that <$con.DlgData[Path]> is the last file to restore? ~ ),YESNO ) != YES )
+		{
+			return FALSE;
+		}
+	}
+	else
+	{
+		if ( MessageBox( Translate( ~Are you sure that there are more files to restore after <$con.DlgData[Path]>? ~ ),YESNO ) != YES )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AskUsersToExit()
+{
+	if ( !NetworkOperation() )
+	{
+	}
+
+	if ( MessageBox( Translate( ~Is it okay to ask users to quit <$App.Title>?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	ShellExecute( Open,~Net~,~Send * "Please quit the application <$App.Title> if you are connected to server <$con.DlgData[Server]> so that database maintenance can be performed."~,~~,SHOWMINNOACTIVE );
+
+	return TRUE;
+}
+
+
+NUMERIC TellUsersWereDone()
+{
+	if ( MessageBox( Translate( ~Is it okay to tell users they may use <$App.Title> now?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	ReturnOnFailure( ReturnToMultiUserMode() );
+
+	ShellExecute( Open,~Net~,~Send * "You may now use the application <$App.Title> with server <$con.DlgData[Server]>"~,~~,SHOWMINNOACTIVE );
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnExclusiveAccessButton()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DlgData[DatabaseName]>~ ) )
+	{
+		return Warning(	~Select a database first first.~ );
+	}
+
+	if ( MessageBox( Translate( ~Have you closed all windows and asked all users to quit the application <$App.Title>?~ ),YESNO ) != YES )
+	{
+		return FALSE;
+	}
+
+	if ( !TryToGetSingleUser( ~<$con.DlgData[DatabaseName]>~ ) )
+	{
+		return FALSE;
+	}
+
+	ShowWarning( ~You are now the sole owner of the <$App.Title> database.  After you are done, you will have to restart <$App.Title>~ );
+
+	dlg( EnableControls,FALSE,ExclusiveAccessButton );
+	dlg( EnableControls,TRUE,MultiUserAccessButton );
+
+	dlg( ShowControls,FALSE,EnableRestoreText );
+
+	dlg( EnableControls,TRUE,DifferentialRestoreRadio,FullRestoreRadio,LogFileRestoreRadio,RepairRadio,CompactRadio );
+
+	return TRUE;
+}
+
+
+NUMERIC OnStopButton()
+{
+	return Warning( ~Currently, there is no way to stop this operation~ );
+
+	return OnStop();
+}
+
+
+NUMERIC OnStop()
+{
+	invoke( dlg,EnableControls,TRUE,StartButton );
+	invoke( dlg,EnableControls,FALSE,StopButton );
+
+	//OnRefreshButton();
+
+	return TRUE;
+}
+
+
+NUMERIC OnBrowsePath()
+{
+	dlg( GetInput );
+
+	Operation = ~<$con.DlgData[Operation]>~;
+
+	if ( IsNull( ~<Operation>~ ) )
+	{
+		return Warning( ~You must select one of the backup or restore options above~ );
+	}
+
+	if ( !FunctionDefined( OnBrowse<Operation>Path ) )
+	{
+		return Warning( ~No file is need for this operation~ );
+	}
+
+	return OnBrowse<Operation>Path();
+}
+
+
+NUMERIC OnSetPath()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DlgData[LogPath]>~ ) )
+	{
+		return Warning(	~Select a path to the log file first.~ );
+	}
+
+	if ( !SQLServer( Log,DatabaseName,~<$con.DlgData[DatabaseName]>~,SetPath,~<$con.DlgData[LogPath]>~ ) )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnBrowseFullBackupPath()
+{
+	Title = ~Find the file to save the backup to~;
+
+	DefaultFile = ~<$App.Title>_<$Date.SortableDateTime>.Full~;
+
+	if ( FileDialog( OVERWRITEPROMPT,Title,~<Title>~,DefaultFile,~<DefaultFile>~,Path,Path,Save) )
+	{
+		return dlg( SetString,~<Path>~,Path,0 );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC OnBrowseDifferentialBackupPath()
+{
+	Title = ~Find the file to save the differential backup to~;
+
+	DefaultFile = ~<$App.Title>_<$Date.SortableDateTime>.dif~;
+
+	if ( FileDialog( OVERWRITEPROMPT,Title,~<Title>~,DefaultFile,~<DefaultFile>~,Path,Path,Save) )
+	{
+		return dlg( SetString,~<Path>~,Path,0 );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC OnBrowseTransactionLogBackupPath()
+{
+	Title = ~Find the file to save the transaction log to~;
+
+	DefaultFile = ~<$App.Title>_<$Date.SortableDateTime>.log~;
+
+	if ( FileDialog( OVERWRITEPROMPT,Title,~<Title>~,DefaultFile,~<DefaultFile>~,Path,Path,Save) )
+	{
+		return dlg( SetString,~<Path>~,Path,0 );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC ReadTheHeader( DisplayIt )
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DlgData[Path]>~ ) )
+	{
+		return Warning( Translate( ~Select a file first~ ) );
+	}
+
+	if ( Files( FileExists,~<$con.DlgData[Path]>~ ) )
+	{
+		if ( !SQLServer( Verify,Path,~<$con.DlgData[Path]>~,ReadBackupHeader,Result ) )
+		{
+			return Warning( Translate( ~ReadBackupHeader failed on <$con.DlgData[Path]>~ ) );
+		}
+
+		if ( <DisplayIt> )
+		{
+			Warning( ~<Result>~ );
+		}
+		else
+		{
+			Log( Session,~<Result>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnBrowseVerifyPath()
+{
+	Title = ~Find the file to verify~;
+
+	if ( FileDialog( Title,~<Title>~,Path,Path,Open) )
+	{
+		return dlg( SetString,~<Path>~,Path,0 );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC OnBrowseFullRestorePath()
+{
+	Title = ~Find the file that contains the full backup to restore from~;
+
+	if ( FileDialog( Title,~<Title>~,Path,Path,Open) )
+	{
+		return dlg( SetStrings,Path,~<Path>~ );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC OnBrowseDifferentialRestorePath()
+{
+	Title = ~Find the file that contains the differential backup to restore from~;
+
+	if ( FileDialog( Title,~<Title>~,Path,Path,Open) )
+	{
+		return dlg( SetStrings,Path,~<Path>~ );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC OnBrowseTransactionLogRestorePath()
+{
+	Title = ~Find the file that contains the transaction log to restore from~;
+
+	DefaultFile = ~<$App.Title>_Log.bu~;
+
+	if ( FileDialog( Title,~<Title>~,Path,Path,Open) )
+	{
+		return dlg( SetStrings,Path,~<Path>~ );
+	}
+
+
+	return FALSE;
+}
+
+
+NUMERIC ReturnToMultiUserMode()
+{
+	dlg( EnableControls,FALSE,ExclusiveAccessButton,MultiUserAccessButton );
+
+	dlg( GetInput );
+
+	if ( !IsNull( ~<$con.DlgData[DatabaseName]>~ ) )
+	{
+		if ( !SQLServer( GetDatabaseOptions,~<$con.DlgData[DatabaseName]>~,SingleUser,SingleUserMode ) )
+		{
+			return FALSE;
+		}
+
+		InSingleUserMode = <SingleUserMode>;
+
+		if ( <InSingleUserMode> )
+		{
+			if ( !SQLServer( SetDatabaseOptions,~<$con.DlgData[DatabaseName]>~,SingleUser,FALSE ) )
+			{
+				return ShowWarning( ~The database named <$con.DlgData[DatabaseName]> for application <$App.Title> was left in single user mode.  Repair the database to gain multi user access.~ );
+			}
+		}
+
+		dlg( EnableControls,TRUE,ExclusiveAccessButton );
+		dlg( EnableControls,FALSE,MultiUserAccessButton );
+
+		dlg( SetStatus,0,~The <$con.DlgData[DatabaseName]> database is in multi-user mode~ );
+		log( Session,~The <$con.DlgData[DatabaseName]> database is in multi-user mode~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnTransactSQLGo()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$Con.dlgData[TransactSql]>~ ) )
+	{
+		return Warning( ~You must enter the command first~ );
+	}
+
+	if ( Defined(BackgroundOrderProcessor) )
+	{
+		if ( MessageBox( Translate( ~Restoring requires exclusive access to the database.  Is it okay to shut down all processing?~ ),YESNO ) != YES )
+		{
+			return FALSE;
+		}
+
+		ForgetPermanent( BackgroundOrderProcessor );
+
+		Sleep( 3000 );
+	}
+
+	NumOpenConnections = ADO( tempDB,NumOpenConnections );
+
+	tempDB(CloseConnections);
+
+	NumOpenConnections = tempDB( tempDB,NumOpenConnections );
+
+	if ( <NumOpenConnections> )
+	{
+		return ShowWarning( ~Sorry there are still <NumOpenConnections> connection(s) to the database. Close everything but this window, wait a few seconds, and try again.~ );
+	}
+
+	ForgetLocal( tempDB );
+
+	if ( !SQLServer( SetDatabaseOptions,DP2,SingleUser,FALSE ) )
+	{
+		return ShowWarning( ~Failed to gain single user access\n\nPlease close all windows and have all users exit from <$App.Title>.\n\nYou may need to restart <$App.Title> if you still fail after several attempts.~ );
+	}
+
+	SQLServer( Disconnect );
+
+	if ( !Ado( dBase,Mode,Exclusive,Connect,Cmd,~<$Con.dlgData[TransactSql]>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return ShowWarning( ~Command Failed:\n\n<$Con.dlgData[TransactSql]>.\n\n<theErr>~ );
+	}
+
+	return TRUE;
+}
+
+
+VOID CloseDialog( WantAbort )
+{
+	ReturnToMultiUserMode();
+
+	dlg( End );
+
+	if ( <WantAbort> || Debug( ConnectionsHaveBeenFreed ) )
+	{
+		Abort();
+	}
+	else
+	{
+		Exit();
+	}
+}
+
+
+VOID UpdateTheDialog()	// This runs 1 second after the dialog starts up
+{
+	UpdateServerComboBox();
+
+	OnUpdateRadioButton();
+
+	ReturnToMultiUserMode();
+
+	OnRefreshButton();
+}
+
+
+VOID ReOpen()
+{
+}
+
+FileNumber = 0;
+
+Thread( MSDEThread );	 // ADD THE PARAMETER DEBUG TO SINGLE STEP THROUGH THE CODE IN THE SOURCE DEBUGGER
+
+
+if ( !(MSDEInstalled() || SQLServerInstalled()) )
+{
+	Warning( Translate( ~You do not have MSDE or SQL Server installed on this workstation~ ) );
+	Exit();
+}
+else
+{
+	if ( !SQLDMO( SQLServer,SetPopupErrors,FALSE,New ) )
+	{
+		Warning( Translate( ~You do not have MSDE or SQL Server correctly installed on this workstation~ ) );
+		Exit();
+	}
+
+	SQLServer( SetPopupErrors,TRUE );
+
+	DefineDialog();
+
+	Action = ~UpdateTheDialog();~;
+
+	QueueContentsAfter( Action,1000 );
+}
+
+
+
+

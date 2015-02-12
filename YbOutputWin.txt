@@ -1,0 +1,3359 @@
+
+
+IncludeClass(BaseHTML);
+IncludeClass(BaseHTMLPage);
+//IncludeClass(BaseExportOrderItems);
+IncludeClass(BaseThread);
+
+Include: ~YbOutputUtils.txt~;
+
+//----------------------------------- Window --------------------------------------------------
+
+Class( ExportYB,Extends,BaseHTML,
+		Member,fBatchID,Str,~~,
+		Member,fOrdersList,Object,StringList,
+		Member,fExportThread,Object,Thread,
+		Member,fErrors,Numeric,0,
+		Member,BigWindowHeight,Numeric,700,
+		Member,TallerWindowHeight,Numeric,890,
+		Member,TallerWindowWidth,Numeric,750,
+		Member,BigFatWindowHeight,Numeric,800,
+		Member,FatWindowWidth,Numberic,900,
+		Member,fURL,Str,~<$App.HTTPServer>/ExportToYearbook/ExportToYearbook.kpl~,
+		Member,fInfoFieldList,Object,StringList,
+		Member,fLastInfoTable,Str,~~,
+  		Member,fFieldsToDelete,Object,StringList,
+		Member,fSelectedSIField,Str,~~,
+		Member,fStopOnFailure,Numeric,0,
+		Member,fSearchDirectory,Str,~~,
+		Member,fCancel,Numeric,0,
+		Member,fXRefDirty,Numeric,0,
+		Member,fYBDefDirty,Numeric,0,
+		Member,fConnections,Numeric,0 );
+
+VOID	ExportYB::ExportYB()
+{
+	fFieldsToDelete( New );
+	fInfoFieldList( New );
+
+	IsPositionPercent = FALSE;  WantStatusBar = FALSE;
+	WindowLeft = 100; WindowTop = 0;  WindowWidth = 675;	 WindowHeight = 375;
+	fDropTypes = ~Text~;
+	fAcceptingDrops = TRUE;
+	HelpPage = ~OutputToYearbook.htm~;
+
+
+	fScreenHeight = App( thisApp,MainWindow,GetClientHeight );
+
+	if ( <fScreenHeight> < 940 )
+	{
+		BigWindowHeight	   = 600;
+		TallerWindowHeight = <BigWindowHeight>;
+		BigFatWindowHeight = <BigWindowHeight>;
+	}
+
+	fPreviewJobPath = ~<$App.ShareDirectory>\SchoolYBJobs~;
+	Directory( Create,~<fPreviewJobPath>~ );
+	fPreviewJobPath = ~<$App.ShareDirectory>\SchoolYBJobs\TempPreview~;
+	Directory( Create,~<fPreviewJobPath>~ );
+	fPreviewJobPath = ~<fPreviewJobPath>\PSPA_PreviewJob~;
+
+	Private( fPreviewJobPath );
+
+
+}
+
+
+VOID ExportYB::!ExportYB()
+{
+	ForgetPrivate( fConnection );
+
+	Files( Delete,~<fPreviewJobPath>~ );
+	Directory( DeleteRecursively,~<$App.ShareDirectory>\SchoolYBJobs\TempPreview\Preview~ );
+	
+	fFieldsToDelete( DeleteAll );
+	ForgetPrivate( fFieldsToDelete );
+
+	fInfoFieldList( DeleteAll );
+	ForgetPrivate( fInfoFieldList );
+}
+
+NUMERIC ExportYB::Connect()
+{
+	fCritical( Lock );					// Keep multiple threads out of the connection reference counting
+
+	if ( MemberDefined( fConnection ) )
+	{
+		++fConnections;
+		fCritical( Unlock );
+		return TRUE;
+	}
+
+	fConnections = 0;
+
+	if ( !Ado( fConnection,Connect,Private ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( ~Failed to connect to the shared database.  <theErr>.  <$Job.Title>~ );
+		fCritical( Unlock );
+		return FALSE;
+	}
+
+	fConnections = 1;
+
+	return fCritical( Unlock );
+}
+
+
+NUMERIC ExportYB::ReleaseConnection()
+{
+	fCritical( Lock );					// Keep multiple threads out of the connection reference counting
+
+	if ( <--fConnections> <= 0 )
+	{
+		ForgetPrivate( fConnection );
+		fConnections = 0;
+	}
+
+	return 	fCritical( Unlock );		
+}
+
+VOID	ExportYB::HelpRoutine()	{ OnChmHelp(); }
+
+
+VOID	ExportYB::DefineMessages()
+{
+	BaseHTML::DefineMessages();	
+	LoadTranslationFile( ExportToYearbook,ExportToYearbook,ExportToYearbook );
+	LoadTranslationFile( Engine,UIMessages,UIMessages );
+	LoadTranslationFile( Startup,AppStartup,AppStartup );
+	LoadTranslationFile(~Administration\ProblemReport~,ProblemReport,ProblemReport);
+	Title = TR(ExportToYearbook,Title);
+}
+
+
+
+NUMERIC ExportYB::StatusBar(msg)	{ return StatusMsg(~<msg>~); }
+NUMERIC ExportYB::MsgBar(msg)		{ return UserMsg(~<msg>~); }
+
+
+NUMERIC ExportYB::StatusMsg(msg)
+{
+	fHTMLView( SetStyle,StatusMsg,0,color,green );
+	return fHTMLView( SetInnerHTML,StatusMsg,0,~<msg>~ );
+}
+
+NUMERIC ExportYB::UserMsg(msg)
+{
+	fHTMLView( SetStyle,UserMsg,0,color,Black );
+	return fHTMLView( SetInnerHTML,UserMsg,0,~<msg>~ );
+}
+
+NUMERIC ExportYB::ErrorMsg(msg)
+{
+	++fErrors;
+	fHTMLView( SetStyle,UserMsg,0,color,red );
+	return fHTMLView( SetInnerHTML,UserMsg,0,~<msg>~ );
+}
+
+
+VOID ExportYB::NotUsedSetConnection( &connection )	// TBD 
+{
+	ForgetPrivate(fconnection);
+	ADO( fConnection,Is,connection(GetObject),Private );
+}
+
+NUMERIC ExportYB::OnLoadComplete()
+{
+	ReturnOnFailure( GetActiveView() );
+	Action = ~<THIS>.DelayedLoadComplete()~;
+	return QueueContentsAfter( Action,500 );
+}
+
+
+NUMERIC		ExportYB::DelayedLoadComplete()
+{
+	UsersLastSetup = GetUsersSetup();
+
+	RefreshYbIds( ~YearbookIDInst~,~~ );
+	ShowImagesFields();
+	
+	LoadLabInfo();
+
+	RefreshQueueName();
+	RefreshProfiles();
+	
+	RefreshRImageWriters();
+	RefreshRImageTemplates();
+	
+	PopulateChromaControls();
+	
+	RefreshSetupsList(~<UsersLastSetup>~);
+	RefreshYbIds( ~YearbookID~,~~ );
+
+	fHTMLView( Get,~YearbookIDInst~,0,value,ybID );
+	RefreshYbIds( ~YearbookIDMap~,~<ybID>~);
+	fHTMLView( Get,~InfoType~,0,value,InfoType );
+	RefreshInfoTypes( ~InfoType~,~<InfoType>~ );
+
+	OnLoadYBDefButton( ~<ybID>~ );
+	LoadOrdersFromWindow();
+
+	return TRUE;
+}
+
+/////////////////////
+// Lab Info Tab
+NUMERIC		ExportYB::LoadLabInfo()
+{
+	labInfoExists = FALSE;
+
+	labName = ~~;
+	contactName = ~~;
+	location = ~~;
+	phoneNumber = ~~;
+	eMail = ~~;
+	
+	ReturnOnFailure( Connect() );
+
+	exists = fConnection( RecordCountFor,~Select Count(*) from SchoolLabInfo~ );
+
+	if ( <exists> )
+	{
+		Query = ~Select * from SchoolLabInfo~;
+		if ( PGenConList( List,Connection,fConnection,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			if ( List( GetNext,Labinfo ) )
+			{
+				labName = ~<$pcon.Labinfo[LabName]>~;
+				contactName = ~<$pcon.Labinfo[ContactName]>~;
+				location = ~<$pcon.Labinfo[Location]>~;
+				phoneNumber = ~<$pcon.Labinfo[Phone]>~;
+				eMail = ~<$pcon.Labinfo[EMail]>~;
+
+				labInfoExists = TRUE;
+			}
+		}
+	}
+	
+	if ( !<labInfoExists> )
+	{
+		Query = ~Select * from LabInfo~;
+		if ( PGenConList( List2,Connection,fConnection,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			if ( List2( GetNext,Labinfo ) )
+			{
+				labName = ~<$pcon.Labinfo[LabName]>~;
+				contactName = ~<$pcon.Labinfo[ContactName]>~;
+				location = ~<$pcon.Labinfo[Location]>~;
+				phoneNumber = ~<$pcon.Labinfo[Phone]>~;
+				eMail = ~<$pcon.Labinfo[EMail]>~;
+
+				labInfoExists = TRUE;
+			}
+		}
+	}
+	
+	ReleaseConnection();
+
+	if ( !<labInfoExists> )
+	{
+		LabInfoFile = ~<$App.ShareDirectory>\LabInfo.txt~;
+		if ( Files( FileExists,~<LabInfoFile>~ ) )
+		{
+			if ( File( InfoFile,Open,~<LabInfoFile>~,Read ) )
+			{ 
+				if ( InfoFile( ReadTextFile,buffer ) )
+				{
+					labName = String( GetParameter,buffer,~LabName=~,~;~ );
+					contactName = String( GetParameter,buffer,~ContactName=~,~;~ );
+					location = String( GetParameter,buffer,~city=~,~;~ );
+					phoneNumber = String( GetParameter,buffer,~PhoneNumber=~,~;~ );
+					eMail = String( GetParameter,buffer,~Email=~,~;~ );
+
+					InfoFile( Close );
+				}
+			}
+		}
+	}
+
+	fHTMLView( Set, ~LabName~, 0, value, ~<labName>~ );
+	fHTMLView( Set, ~ContactName~, 0, value, ~<contactName>~ );
+	fHTMLView( Set, ~Location~, 0, value, ~<location>~ );
+	fHTMLView( Set, ~PhoneNumber~, 0, value, ~<phoneNumber>~ );
+	fHTMLView( Set, ~EMail~, 0, value, ~<eMail>~ );
+
+	return TRUE;
+}
+
+NUMERIC ExportYB::SaveLabInfo()
+{
+	ReturnOnFailure( Connect() );
+
+	exists = fConnection( RecordCountFor,~Select Count(*) from SchoolLabInfo~ );
+
+	if ( Defined( fHTMLView ) )
+	{
+		fHTMLView( Get,~LabName~,0,value,labName );
+		fHTMLView( Get,~ContactName~,0,value,contactName );
+		fHTMLView( Get,~Location~,0,value,location );
+		fHTMLView( Get,~PhoneNumber~,0,value,phone );
+		fHTMLView( Get,~Email~,0,value,email );
+
+		MakeSQLSafe( labName );
+		MakeSQLSafe( contactName );
+		MakeSQLSafe( location );
+		MakeSQLSafe( phone );
+		MakeSQLSafe( email );
+
+		if ( <exists> )
+		{
+			Cmd = ~Update SchoolLabInfo~;
+			Cmd = ~<Cmd>~ + ~ Set LabName = '<labName>',ContactName = '<contactName>',Location = '<location>',~;
+			Cmd = ~<Cmd>~ + ~Phone = '<phone>',~;
+			Cmd = ~<Cmd>~ + ~Email = '<email>'~;
+			
+			if ( !fConnection( Cmd, ~<Cmd>~ ) )
+			{
+				fConnection( GetErrorDescription,theErr );
+				Log( Session,~Database update failed <cmd>. <theErr>~ );
+				ReleaseConnection();
+				return FALSE;
+			}
+		}
+		else
+		{
+
+			Parameters = ~LabName,ContactName,Location,Phone,Email~;
+			Values = ~'<labName>','<contactName>','<location>','<phone>','<email>'~;
+
+			Cmd = ~Insert Into SchoolLabInfo(<Parameters>) Values(<Values>)~;
+			if ( !fConnection( Cmd, ~<Cmd>~ ) )
+			{
+				fConnection( GetErrorDescription,theErr );
+				Log( Session,~Database update failed <cmd>. <theErr>~ );
+				ReleaseConnection();
+				return FALSE;
+			}
+		}
+
+		// Let the user know that the lab info was saved.
+		fHTMLView( SetInnerHTML, ~InfoSection~, 0, TR( AppStartup, LabInfoSaved ) );
+	}
+	
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+/////////////////////////////////
+// Yearbook Definition tab
+NUMERIC ExportYB::OpenYBDefGrid()
+{
+	Actions = ACTION DOC ( YearbookDefsDoc OpenOnce YearbookDefsDoc "Init();" );
+	return PerformActions( Actions );
+}
+
+NUMERIC ExportYB::OpenFieldMapGrid()
+{
+	Actions = ACTION DOC ( YBSIFieldMapDoc OpenOnce YBSIFieldMapDoc "Init();" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC ExportYB::OnLoadYBDefButton( YBid )
+{
+	UserMsg( ~~ );
+	ErrorMsg( ~~ );
+	
+	fXRefDirty = FALSE;
+	fYBDefDirty = FALSE;
+
+	if (IsNull(~<YBid>~) )
+	{
+		OnNewYBDefButton();
+		LoadInfoFieldList();
+		fHtmlView( Execute,~EnableYbMgmtButtons()~ );
+		fHtmlView( Execute,~onChangeImageSize()~ );
+		return TRUE;
+	}
+	
+	ReturnOnFailure( Connect() );
+
+	Query = ~Select * From YearbookDefs Where YearbookID = '<YBid>'~;
+	
+	if ( !PGenConList( List,Connection,fConnection,GetRecordFor,~<Query>~,Rec ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the yearbook definition from the database.  <theErr>~ );
+	}
+
+	Rec( GetValues,ImageSize,ImageSizeValue );
+
+	if ( !fHTMLView( UpdateFrom,Rec ) )
+	{
+		ReleaseConnection();
+		return Failure( ~Failed to update the Yearbook Definition view.~ );
+	}
+	
+	fHTMLView( Set,~YearbookID~,0,value,~<YBid>~);
+	fHTMLView( Set,~YearbookIDMap~,0,value,~<YBid>~);
+
+	ImageSize = ImageSizeToString( ~<ImageSizeValue>~ );
+	fHTMLView( Set,~ImageSize~,0,value,~<ImageSize>~ );
+
+	LoadYearbookFields( ~<YBid>~ );
+
+	fHtmlView( Execute,~EnableYbMgmtButtons()~ );
+	fHtmlView( Execute,~onChangeImageSize()~ );
+	
+	ReleaseConnection();
+
+	return StatusBar( ~Loaded Yearbook Definition <YBid>~ );
+}
+
+VOID ExportYB::ChooseBlankFileNameField()
+{
+	fHTMLView(Set, ~FileNameField~,0,value,~~ );
+}
+
+VOID ExportYB::ChooseBlankSIPose()
+{
+	fHTMLView(Set, ~SIPoseField~,0,value,~~ );
+	fHTMLView(Set, ~SIPoseValue~,0,value,~~ );
+}
+
+VOID ExportYB::ChooseBlankImagesPose()
+{
+	fHTMLView(Set, ~PoseField~,0,value,~~ );
+	fHTMLView(Set, ~PoseValue~,0,value,~~ );
+}
+
+
+NUMERIC ExportYB::Revert()
+{
+	fHTMLView(Get,~YearbookID~,0,Value,YearbookID );
+	fXRefDirty = FALSE;
+	fYBDefDirty = FALSE;
+
+	return LoadYearbookFields( ~<YearbookID>~ );
+}
+
+
+NUMERIC ExportYB::OnNewYBDefButton()
+{
+	fYBDefDirty = TRUE;
+	return LoadDefaultYBDef();
+}
+
+NUMERIC ExportYB::LoadDefaultYBDef()
+{
+	fYBDefDirty = TRUE;
+	NewYBTable();
+
+	fHTMLView( Set,YearbookID,0,value,~~ );
+	fHTMLView( Set,ImageSize,0,value,~Small~ );
+	fHTMLView( Set,CompressionQuality,0,value,90 );
+	fHTMLView( Set,Resolution,0,value,300 );
+	fHTMLView( Set,GroupFields,0,value,~Grade~ );
+	fHTMLView( Set,GroupBy,0,value,~Grade~ );
+	fHTMLView( Set,SortBy,0,value,~Last Name~ );
+//	fHTMLView( Set,CropAdjustment,0,value,100 );
+
+	return StatusBar( ~New Yearbook Definition~ );
+}
+
+NUMERIC ExportYB::LoadYearbookFields( YBid )
+{
+	WaitCursor( Begin );	
+	fFieldsToDelete( DeleteAll );
+	fHTMLView( Table,MapTable,0,DeleteAllRows,0 );
+	fHTMLView( Table,MapTable,0,GetRows,numRows );
+	rowIndex = 0;
+	
+	ReturnOnFailure( Connect() );
+
+	query = ~Select * from YearbookFields Where YearbookID='<YBid>' Order By YearbookFields.Sequence~;
+
+	if ( !PGenConList( FieldList,Connection,fConnection,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		Log( Session, ~ExportYB::LoadYearbookFields: Query failed: <Query>, <theErr>~ );
+		WaitCursor( END );	
+		ErrorMsg( TR(ExportToYearbook, UnableToQueryDB) );
+		ReleaseConnection();
+		return FALSE;
+	}
+
+	numEntries = FieldList( ChildCount );
+	if ( <numEntries> == 0 )
+	{
+		WaitCursor( END );	
+		fXRefDirty = TRUE;
+		fYBDefDirty = TRUE;
+		ReleaseConnection();
+		return NewYBTable();
+	}
+
+	while ( FieldList( GetNext, Entry ) )
+	{
+		Sequence = Numeric(~<$pcon.Entry[Sequence]>~);
+		ContinueIf( <Sequence> < 0 );
+
+		FieldName = ~<$pcon.Entry[FieldName]>~;
+		Reserved = Numeric(~<$pcon.Entry[Reserved]>~);
+		DisableClause = <Reserved> ? ~disabled=disabled~ : ~~;
+
+		fHTMLView( InsertTableRow,MapTable,0,-1 );
+		fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><button OnClick="DeleteField(this)" style="width:75" <DisableClause> > <$TR.ExportToYearbook(Delete)> </button></span>~ );
+		fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><input Name="Field<Seq>" id="Sequence" Value='<Sequence>' style="width:35" mask='###'  <DisableClause>></span>~ );
+		fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><input id="YearbookFields" Value='<FieldName>' style="width:120" mask='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'  <DisableClause>></span>~ );
+
+		if ( <Sequence> <= 3 )
+		{
+			fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><select maxlength=100 size=1 class="TopSelectors" id="InfoFields" style="width:120" <DisableClause>></select></span>~ );
+		}
+		else
+		{
+			fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><select maxlength=100 size=1 class="TopSelectors" id="InfoFields"  style="width:120"></select></span>~ );
+		}
+		<++rowIndex>;
+	}
+	
+	LoadInfoFieldList();
+	LoadInfoMapFields();
+
+	fHTMLView( Set,~YearbookID~,0,value,~<YBid>~);
+
+	fXRefDirty = FALSE;
+	fYBDefDirty = FALSE;
+
+	WaitCursor( END );	
+	
+	ReleaseConnection();
+	
+	return TRUE;
+}
+
+
+NUMERIC ExportYB::OnDeleteYBDefButton()
+{
+	fHTMLView( Get,YearbookID,0,value,YearbookID );
+
+	ReturnOnFailure( !IsNull(~<YearbookID>~) );
+	
+	ReturnOnFailure( MessageBox(~Are you sure you want to delete Yearbook ID <YearbookID>?~,YESNO ) == ~YES~ );
+
+	cmd1 = ~Delete From YBSIFieldMap Where YearbookID = '<YearbookID>'~;
+	cmd2 = ~Delete From YearbookFields Where YearbookID = '<YearbookID>'~;
+	cmd3 = ~Delete From YearbookDefs Where YearbookID = '<YearbookID>'~;
+	
+	ReturnOnFailure( Connect() );
+	
+	if ( !fConnection( Cmd,~<cmd1>~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to delete Yearbook to Subject Info fields mappings for '<YearbookID>'.  <theErr>~ );
+	}
+	
+	if ( !fConnection( Cmd,~<cmd2>~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to delete Yearbook Fields for '<YearbookID>'.  <theErr>~ );
+	}
+	
+	if ( !fConnection( Cmd,~<cmd3>~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to delete Yearbook Definition '<YearbookID>'.  <theErr>~ );
+	}
+	
+	RefreshYbIds( ~YearbookID~,~~ );
+	RefreshYbIds( ~YearbookIDInst~,~~ );
+	RefreshYbIds( ~YearbookIDMap~,~~ );
+	
+	fXRefDirty = FALSE;
+	fYBDefDirty = FALSE;
+	
+	ReleaseConnection();
+
+	StatusBar(~Yearbook Definition <YearbookID> was deleted~);
+	
+	return TRUE;
+}
+
+NUMERIC ExportYB::DeleteMapFields()
+{
+	fHTMLView( Get,YearbookID,0,value,YearbookID );
+	fHTMLView( Get,InfoType,0,value,InfoType );
+
+	ReturnOnFailure( !IsNull(~<YearbookID>~) );
+	ReturnOnFailure( !IsNull(~<InfoType>~) );
+	
+	ReturnOnFailure( MessageBox(~Are you sure you want to delete the mapping between Yearbook '<YearbookID>' and <InfoType>?~,YESNO ) == ~YES~ );
+
+	st_size = strlen( ~<InfoType>~ ) - strlen( ~SubjectInfo~ );
+	InfoType = String( Right,~<InfoType>~, <st_size> );
+	
+	ReturnOnFailure( Connect() );
+
+	cmd = ~Delete From YBSIFieldMap Where YearbookID = '<YearbookID>' AND InfoType = '<InfoType>'~;
+	
+	if ( !fConnection( Cmd,~<cmd>~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to delete Yearbook Definition '<YearbookID>'.  <theErr>~ );
+	}
+	
+	fXRefDirty = FALSE;
+	
+	ReleaseConnection();
+
+	return ClearInfoFields();
+}
+
+
+NUMERIC ExportYB::OnSaveYBDefButton( fromXRef )
+{
+	SetupName = ~~;
+	
+	if ( !DefinedAndNotNULL( fromXRef ) )
+	{
+		return ErrorMsg( ~No fromXRef~ );
+	}
+	if ( <fromXRef> )
+	{
+		fHTMLView( Get,YearbookIDMap,0,value,SetupName );
+	}
+	else
+	{
+		fHTMLView( Get,YearbookID,0,value,SetupName );
+	}
+	
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select ImageSize From YearbookDefs Where YearbookID = '<SetupName>'~;
+	
+	if ( !PGenConList( List,Connection,fConnection,GetRecordFor,~<Query>~,Rec ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the Yearbook Setups from the database.  <theErr>~ );
+	}
+	
+	result = AuditYearbookFields( ~<SetupName>~, TRUE );
+	if ( !<result> )
+	{
+		ReleaseConnection();
+		return FALSE;
+	}
+
+	if ( !fHTMLView( Update,Rec ) )
+	{
+		ReleaseConnection();
+		return Failure( ~failed to set the fields in the record~ );
+	}
+	fHTMLView( Get,ImageSize,0,value,imageSize );
+	size = ImageSizeToInt( ~<imageSize>~ );
+	Rec( Set,ImageSize,<size> );
+	
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the Yearbook Setups from the database.  <theErr>~ );
+	}
+
+	if ( !SaveYbFields( ~<SetupName>~ ) )
+	{
+		ReleaseConnection();
+		return FALSE;
+	}
+	
+	fXRefDirty = FALSE;
+	fYBDefDirty = FALSE;
+	
+	ReleaseConnection();
+
+	return StatusBar(~Yearbook ID <SetupName> was saved~);
+}
+
+
+NUMERIC ExportYB::OnSaveYBDefAsButton(SetupName)
+{
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select * From YearbookDefs Where YearbookID = '<SetupName>'~;
+	
+	Count = fConnection( RecordCountFor,~Select * From YearbookDefs Where YearbookID = '<SetupName>'~ );
+	
+	if ( <Count> > 0 )
+	{
+		ReleaseConnection();
+		return ErrorMsg( ~Sorry there is already a setup named <SetupName>.  Press 'Save' to update it or choose another name.~ );
+	}
+	
+	result = AuditYearbookFields( ~<SetupName>~,FALSE );
+	
+	if ( !<result> )
+	{
+		ReleaseConnection();
+		return FALSE;
+	}
+
+	if ( !PGenConList( List,Connection,fConnection,GetRecordFor,~<Query>~,Rec ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the Yearbook Setups from the database.  <theErr>~ );
+	}
+	
+	YearbookID = ~~;
+	
+	if ( !fHTMLView( Update,Rec ) )
+	{
+		ReleaseConnection();
+		return Failure( ~failed to set the fields in the record~ );
+	}
+	
+	Rec( Set,YearbookID,~<SetupName>~ );
+
+	fHTMLView( Set, YearbookID, ~<SetupName>~ );
+
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to update the Yearbook Setups in the database.  <theErr>~ );
+	}
+	
+	fYBDefDirty = FALSE;
+
+	SaveYbFields( ~<SetupName>~ ); 
+
+	result = AuditYearbookFields( ~<SetupName>~,TRUE );
+	
+	if ( !<result> )
+	{
+		cmd1 = ~Delete From YBSIFieldMap Where YearbookID = '<SetupName>'~;
+		cmd2 = ~Delete From YearbookFields Where YearbookID = '<SetupName>'~;
+		cmd3 = ~Delete From YearbookDefs Where YearbookID = '<SetupName>'~;
+		
+		if ( !fConnection( Cmd,~<cmd1>~ ) )
+		{
+			fConnection( GetErrorDescription,theErr );
+			ReleaseConnection();
+			return Failure( ~Failed to delete Yearbook to Subject Info fields mappings for '<SetupName>'.  <theErr>~ );
+		}
+		
+		if ( !fConnection( Cmd,~<cmd2>~ ) )
+		{
+			fConnection( GetErrorDescription,theErr );
+			ReleaseConnection();
+			return Failure( ~Failed to delete Yearbook Fields for '<SetupName>'.  <theErr>~ );
+		}
+		
+		if ( !fConnection( Cmd,~<cmd3>~ ) )
+		{
+			fConnection( GetErrorDescription,theErr );
+			ReleaseConnection();
+			return Failure( ~Failed to delete Yearbook Definition '<SetupName>'.  <theErr>~ );
+		}
+		ReleaseConnection();
+		return FALSE;
+	}
+	
+	ReleaseConnection();
+
+	RefreshYbIds( ~YearbookID~,~<SetupName>~ );
+	StatusBar(~YearbookID <SetupName> was saved~);
+
+	// update the yearbook list on the instance page without changing the selection
+	fHTMLView( Get, ~YearbookIDInst~,0,value,YBInst );
+	Action = STR ( <this>.RefreshYbIds( ~YearbookIDInst~,~<YBInst>~ ); <this>.RefreshYbIds( ~YearbookIDMap~,~<SetupName>~ ); );
+	QueueContentsAfter( Action,100 );
+	
+	return TRUE;
+}
+
+NUMERIC ExportYB::AuditYearbookFields( YearbookID, updateRec )
+{
+	ErrorMsg( ~~ );
+	result = TRUE;
+
+	fHTMLView( Get,Resolution,0,value,Resolution );
+	fHTMLView( Get,ImageWidth,0,value,ImageWidth );
+	fHTMLView( Get,ImageLength,0,value,ImageLength );
+//	fHTMLView( Get,CropAdjustment,0,value,CropAdjust );
+	fHTMLView( Get,CompressionQuality,0,value,CompressionQuality );
+	fHTMLView( Get,ImageSize,0,value,ImageSize );
+
+	fHTMLView( Get,GroupFields,0,value,GroupFields );
+	fHTMLView( Get,GroupBy,0,value,GroupBy );
+	fHTMLView( Get,SortBy,0,value,SortBy );
+
+	if ( SimilarStr( ~<Resolution>~,~~ ) )
+	{
+		fHTMLView( Set,Resolution,0,value,~300~ );
+	}
+
+	if ( SimilarStr( ~<ImageSize>~,~~ ) )
+	{
+		fHTMLView( Set,ImageSize,0,value,~Small~ );
+		fHTMLView( Set,ImageWidth,0,value,~320~ );
+		fHTMLView( Set,ImageLength,0,value,~400~ );
+	}
+
+//	if ( SimilarStr( ~<CropAdjust>~,~~ ) )
+//	{
+//		fHTMLView( Set,CropAdjustment,0,value,~100~ );
+//	}
+
+	if (  SimilarStr( ~<CompressionQuality>~,~~ ) )
+	{
+		fHTMLView( Set,CompressionQuality,0,value,~90~ );
+	}
+
+	if ( !SimilarStr( ~<GroupFields>~,~~ ) && <updateRec> )
+	{
+		if ( !AuditGroupField( ~GroupFields~, ~<YearbookID>~ ) )
+		{
+			return FALSE;
+		}
+	}
+
+	if ( !SimilarStr( ~<GroupBy>~,~~ ) && <updateRec> )
+	{
+		if ( !AuditGroupField( ~GroupBy~, ~<YearbookID>~ ) )
+		{
+			return FALSE;
+		}
+	}
+
+	if ( !SimilarStr( ~<SortBy>~,~~ ) && <updateRec> )
+	{
+		if ( !AuditGroupField( ~SortBy~, ~<YearbookID>~ ) )
+		{
+			return FALSE;
+		}
+	}
+
+	GetCheckedButton( ~~,~NamingType~,NamingType);
+
+	if ( <NamingType> == 1)
+	{
+		fHTMLView( Get,~FileNameField~,0,value,FileNameField );
+		if ( SimilarStr( ~<FileNameField>~,~~ ) )
+		{
+			ErrorMsg( ~Save failed.  When you choose to use a field in the SubjectInfo table, the File Name Field cannot be blank.~ );
+			result = FALSE;
+		}
+
+	}
+	return <result>;
+}
+
+NUMERIC ExportYB::AuditGroupField( ControlName,YearbookID )
+{
+	fHTMLView( Get,~<ControlName>~,0,value,Group );
+	result = TRUE;
+
+	i = 0;
+	count = 0;
+	numTokens = GetTokens(~<Group>~,~,~);
+
+	while ( <i++> < <numTokens> && <result> )
+	{
+		lookupField = String( TrimLeftRight,~<Token<i>>~ );
+
+		result = AuditYBField( ~<lookupField>~, ~<YearbookID>~ );
+	}
+
+	if ( !<result> )
+	{
+		ErrorMsg( ~The <ControlName> setting must be one or more fields from the Yearbook Field Column~ );
+	}
+
+	return <result>;
+}
+
+NUMERIC ExportYB::AuditYBField( FieldName, YearbookID )
+{
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select count(*) from YearbookFields Where FieldName='<FieldName>' AND YearbookID='<YearbookID>'~;
+	exists = fConnection( RecordCountFor,~<Query>~ );
+	
+	ReleaseConnection();
+
+	return <exists>;
+}
+
+
+NUMERIC ExportYB::NewYBTable()
+{
+	GetViewByName( View );
+
+	fHTMLView( Execute,~SetRadioButton( 'ExportWithBlanks',0 )~ );
+
+	fHTMLView( Execute,~SetRadioButton( 'NamingType',0 )~ );
+	fHTMLView( Set,FileNameField,0,value,~~ );
+	fHTMLView( Execute,~onSetNamingType()~ );
+
+	fHTMLView( Execute,~SetRadioButton( 'PoseSource',0 )~ );
+	fHTMLView( Set,PoseField,0,value,~~ );
+	fHTMLView( Set,SIPoseField,0,value,~~ );
+	fHTMLView( Set,PoseValue,0,value,~~ );
+	fHTMLView( Set,SIPoseValue,0,value,~~ );
+
+	// Remove all rows from the Map table.
+	fHTMLView( Table,MapTable,0,DeleteAllRows,0 );
+	fHTMLView( Table,MapTable,0,GetRows,numRows );
+
+	rowIndex = 0;
+	Field0 = ~Volume Name~;
+	Field1 = ~Image Folder~;
+	Field2 = ~Image File Name~;
+	Field3 = ~Grade~;
+	Field4 = ~Last Name~;
+	Field5 = ~First Name~;
+	Field6 = ~Home Room~;
+	Field7 = ~Period~;
+	Field8 = ~Teacher Name~;
+	Field9 = ~Track~;
+
+	while ( <rowIndex> < 10 )
+	{
+		Seq = <rowIndex> + 1;
+		fHTMLView( InsertTableRow,MapTable,0,-1 );
+		fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><button style="width:75" disabled=disabled> <$TR.ExportToYearbook(Delete)> </button></span>~ );
+		fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><input Name="Field<Seq>" id="Sequence" Value='<Seq>' style="width:35" mask='###'  disabled=disabled></span>~ );
+		fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><input id="YearbookFields" Value='<Field<rowIndex>>' style="width:120" mask='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'  disabled=disabled></span>~ );
+
+		if ( <Seq> <= 3 )
+		{
+			fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><select  maxlength=120 size=1 class="TopSelectors" id="InfoFields" style="width:120" disabled=disabled></select></span>~ );
+		}
+		else
+		{
+			fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><select  maxlength=120 size=1 class="TopSelectors" id="InfoFields" style="width:120"></select></span>~ );
+		}
+		<++rowIndex>;
+	}
+
+	fXRefDirty = TRUE;
+	fYBDefDirty = TRUE;
+
+	return TRUE;
+}
+
+NUMERIC ExportYB::AddYBField()
+{
+	GetViewByName( View );
+	fHTMLView( Table,MapTable,0,GetRows,numRows );
+	
+	if ( <numRows> < 10 )
+	{
+		NewYBTable();
+		fHTMLView( Table,MapTable,0,GetRows,numRows );
+	}
+
+	fXRefDirty = TRUE;
+	fYBDefDirty = TRUE;
+
+	rowIndex = <numRows>;
+
+	Seq = <rowIndex> + 1;
+	fHTMLView( InsertTableRow,MapTable,0,-1 );
+	fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><button OnClick="DeleteField(this)" style="width:75"> <$TR.ExportToYearbook(Delete)> </button></span>~ );
+	fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><input Name="Field<Seq>" id="Sequence" value='<Seq>' style="width:35" mask='###'></span>~ );
+	fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><input id="YearbookFields" style="width:120" mask='AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'></span>~ );
+	fHTMLView( InsertTableCell,MapTable,0,<rowIndex>,-1,~<span><select  maxlength=100 size=1 class="TopSelectors" id="InfoFields" style="width:120"></select></span>~ );
+
+	more = fInfoFieldList( GetFirstString,theFieldName );
+	while ( <more>  )
+	{
+		// add <theFieldName> to options list for InfoField table cell
+		fHTMLView( Execute,~AddToCellOptionList( MapTable,<rowIndex>,3,'<theFieldName>','<theFieldName>' )~ );
+		more = fInfoFieldList( GetNextString,theFieldName );
+	}
+
+	return TRUE;
+}
+
+NUMERIC ExportYB::SaveYbFields( YearbookID )
+{
+	GetViewByName( View );
+	fHTMLView( Table,MapTable,0,GetRows,numRows );
+	
+	if ( <numRows> < 1 )
+	{
+		NewYBTable();
+	}
+//	fHTMLView( Get,YearbookIDMap,0,value,YearbookID );
+	fHTMLView( Get,InfoType,0,value,SInfoType );
+
+	st_size = strlen( ~<SInfoType>~ ) - strlen( ~SubjectInfo~ );
+	InfoType = String( Right,~<SInfoType>~, <st_size> );
+	
+	ReturnOnFailure( Connect() );
+
+	// Remove each entry in the deleted ID list from the YBSIFieldMap and YearbookFields tables.
+	FieldToDelete = ~~;
+	if ( Defined( fFieldsToDelete ) )
+	{
+		more = fFieldsToDelete( GetFirstString,FieldToDelete );
+		while ( <more> && !SimilarStr( ~<FieldToDelete>~,~~ ) )
+		{
+			// Remove the entry from the PrintChannels table.
+			Cmd = ~Delete from YBSIFieldMap Where FieldName = '<FieldToDelete>' AND YearbookID='<YearbookID>'~;
+			if ( !fConnection( CMD,~<Cmd>~ ) )
+			{
+				fConnection( GetErrorDescription,theErr );
+				Log( Session, ~ExportYB::SaveYbFields: Unable to delete entries from YBSIFieldMap table. <theErr>~ );
+				ReleaseConnection();
+				return FALSE;
+			}
+
+			// Remove the entry from the YearbookFields table.
+			Cmd = ~Delete from YearbookFields Where FieldName = '<FieldToDelete>' AND YearbookID='<YearbookID>'~;
+			if ( !fConnection( CMD,~<Cmd>~ ) )
+			{
+				fConnection( GetErrorDescription,theErr );
+				Log( Session, ~ExportYB::SaveYbFields: Unable to delete entries from YearbookFields table. <theErr>~ );
+				ReleaseConnection();
+				return FALSE;
+			}
+
+			more = fFieldsToDelete( GetNextString,FieldToDelete );
+		}
+	}
+
+	// Add the fields.
+	Reserved = 0;
+
+	FieldName = ~~;
+	SIFieldName = ~~;
+	Sequence = ~~;
+
+	YBFields = ~YearbookID,Reserved,Sequence,FieldName~;
+	YBValues = ~~;
+	YBCmd     = ~~;
+
+	MapFields = ~YearbookID,InfoType,FieldName,SIFieldName~;
+	MapValues = ~~;
+	MapCmd	  = ~~;
+
+	rowIndex = 0;
+	cellIndex = 1;
+
+	MasterKey = ~YearbookID='<YearbookID>'~;
+	SIKey = ~InfoType='<InfoType>'~;
+
+	// validate filenamefield not blank if namingtype == 1
+
+	AddSpecialField( ~FileNameField~,-1,~value~,~<YearbookID>~,~<InfoType>~ );
+	AddSpecialField( ~NamingType~,-2,~checked~,~<YearbookID>~,~<InfoType>~ );
+	AddSpecialField( ~SIPoseValue~,-3,~value~,~<YearbookID>~,~<InfoType>~ );
+	AddSpecialField( ~SIPoseField~,-4,~value~,~<YearbookID>~,~<InfoType>~ );
+	AddSpecialField( ~PoseValue~,-5,~value~,~<YearbookID>~,~<InfoType>~ );
+	AddSpecialField( ~PoseField~,-6,~value~,~<YearbookID>~,~<InfoType>~ );
+	AddSpecialField( ~PoseSource~,-7,~checked~,~<YearbookID>~,~<InfoType>~ );
+	AddSpecialField( ~ExportWithBlanks~,-8,~checked~,~<YearbookID>~,~<InfoType>~ );
+	
+	// validate filenamefield not blank if namingtype == 1
+	while ( fHTMLView( TableCell,MapTable,0,<rowIndex>,<cellIndex>,GetFromCell,~Sequence,0,value~,Sequence ) )
+	{
+		fHTMLView( TableCell,MapTable,0,<rowIndex>,<++cellIndex>,GetFromCell,~YearbookFields,0,value~,FieldName );
+		fHTMLView( TableCell,MapTable,0,<rowIndex>,<++cellIndex>,GetFromCell,~InfoFields,0,value~,SIFieldName );
+
+		if ( Numeric(~<Sequence>~) <= 10 )
+		{
+			Reserved = 1;
+		}
+
+		if ( !SimilarStr(~<Sequence>~,~~) && !SimilarStr(~<FieldName>~,~~) )
+		{
+			Query = ~Select count(*) from YearbookFields Where FieldName='<FieldName>' AND <MasterKey>~;
+			exists = fConnection( RecordCountFor,~<Query>~ );
+
+			if ( !<exists> )
+			{
+				YBValues = ~'<YearbookID>',<Reserved>,<Sequence>,'<FieldName>'~;
+				YBCmd = ~Insert Into YearbookFields(<YBFields>) Values(<YBValues>)~;
+				if ( !SimilarStr( ~<SIFieldName>~, ~~ ) )
+				{
+					MapValues = ~'<YearbookID>','<InfoType>','<FieldName>','<SIFieldName>'~;
+					MapCmd	  = ~Insert Into YBSIFieldMap(<MapFields>) Values(<MapValues>)~;
+				}
+			}
+			else
+			{
+				Query = ~Select count(*) from YBSIFieldMap Where <MasterKey> And FieldName='<FieldName>' AND <SIKey>~;
+				mapExists = fConnection( RecordCountFor,~<Query>~ );
+
+				YBCmd = ~Update YearbookFields Set Reserved = <Reserved>, Sequence = <Sequence>  Where FieldName = '<FieldName>' AND <MasterKey>~;
+				if ( <mapExists> )
+				{
+					if (!SimilarStr( ~<SIFieldName>~, ~~ ))
+					{
+						MapCmd = ~Update YBSIFieldMap Set SIFieldName = '<SIFieldName>' Where FieldName = '<FieldName>' AND <MasterKey> AND <SIKey>~;
+					}
+					else
+					{
+						MapCmd	  = ~Delete from YBSIFieldMap Where FieldName = '<FieldName>' AND <MasterKey> AND <SIKey>~;
+					}
+				}
+				else if ( !SimilarStr( ~<SIFieldName>~, ~~ ) )
+				{
+					MapValues = ~'<YearbookID>','<InfoType>','<FieldName>','<SIFieldName>'~;
+					MapCmd	  = ~Insert Into YBSIFieldMap(<MapFields>) Values(<MapValues>)~;
+				}
+			}
+
+			if ( !fConnection( Cmd, ~<YBCmd>~ ) )
+			{
+				fConnection( GetErrorDescription, theErr );
+				Log( Session, ~ExportYB::SaveYBFields: Unable to insert Field into YearbookFields table. <theErr>~ );
+				ReleaseConnection();
+				return FALSE;
+			}
+
+			if ( !SimilarStr( ~<MapCmd>~,~~ ) )
+			{
+				if ( !fConnection( Cmd, ~<MapCmd>~ ) )
+				{
+					fConnection( GetErrorDescription, theErr );
+					Log( Session, ~ExportYB::SaveYBFields: Unable to insert mapping record into YBSIFieldMap table. <theErr>~ );
+					ReleaseConnection();
+					return FALSE;
+				}
+			}
+		}
+
+		Reserved = 0;
+
+		FieldName = ~~;
+		SIFieldName = ~~;
+		Sequence = ~~;
+
+		YBValues = ~~;
+		YBCmd     = ~~;
+
+		MapValues = ~~;
+		MapCmd	  = ~~;
+
+		++rowIndex;
+		cellIndex = 1;
+	}
+
+	// Remove all entries from the list of IDs to delete.
+	fFieldsToDelete( DeleteAll );
+
+	if ( !AuditGroupingMap( ~<YearbookID>~,~<InfoType>~,~GroupBy~ ) )
+	{
+		ReleaseConnection();
+		ErrorMsg( ~You have not mapped subject info fields to the Group By fields.~ );
+		return FALSE;
+	}
+
+	if ( !AuditGroupingMap( ~<YearbookID>~,~<InfoType>~,~SortBy~ ) )
+	{
+		ReleaseConnection();
+		ErrorMsg( ~You have not mapped subject info fields to the Sort By fields.~ );
+		return FALSE;
+	}
+
+	fXRefDirty = FALSE;
+	fYBDefDirty = FALSE;
+	
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+
+NUMERIC ExportYB::AddSpecialField( FieldName,Sequence,controlType,YearbookID,InfoType )
+{
+	fHTMLView( Get,~<FieldName>~,0,~<controlType>~,SIFieldName );
+	if ( SimilarStr( ~<controlType>~,~value~ ) )
+	{
+		SIFieldName = ~~;
+		fHTMLView( Get,~<FieldName>~,0,~<controlType>~,SIFieldName );
+	}
+	else if ( SimilarStr( ~<controlType>~,~checked~ ) )
+	{
+		SIFieldName = 0;
+		GetCheckedButton( ~~,~<FieldName>~,SIFieldName);
+	}
+	// Add the fields.
+
+	Reserved = 1;
+
+	YBFields = ~YearbookID,Reserved,Sequence,FieldName~;
+	YBValues = ~'<YearbookID>',1,<Sequence>,'<FieldName>'~;
+
+	YBCmd     = ~~;
+
+	MapFields = ~YearbookID,InfoType,FieldName,SIFieldName~;
+	MapValues = ~'<YearbookID>','<InfoType>','<FieldName>','<SIFieldName>'~;
+
+	MapCmd	  = ~~;
+
+	MasterKey = ~YearbookID='<YearbookID>'~;
+	SIKey = ~InfoType='<InfoType>'~;
+	
+	ReturnOnFailure( Connect() );
+
+	Query = ~Select count(*) from YearbookFields Where FieldName='<FieldName>' AND <MasterKey>~;
+	exists = fConnection( RecordCountFor,~<Query>~ );
+
+	if ( !<exists> )
+	{
+		YBCmd   = ~Insert Into YearbookFields(<YBFields>) Values(<YBValues>)~;
+		MapCmd	= ~Insert Into YBSIFieldMap(<MapFields>) Values(<MapValues>)~;
+	}
+	else
+	{
+		Query = ~Select count(*) from YBSIFieldMap Where <MasterKey> And FieldName='<FieldName>' AND <SIKey>~;
+		mapExists = fConnection( RecordCountFor,~<Query>~ );
+
+		YBCmd = ~Update YearbookFields Set Reserved = <Reserved>, Sequence = <Sequence>  Where FieldName = '<FieldName>' AND <MasterKey>~;
+		if ( <mapExists> )
+		{
+			MapCmd = ~Update YBSIFieldMap Set SIFieldName = '<SIFieldName>' Where FieldName = '<FieldName>' AND <MasterKey> AND <SIKey>~;
+		}
+		else
+		{
+			MapCmd = ~Insert Into YBSIFieldMap(<MapFields>) Values(<MapValues>)~;
+		}
+	}
+
+	if ( !fConnection( Cmd, ~<YBCmd>~ ) )
+	{
+		fConnection( GetErrorDescription, theErr );
+		Log( Session, ~ExportYB::AddSpecialField: Unable to insert Field into YearbookFields table. <theErr>~ );
+		ReleaseConnection();
+		return FALSE;
+	}
+
+	if ( !SimilarStr( ~<MapCmd>~,~~ ) )
+	{
+		if ( !fConnection( Cmd, ~<MapCmd>~ ) )
+		{
+			fConnection( GetErrorDescription, theErr );
+			Log( Session, ~ExportYB::AddSpecialField: Unable to insert mapping record into YBSIFieldMap table. <theErr>~ );
+			ReleaseConnection();
+			return FALSE;
+		}
+	}
+	
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+// verify all fields are mapped
+NUMERIC ExportYB::AuditGroupingMap( YearbookID,InfoType,Grouping )
+{
+	fHTMLView( Get,~<Grouping>~,0,Value,group );
+
+	numTokens = GetTokens(~<group>~,~,~);
+	
+	ReturnOnFailure( Connect() );
+
+	i = 0;
+	while ( <i++> < <numTokens>)
+	{
+		fieldName = String( TrimLeftRight,~<Token<i>>~ );
+
+		query = ~Select count(*) from YBSIFieldMap Where YearbookID='<YearbookID>' AND InfoType='<InfoType>' AND FieldName='<fieldName>'~;
+
+		Count = fConnection( RecordCountFor,~<query>~ );
+
+		if ( <Count> == 0 )
+		{
+			ReleaseConnection();
+			return FALSE;
+		}
+	}
+	
+	ReleaseConnection();
+
+	return TRUE;
+
+}
+
+VOID ExportYB::DeleteField( RowIndexSelected )
+{
+	GetViewByName( View );
+
+	ID = ~~;
+	if ( !fHTMLView( TableCell,MapTable,0,<RowIndexSelected>,2,GetFromCell,~YearbookFields,0,Value~,FieldName ) )
+	{
+		return;
+	}
+
+	if ( Defined( fFieldsToDelete ) )
+	{
+		if ( !SimilarStr(~<FieldName>~,~New~) )
+		{
+			fFieldsToDelete( AddString,~<FieldName>~);
+		}
+	}
+
+	// Remove the row from the table.
+	fHTMLView( Table,MapTable,0,DeleteRow,<RowIndexSelected> );
+	fHTMLView( Table,MapTable,0,GetRows,numRows );
+
+	fXRefDirty = TRUE;
+	fYBDefDirty = TRUE;
+
+}
+
+NUMERIC ExportYB::LoadInfoFieldList()
+{
+	fHTMLView( Get,~InfoType~,0,Value,InfoType );
+	
+	if ( SimilarStr( ~<InfoType>~,~~ ) )
+	{
+		ClearInfoFieldList();
+		return TRUE;
+	}
+	
+	ReturnOnFailure( Connect() );
+
+	WaitCursor( Begin );
+
+	if ( !SimilarStr( ~<InfoType>~,~<fLastInfoTable>~ ) )
+	{
+		Query = ~Select * From <InfoType>~;
+		
+		if ( !PGenConList( List,Connection,fConnection,Cursor,Forward,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			WaitCursor( END );
+			ReleaseConnection();
+			return ErrorMsg( ~Failed to Query.  <theErr>~ );
+		}
+
+		Index = 0;
+		ClearInfoFieldList();
+
+		fInfoFieldList( AddString,~~);
+		while ( List( FieldInfo,<Index++>,Name,theFieldName ) )
+		{
+			ContinueIf( SimilarStr( ~<theFieldName>~,~OrderID~,~SubjectID~ ) );
+			fInfoFieldList( AddString,~<theFieldName>~);
+		}
+
+		fHtmlView( Execute,~ResetList(FileNameField)~ );
+		fHtmlView( Execute,~ResetList(SIPoseField)~ );
+		fHtmlView( CreateOptionsFromStringList,FileNameField,0,fInfoFieldList );
+		fHtmlView( CreateOptionsFromStringList,SIPoseField,0,fInfoFieldList );
+	}
+
+	rowIndex = 0;
+	fHTMLView( Table,MapTable,0,GetRows,numRows );
+
+	more = fInfoFieldList( GetFirstString,theFieldName );
+	while ( <more>  )
+	{
+		rowIndex = 0;
+		while ( <rowIndex> < <numRows> )
+		{
+			// add <theFieldName> to options list for InfoField table cell
+			fHTMLView( Execute,~AddToCellOptionList( MapTable,<rowIndex>,3,'<theFieldName>','<theFieldName>' )~ );
+			<++rowIndex>;
+		}
+		more = fInfoFieldList( GetNextString,theFieldName );
+	}
+	
+	fLastInfoTable = ~<InfoType>~;
+	
+	ReleaseConnection();
+
+	return WaitCursor( END );
+}
+
+NUMERIC ExportYB::ClearInfoFieldList()
+{
+	Index = 0;
+	fInfoFieldList( DeleteAll );
+	numRows= 0;
+	rowIndex = 0;
+	fHTMLView( Table,MapTable,0,GetRows,numRows );
+
+	while ( <rowIndex> < <numRows> )
+	{
+		// add <theFieldName> to options list for InfoField table cell
+		fHTMLView( Execute,~ResetCellOptionList( MapTable,<rowIndex>,3 )~ );
+		<++rowIndex>;
+	}
+
+	return TRUE;
+
+}
+
+
+NUMERIC ExportYB::LoadInfoMapFields()
+{
+	fHTMLView( Get,~YearbookIDMap~,0,value,YearbookID );
+	InfoType = ~~;
+	fHTMLView( Get,InfoType,0,value,InfoType );
+	if ( SimilarStr( ~<InfoType>~,~~ ) )
+	{
+		return ClearInfoFields();
+	}
+
+	st_size = strlen( ~<InfoType>~ ) - strlen( ~SubjectInfo~ );
+	InfoType = String( Right,~<InfoType>~, <st_size> );
+	
+	ReturnOnFailure( Connect() );
+
+	query = ~Select YearbookFields.*,YBSIFieldMap.SIFieldName from YearbookFields LEFT Outer Join YBSIFieldMap On (YearbookFields.FieldName = YBSIFieldMap.FieldName AND YearbookFields.YearbookID = YBSIFieldMap.YearbookID) Where YearbookFields.YearbookID='<YearbookID>' AND YBSIFieldMap.InfoType='<InfoType>' Order By YearbookFields.Sequence~;
+
+	if ( !PGenConList( mapList,Connection,fConnection,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		Log( Session, ~ExportYB::LoadInfoMapFields: Query failed: <Query>, <theErr>~ );
+		ErrorMsg( TR(ExportToYearbook, UnableToQueryDB) );
+		ReleaseConnection();
+		return ClearInfoFields();
+	}
+
+	numEntries = mapList( ChildCount );
+	if ( <numEntries> == 0 )
+	{
+		ReleaseConnection();
+		return ClearInfoFields();
+	}
+
+	rowIndex  = 3;
+
+	FieldCell = 2;
+	InfoCell  = 3;
+
+	while ( fHTMLView( TableCell,MapTable,0,<rowIndex>,<FieldCell>,GetFromCell,~YearbookFields,0,value~,tableField ) )
+	{
+		while ( mapList( GetNext, Entry ) )
+		{
+			Sequence = Numeric(~<$pcon.Entry[Sequence]>~);
+			FieldName = ~<$pcon.Entry[FieldName]>~;
+			SIFieldName = ~<$pcon.Entry[SIFieldName]>~;
+			Reserved = Numeric(~<$pcon.Entry[Reserved]>~);
+
+			if ( <Sequence> < 0 )
+			{
+				if ( SimilarStr( ~<FieldName>~,~ExportWithBlanks~ ) )
+				{
+					fHTMLView( Execute,~SetRadioButton( '<FieldName>','<SIFieldName>' )~ );
+				}
+				if ( SimilarStr( ~<FieldName>~,~FileNameField~ ) )
+				{
+					fHTMLView( Set,~<FieldName>~,0,value,~<SIFieldName>~ );
+				}
+				else if ( SimilarStr( ~<FieldName>~,~NamingType~ ) )
+				{
+					fHTMLView( Execute,~SetRadioButton( '<FieldName>','<SIFieldName>' )~ );
+					fHTMLView( Execute,~onSetNamingType()~ );
+				}
+				else if ( SimilarStr( ~<FieldName>~,~PoseSource~ ) )
+				{
+					fHTMLView( Execute,~SetRadioButton( '<FieldName>','<SIFieldName>' )~ );
+				}
+				else if ( SimilarStr( ~<FieldName>~,~PoseField~ ) )
+				{
+					fHTMLView( Set,~<FieldName>~,0,value,~<SIFieldName>~ );
+				}
+				else if ( SimilarStr( ~<FieldName>~,~PoseValue~ ) )
+				{
+					fHTMLView( Set,~<FieldName>~,0,value,~<SIFieldName>~ );
+				}
+				else if ( SimilarStr( ~<FieldName>~,~SIPoseField~ ) )
+				{
+					fHTMLView( Set,~<FieldName>~,0,value,~<SIFieldName>~ );
+				}
+				else if ( SimilarStr( ~<FieldName>~,~SIPoseValue~ ) )
+				{
+					fHTMLView( Set,~<FieldName>~,0,value,~<SIFieldName>~ );
+				}
+				continue;
+			}
+			else if ( ~<tableField>~ == ~<FieldName>~ )
+			{
+				fHTMLView( TableCell,MapTable,0,<rowIndex>,<InfoCell>,SetInCell,~InfoFields,0,value~,~<SIFieldName>~ );
+				break;
+			}
+		}
+		<++rowIndex>;
+		mapList( SetPosition, ~BeforeFirst~ );
+	}
+	
+	ReleaseConnection();
+
+	fXRefDirty = FALSE;
+
+	return TRUE;
+}
+
+
+NUMERIC ExportYB::ClearInfoFields()
+{
+	rowIndex = 0;
+	InfoCell = 3;
+
+	while ( fHTMLView( TableCell,MapTable,0,<rowIndex++>,<InfoCell>,SetInCell,~InfoFields,0,value~,~~ ) )
+	{
+	}
+
+	return TRUE;
+}
+
+
+//+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+///////////////////
+// Setups tab
+NUMERIC ExportYB::RefreshTheSetupsList()
+{
+	UsersLastSetup = GetUsersSetup();
+	return RefreshSetupsList(~<UsersLastSetup>~);
+}
+
+
+STR	ExportYB::GetUsersSetup() 
+{
+	if ( GetUserSettings(~<$Job.Title>~,Setup,Setupname,Enabled) )
+	{
+		if ( <enabled> )
+		{
+			return ~<SetupName>~;
+		}
+	}
+	
+	return ~~;
+}
+
+NUMERIC	ExportYB::Failure( msg )
+{
+	Invoke( ErrorMsg,~<msg>~ );
+	return FALSE;
+}
+
+
+NUMERIC ExportYB::OpenSetupGrid()
+{
+	Actions = ACTION DOC ( ExportYBSetupsDoc OpenOnce ExportYBSetupsDoc "Init();" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC ExportYB::OnLoadSetupButton()
+{
+	fHTMLView( Get,SetupList,0,value,SetupName );
+
+	ReturnOnFailure( !IsNull(~<SetupName>~) );
+	
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select * From ExportYBSetups Where Setup = '<SetupName>'~;
+	
+	if ( !PGenConList( List,Connection,fConnection,GetRecordFor,~<Query>~,Rec ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the Export to Yearbook Setups from the database.  <theErr>~ );
+	}
+	
+	if ( !fHTMLView( UpdateFrom,Rec ) )
+	{
+		ReleaseConnection();
+		return Failure( ~Failed to update the ExportToYearbook view.~ );
+	}
+	
+	Rec( Get,InfoType,InfoType );
+	RefreshInfoTypes( ~InfoType~,~<InfoType>~ );
+	
+	option = ~<$pcon.Rec[ChromaKeyBGIDOption].numeric>~;
+	
+	fHTMLView( SetStyle,ColorSwatch,0,~backgroundColor~,~rgb(<$pcon.Rec[BGRed].numeric>,<$pcon.Rec[BGGreen].numeric>,<$pcon.Rec[BGBlue].numeric>)~ );
+	
+	fHTMLView( Click,ChromaKeyBGIDOption,~<option>~ );
+
+	//OnProductType();
+	
+	fHTMLView( SetInnerText,CurrentSetup,0,~<SetupName>~ );
+
+	SetUserSettings(~<$Job.Title>~, ~Setup~, ~<SetupName>~, TRUE);
+	
+	fHtmlView( Execute,~EnableMgmtButtons()~ );
+
+	fHTMLView( Get,~YearbookIDInst~,0,value, YbID );
+	OnLoadYBDefButton( ~<ybID>~ );
+	
+	ReleaseConnection();
+	
+	return StatusBar( ~Loaded setup <SetupName>~ );
+}
+
+
+NUMERIC ExportYB::OnDeleteButton()
+{
+	fHTMLView( Get,SetupList,0,value,SetupName );
+
+	ReturnOnFailure( !IsNull(~<SetupName>~) );
+	
+	ReturnOnFailure( MessageBox(~Are you sure you want to delete setup <SetupName>?~,YESNO ) == ~YES~ );
+	
+	ReturnOnFailure( Connect() );
+
+	cmd = ~Delete From ExportYBSetups Where Setup = '<SetupName>'~;
+	
+	if ( !fConnection( Cmd,~<cmd>~ ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to delete Export To Yearbook Setup <SetupName>.  <theErr>~ );
+	}
+	
+	RefreshSetupsList();
+	
+	ReleaseConnection();
+	
+	StatusBar(~Setup <SetupName> was deleted~);
+	
+	return TRUE;
+}
+
+
+NUMERIC ExportYB::OnSaveButton(SetupName)
+{
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select * From ExportYBSetups Where Setup = '<SetupName>'~;
+	
+	if ( !PGenConList( List,Connection,fConnection,GetRecordFor,~<Query>~,Rec ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the Export to Yearbook Setups from the database.  <theErr>~ );
+	}
+	
+	fHTMLView( Get,AutoCropSrcX,0,value,AutoCropSrcX );
+	fHTMLView( Get,AutoCropSrcY,0,value,AutoCropSrcY );
+	fHTMLView( Get,AutoCropDstX,0,value,AutoCropDstX );
+	fHTMLView( Get,AutoCropDstY,0,value,AutoCropDstY );
+	fHTMLView( Get,AutoCropWidth,0,value,AutoCropWidth );
+	fHTMLView( Get,AutoCropLength,0,value,AutoCropLength );
+
+	if ( Numeric( <AutoCropSrcX> ) <= 0 || Numeric( <AutoCropSrcX> ) >= 100 )
+	{
+		fHTMLView( Set,AutoCropSrcX,0,value,50 );
+	}
+	if ( Numeric( <AutoCropSrcY> ) <= 0 || Numeric( <AutoCropSrcY> ) >= 100 )
+	{
+		fHTMLView( Set,AutoCropSrcY,0,value,50 );
+	}
+	if ( Numeric( <AutoCropDstX> ) <= 0 || Numeric( <AutoCropDstX> ) >= 100 )
+	{
+		fHTMLView( Set,AutoCropDstX,0,value,50 );
+	}
+	if ( Numeric( <AutoCropDstY> ) <= 0 || Numeric( <AutoCropDstY> ) >= 100 )
+	{
+		fHTMLView( Set,AutoCropDstY,0,value,50 );
+	}
+	if ( Numeric( <AutoCropWidth>) <= 0 || Numeric( <AutoCropWidth>) > 100 )
+	{
+		fHTMLView( Set,AutoCropWidth,0,value,100 );
+	}
+	if ( Numeric( <AutoCropLength>) <= 0 || Numeric( <AutoCropLength>) > 100 )
+	{
+		fHTMLView( Set,AutoCropLength,0,value,100 );
+	}
+
+	Rec( Set,Setup,~<SetupName>~ );
+	
+	if ( !fHTMLView( Update,Rec ) )
+	{
+		ReleaseConnection();
+		return Failure( ~failed to set the fields in the record~ );
+	}
+	
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the Export to Yearbook Setups from the database.  <theErr>~ );
+	}
+	
+	ReleaseConnection();
+	
+	return StatusBar(~Setup <SetupName> was saved~);
+}
+
+
+NUMERIC ExportYB::OnSaveAsButton(SetupName)
+{
+	ReturnOnFailure( Connect() );
+
+	Query = ~Select * From ExportYBSetups Where Setup = '<SetupName>'~;
+	
+	Count = fConnection( RecordCountFor,~Select * From ExportYBSetups Where Setup = '<SetupName>'~ );
+	
+	if ( <Count> > 0 )
+	{
+		ReleaseConnection();
+		return ErrorMsg( ~Sorry there is already a setup named <SetupName>.  Press 'Save' to update it or choose another name.~ );
+	}
+	
+	if ( !PGenConList( List,Connection,fConnection,GetRecordFor,~<Query>~,Rec ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the Export to Yearbook Setups from the database.  <theErr>~ );
+	}
+	
+	fHTMLView( Get,AutoCropSrcX,0,value,AutoCropSrcX );
+	fHTMLView( Get,AutoCropSrcY,0,value,AutoCropSrcY );
+	fHTMLView( Get,AutoCropDstX,0,value,AutoCropDstX );
+	fHTMLView( Get,AutoCropDstY,0,value,AutoCropDstY );
+	fHTMLView( Get,AutoCropWidth,0,value,AutoCropWidth );
+	fHTMLView( Get,AutoCropLength,0,value,AutoCropLength );
+
+	Rec( Set,Setup,~<SetupName>~ );
+	
+	if ( Numeric( <AutoCropSrcX> ) <= 0 || Numeric( <AutoCropSrcX> ) >= 100 )
+	{
+		fHTMLView( Set,AutoCropSrcX,0,value,50 );
+	}
+	if ( Numeric( <AutoCropSrcY> ) <= 0 || Numeric( <AutoCropSrcY> ) >= 100 )
+	{
+		fHTMLView( Set,AutoCropSrcY,0,value,50 );
+	}
+	if ( Numeric( <AutoCropDstX> ) <= 0 || Numeric( <AutoCropDstX> ) >= 100 )
+	{
+		fHTMLView( Set,AutoCropDstX,0,value,50 );
+	}
+	if ( Numeric( <AutoCropDstY> ) <= 0 || Numeric( <AutoCropDstY> ) >= 100 )
+	{
+		fHTMLView( Set,AutoCropDstY,0,value,50 );
+	}
+	if ( Numeric( <AutoCropWidth>) <= 0 || Numeric( <AutoCropWidth>) > 100 )
+	{
+		fHTMLView( Set,AutoCropWidth,0,value,100 );
+	}
+	if ( Numeric( <AutoCropLength>) <= 0 || Numeric( <AutoCropLength>) > 100 )
+	{
+		fHTMLView( Set,AutoCropLength,0,value,100 );
+	}
+
+	if ( !fHTMLView( Update,Rec ) )
+	{
+		ReleaseConnection();
+		return Failure( ~failed to set the fields in the record~ );
+	}
+	
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the Export to Yearbook Setups from the database.  <theErr>~ );
+	}
+	
+	ReleaseConnection();
+
+	StatusBar(~Setup <SetupName> was saved~);
+	
+	return RefreshSetupsList(~<SetupName>~);
+}
+
+
+NUMERIC ExportYB::RefreshSetupsList(SetupName)
+{	
+	fHtmlView( SetSelectOptionsLength,SetupList, 0, 0 );
+	
+	ReturnOnFailure( Connect() );
+	
+	if ( !PGenConList( List,Connection,fConnection,Query,~Select * From ExportYBSetups Order By Setup~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the Export to Yearbook Setups from the database.  <theErr>~ );
+	}
+	
+	fHtmlView( CreateOptionsFromGenConList,SetupList,0,List,Setup );
+	
+	if ( DefinedAndNotNULL(SetupName) )
+	{
+		fHtmlView( Set,SetupList, 0,value,~<SetupName>~ );
+	}
+	
+	OnLoadSetupButton();
+	
+	ReleaseConnection();
+		
+	return TRUE;
+}
+
+
+////////////////////////////
+// RImage tab
+NUMERIC ExportYB::RefreshRImageWriters()
+{	
+	fHtmlView( SetSelectOptionsLength,RImageWriter, 0, 0 );
+	
+	ReturnOnFailure( Connect() );
+	
+	if ( !PGenConList( List,Connection,fConnection,Query,~Select * From RImage Order By ID~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the RImageWriters from the database.  <theErr>~ );
+	}
+	
+	fHtmlView( CreateOptionsFromGenConList,RImageWriter,0,List,ID );
+	
+	ReleaseConnection();
+	
+	return TRUE;
+}
+
+
+NUMERIC ExportYB::OpenRImageWritersWindow()
+{
+	Actions = ACTION Doc ( ~RImageDoc~ OpenOnce RImageDoc "Init();" );
+	return PerformActions( Actions );
+}
+
+NUMERIC ExportYB::RefreshRImageTemplates()
+{	
+	fHtmlView( SetSelectOptionsLength,RImageTemplate, 0, 0 );
+	
+	ReturnOnFailure( Connect() );
+	
+	if ( !PGenConList( List,Connection,fConnection,Query,~Select * From RImageTemplates Order By ID~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the RImageTemplates from the database.  <theErr>~ );
+	}
+	
+	fHtmlView( CreateOptionsFromGenConList,RImageTemplate,0,List,ID );
+	
+	ReleaseConnection();
+	
+	return TRUE;
+}
+
+
+NUMERIC ExportYB::OpenRImageTemplatesWindow()
+{
+	Query = ~Select * From RImageTemplates Order By ID~;
+	Actions = ACTION Doc ( ~RImageTemplatesDoc~ OpenOnce RImageTemplatesDoc "Init( ~All~,~<Query>~ );" );
+	return PerformActions( Actions );
+}
+
+
+////////////////////////
+// Output tab
+NUMERIC ExportYB::RefreshQueueName()
+{	
+	fHtmlView( SetSelectOptionsLength,QueueName, 0, 0 );
+	
+	ReturnOnFailure( Connect() );
+	
+	if ( !PGenConList( QueueList,Connection,fConnection,Query,~Select QueueName From QueueDefinition Where PrinterModel = 'Disk' Order By QueueName~ ) )
+	{
+		QueueList( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return ErrorMsg( ~Query failed. <Query>.  <theErr>~ );
+	}
+	
+	fHtmlView( CreateOptionsFromGenConList,QueueName,0,QueueList,QueueName );
+	
+	ReleaseConnection();
+	
+	return TRUE;
+}
+
+
+NUMERIC ExportYB::SetOrdersList( ordersList )
+{
+	numTokens = GetTokens(~<OrdersList>~,~,~);
+	i = 1;
+
+	StringList( tempList, New );
+	while ( <i> <= <numTokens> )
+	{
+		tempList( AddString,~<Token<i++>>~);
+	}
+
+	StringList( fOrdersList,CopyOf,tempList );
+	return TRUE;
+}
+//////////////////////
+// Export tab
+NUMERIC	ExportYB::LoadOrdersFromWindow()
+{
+	fHtmlView( Execute,~ResetList(OrdersList)~ );
+	fHtmlView( CreateOptionsFromStringList,OrdersList,0,fOrdersList );
+	fHTMLView( Execute,~ShowTab(ExportTab);~ );
+	return fHTMLView( Execute,~OnOrdersList();~ );
+
+}
+
+
+
+NUMERIC ExportYB::ProcessOrdersDrop( &Item )	
+{ 	
+	OrderID = ~<$con.Item[OrderID]>~;
+		
+	len = fHTMLView( GetSelectOptionsLength,OrdersList,0 );
+	fHtmlView( SetSelectOptionsLength, OrdersList, 0,<len>+1 );
+	return fHtmlView( SetSelectOptionFromSymbol,OrdersList,0,<len>,OrderID,OrderID );
+}
+
+
+NUMERIC ExportYB::AfterDrag()
+{
+	return fHTMLView( Execute,~ShowTab(ExportTab); OnOrdersList();~ );
+}
+
+NUMERIC ExportYB::OnFindShootButton()
+{
+	fHTMLView( SetStyle,OrderSelectorDiv,0,Display,None );
+	
+	fHTMLView( Get,ShootID,0,value,ShootID );
+	
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select ID From ShootDescription Where ID Like '<ShootID>%' Order By ID~;
+	
+	if ( !PGenConList( List,Connection,fConnection,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the Shoot Descriptions Data.  <Query>.  <theErr>~ );
+	}
+	
+	if ( List( NumEntries) == 0 )
+	{
+		ReleaseConnection();
+		return PopupMsg(~There are no Shoots that begin with <ShootID>~);
+	}
+	
+	Count = List( NumEntries);
+	
+	count = (<count> == 1) ? 2 : <count>;
+	
+	fHTMLView( Set,ShootSelector,0,Size,Min(<count>,6) );
+	fHtmlView( SetSelectOptionsLength,ShootSelector,0,0 );
+	fHTMLView( SetStyle,ShootSelectorDiv,0,Display,Block );
+	fHTMLView( Execute,~ShootSelector.focus()~ );
+	fHtmlView( CreateOptionsFromGenConList,ShootSelector,0,List,ID );
+	
+	ReleaseConnection();
+	
+	return fHTMLView( SetSelectedOptionByIndex,ShootSelector,0,0 );	
+}
+
+
+
+NUMERIC	ExportYB::OnListShootOrders( ele,partialShootID )
+{
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select ID From Orders Where ShootDescID Like '<partialShootID>%' Order By ID ~;
+	
+	if ( !PGenConList( List,Connection,fConnection,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return Failure( ~Failed to read the Order Data.  <Query>.  <theErr>~ );
+	}
+	
+	Count = List( NumEntries);
+	
+	if ( <Count> == 0 )
+	{
+		ReleaseConnection();
+		return PopupMsg(~There are no orders for Shoot ID containing <partialShootID>~);
+	}
+
+	// Clear the OrdersTextBox before populating again
+	fHtmlView( Execute,~ResetList( GetElement('<ele>') )~ );
+
+	fHtmlView( CreateOptionsFromGenConList,~<ele>~,0,List,ID );
+	
+	ReleaseConnection();
+
+	return TRUE;
+}
+
+
+NUMERIC	ExportYB::RefreshYbIds(ele,YbId)
+{
+	fHtmlView( SetSelectOptionsLength,~<ele>~, 0, 0 );
+	
+	ReturnOnFailure( Connect() );
+	
+	if ( !PGenConList( YbList,Connection,fConnection,Query,~Select YearbookID From YearbookDefs Order By YearbookID~ ) )
+	{
+		YbList( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return ErrorMsg( ~Query failed. <Query>.  <theErr>~ );
+	}
+	
+	fHtmlView( CreateOptionsFromGenConList,~<ele>~,0,YbList,YearbookID );
+
+	if ( DefinedAndNotNULL(YbId) )
+	{
+		fHtmlView( Set,~<ele>~, 0,value,~<YbId>~ );
+		LoadInfoMapFields();
+	}
+	
+	ReleaseConnection();
+	
+	return TRUE;
+}
+
+NUMERIC ExportYB::RefreshInfoTypes(ele, SIType)
+{
+	fHtmlView( SetSelectOptionsLength,~<ele>~, 0, 0 );
+	
+	ReturnOnFailure( Connect() );
+	
+	if ( !PGenConList( SchemaList,Connection,fConnection,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return ErrorMsg( ~Schema query failed  <theErr>~ );
+	}
+
+	SchemaList( Filter,~Table_Name Like 'SubjectInfo%'~ );
+	SchemaList( Sort,~Table_Name~ );
+
+	while ( SchemaList( GetNext,Table ) )
+	{
+		TableName = ~<$pcon.Table[TABLE_NAME]>~;
+		substr( ~<TableName>~,strlen(~SubjectInfo~),99,theType);
+
+		ContinueIf( SimilarStr(~<TheType>~,~Columns~) );
+		theType = IsNull( ~<theType>~ ) ? ~Std Subject Info~ : ~<theType>~;
+
+		len = fHTMLView( GetSelectOptionsLength,~<ele>~,0 );
+		fHtmlView( SetSelectOptionsLength,~<ele>~,0,<len>+1 );
+		fHtmlView( SetSelectOptionFromSymbol,~<ele>~,0,<len>,TableName,theType );
+	}
+	
+	if ( DefinedAndNotNULL(SIType) )
+	{
+		fHtmlView( Set,~<ele>~, 0,value,~<SIType>~ );
+	}
+	
+	ReleaseConnection();
+	
+	return TRUE;
+}
+
+NUMERIC ExportYB::ShowImagesFields()
+{	
+	fHtmlView( SetSelectOptionsLength,PoseField,0,0 );
+
+	Query = ~Select * From Images~;
+	
+	ReturnOnFailure( Connect() );
+	
+	if ( !PGenConList( List,Connection,fConnection,Cursor,Forward,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return ErrorMsg( ~Query Failed. <Query>.  <theErr>~ );
+	}
+
+	Index = 0;
+	while ( List( FieldInfo,<Index++>,Name,theFieldName ) )
+	{
+		ContinueIf( SimilarStr( ~<theFieldName>~,~OrderID~,~Roll~,~Frame~,~SubjectID~ ) );
+		len = fHTMLView( GetSelectOptionsLength,PoseField,0 );
+		fHtmlView( SetSelectOptionsLength,PoseField,0,<len>+1 );
+		fHtmlView( SetSelectOptionFromSymbol,PoseField,0,<len>,theFieldName,theFieldName );
+	}
+	
+	fHtmlView( SetStyle,PoseField,0,display,inline );
+	
+	ReleaseConnection();
+	
+	return TRUE;
+}	
+
+
+VOID	ExportYB::PopulateChromaControls()
+{
+	PopulateDP2Backgrounds();
+	
+	PopulateProductTypes();
+}
+
+
+NUMERIC ExportYB::PopulateDP2Backgrounds()
+{	
+	theSelectedValue = ~~;
+	
+	Count = fHTMLView( GetSelectOptionsLength,DP2BGId,0 );
+	
+	if ( <Count> > 0 )
+	{
+		if ( fHtmlView( GetSelectedOptionIndex,~DP2BGId~,0,optionIndex ) >= 0 )
+		{
+			fHTMLView( GetSelectOption,DP2BGId,0,<optionIndex>,theSelectedValue,theSelectedItem );
+		}
+	}
+
+	fHtmlView( SetSelectOptionsLength,DP2BGId, 0, 0 );
+	
+	Query = ~Select Distinct ID from Backgrounds Order by ID~;
+	
+	ReturnOnFailure( Connect() );
+	
+	if ( !PGenConList( List,Connection,fConnection,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return ErrorMsg( ~Query failed. <Query>.  <theErr>~ );
+	}
+	
+	fHtmlView( CreateOptionsFromGenConList,DP2BGId,0,List,ID );
+	
+	ReleaseConnection();
+	
+	if ( <Count> > 0 )
+	{
+		fHtmlView( SetSelectedOptionByValue,DP2BGId,0,~<theSelectedValue>~ );
+	}
+	
+	return TRUE; 
+}
+
+
+NUMERIC ExportYB::PopulateProductTypes()
+{
+	theSelectedValue = ~~;
+	
+	Count = fHTMLView( GetSelectOptionsLength,ProductType,0 );
+	
+	if ( <Count> > 0 )
+	{
+		if ( fHtmlView( GetSelectedOptionIndex,~ProductType~,0,optionIndex ) >= 0 )
+		{
+			fHTMLView( GetSelectOption,ProductType,0,<optionIndex>,theSelectedValue,theSelectedItem );
+		}
+	}
+	
+	fHtmlView( SetSelectOptionsLength,ProductType, 0, 0 );
+	
+	Query = ~Select BackgroundType From BackgroundTypes Order By BackgroundType~;
+	
+	ReturnOnFailure( Connect() );
+	
+	if ( !PGenConList( List,Connection,fConnection,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return ErrorMsg( ~Query failed. <Query>.  <theErr>~ );
+	}
+	
+	fHtmlView( CreateOptionsFromGenConList,ProductType,0,List,BackgroundType );
+	
+	ReleaseConnection();
+	
+	if ( <Count> > 0 )
+	{
+		fHtmlView( SetSelectedOptionByValue,ProductType,0,~<theSelectedValue>~ );
+	}
+	
+	return TRUE; 
+}
+
+
+NUMERIC ExportYB::OnProductType( value )
+{
+	fHtmlView( SetSelectOptionsLength,CustomerBGId,0,0 );
+	
+	fHtmlView( Get,ProductType,0,value,ProductType );
+	
+	ReturnOnSuccess( IsNull(~<ProductType>~) );
+	
+	ReturnOnFailure( Connect() );
+	
+	ReturnOnFailure( GetInfoForOrders(ThisCustomerID,ThisProgram,ThisInfoType) );
+	
+	WhichCustomer	= ~<ThisCustomerID>~;
+	WhichProgram	= ~<ThisProgram>~;
+	WhichInfoType	= ~<ThisInfoType>~;	
+	
+	WhereClause = ~(CustomerID = '<ThisCustomerID>')~;
+	
+	WhereClause = ~<WhereClause> AND (ProgramID = '<ThisProgram>' OR ProgramID = '*')~;
+		
+	WhereClause = ~<WhereClause> AND (BackgroundType = '<ProductType>')~;
+	
+	Query = ~Select Distinct CustBackgroundID From CustomerBackgrounds Where <WhereClause> Order By CustBackgroundID~;
+	
+	if ( !PGenConList( List,Connection,fConnection,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return ErrorMsg( ~Query failed. <Query>.  <theErr>~ );
+	}
+	
+	fHtmlView( CreateOptionsFromGenConList,CustomerBGId,0,List,CustBackgroundID );
+	
+	ReleaseConnection();
+	
+	return TRUE;
+}
+
+
+NUMERIC ExportYB::GetInfoForOrders(&CustomerID,&ProgramID,&SubjectInfoTable)
+{
+	fHTMLView( Get,OrdersList,0,value,OrderID );
+	
+	if ( IsNull(~<OrderID>~) )
+	{
+		return Warning( ~You must select an  order first~ );
+	}
+
+	Query = ~Select CustomerID,ProgramID,InfoType From Orders Where ID = '<OrderID>'~;
+	
+	ReturnOnFailure( Connect() );
+	
+	if ( !fConnection( GetValuesFor,~<Query>~,CustomerID,ProgramID,Infotype ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		ReleaseConnection();
+		return ErrorMsg( ~Failed to query the Orders table.\n\n<Query>\n\n<theErr>~ ); 
+	}
+	
+	SubjectInfoTable = ~SubjectInfo<InfoType>~;
+	
+	CustomerID	= IsNull(~<CustomerID>~) ? ~*~ : ~<CustomerID>~;
+	ProgramID	= IsNull(~<ProgramID>~) ? ~*~ : ~<ProgramID>~;
+	
+	ReleaseConnection();
+	
+	return TRUE;
+}
+
+
+STR ExportYB::GetTheBGID( CustomerBGId,ProductType )
+{	
+	if ( GetInfoForOrders(ThisCustomerID,ThisProgram,ThisInfoType) )
+	{
+		WhichCustomer	= ~<ThisCustomerID>~;
+		WhichProgram	= ~<ThisProgram>~;
+		WhichInfoType	= ~<ThisInfoType>~;	
+
+		BGId = BackgroundIDFor( WhichCustomer,WhichProgram,ProductType,WhichInfoType,CustomerBGId,Rules );
+	}
+	else	// NO IMAGES SO THEREFORE NO CUSTOMER
+	{
+		BGId = BackgroundIDFor( ~*~,~*~,ProductType,~*~,ID,Rules );
+	}
+	
+	return ~<BGId>~;
+}
+
+
+NUMERIC ExportYB::OnCustomerBackgrounds()
+{	
+	fHtmlView( Get,ProductType,0,value,ProductType );
+	fHtmlView( Get,CustomerBGId,0,value,CustomerBGId );
+	fHtmlView( GetRadioValue,OrientationOption,Orientation );
+		
+	ReturnOnSuccess( IsNull(~<ProductType>~) || IsNull(~<CustomerBGId>~) );
+	
+	BGId = GetTheBGID( ~<CustomerBGId>~,~<ProductType>~ );
+	
+	if ( IsNull(~<BGId>~) )
+	{
+		return Warning(~There was no DP2 BGID for <ProductType> / <CustomerBGId>~ );
+	}
+	
+	return ShowDP2BGId(~<BGId>~,~<$str.$Orientation.numeric>~);
+}
+
+
+NUMERIC ExportYB::OnDP2BGId()
+{
+	fHtmlView( Get,DP2BGId,0,value,DP2BGId );
+	fHtmlView( GetRadioValue,OrientationOption,Orientation );
+	
+	ReturnOnSuccess( IsNull(~<DP2BGId>~) );
+	
+	return ShowDP2BGId(~<DP2BGId>~,Numeric(~<Orientation>~));
+}
+
+
+NUMERIC ExportYB::ShowDP2BGId(DP2BGId,Orientation)
+{
+	ReturnOnFailure( Connect() );
+	
+	Orientation = Numeric(~<Orientation>~) ? 90 : 0;
+	
+	Query = ~Select Path From Backgrounds Where ID='<DP2BGId>' And Orientation=<Orientation>~;
+		
+	if ( !fConnection( GetValuesFor,~<Query>~,Path ) )
+	{
+		fConnection( GetErrorDescription,theErr );
+		ReleaseConnection();
+		return ErrorMsg( ~Query failed. <Query>.  <theErr>~ );
+	}
+	
+	fHtmlView( Set,ChromaBackgroundImage,0,src,~<Path>~ );
+	
+	fHtmlView( SetInnerText,BGID,0,~<DP2BGId>~ );
+	
+	fHtmlView( SetStyle,ChromaKeyBackgroundsDiv,0,display,block );
+	
+	ReleaseConnection();
+	
+	return TRUE;
+}
+
+
+NUMERIC	ExportYB::SelectBGColor()
+{
+	fHtmlView( Get,BGRed,0,value,Red );
+	fHtmlView( Get,BGGreen,0,value,Green );
+	fHtmlView( Get,BGBlue,0,value,Blue );
+	
+	Red = Numeric(~<Red>~);  Green = Numeric(~<Green>~);  Blue = Numeric(~<Blue>~);
+
+	ReturnOnFailure( ColorDialog( <Red>,<Green>,<Blue>,red,green,blue ) );
+	
+	fHtmlView( Set,BGRed,0,value,<red> );
+	fHtmlView( Set,BGGreen,0,value,<green> );
+	fHtmlView( Set,BGBlue,0,value,<blue> );
+	
+	return fHtmlView( SetStyle,ColorSwatch,0,~backgroundColor~,~rgb(<red>,<green>,<blue>)~ );
+}
+
+
+NUMERIC ExportYB::RefreshProfiles()
+{
+	fHtmlView( SetSelectOptionsLength,Profile, 0, 0 );
+	
+	ReturnOnFailure( Connect() );
+	
+	Query = ~Select Device,Name From Profiles Where (Type = 'WorkingSpace') Order By Device,Name~;
+	
+	if ( !PGenConList( ProfileList,Connection,fConnection,Query,~<Query>~ ) )
+	{
+		ProfileList( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return ErrorMsg( ~Query failed. <Query>.  <theErr>~ );
+	}
+	
+	fHtmlView( CreateOptionsFromGenConList,Profile,0,ProfileList,Name );
+	
+	fHtmlView( Set,Profile, 0,value,~srgb~ );
+	
+	ReleaseConnection();
+	
+	return TRUE;
+}
+
+
+VOID	ExportYB::EnableExportButtons( v )
+{
+	fHTMLView( Set,ExportAllButton,0,disabled,<v> ? ~~ : ~disabled~ );
+	fHTMLView( Set,CancelExportButton,0,disabled,<v> ? ~~ : ~disabled~ );
+	fHTMLView( Set,PreviewButton,0,disabled,<v> ? ~~ : ~disabled~ );
+}
+
+
+NUMERIC	ExportYB::OnPreviewJob()		// Called from the Adjust Crop button
+{
+	Count = fHTMLView( GetSelectOptionsLength,OrdersList,0 );
+	
+	ReturnOnFailure( <Count> );
+
+	WaitCursor( Begin );
+
+	index = -1;
+	Query = ~~;
+	Path  = ~~;
+	
+	while ( <++index> < <Count> )
+	{
+		fHTMLView( GetSelectOption,OrdersList,0,<index>,value,item,IsSelected );
+		
+		if ( !<IsSelected> )
+			continue;
+
+		Query = ~Set rowcount 1 Select Path from Images Where OrderID='<item>' and Path Is Not Null Order By OrderID, Roll, Frame~;
+	}
+
+	if ( SimilarStr(~<Query>~,~~ ) )
+	{
+		fHTMLView( GetSelectOption,OrdersList,0,0,value,item,IsSelected );
+		Query = ~Set rowcount 1 Select Path from Images Where OrderID='<item>' and Path Is Not Null Order By OrderID, Roll, Frame~;
+	}
+	
+	ReturnOnFailure( Connect() );
+
+	fConnection( GetValuesFor,~<Query>~,Path );
+
+	if ( SimilarStr( ~<Path>~,~~ ) )
+	{
+		ReleaseConnection();
+		ErrorMsg( ~None of the images in order <item> has a path.~ ); 
+		return FALSE;
+	}
+
+	fPreviewOrderID = ~<item>~;
+	Private( fPreviewOrderID );
+
+	fHTMLView( Get,Resolution,0,value,Resolution );
+	fHTMLView( Get,ImageWidth,0,value,ImageWidth );
+	fHTMLView( Get,ImageLength,0,value,ImageLength );
+	fHTMLView( Get,QueueName,0,value,QueueName );
+	fHTMLView( Get,CompressionQuality,0,value,CompressionQuality );
+	fHTMLView( Get,Profile,0,value,Profile );
+
+	fHTMLView( Get,AutoCropSrcX,0,value,AutoCropSrcX );
+	fHTMLView( Get,AutoCropSrcY,0,value,AutoCropSrcY );
+	fHTMLView( Get,AutoCropDstX,0,value,AutoCropDstX );
+	fHTMLView( Get,AutoCropDstY,0,value,AutoCropDstY );
+	fHTMLView( Get,AutoCropWidth,0,value,AutoCropWidth );
+	fHTMLView( Get,AutoCropLength,0,value,AutoCropLength );
+
+	if ( Numeric( <AutoCropSrcX> ) <= 0 || Numeric( <AutoCropSrcX> ) >= 100 )
+	{
+		AutoCropSrcX = 50;
+	}
+	if ( Numeric( <AutoCropSrcY> ) <= 0 || Numeric( <AutoCropSrcY> ) >= 100 )
+	{
+		AutoCropSrcY = 50;
+	}
+	if ( Numeric( <AutoCropDstX> ) <= 0 || Numeric( <AutoCropDstX> ) >= 100 )
+	{
+		AutoCropDstX = 50;
+	}
+	if ( Numeric( <AutoCropDstY> ) <= 0 || Numeric( <AutoCropDstY> ) >= 100 )
+	{
+		AutoCropDstY = 50;
+	}
+	if ( Numeric( <AutoCropWidth>) <= 0 || Numeric( <AutoCropWidth>) > 100 )
+	{
+		AutoCropWidth = 100;
+	}
+	if ( Numeric( <AutoCropLength>) <= 0 || Numeric( <AutoCropLength>) > 100 )
+	{
+		AutoCropLength = 100;
+	}
+
+	ForgetPrivate( exporter );
+	YBGen( New,exporter );
+	Private( exporter );
+	exporter.SetDbConnection( fConnection );	// THIS DOES NOT HAPPEN ON A THREAD SO IT IS OKAY TO USE THIS CONNECTION
+
+	exporter.AutoCropSrcX( <AutoCropSrcX> );
+	exporter.AutoCropSrcY( <AutoCropSrcY> );
+	exporter.AutoCropDstX( <AutoCropDstX> );
+	exporter.AutoCropDstY( <AutoCropDstY> );
+	exporter.AutoCropWidth( <AutoCropWidth> );
+	exporter.AutoCropLength( <AutoCropLength> );
+
+	exporter.Resolution( <Resolution> );
+	exporter.ImageWidth( <ImageWidth> );
+	exporter.ImageLength( <ImageLength> );
+	exporter.QueueName( ~<QueueName>~ );
+	exporter.CompressionQuality( <CompressionQuality> );
+	exporter.Profile( ~<Profile>~ );
+	exporter.SchoolName( ~TempPreview~ );
+		
+	// ***** Handle Chroma Key Options ******************************
+	
+	fHTMLView( GetRadioValue,ChromaKeyBGIDOption,ChromaKeyBGIDOption );
+	fHTMLView( Get,ProductType,0,value,ProductType );
+	fHTMLView( Get,DP2BGId,0,value,DP2BGId );
+	
+	fHtmlView( Get,BGRed,0,value,Red );
+	fHtmlView( Get,BGGreen,0,value,Green );
+	fHtmlView( Get,BGBlue,0,value,Blue );
+
+	
+	if ( <ChromaKeyBGIDOption> == 3 )			// EXPORT USING A CUSTOMER BACKGROUND ID TO FIND THE BACKGROUND?
+	{
+		fHTMLView( Get,CustomerBGId,0,value,CustomerBGId );
+		DP2BGId = GetTheBGID( ~<CustomerBGId>~,~<ProductType>~ );
+	}
+	
+	exporter.ChromaKeyBGIDOption( ~<ChromaKeyBGIDOption>~ );
+	exporter.ProductType( ~<ProductType>~ );
+	exporter.DP2BGId( ~<DP2BGId>~ );
+	
+	exporter.Red( ~<Red>~ );
+	exporter.Green( ~<Green>~ );
+	exporter.Blue( ~<Blue>~ );
+
+	
+	//***************************************************************
+
+	JobID = 0;
+
+	OutFilePath = ~<$App.ShareDirectory>\SchoolYBJobs\TempPreview\Preview~;
+	Directory( Create,~<OutFilePath>~ );
+	OutFilePath = ~<$App.ShareDirectory>\SchoolYBJobs\TempPreview\Preview\PSPA_PreviewJob.jpg~;
+
+	if ( IsNull( ~<JobPath>~ ) )
+	{
+		ErrorMsg( ~Could not create a unique job path~ );
+		ReleaseConnection();
+		return FALSE;
+	}
+
+
+	if ( !exporter.CreateAJob( ~<fPreviewJobPath>~,~<Path>~,~<OutFilePath>~,FALSE,~~,~~,FALSE,~<fPreviewOrderID>~ ) )
+	{
+		ErrorMsg( ~Could not create a preview job~ );
+		ReleaseConnection();
+		return FALSE;
+	}
+	
+	ReleaseConnection();
+
+	GenCon( Info,New,DDDocumentInfo );
+
+	Info( SetValues,OrderID,~<fPreviewOrderID>~,OrderItemID,~999~ );
+
+	Document( aJob,Open,~<fPreviewJobPath>~,Job,~~,Info );
+
+	return TRUE;
+}
+
+VOID ExportYB::RegisterCallBack()
+{
+	PGenConList( DummyList, Create );
+
+	DummyList( AppendField, OrderID,			Char,25, FldUpdatable );
+	DummyList( AppendField, ID,					Char,25, FldUpdatable );
+	DummyList( AppendField, JobPath,			Char,25, FldUpdatable );
+	DummyList( AppendField, PreviewPath,	Char,25, FldUpdatable );
+
+	DummyList( Open );
+
+	SetDocumentData( DummyList(GetObject) );
+
+}
+
+NUMERIC ExportYB::SetAutoCrop( theAutoCrop )
+{
+	ReturnOnFailure( !IsNull( theAutoCrop ) );
+
+	numTokens = GetTokens(~<theAutoCrop>~,~ ~);
+	if ( <numTokens> < 6 )
+	{
+		ErrorMsg( ~Auto crop is not set correctly.~ );
+	}
+	
+	AutoCropSrcX = String( TrimLeftRight,Numeric( ~<Token1>~ ) );
+	AutoCropSrcY = String( TrimLeftRight,Numeric( ~<Token2>~ ) );
+	AutoCropDstX = String( TrimLeftRight,Numeric( ~<Token3>~ ) );
+	AutoCropDstY = String( TrimLeftRight,Numeric( ~<Token4>~ ) );
+	AutoCropWidth  = String( TrimLeftRight,Numeric( ~<Token5>~ ) );
+	AutoCropLength = String( TrimLeftRight,Numeric( ~<Token6>~ ) );
+
+	if ( Numeric( <AutoCropSrcX> ) <= 0 || Numeric( <AutoCropSrcX> ) >= 100 )
+	{
+		AutoCropSrcX = 50;
+	}
+	if ( Numeric( <AutoCropSrcY> ) <= 0 || Numeric( <AutoCropSrcY> ) >= 100 )
+	{
+		AutoCropSrcY = 50;
+	}
+	if ( Numeric( <AutoCropDstX> ) <= 0 || Numeric( <AutoCropDstX> ) >= 100 )
+	{
+		AutoCropDstX = 50;
+	}
+	if ( Numeric( <AutoCropDstY> ) <= 0 || Numeric( <AutoCropDstY> ) >= 100 )
+	{
+		AutoCropDstY = 50;
+	}
+	if ( Numeric( <AutoCropWidth>) <= 0 || Numeric( <AutoCropWidth>) > 100 )
+	{
+		AutoCropWidth = 100;
+	}
+	if ( Numeric( <AutoCropLength>) <= 0 || Numeric( <AutoCropLength>) > 100 )
+	{
+		AutoCropLength = 100;
+	}
+
+	fHTMLView( Set,AutoCropSrcX,0,value,<AutoCropSrcX> );
+	fHTMLView( Set,AutoCropSrcY,0,value,<AutoCropSrcY> );
+	fHTMLView( Set,AutoCropDstX,0,value,<AutoCropDstX> );
+	fHTMLView( Set,AutoCropDstY,0,value,<AutoCropDstY> );
+	fHTMLView( Set,AutoCropWidth,0,value,<AutoCropWidth> );
+	fHTMLView( Set,AutoCropLength,0,value,<AutoCropLength> );
+
+	return TRUE;
+}
+
+
+NUMERIC ExportYB::GenerateYearbook( OrdersList, OutputDirectory,  JobNumber, Comments )
+{
+	if ( !ADO( dbase,Connect ) )
+	{
+		Invoke( );
+		return FALSE;
+	}
+	
+	exporter.SetDbConnection( dbase );
+	
+	ReturnOnFailure( exporter.GenReadmeFile( ~<OutputDirectory>~,  ~<JobNumber>~, ~<Comments>~ ) );
+
+	return exporter.GenYBOutput( ~<OrdersList>~ );
+}
+
+
+STR ExportYB::ImageSizeToString( value )
+{
+	if ( Numeric( ~<value>~ ) == 0 )
+	{
+		return ~Small~;
+	}
+	else if ( Numeric( ~<value>~ ) == 1 )
+	{
+		return ~Large~;
+	}
+
+	return ~Custom~;
+}
+
+
+NUMERIC ExportYB::ImageSizeToInt( value )
+{
+	if ( SimilarStr( ~<value>~,~Small~ ) )
+	{
+		return 0;
+	}
+	else if ( SimilarStr( ~<value>~,~Large~ ) )
+	{
+		return 1;
+	}
+
+	return 2;
+}
+
+NUMERIC ExportYB::FindOrderID(ele,partialOrderID)
+{	
+	ReturnOnFailure( GetActiveView() );
+
+	Class( OrderClass,Extends,BaseOrder);
+	OrderClass( New,OrderObj );
+
+	numOrdersFound = 0;
+	StringList( StrListofOrders, New );
+	
+	ReturnOnFailure( Connect() );
+	
+	numOrdersFound = OrderObj.GetCountOfOrderID( fConnection, ~<partialOrderID>~ );
+	
+	if ( <numOrdersFound> > 30 )
+	{
+		if ( MessageBox( TR( ExportToYearbook, MoreThan30Warning, TR( ExportToYearbook, Orders) ), YESNO ) == NO )
+		{
+			ReleaseConnection();
+			return FALSE;
+		}
+	}
+		
+	if ( !OrderObj.FindPartialOrderID( fConnection, ~<partialOrderID>~, StrListofOrders) )
+	{
+		Log( Session,~Failed getting list of orders~ );
+		ReleaseConnection();
+		return FALSE;
+	}
+	
+	ReleaseConnection();
+
+	// Clear the OrdersTextBox before populating again
+	fHtmlView( Execute,~ResetList( GetElement('<ele>') )~ );
+
+	ordersFound = StrListofOrders( GetFirstString,OrderID );
+	while ( <ordersFound> )
+	{
+		
+		fHtmlView( Execute,~AddListOption( GetElement('<ele>'),'<OrderID>','<OrderID>')~ );
+		ordersFound = StrListofOrders( GetNextString, OrderID );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ExportYB::OnCancelExportButton()
+{
+	fCancel = TRUE;
+
+	if ( Defined( exporter ) )
+	{
+		exporter.Cancel( TRUE );
+	}
+
+	return TRUE;
+}
+
+NUMERIC	ExportYB::OnExportSelectedButton(OnlySelected)
+{	
+	ForgetPrivate( exporter );
+
+	StatusMsg( ~~ );
+	UserMsg( ~~ );
+	fErrors = 0;
+
+	fCancel = FALSE;
+	
+	Count = fHTMLView( GetSelectOptionsLength,OrdersList,0 );
+	
+	ReturnOnFailure( <Count> );
+	
+	fHTMLView( Get,OutputDirectory,0,value,OutputDirectory );
+	fHTMLView( Get,QueueName,0,value,QueueName );
+
+	if ( SimilarStr( ~<OutputDirectory>~,~~ ) )
+	{
+		ErrorMsg( ~You must specify an Output Directory on the Output tab.~ );
+		return FALSE;
+	}
+
+	if ( SimilarStr( ~<QueueName>~,~~ ) )
+	{
+		ErrorMsg( ~You must specify a Printer Queue on the Output tab.~ );
+		return FALSE;
+	}
+
+//	if ( <fYBDefDirty> || <fXRefDirty> )
+//	{
+//		ErrorMsg( ~You have not saved the latest changes to the Yearbook Definition or Field XRef.~ );
+//		if ( MessageBox( ~You have not saved the latest changes to the Yearbook Definition or Field XRef. Do you want to continue with the previously saved settings?~, YESNO ) == NO )
+//		{
+//			return FALSE;
+//		}
+//		ErrorMsg( ~~ );
+//	}
+
+	YBGen( New,exporter );
+	Private( exporter );
+
+	
+
+	fHTMLView( Get,YearbookIDInst,0,value,YearbookID );
+	fHTMLView( Get,JobNumber,0,value,JobNumber );
+	fHTMLView( Get,SchoolName,0,value,SchoolName );
+	fHTMLView( Get,Comments,0,value,Comments );
+
+	fHTMLView( Get,Profile,0,value,Profile );
+	embedProfile = GetCheckedButton( ~~,~Embed~,Embed);
+
+	fHTMLView( Get,Resolution,0,value,Resolution );
+	fHTMLView( Get,ImageWidth,0,value,ImageWidth );
+	fHTMLView( Get,ImageLength,0,value,ImageLength );
+//	fHTMLView( Get,CropAdjustment,0,value,CropAdjust );
+	fHTMLView( Get,CompressionQuality,0,value,CompressionQuality );
+	fHTMLView( Get,ImageSize,0,value,ImageSize );
+
+	AllPoses = GetCheckedButton( ~~,~AllPosesEnabled~,AllPosesEnabled);
+
+	fHTMLView( Get,GroupFields,0,value,GroupFields );
+	fHTMLView( Get,GroupBy,0,value,GroupBy );
+	fHTMLView( Get,SortBy,0,value,SortBy );
+
+	fHTMLView( Get,RImageTemplate,0,value,RImageTemplate );
+	fHTMLView( Get,GroupsPerCD,0,value,GroupsPerCD );
+	fHTMLView( Get,QueueName,0,value,QueueName );
+	RImageOn = GetCheckedButton( ~~,~RImageEnabled~,RImageEnabled);
+	DeleteAfter = GetCheckedButton( ~~,~DeleteAfterRImage~,DeleteAfterRImage);
+
+	fHTMLView( Get,AutoCropSrcX,0,value,AutoCropSrcX );
+	fHTMLView( Get,AutoCropSrcY,0,value,AutoCropSrcY );
+	fHTMLView( Get,AutoCropDstX,0,value,AutoCropDstX );
+	fHTMLView( Get,AutoCropDstY,0,value,AutoCropDstY );
+	fHTMLView( Get,AutoCropWidth,0,value,AutoCropWidth );
+	fHTMLView( Get,AutoCropLength,0,value,AutoCropLength );
+
+	if ( Numeric( <AutoCropSrcX> ) <= 0 || Numeric( <AutoCropSrcX> ) >= 100 )
+	{
+		AutoCropSrcX = 50;
+	}
+	if ( Numeric( <AutoCropSrcY> ) <= 0 || Numeric( <AutoCropSrcY> ) >= 100 )
+	{
+		AutoCropSrcY = 50;
+	}
+	if ( Numeric( <AutoCropDstX> ) <= 0 || Numeric( <AutoCropDstX> ) >= 100 )
+	{
+		AutoCropDstX = 50;
+	}
+	if ( Numeric( <AutoCropDstY> ) <= 0 || Numeric( <AutoCropDstY> ) >= 100 )
+	{
+		AutoCropDstY = 50;
+	}
+	if ( Numeric( <AutoCropWidth>) <= 0 || Numeric( <AutoCropWidth>) > 100 )
+	{
+		AutoCropWidth = 100;
+	}
+	if ( Numeric( <AutoCropLength>) <= 0 || Numeric( <AutoCropLength>) > 100 )
+	{
+		AutoCropLength = 100;
+	}
+
+	exporter.GroupBy( ~<GroupBy>~ );
+	exporter.SortBy( ~<SortBy>~ );
+	exporter.GroupFields( ~<GroupFields>~ );
+
+	exporter.ImageSize( <ImageSize> );
+	exporter.ImageWidth( <ImageWidth> );
+	exporter.ImageLength( <ImageLength> );
+	exporter.Resolution( <Resolution> );
+
+//	exporter.CropAdjustment( <CropAdjust> );
+	exporter.CompressionQuality( <CompressionQuality> );
+
+	exporter.AutoCropSrcX( <AutoCropSrcX> );
+	exporter.AutoCropSrcY( <AutoCropSrcY> );
+	exporter.AutoCropDstX( <AutoCropDstX> );
+	exporter.AutoCropDstY( <AutoCropDstY> );
+	exporter.AutoCropWidth( <AutoCropWidth> );
+	exporter.AutoCropLength( <AutoCropLength> );
+
+	exporter.Profile( ~<Profile>~ );
+	exporter.EmbedProfile( <embedProfile> );
+
+	exporter.RImageTemplate(~<RImageTemplate>~);
+	exporter.RImageEnabled( <RImageOn> );
+	exporter.DeleteAfterRImage( <DeleteAfter> );
+	exporter.GroupsPerCD( Numeric( ~<GroupsPerCD>~ ) );
+	exporter.QueueName( ~<QueueName>~ );
+
+	exporter.YearbookID( ~<YearbookID>~ );
+	exporter.SchoolName( ~<SchoolName>~ );
+
+	exporter.AllPoses( ~<AllPoses>~ );
+	
+	// ***** Handle Chroma Key Options ******************************
+	
+	fHTMLView( GetRadioValue,ChromaKeyBGIDOption,ChromaKeyBGIDOption );
+	fHTMLView( Get,ProductType,0,value,ProductType );
+	fHTMLView( Get,DP2BGId,0,value,DP2BGId );
+	
+	fHtmlView( Get,BGRed,0,value,Red );
+	fHtmlView( Get,BGGreen,0,value,Green );
+	fHtmlView( Get,BGBlue,0,value,Blue );
+
+	
+	if ( <ChromaKeyBGIDOption> == 3 )			// EXPORT USING A CUSTOMER BACKGROUND ID TO FIND THE BACKGROUND?
+	{
+		fHTMLView( Get,CustomerBGId,0,value,CustomerBGId );
+		DP2BGId = GetTheBGID( ~<CustomerBGId>~,~<ProductType>~ );
+	}
+	
+	exporter.ChromaKeyBGIDOption( ~<ChromaKeyBGIDOption>~ );
+	exporter.ProductType( ~<ProductType>~ );
+	exporter.DP2BGId( ~<DP2BGId>~ );
+	
+	exporter.Red( ~<Red>~ );
+	exporter.Green( ~<Green>~ );
+	exporter.Blue( ~<Blue>~ );
+
+	
+	//***************************************************************
+
+	ReturnOnFailure( fHtmlView( CreateStringListFromOptions,OrdersList,0,theOrders,FALSE ) );
+	ReturnOnFailure( theOrders( NumEntries ) > 0 );
+	theOrders( MakeSQLList,OrdersList,TRUE );
+
+	EnableExportButtons( FALSE );
+	fHTMLView( Set,CancelExportButton,0,disabled, ~~  );
+	
+	return fExportThread( New,~<This>.ExportThreadProc~,~<OrdersList>~, ~<OutputDirectory>~, ~<JobNumber>~, ~<Comments>~ );
+		
+//	ExportThreadProc(~<OrdersList>~, ~<OutputDirectory>~, ~<JobNumber>~, ~<Comments>~);		// FOR TESTING WITHOUT A THREAD
+
+	return TRUE;
+}
+
+	
+VOID	ExportYB::ExportThreadProc(OrdersList, OutputDirectory,JobNumber,Comments)		// On a worker thread.  No UI work allowed here
+{ 
+	if ( !GenerateYearbook( ~<OrdersList>~, ~<OutputDirectory>~, ~<JobNumber>~, ~<Comments>~ ) )
+	{
+		Log( Session, ~The yearbook export failed.~ );
+		Invoke( ~Obj.Cleanup~ );
+	}
+} 
+
+
+VOID	ExportYB::BatchComplete(BatchID,Count,RImageJobID)	
+{
+	len = fHTMLView( GetSelectOptionsLength,SubmittedBatches,0 );
+	fHtmlView( SetSelectOptionsLength, SubmittedBatches, 0,<len>+1 );
+	theValue = IsNull(~<RImageJobID>~) ? ~<BatchID>~ : ~<BatchID>,<RImageJobID>~ ;
+	fHtmlView( SetSelectOption,SubmittedBatches,0,<len>,~<theValue>~,~<BatchID>~ );
+}
+	
+	
+NUMERIC	ExportYB::ExportThreadComplete( count )		// RUNS ON THE MAIN THREAD
+{
+	EnableExportButtons( TRUE );
+	StatusBar( ~Yearbook export complete: <count> images exported.~ );
+	MsgBar(~~);
+	return Cleanup();
+}
+
+
+NUMERIC	ExportYB::ThreadFailure()		// Runs on the main thread
+{
+	EnableExportButtons( TRUE );
+//	StatusBar( <fCancel> ? ~Cancelled~ : ~Error~ );
+//	MsgBar(~~);
+	return TRUE;
+}
+
+VOID	ExportYB::OnCancelButton()
+{
+	fCancel = TRUE;
+	
+	if ( fExportThread( IsActive ) )
+	{
+		exporter.Cancel( TRUE );
+		StatusMsg( ~Cancelling....~ ) ;
+	}
+	
+	fHTMLView( Set,CancelButton,0,disabled,disabled );
+}
+
+
+NUMERIC	ExportYB::CloseCheck()
+{
+	OnCancelButton();
+	
+	while ( fExportThread( IsActive ) )
+	{
+		Sleep( 500 );
+		StatusBar( ~Waiting for processing of the current image to finish...~ );
+	}
+	
+	ForgetGlobal( DirChange );
+
+	StatusBar( ~Closing...~ );
+	
+	return TRUE;
+}
+
+
+NUMERIC ExportYB::Cleanup()
+{
+	EnableExportButtons( TRUE );
+	
+	WaitCursor( End );
+	
+	if ( !<fErrors> )
+	{
+		MsgBar(~Completed with <fErrors> errors.~);
+	}
+	
+	ForgetPrivate( exporter );
+	
+	return TRUE;
+}
+
+
+VOID	ExportYB::ShowMsg(msg)										{ Invoke( ~Obj.MsgBar~,~<msg>~ ); }
+VOID	ExportYB::ShowProgress(msg)									{ Invoke( ~Obj.StatusBar~,~<msg>~ ); }
+//VOID	ExportYB::BatchComplete(BatchID,BatchCount,RImageJobID)		{ Invoke( ~Obj.BatchComplete~,~<BatchID>~,~<BatchCount>~,~<RImageJobID>~ ); }
+//VOID	ExportYB::ExportComplete(ExportCount,TotalCount,BatchID)	{ Invoke( ~Obj.ExportThreadComplete~,~<ExportCount>~,~<TotalCount>~,~<BatchID>~ ); }
+VOID	ExportYB::ShowError(msg)									{ Invoke( ~Obj.ErrorMsg~,~<msg>~ ); }
+
+
+	
+NUMERIC ExportYB::OpenSelectedOrders()
+{
+	Count = fHTMLView( GetSelectOptionsLength,OrdersList,0 );
+	
+	ReturnOnFailure( <Count> );
+
+	WaitCursor( Begin );
+
+	index = -1;
+	
+	InList = ~~;
+	
+	while ( <++index> < <Count> )
+	{
+		fHTMLView( GetSelectOption,OrdersList,0,<index>,value,item,IsSelected );
+		
+		if ( !<IsSelected> )
+			continue;
+			
+		InList = ~<InList>~ == ~~ ? ~'<item>'~ : ~<InList>,'<item>'~;
+
+		if ( ++count >= 20 )		// BUILD UP A LIST OF UP TO 20 Order ID'S
+		{
+			OrdersQuery = STR ( SELECT * FROM Orders WHERE ID In (<InList>) ORDER BY ID ) ;
+			Actions = ACTION Doc ( ~Orders~ OpenOnce OrdersDoc "Init( ~<InList>~,~<OrdersQuery>~ );" );
+			PerformActions( Actions );
+			InList = ~~;		
+		}
+	}
+	
+	if ( ~<InList>~ != ~~ )
+	{
+		OrdersQuery = STR ( SELECT * FROM Orders WHERE ID In (<InList>) ORDER BY ID ) ;
+		Actions = ACTION Doc ( ~Orders~ OpenOnce OrdersDoc "Init( ~<InList>~,~<OrdersQuery>~ );" );
+		PerformActions( Actions );
+	}
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+	
+NUMERIC ExportYB::ShowImagesForShoot()
+{
+	fHTMLView( Get,ShootID,0,value,ShootID );
+	
+	if ( IsNull(~<ShootID>~) )
+	{
+		PopupMsg(~You must enter a ShootID~);
+		return FALSE;
+	}
+	
+	Actions = ACTION Doc ( ~Images~ OpenOnce ImagesDoc "OrderImagesForShoot( ~<ShootID>~,TRUE );" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC ExportYB::ShowImagesForOrder()
+{
+	fHTMLView( Get,OrdersList,0,value,OrderID );
+	
+	if ( IsNull(~<OrderID>~) )
+	{
+		PopupMsg(~You must enter an Order ID~);
+		return FALSE;
+	}
+	
+	Query = ~Select * From Images Where OrderID='<OrderID>' ORDER BY OrderID,Roll,Frame~;
+
+	Actions = ACTION Doc ( ~Images~ OpenOnce ImagesDoc "Init( ~<OrderID>~,TRUE,~<Query>~,0 );" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC ExportYB::ShowSubjectInfoTables(TablesList,FieldsList)
+{
+	fHtmlView( SetSelectOptionsLength,~<TablesList>~, 0, 0 );
+	
+	ReturnOnFailure( Connect() );
+	
+	if ( !PGenConList( SchemaList,Connection,fConnection,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		ReleaseConnection();
+		return ErrorMsg( ~Schema query failed  <theErr>~ );
+	}
+
+	SchemaList( Filter,~Table_Name Like 'SubjectInfo%'~ );
+	SchemaList( Sort,~Table_Name~ );
+
+	while ( SchemaList( GetNext,Table ) )
+	{
+		TableName = ~<$pcon.Table[TABLE_NAME]>~;
+		substr( ~<TableName>~,strlen(~SubjectInfo~),99,theType);
+
+		ContinueIf( SimilarStr(~<TheType>~,~Columns~) );
+		theType = IsNull( ~<theType>~ ) ? ~Std Subject Info~ : ~<theType>~;
+
+		len = fHTMLView( GetSelectOptionsLength,~<TablesList>~,0 );
+		fHtmlView( SetSelectOptionsLength,~<TablesList>~,0,<len>+1 );
+		fHtmlView( SetSelectOptionFromSymbol,~<TablesList>~,0,<len>,TableName,theType );
+	}
+	
+	ReleaseConnection();
+	
+	return TRUE;
+}	
+
+
+NUMERIC ExportYB::BrowseOutputPath()
+{
+	ErrorMsg( ~~ );
+
+	while ( GetFolder( ~<$TR.ExportToYearbook(Find)>~,~<$TR.ExportToYearbook(RenderTo)>~,Path,TRUE,~~ ) )
+	{
+		if ( CheckShared( ~<Path>~ ) )
+		{
+			return fHtmlView( SetInnerText,OutputDirectory,0,~<Path>~ );
+		}
+		
+		ErrorMsg( ~Change <Path> a path to a shared folder~ );
+	}
+	
+	ErrorMsg( ~~ );
+
+	return FALSE;
+}
+
+
+NUMERIC ExportYB::ViewBatch()
+{
+	fHTMLView( Get,SubmittedBatches,0,value,BatchIDString );
+	ReturnOnSuccess( IsNull(~<BatchIDString>~) );
+	GetTokens(~<BatchIDString>~,~,~,BatchID,RImageJobID);
+	
+	ReturnOnFailure( !IsNull(~<BatchID>~) );
+	Actions = ACTION DOC ( JobQueueDoc Open JobQueueDoc "Init( ~<$TR.ExportToYearbook(WhichBatch,~<BatchID>~)>~,~Select * From JobQueue Where BatchID='<BatchID>'~ );" );
+	PerformActions(Actions);
+	
+	ReturnOnSuccess( IsNull(~<RImageJobID>~) );
+	Actions = ACTION DOC ( RImageOrdersDoc Open RImageOrdersDoc "Init( ~<RImageJobID> For Batch <BatchID>~,~Select * From RImageOrders Where ID='<RImageJobID>'~ );" );
+	return PerformActions(Actions);
+}
+
+
+NUMERIC ExportYB::ViewQueue()
+{
+	fHTMLView( Get,QueueName,0,value,QueueName );
+	ReturnOnFailure( !IsNull(~<BatchID>~) );
+	Actions = ACTION DOC ( JobQueueDoc Open JobQueueDoc "Init( ~<$TR.ExportToYearbook(WhichQueueName,~<QueueName>~)>~,~Select * From JobQueue Where QueueName='<QueueName>'~ );" );
+	return PerformActions(Actions);
+}
+
+NUMERIC ExportYB::ShowBatchStatus(BatchID,RImageOrderID)
+{
+	ReturnOnSuccess( IsNull(~<BatchID>~) );
+	
+	ReturnOnFailure( Connect() );
+	
+	TotalCount = fConnection( RecordCountFor,~Select count(*) from JobQueue Where BatchID='<BatchID>'~ );
+	
+	if ( <TotalCount> == 0 )
+	{
+		fHtmlView( SetInnerText,BatchStatus,0,~Batch <BatchID> has completed without error.~ );
+		ReleaseConnection();
+		return TRUE;
+	}
+	
+	Msg = ~<TotalCount> jobs<br>~;
+	
+	if ( !IsNull(~<RImageOrderID>~) )
+	{
+		Msg = ~<msg><br>Rimage Order is <RImageOrderID><br><br>~;
+	}
+	
+	NotStarted = fConnection( RecordCountFor,~Select count(*) from JobQueue Where BatchID='<BatchID>' AND PrintStatus In (0,1,8)~ );
+
+	ReleaseConnection();
+
+	if ( <NotStarted> )
+	{
+		fHtmlView( SetInnerHTML,BatchStatus,0,~<Msg>  has not started rendering~ );
+	}
+	else
+	{
+		fHtmlView( SetInnerHTML,BatchStatus,0,~<Msg>~ );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC ExportYB::CheckShared( Path )
+{
+	ReturnOnSuccess( IsNULL( ~<Path>~ ) );
+
+	if ( !Files( IsUNC,~<Path>~ ) && NetworkOperation() )
+	{
+		if ( MessageBox( TR(UIMessages,UnsharedFileChoose,~<Path>~),YESNO ) != YES )
+			{ return FALSE; }
+	}
+
+	return TRUE;
+}
+
+VOID	ExportYB::OnTabClose()
+{
+	ErrorMsg(~~);
+	StatusBar(~~);
+}
+
+
+VOID	ExportYB::OnBiggerWindow()
+{
+	DataWindow( SetWindowSize,<WindowWidth>,<BigWindowHeight> );
+}
+
+VOID	ExportYB::OnBigFatWindow()
+{
+	DataWindow( SetWindowSize,<FatWindowWidth>,<BigFatWindowHeight> );
+}
+
+VOID	ExportYB::OnSmallerWindow()
+{
+	DataWindow( SetWindowSize,<WindowWidth>,<WindowHeight> );
+}
+
+VOID	ExportYB::OnTallerWindow()
+{
+	DataWindow( SetWindowSize,<TallerWindowWidth>,<TallerWindowHeight> );
+}
+
+VOID	ExportYB::OnTallNormalWindow()
+{
+	DataWindow( SetWindowSize,700,<TallerWindowHeight> );
+}
+	
+NUMERIC ExportYB::GetImportWindow()	
+{
+	ReturnOnFailure( GenCon( ActiveWindow,GetActiveWindow ) );	
+	ReturnOnFailure( ActiveWindow( GetActiveViewOfWindow,fOrdersDoc,Permanent ) );
+	return Private( fOrdersDoc );
+}
+
+	
+NUMERIC ExportYB::DisplayWindow()				
+{
+	if ( Defined( DataWindow ) )		// Is the UI already open?
+	{
+		LoadOrdersFromWindow();
+		return TRUE;
+	}
+	
+	DefineWindow();
+	Init();
+	Open( ~<fURL>~ );
+	SetWindowTitle( IsNull(~<Title>~) ? ~<fURL>~ : ~<Title>~ );
+
+	
+	return TRUE;
+}
+
+
+
+NUMERIC InitWithOrder( OrdersList )						// Entry Point
+{
+	if ( !Defined( Obj ) )
+	{
+		ExportYB( New,Obj );
+		Global( Obj );
+	}
+	
+	Obj.RegisterCallBack();
+	Obj.SetOrdersList( ~<OrdersList>~ );
+	return Obj.DisplayWindow();
+}
+
+VOID ShowProgress( msg )
+{
+	if ( Defined( Obj ) )
+	{
+		Invoke( ~Obj.ShowProgress~, ~<msg>~ );
+	}
+}
+
+VOID UserMsg( msg )
+{
+	if ( Defined( Obj ) )
+	{
+		Invoke( ~Obj.UserMsg~, ~<msg>~ );
+	}
+}
+
+VOID StatusMsg( msg )
+{
+	if ( Defined( Obj ) )
+	{
+		Invoke( ~Obj.StatusMsg~, ~<msg>~ );
+	}
+}
+
+VOID ErrorMsg( msg )
+{
+	if ( Defined( Obj ) )
+	{
+		Invoke( ~Obj.ErrorMsg~,~<msg>~ );
+	}
+}
+
+VOID HistoryMsg( msg,isBold )
+{
+	if ( Defined( Obj ) )
+	{
+		Invoke( ~Obj.HistoryMsg~,~<msg>~,~<isBold>~ );
+	}
+}
+
+VOID ExportThreadFailure()
+{
+	if ( Defined( Obj ) )
+	{
+		Invoke( ~Obj.ThreadFailure~ );
+	}
+}
+
+VOID ExportComplete( count )
+{
+	if ( Defined( Obj ) )
+	{
+		Invoke( ~Obj.ExportThreadComplete~, <count> );
+	}
+}
+
+VOID BatchComplete( BatchID,BatchCount,RImageJobID )
+{	
+	if ( Defined( Obj ) )
+	{
+		Invoke( ~Obj.BatchComplete~,~<BatchID>~,~<BatchCount>~,~<RImageJobID>~ ); 
+	}
+}
+
+NUMERIC RedrawJobIcon(OrderID,ID)
+{
+	if ( !Defined( Obj ) )
+	{
+		return FALSE;
+	}
+
+	PreviewOrderID = Obj.Get( fPreviewOrderID );
+	PreviewJobPath = Obj.Get( fPreviewJobPath );
+
+	ReturnOnFailure( SimilarStr(~<OrderID>~,~<PreviewOrderID>~ ) );	// Get out if this not your special job
+	ReturnOnFailure( SimilarStr(~<ID>~,~999~ ) );
+
+	Document( Job );
+	Job( Create );
+	Job( SetNoMessageBox,TRUE );
+
+	
+	ReturnOnFailure( Job( ParseFile,~<PreviewJobPath>~ ) );
+	ReturnOnFailure( Job( GetRenderList,0,aRenderList ) );
+	ReturnOnFailure( aRenderList( GetNodeByID,~1~,0,TheNode ) );
+
+	TheNode( Get,~AutoCrop:~,theAutoCrop );
+	return Obj.SetAutoCrop( ~<theAutoCrop>~ );	// do what you need with the autocrop
+	
+}
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\YbOutputWin.txt~ );
+
+
+
+
+

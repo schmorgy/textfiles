@@ -1,0 +1,344 @@
+
+VOID ReOpen()
+{
+}
+
+
+if ( !Tree( Name,SubjectIDS,Location,~[STRINGS]~,Exists ) )
+{
+	StringList: Name ~SubjectIDS~
+		Fields: String	~~
+	Hang:	SubjectIDS	~[STRINGS]~ ;
+
+	Dictionary: DDSubjectIDValues
+		Fields:	Name SubjectID		Type Text
+		Fields: Name ComboValue		Type Text
+		Fields: Name Increment		Type Long
+		Fields: Name IgnoreRejected	Type Long
+}
+	
+
+VOID DefineDialog( DialogLeft,DialogTop )
+{
+    Left = 5;				Top = 5;		
+	hGap = 5;				vGap = 10;
+	ButtonHeight = 20;		ButtonWidth = 40;
+    ComboBoxWidth = 150;	ComboBoxHeight = 120;
+	x = $Left;				y = $Top;
+	
+    Define: DlgDefinition Using DDWinDef
+            Fields: Position		$DialogLeft $DialogTop $DialogWidth 600
+                    Title			Translate( ~Enter Subject ID~ )
+                    TypeName		~Dialog~
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "Subject ID.htm" )
+                    OACTIONSTEXT	ACTION EXEC ( OnCancel() ) ;
+
+    Contains: InListOrder
+    {
+		Define: SubjectIDComboBox Using DDWinCtrlDef AsSymbol SubjectIDComboBox 
+			Fields: TypeName		MaskedEditText  
+					Position		$x,$y,<ComboBoxWidth>,<ButtonHeight> 
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					IsTabStop		TRUE
+					GenConField		~SubjectID~
+					Mask			~<$[DATABASE FieldTypes].SubjectID[Mask]>~
+					PromptChar		~<$[DATABASE FieldTypes].SubjectID[PromptChar]>~
+					AllowedChars	~<$[DATABASE FieldTypes].SubjectID[AllowedChars]>~
+					DisallowedChars ~<$[DATABASE FieldTypes].SubjectID[DisallowedChars]>~
+					PromptChar		~ ~
+					Tooltip         ~Select from the existing list of SubjectID(s) for this order~ ;
+
+		Define: MinusButton Using DDWinCtrlDef AsSymbol MinusButton 
+            Fields: TypeName		Button
+					Text			Translate( ~&<~ )
+					Position		$hGap,
+									$y + $ButtonHeight + $vGap,20, $ButtonHeight
+					DActionsText	ACTION EXEC  ( SendKeystrokeToImagesDoc(0x25) ) 
+
+		Define: FakeMinusButton Using DDWinCtrlDef AsSymbol FakeMinusButton 
+            Fields: TypeName		Button
+					Text			Translate( ~<&,~ )
+					Position		0 0 0 0
+					DActionsText	ACTION EXEC  ( SendKeystrokeToImagesDoc(0x25) ) 
+
+		Define: AddButton Using DDWinCtrlDef AsSymbol AddButton 
+			Fields: TypeName		Button
+					Text			Translate( ~&Add~ )
+					Position		MinusButton(GetRight,Position) + $hGap,
+									MinusButton(GetTop,Position),
+									$ButtonWidth, $ButtonHeight
+					DActionsText	ACTION EXEC  ( OnAdd(1) ) 
+					Tooltip			Translate( ~Increment and set the Subject ID for the selected image(s)~ )  ;
+
+		Define: SetButton Using DDWinCtrlDef AsSymbol SetButton 
+			Fields: TypeName		DefaultButton
+					Text			Translate( ~&Set~ )
+					Position		AddButton(GetRight,Position) + $hGap,
+									AddButton(GetTop,Position),
+									$ButtonWidth, $ButtonHeight
+					DActionsText	ACTION EXEC  ( OnAdd(0) ) 
+					Tooltip			Translate( ~Set the Subject ID for the selected image(s)~ )  ;
+
+		Define: DecButton Using DDWinCtrlDef AsSymbol DecButton 
+			Fields: TypeName		Button
+					Text			Translate( ~&Dec~ )
+					Position		SetButton(GetRight,Position) + $hGap,
+									SetButton(GetTop,Position),
+									$ButtonWidth, $ButtonHeight
+					DActionsText	ACTION EXEC  ( OnAdd(-1) ) 
+					Tooltip			Translate( ~Decrement and set the Subject ID for the selected image(s)~ )  ;
+
+		Define: ClrButton Using DDWinCtrlDef AsSymbol ClrButton 
+			Fields: TypeName		Button
+					Text			Translate( ~&Clr~ )
+					Position		DecButton(GetRight,Position) + $hGap,
+									DecButton(GetTop,Position),
+									$ButtonWidth, $ButtonHeight
+					DActionsText	ACTION EXEC  ( OnClr() ) 
+					Tooltip			Translate( ~Clear the Subject ID for the selected image(s)~ )  ;
+
+
+		Define: XButton Using DDWinCtrlDef AsSymbol XButton 
+            Fields: TypeName		Button
+					Text			Translate( ~&Reject~ )
+					Position		ClrButton(GetRight,Position) + $hGap,
+									ClrButton(GetTop,Position),
+									$ButtonWidth, $ButtonHeight
+					DActionsText	ACTION EXEC  ( SendKeystrokeToImagesDoc(0x58) ) 
+					Tooltip			Translate( ~Mark the selected image(s) as rejected.  Depress shift while clicking to accept~ )  ;
+
+		Define: PlusButton Using DDWinCtrlDef AsSymbol PlusButton 
+            Fields: TypeName		Button
+					Text			Translate( ~&>~ )
+					Position		XButton(GetRight,Position) + $hGap,
+									XButton(GetTop,Position),
+									20, $ButtonHeight
+					DActionsText	ACTION EXEC  ( SendKeystrokeToImagesDoc(0x27) ) ;
+
+		Define: FakePlusButton Using DDWinCtrlDef AsSymbol FakePlusButton // Use the > on the keyboard
+            Fields: TypeName		Button
+					Text			Translate( ~&.~ )
+					Position		0 0 0 0
+					DActionsText	ACTION EXEC  ( SendKeystrokeToImagesDoc(0x27) ) ;
+
+		DialogWidth = PlusButton(GetRight,Position) + ($hGap*2);
+
+		Define: IncrementByPrompt Using DDWinCtrlDef AsSymbol IncrementByPrompt 
+			Fields: TypeName		StaticText  
+					Position		PlusButton(GetRight,Position)+$hGap,$y,60,<ButtonHeight> 
+					Text			Translate( ~Increment~ );
+
+		Define: IncrementByField Using DDWinCtrlDef AsSymbol IncrementByField 
+			Fields: TypeName		MaskedEditText  
+					Position		IncrementByPrompt(GetRight,Position)+$hGap,$y,30,<ButtonHeight> 
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save  )
+					IActionsText	ACTIONS ( Get )
+					GenConName      THIS
+					GenConField		~Increment~
+					Mask			~###~
+					AllowedChars	~-~
+					PromptChar		~ ~
+					Tooltip         ~Increment by this amount for each successive image~ ;
+
+		Define: IgnoreRejectedCheckBox Using DDWinCtrlDef AsSymbol IgnoreRejectedCheckBox 
+				Fields: TypeName		CheckBox
+						GenConName		THIS
+						GenConField		~IgnoreRejected~
+						Text			~Ignore Rejected~
+						Position		IncrementByPrompt(GetLeft,Position) + $hGap,IncrementByPrompt(GetBottom,Position)+$vGap,100, <ButtonHeight>
+						IActionsText	~[Get]~
+						OActionsText	~[Save]~
+						Tooltip			~Skip the images that are rejected~;
+
+
+		DialogWidthWithIncrement = IgnoreRejectedCheckBox(GetRight,Position) + ($hGap)*2;
+
+		Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~&Exit~ )
+                    Position		0 0 0 0 
+                    DActionsText	ACTION EXEC  ( OnCancel() ) 
+                    Tooltip			Translate( ~Cancel without changes~ )  ;
+	}
+
+	DialogHeight = AddButton(GetBottom,Position) + $vGap + 25;
+
+    DlgDefinition( Set,Position,~<DialogLeft> <DialogTop> <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,DlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    Global( dlg,DialogHeight,DialogWidthWithIncrement );
+}
+
+
+
+VOID BumpID( increment )
+{
+	dlg( GetInput );
+
+	SubjectID = ~<$con.dlgData[SubjectID]>~;
+
+	if ( ~<SubjectID>~ != ~~ )
+	{
+		len = strlen( ~<SubjectID>~ );
+
+		SubjectID = <SubjectID> + <Increment>;
+
+		if ( <SubjectID> < 0 )
+		{
+			SubjectID = 0;
+		}
+
+		SubjectID = Format( ~<SubjectID>~,~%0<len>ld~ );
+		
+		dlg( SetString,~<SubjectID>~,SubjectID );
+	}
+}
+
+
+VOID SendKeystrokeToImagesDoc( Key )
+{
+	Action = STR ( PostKeystroke(~<Key>~) );
+		
+	PerformInActiveDocument( Action );
+}
+
+
+VOID OnCancel()
+{
+	dlg( End );
+
+	Exit();
+}
+
+
+VOID OnAdd( Bump )
+{
+	if ( <Bump> != 0 )
+	{
+		BumpID( <Bump> );
+	}
+
+	dlg( GetInput );
+
+	SubjectID = ~<$con.dlgData[SubjectID]>~;
+	Increment = ~<$con.dlgData[Increment]>~;
+
+	IgnoreRejected = ~<$con.dlgData[IgnoreRejected]>~;
+
+	if ( ~<SubjectID>~ != ~~ )
+	{
+		Action = STR ( SetSubjectID(~<SubjectID>~,~<Increment>~,<IgnoreRejected>) );
+		
+		PerformInActiveDocument( Action );
+	}
+
+	if ( !<Increment> )
+	{
+		SendKeystrokeToImagesDoc(0x27);
+	}
+
+	MaintainFocus();
+}
+
+
+NUMERIC PerformInActiveDocument( &Action )
+{
+	if ( !Document( Doc,FindByActiveWindow ) )
+	{
+		return Warning( ~There was no active window~ );
+	}
+	
+	Doc( GetDocumentName,DocName );
+
+	if ( !Doc( ExecuteContentsOf,Action ) )
+	{
+		return Warning( ~The window in the front is unable to perform this action~ );
+	}
+
+	return TRUE;
+} 
+	
+	
+
+
+VOID MaintainFocus()
+{
+	dlg( EditText,SubjectIDComboBox,SetSel,0,-1,TRUE );
+	dlg( SetControlFocus,SubjectIDComboBox );
+	dlg( SetFocus );
+}
+
+VOID OnClr()
+{
+	dlg( GetInput );
+
+	SubjectID = ~<$con.dlgData[SubjectID]>~;
+	Increment = ~<$con.dlgData[Increment]>~;
+
+	IgnoreRejected = ~<$con.dlgData[IgnoreRejected]>~;
+
+	Action = STR ( SetSubjectID( ~~,~<Increment>~,<IgnoreRejected>) );
+	
+	PerformInActiveDocument( Action );
+
+	if ( !<Increment> )
+	{
+		SendKeystrokeToImagesDoc(0x27);
+	}
+}
+
+
+
+
+VOID SetSubjectIDComboBox()
+{
+	InfoType = ~~;
+
+	ADO( dBase,Connect,GetValuesFor,~Select InfoType From Orders Where ID = '<OrderID>'~,InfoType );
+
+	Query = ~Select SubjectID From SubjectInfo<InfoType> Where OrderID = '<OrderID>' Order By SubjectID~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Failed to query the SubjectInfo<InfoType> table.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	List( MakeStringList,Subjects,SubjectID );
+
+	dlg( SetControlFromStringList,SubjectIDComboBox,Subjects );
+}
+
+
+VOID Init( OrderID,FirstSubjectID,XPosition,YPosition,Count )
+{
+	Global( OrderID );
+
+	if ( !Defined( dlg) )
+	{
+		Define: DlgData Using DDSubjectIDValues
+			Fields:	Increment 0 
+					IgnoreRejected 0;
+
+		Global( DlgData );
+
+		DefineDialog( ~<XPosition>~,~<YPosition>~ );
+	}
+
+	if ( <Count> > 1 )
+	{
+		dlg( SetWindowSize,<DialogWidthWithIncrement>,$DialogHeight );
+		dlg( SetString,~1~,Increment );
+	}
+
+	SetSubjectIDComboBox();
+
+	dlg( SetString,~<FirstSubjectID>~,SubjectID );
+
+	MaintainFocus();
+}

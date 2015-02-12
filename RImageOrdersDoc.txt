@@ -1,0 +1,697 @@
+Include: ~FormattingRoutines~;
+
+IncludeClass( BaseGrid );
+
+VOID	RImageOrders::RImageOrders()						// CONSTRUCTOR
+{
+	TableName = ~RImageOrders~;
+	DocumentQuery = ~Select * from <TableName> Order By ID~;
+	Title = RunningVersion(14) ? ~Media Burning Orders~ : ~RImage Orders~;
+	WindowTop = 70;
+	WindowWidth = 100;
+	WindowHeight = 30;
+	HelpPage = ~RImageOrders.htm~;
+	ButtonWidth = 40;
+	SplitterRows = ~2 7 93~;
+}
+
+STR		RImageOrders::GetKey( &Item )					// PRIMARY KEY FOR THE TABLE
+{
+	return ~ID = '<$con.Item[ID]>'~;
+}
+
+
+NUMERIC RImageOrders::ChangeRecordAudits( &Changed )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[ID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  ID cannot be blank.~ ) ); }
+
+	return TRUE;
+}
+
+VOID	RImageOrders::AddMenuItems()					// ADD ADDITIONAL RIGHT CLICK MENU ITEMS
+{
+	AddMenuSeparator();
+	AddMenuItem( TRUE,FALSE,Translate(~Driver~),ACTION EXEC ( <THIS>.OnDriverButton() ) );
+	AddMenuSeparator();
+	AddMenuItem( TRUE,FALSE,Translate(~Hold~),ACTION EXEC ( <THIS>.SetProgress(0) ) );
+	AddMenuItem( TRUE,FALSE,Translate(~Ready~),ACTION EXEC ( <THIS>.SetProgress(1) ) );
+
+}
+
+NUMERIC RImageOrders::AddControls( position )
+{
+	Define: DriverButton Using DDWinCtrlDef AsSymbol DriverButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnDriverButton() )
+				POSITION		$position + $hGap, $vGap $ButtonWidth $ButtonHeight
+				TEXT			Translate( ~Driver~ )
+				TOOLTIP			Translate( ~Open the driver for this RImage writer~ );
+
+	Define: SetReadyButton Using DDWinCtrlDef AsSymbol SetReadyButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.SetProgress(1) )
+				POSITION		DriverButton(GetRight,Position) + $hGap*3, $vGap DriverButton(GetWidth,Position) $ButtonHeight
+				TEXT			Translate( ~Ready~ )
+				TOOLTIP			Translate( ~Set the selected jobs to Ready.~ );
+
+	Define: SetHoldButton Using DDWinCtrlDef AsSymbol SetHoldButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.SetProgress(0) )
+				POSITION		SetReadyButton(GetRight,Position) + $hGap, $vGap SetReadyButton(GetWidth,Position) $ButtonHeight
+				TEXT			Translate( ~Hold~ )
+				TOOLTIP			Translate( ~Set the selected jobs to Hold.~ );
+		
+	Define: NewFromButton Using DDWinCtrlDef AsSymbol  NewFromButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.NewFrom() )
+				POSITION		SetHoldButton(GetRight,Position) + $hGap*6, $vGap 105 $ButtonHeight
+				TEXT			Translate( ~New From Template~ )
+				TOOLTIP			Translate( ~Add a new job using a predefined template~ );
+
+	Define: TemplatesComboBox Using DDWinCtrlDef AsSymbol TemplatesComboBox  Private
+		Fields: TypeName        ComboBox  
+				Position		NewFromButton(GetRight,Position) + $hGap*2, NewFromButton(GetTop,Position),100,120
+				IActionsText	ACTION EXEC ( <THIS>.UpdateTemplatesList() )
+				DropDownActionsText	ACTION EXEC ( <THIS>.UpdateTemplatesList() )
+				DActionsText	ACTIONS ( Save )
+				OActionsText	ACTIONS ( Save )
+				GenConName		THIS
+				GenConField		~Template~
+				Mask			~<$[DATABASE FieldTypes].ScanSetupName[Mask]>~
+				PromptChar		~<$[DATABASE FieldTypes].ScanSetupName[PromptChar]>~
+				AllowedChars	~<$[DATABASE FieldTypes].ScanSetupName[AllowedChars]>~
+				DisallowedChars ~<$[DATABASE FieldTypes].ScanSetupName[DisallowedChars]>~
+				Tooltip			~Select a predefined RImage template~
+
+	Define: ViewTemplatesButton Using DDWinCtrlDef AsSymbol  ViewTemplatesButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnViewTemplatesButton() )
+				POSITION		TemplatesComboBox(GetRight,Position) + $hGap,  NewFromButton(GetTop,Position) 20 $ButtonHeight
+				TEXT			Translate( ~?~ )
+				TOOLTIP			Translate( ~See the templates~ );
+
+	Define: EditListButton Using DDWinCtrlDef AsSymbol EditListButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnDoubleClick() )
+				POSITION		ViewTemplatesButton(GetRight,Position) + $hGap*4, $vGap 60 $ButtonHeight
+				TEXT			Translate( ~File List~ )
+				TOOLTIP			Translate( ~See the list of files to to write to CD if you are using EDITLIST Mode~ );
+	
+	Define: MergeButton Using DDWinCtrlDef AsSymbol MergeButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnMergeButton() )
+				POSITION		EditListButton(GetRight,Position) + $hGap, $vGap EditListButton(GetWidth,Position)+2 $ButtonHeight
+				TEXT			Translate( ~Label Data~ )
+				TOOLTIP			Translate( ~See the fields to merge into the CD label~ );
+	
+	return ViewTemplatesButton( GetRight,Position );
+}
+
+NUMERIC RImageOrders::OnViewTemplatesButton()
+{
+	Actions = ACTION DOC ( RImageTemplatesDoc OpenOnce RImageTemplatesDoc "Init(~All~,~Select * From RImageTemplates Order By ID~);" );
+	return PerformActions( Actions );
+}
+
+NUMERIC RImageOrders::UpdateTemplatesList()
+{
+	Query = ~Select ID From RImageTemplates Order By ID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		WriterSetupsList( GetErrorDescription,0,theErr );
+		ShowWarning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	List( MakeStringList,Templates,ID );
+
+	return ControlView( SetControlFromStringList,TemplatesComboBox,Templates );
+}
+
+
+NUMERIC RImageOrders::OnDriverButton()
+{
+	if ( DataView( GetSelected,SelectedItems ) )
+	{
+		if ( SelectedItems( GetNext,Item ) )
+		{
+			Writer =  ~<$con.Item[Writer]>~ ;
+
+			if ( IsNull(~<Writer>~) )
+			{
+				return Warning( ~The Writer is blank for the selected record~ );
+			}
+
+			Actions = ACTION DOC ( RImageDriverDoc OpenOnce RImageDriverDoc "Init(~<Writer>~);" );
+			PerformActions( Actions );
+		}
+	}
+
+
+	return TRUE;
+}
+
+NUMERIC	BaseGrid::OnButtonClickAudit(Row,Col)		
+{
+	if ( IsColumnName(<Col>,~FilePath~ ) )
+	{
+		FileType = GetCellValue( <row>,Filetype );
+
+		if ( Numeric(~<FileType>~) == 0 )
+		{
+			return Warning( ~You specify a parent directory only when using Parent mode~ );
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC	RImageOrders::OnButtonClickWantFile(Row,Col)
+{ 
+	if ( IsColumnName(<Col>,~FilePath~ ) )
+	{
+		return FALSE;	// Want a directory dialog instead of a file dialog for the Parent Directory Field
+	}
+
+	return TRUE;
+}
+
+NUMERIC RImageOrders::OnButtonClickCheckShared( Col )			{ return FALSE; }
+
+
+STR RImageOrders::OnButtonClickTitle(Row,Col)
+{
+	if ( IsColumnName(<Col>,~MergeFile~ ) )		{ return Translate(~Find the file with data for the label~); }
+	if ( IsColumnName(<Col>,~LabelFile~ ) )		{ return Translate(~Find the label definition file~); }
+	if ( IsColumnName(<Col>,~XMLGenerator~ ) )	{ return Translate(~Find the script to generate the XML for the RImage V7 and above~); }
+	if ( IsColumnName(<Col>,~FilePath~ ) )
+	{ 
+		if ( OnButtonClickWantFile(<Row>,<Col>) )
+		{
+			return Translate(~Find the edit list file~);
+		}
+		else
+		{
+			return Translate(~Find the parent directory~);
+		}
+	}
+
+	return BaseGrid::OnButtonClickTitle(<Row>,<Col>);
+}
+
+
+STR RImageOrders::OnButtonClickDirectory(Row,Col)
+{
+	if ( IsColumnName(<Col>,~MergeFile~) )		{ return Translate(~Find the file with data for the label~); }
+	if ( IsColumnName(<Col>,~LabelFile~) )		{ return Translate(~Find the label definition file~); }
+	if ( IsColumnName(<Col>,~FilePath~) )		{ return Translate(~Find the parent directory to copy from~); }
+	if ( IsColumnName(<Col>,~XMLGenerator~) )	{ return ~<$App.ShareDirectory>\Scripts\RImageXMLScripts~; }
+
+	return Translate(~Find the desired File~);
+
+}
+
+
+
+STR RImageOrders::OnButtonClickFixupPath(Row,Col,Path)
+{
+	if ( IsColumnName(<Col>,~XMLGenerator~ ) )	// We only want the filename for the XML Generation Script
+	{ 
+		return ~<$str.$Path.FileName>~;
+	}
+
+	return BaseGrid::OnButtonClickFixupPath(<Row>,<Col>,~<Path>~);
+}
+
+
+
+NUMERIC RImageOrders::DeleteRelatedRecords( &connection,&Item )
+{
+	Cmd = ~Delete From RImageEditList Where ID = '<$con.Item[ID]>'~;
+
+	if ( !connection( Cmd,~<Cmd>~ ) )
+	{
+		return Warning(~Failed to delete the Edit list for ID = '<$con.Item[ID]>'~ );
+	}
+
+	Cmd = ~Delete From RImageMerge Where ID = '<$con.Item[ID]>'~;
+
+	if ( !connection( Cmd,~<Cmd>~ ) )
+	{
+		return Warning(~Failed to delete the Merge list for ID = '<$con.Item[ID]>'~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RImageOrders::ChangeRecordAudits( &Changed,&Original )
+{
+	if ( IsNull(~<$con.Changed[ID]>~) )
+	{
+		return Warning(~The ID can't be NULL~ );
+	}
+
+
+
+	return TRUE;
+}	
+
+NUMERIC RImageOrders::HasRelatedRecords(&Changed,&Original,ChangedRow,IsNewRow)
+{ 
+	return !SimilarStr( ~<$con.Changed[ID]>~,~<$con.Original[ID]>~ );
+}
+
+
+NUMERIC RImageOrders::ChangeRelatedRecords( &connection,&Changed,&Original,ChangedRow,IsNewRow )
+{ 
+	cmd = ~Update RImageEditList SET ID = '<$con.Changed[ID]>' Where ID = '<$con.Original[ID]>'~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( ~Could not update related RImageEditList records. <theErr>~ );
+	}
+
+	cmd = ~Update RImageMerge SET ID = '<$con.Changed[ID]>' Where ID = '<$con.Original[ID]>'~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( ~Could not update related RImageMerge records. <theErr>~ );
+	}
+
+	cmd = ~Delete From RImageOrders Where ID = '<$con.Original[ID]>'~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr,RollBackTransaction );
+		return Warning( ~Could not delete the original RImageOrders record. <theErr>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RImageOrders::AddRelatedRecords( &Connection,&Changed,&Original,ChangedRow,IsNewRow )
+{
+	if ( IsNull(~<$con.Changed[ID]>~) )	{ return FALSE; }
+
+	if ( !IsNull( ~<FromTemplate>~ ) )	// COPY THE LABEL DATA FROM THE REQUESTED TEMPLATE
+	{
+		Query = ~SELECT * FROM RImageMergeTemplates WHERE ID = '<FromTemplate>' Order By FieldNumber~;
+
+		if ( !PGenConList( MergeList,Connection,Connection,cursor,Forward,Query,~<Query>~ ) )
+		{
+			MergeList( GetErrorDescription,0,theErr );
+			return	Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		}
+
+		while ( MergeList( GetNext,Item ) )
+		{
+			Data = ~<$pcon.Item[FieldData]>~;
+
+			if ( !IsNull( ~<Data>~ ) )	// GET CHUNK ONLY WORKS ONCE ON LONG TEXT FIELDS
+			{
+				connection( Cmd,~Insert Into RImageMerge(ID,FieldNumber,FieldData) values('<$con.Changed[ID]>',<$pcon.Item[FieldNumber]>,'<Data>')~ );
+			}
+		}
+
+		Query = ~SELECT * FROM RImageEditListTemplates WHERE ID = '<FromTemplate>'~;
+
+		if ( !PGenConList( EditList,Connection,Connection,cursor,Forward,Query,~<Query>~ ) )
+		{
+			EditList( GetErrorDescription,0,theErr );
+			return	Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		}
+
+		while ( EditList( GetNext,Item ) )
+		{
+			Cmd = ~Insert Into RImageEditList(ID,ToPath,FromPath) Values('<$con.Changed[ID]>','<$pcon.Item[ToPath]>','<$pcon.Item[FromPath]>')~;
+
+			if ( !connection( Cmd,~<Cmd>~ ) )
+			{
+				Connection( GetErrorDescription,theErr,GetErrorNumber,errNumber );
+				return Warning( Translate(DBMessages,UpdateFailed,~<Cmd>~,~<theErr>~,~<errNumber>~) );
+			}
+		}
+	}
+
+	FromTemplate = ~~;
+
+	return TRUE;
+}
+
+
+NUMERIC RImageOrders::OpenSelected()	{ return OnDoubleClick(); }
+
+
+NUMERIC RImageOrders::SaveAsTemplate()	// NOT USED YET
+{
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( ~There were no selected items~ ); }
+
+	if ( SelectedItems( GetNext,Item ) )
+	{
+		ID = '<$con.Item[ID]>'~;
+	}
+
+	return TRUE;
+}
+
+NUMERIC RImageOrders::OnDoubleClick()
+{
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( ~There were no selected items~ ); }
+
+	while ( SelectedItems( GetNext,Item ) )
+	{
+		Query = ~Select * From RImageEditList Where ID = '<$con.Item[ID]>'~;
+		Actions = ACTION DOC ( RImageEditListDoc Open RImageEditListDoc "Init(~<$con.Item[Writer]>~,~<$con.Item[ID]>~,~<Query>~);" );
+		PerformActions( Actions );
+	}
+
+	return TRUE;
+}
+
+NUMERIC RImageOrders::OnMergeButton()
+{
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( ~There were no selected items~ ); }
+
+	while ( SelectedItems( GetNext,Item ) )
+	{
+		Query = ~Select * From RImageMerge Where ID = '<$con.Item[ID]>' Order By FieldNumber~;
+		Actions = ACTION DOC ( RImageMergeDoc Open RImageMergeDoc "Init(~<$con.Item[ID]>~,~<Query>~);" );
+		PerformActions( Actions );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RImageOrders::SetProgress( Progress )
+{
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( Translate(~There were no selected items~) ); }
+	
+	Count = SelectedItems( ChildCount );
+	
+	theStatus = (<Progress> == 1) ? ~Ready~ : ~Hold~;
+	
+	ReturnOnFailure( MessageBox( ~Are you sure you want to set the <Count> selected jobs to <theStatus>?~,YESNO ) == YES );
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+	
+	while ( SelectedItems( GetNext,Item ) )
+	{
+		Cmd = ~Update RImageOrders Set Progress='<Progress>',Condition=0,State=0,Status='' Where ID = '<$con.Item[ID]>'~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Database update failed: <Cmd>  <theErr>~ );
+			break;
+		}
+	}
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+NUMERIC RImageOrders::OnDuplicateRecord( &NewRow )	
+{ 
+	Now = Time();
+	NewRow( Set,SubmitDate,~<Now>~ );
+	NewRow( Set,Progress,0 );
+
+	return NewRow( Set,ID,UniqueRImageJobID() );
+}
+
+
+NUMERIC RImageOrders::OnDuplicateComplete( &RowToImitate,&NewRow,RowBeingAdded )
+{
+	ChangeRecord();
+	
+	OldID = ~<$con.RowToImitate[ID]>~;
+	NewID = ~<$con.NewRow[ID]>~; 
+	
+	if ( IsNull(~<NewID>~) )
+	{
+		return Warning( ~The ID can't be null~ );
+	}
+	
+	Query = ~Select * From RImageEditList Where ID='<OldID>'~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Database query failed: <Query>  <theErr>~ );
+	}
+	
+	List( GetConnection,dBase );
+	
+	while ( List(GetNext,Rec) )
+	{
+		Cmd = ~Insert Into RImageEditList(ID,ToPath,FromPath,DeleteAfter) Values('<NewID>','<$pcon.Rec[ToPath]>','<$pcon.Rec[FromPath]>',<$pcon.Rec[DeleteAfter]>)~;
+		
+		if ( !dbase( Cmd,~<Cmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			return Warning( ~Database update failed: <Cmd>  <theErr>~ );
+		}
+	}
+	
+	ForgetPrivate( List );
+	
+	Query = ~Select * From RImageMerge Where ID='<OldID>'~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Database query failed: <Query>  <theErr>~ );
+	}
+	
+	List( GetConnection,dBase );
+	
+	while ( List(GetNext,Rec) )
+	{
+		Cmd = ~Insert Into RImageMerge(ID,FieldNumber,FieldData) Values('<NewID>','<$pcon.Rec[FieldNumber]>','<$pcon.Rec[FieldData]>')~;
+		
+		if ( !dbase( Cmd,~<Cmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			return Warning( ~Database update failed: <Cmd>  <theErr>~ );
+		}
+	}
+	
+	
+	return TRUE;
+}
+
+NUMERIC RImageOrders::OnAddRecord( &NewRow )
+{
+	Writer = ~~;
+
+	if ( DataView( GetSelected,SelectedItems ) )
+	{
+		if ( SelectedItems( GetNext,Item ) )
+		{
+			Writer =  ~<$con.Item[Writer]>~ ;
+		}
+	}
+	
+	NewRow( Set,Writer,~<Writer>~ );
+	NewRow( Set,ID,UniqueRImageJobID() );
+	NewRow( Set,Search,~*.*~ );
+	NewRow( Set,Copies,~1~ );
+	NewRow( Set,LabelType,~0~ );
+	NewRow( Set,Priority,~5~ );
+	NewRow( Set,FileType,~0~ );
+	NewRow( Set,OrderID,~NA~ );
+
+	Now = Time();
+	NewRow( Set,SubmitDate,~<Now>~ );
+	
+	return TRUE;
+}
+
+
+NUMERIC RImageOrders::EndEdit()
+{
+	DataView( GetEditedCell,row,col );
+	DataView( GetEditedCellValue,value );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	MediaTypeString = GetCellValue( <Row>, ~MEDIATYPE~ );	// ~CD~,~DVD~,~DVDR-DL~,~DVDR-HD~,~DVDR-BD~
+	MediaTypeValue = MakeNumber( ~<MediaTypeString>~ );
+
+	// If CD (a value of 0) is the current Media Type
+	if ( <MediaTypeValue> == 0 )
+	{
+		// Then clear the File System Extensions
+		// field ( set to None (a value of 0) )
+		//
+		// Currently only the DVD Media Type DVD uses the
+		// settings contained in the File System field.
+
+		DataView( SetCellValue, Current, FileSystem, 0 );
+	}
+
+	// If DVD (a value of 1 or greater) is the current Media Type
+	if ( <MediaTypeValue> >= 1 )
+	{
+		// Then clear the File System Extensions that
+		// are not supported by the DVD ( set to None
+		// (a value of 0) )
+
+		DataView( SetCellValue, Current, PowerImage, 0 );
+		DataView( SetCellValue, Current, RecordingType, 0 );
+		DataView( SetCellValue, Current, AppleExtensions, 0 );
+	}
+
+	return TRUE;
+}
+
+
+VOID RImageOrders::DataViewDefinition()
+{
+	Fields:
+		ComboBoxChangedActionsText	ACTION Call ( <This>.EndEdit() )
+		EndEditActionsText			ACTION Call ( <This>.EndEdit() )
+}
+
+
+NUMERIC RImageOrders::UpdateFILESYSTEMCombo( &ColumnDefinition,Row,Col )
+{
+	MediaTypeValue = GetCellValue( <Row>, ~MEDIATYPE~ );
+
+	// If CD (a value of 0) is the current Media Type
+	if ( MakeNumber( ~<MediaTypeValue>~ ) == 0 )
+	{
+		StringList( list,New,Is,~<$[DATABASE FieldTypes].RImageNoFileSystem[ChoiceList]>~ );
+	}
+
+	// Else If DVD (a value of 1) is the current Media Type
+	else
+	{
+		StringList( list,New,Is,~<$[DATABASE FieldTypes].RImageFileSystem[ChoiceList]>~ );
+	}
+
+	ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,list(GetCopyOf) );
+
+	DataView( SetComboBox,ColumnDefinition,<Col> );
+
+	return TRUE;
+}
+
+
+NUMERIC RImageOrders::UpdateWriterCombo( &ColumnDefinition,row,col )
+{
+	Query = STR ( Select ID From RImage Order By ID );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,Writers,ID );
+
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,Writers(GetCopyOf) );
+
+		DataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RImageOrders::NewFrom()
+{
+	ControlView( GetControlValue,TemplatesComboBox,TemplateName );
+
+	if ( IsNull( ~<TemplateName>~ ) )
+	{
+		Warning( ~You select a template~ );
+	}
+
+	WaitCursor( Begin );
+
+	Query = ~SELECT * FROM RImageTemplates WHERE ID = '<TemplateName>'~;
+
+	if ( !PGenConList( List, Connect, GetRecordFor, ~<Query>~, Template ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		WaitCursor( End );
+		return	Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	OnAddRecord( NewRow );
+
+	NewRow( Get,ID,JobID );
+
+	Template( UpdateIn,NewRow );
+
+	NewRow( ParseAttributes,FALSE,OrderID,Volume,CDPath,FilePath,Search,LabelType,LabelFile,MergeFile,MergeData );
+
+	NewRow( SetValues,ID,~<JobID>~ );
+
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )	{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	SetActiveCell( <RowBeingAdded>,~ID~,TRUE );
+
+	FromTemplate = ~<TemplateName>~;
+	
+	ChangeRecord();
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+
+NUMERIC Init( Which,Query )
+{
+	if ( Defined(Grid) )
+	{
+		Grid.Set( DocumentQuery,~<Query>~ );
+		Grid.SetTitle( ~RImageOrders - <Which>~ );
+		Grid.RefreshListView();
+		Grid.ReOpen();
+		return TRUE;
+	}
+
+	Class( RImageOrders,Extends,BaseGrid,
+			Member,FromTemplate,Str,~~ );
+
+	RImageOrders( New,Grid );
+
+	Grid.Set( DocumentQuery,~<Query>~ );
+	Grid.Set( Title,~RImageOrders - <Which>~ );
+
+	Global( Grid );
+
+	Grid.DefineWindow();
+	Grid.Init();
+
+	Action = STR ( Grid.UpdateTemplatesList(); );
+
+	QueueContentsAfter( Action,1000 );
+
+	return TRUE;
+}
+

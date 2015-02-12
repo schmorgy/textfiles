@@ -1,0 +1,426 @@
+// ******** THE FOLLOWING ROUTINES ARE CALLED FROM THE REMOTEJOBSERVER THREAD
+
+VOID Opening(Path)
+{
+	JobsDataWindow( StatusBar,Text,Translate( ~<$Date.DateTime>  Opening <Path>~ ) );
+}
+
+VOID Queueing(Path)
+{
+	JobsDataWindow( StatusBar,Text,Translate( ~<$Date.DateTime>  Queueing <Path>~ ) );
+}
+
+VOID Sleeping()
+{
+	JobsDataWindow( StatusBar,Text,Translate( ~<$Date.DateTime>  Sleeping~ ) );
+}
+
+
+NUMERIC RefreshListView()
+{
+	if ( JobsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,ConnectLocal,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	Count = List( NumEntries );
+	
+	JobsDataWindow( StatusBar,Text,~Refreshing~ );
+	JobsDataWindow( RefreshWindow );
+	JobsDataWindow( StatusBar,Text,~<Count> Records~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !JobsDataView( GetChangedRow,ChangedJobEntry,OrigJobEntry,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate( ~There was no changed row.~ ) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedJobEntry[ID]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  ID cannot be blank.~ ) ); }
+
+	Key = ~ID = '<$con.OrigJobEntry[ID]>'~;
+	
+	Query = ~Select * From Jobs Where <Key>~;
+
+	if ( !PGenConList( List,ConnectLocal,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,ChangedJobEntry,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update Job record where <Key>. <theErr>~ );
+	}
+
+	JobsDataView( CommitChanges );	
+
+	return TRUE;
+}
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !JobsDataView( GetSelectedRows,JobsToDelete ) )		
+		{ return Warning( Translate( ~There were no jobs selected to delete~ ) ); }
+
+	Count = JobsToDelete( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( ~There were no jobs selected to delete~ ) ); }
+
+	if ( MessageBox( Translate( ~Are you sure you want to delete the <Count> selected Jobs?~ ),YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,ConnectLocal ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the database. <theErr>~ );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( JobsToDelete( GetNext,Job ) )
+	{
+		Key = ~ID = '<$con.Job[ID]>'~;
+
+		Cmd = ~Delete From Jobs Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Could not delete Jobs Where <Key>. <theErr>~ );
+		}
+
+		if ( ~<$con.Job[JobPath]>~ != ~~ )
+		{
+			JobQueuesDataWindow( StatusBar,Text,Translate( ~Deleting <$con.Job[Path]>~  ) );
+
+			if ( !Files( Delete,~<$con.Job[JobPath]>~ ) )
+			{
+				Log( Session,~Could not delete <$con.Job[Path]>.  <$Func.GetLastErrorMsg()>~ );
+			}
+		}
+
+		RowsToDelete( AddString,JobsToDelete(GetCurrentPosition) );
+	}
+
+	JobsDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	GenerateUniqueID( JobID,ID );
+
+	NewRow( Set,ID,~<ID>~ );
+	NewRow( Set,SubmittedAt,~<$Date.LongDateTime>~ );
+	NewRow( Set,RunAt,~<$Date.LongDate>~ );
+	
+	RowBeingAdded = JobsDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate( ~You are too low on memory to add any more rows~ ) ); }
+
+	JobsDataView( SetActiveCell,<RowBeingAdded>,SubmittedAt );
+
+	return TRUE;
+}
+
+
+NUMERIC OpenAJob( JobPath )
+{
+	if ( ~<JobPath>~ == ~~ )
+		{ return FALSE; }
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == JobView || ~<ViewType>~ == ImageView )
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<JobPath>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+		}
+	}
+
+	if ( ~<JobPath>~ == ~~ )
+		{ return FALSE; }
+
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( ~Could not create document info for <JobPath>~ ); }
+
+	Info( SetValues,OrderID,~~,OrderItemID,~1~ );
+
+	if (!Document( aJob,Open,~<JobPath>~,Job,~~,Info ) )
+		{ return Warning( ~Could not open <JobPath>~ ); }
+
+	return TRUE;
+}
+
+
+
+NUMERIC OpenJobs()
+{
+	if ( !JobsDataView( GetSelectedRows,SelectedJobs ) )		
+		{ return Warning( Translate( ~There were no rows selected~ ) ); }
+
+	while ( SelectedJobs( GetNext,SelectedJob ) )
+	{
+		if ( ~<$Con.SelectedJob[Path]>~ == ~~ ) 
+		{
+			Warning( Translate( ~There is no job to open~ ));
+		}
+		else
+		{
+			OpenAJob( ~<$Con.SelectedJob[Path]>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ViewAsText()
+{
+	Program = ~<$Sys.Directory>\Notepad.exe~;
+
+	if ( !Files( FileExists,~<Program>~ ) )
+	{
+		return Warning( Translate( ~Could not find NotePad.exe at <Program>~ ) );
+	}
+
+	if ( !JobsDataView( GetSelectedRows,SelectedJobs ) )		
+		{ return Warning( Translate( ~There were no rows selected~ ) ); }
+
+	while ( SelectedJobs( GetNext,SelectedJob ) )
+	{
+		if ( ~<$Con.SelectedJob[Path]>~ == ~~ ) 
+		{
+			Warning( Translate( ~There is no job to open~ ));
+		}
+		else
+		{
+			if ( !ShellExecute( Open,~<Program>~,~<$con.SelectedJob[Path]>~ ) )
+			{
+				GetLastError( ErrorString,theErr );
+				return Warning( Translate( ~Could not open <$con.SelectedJob[Path]>. <theErr>~ ) );
+			}
+
+		}
+	}
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC OnButtonClick()
+{
+	JobsDataView( GetActiveCell,Row,Col );
+
+	if ( FileDialog( Path,Path,Open ) )
+	{
+		JobsDataView( SetCellValue,<Row>,<Col>,~<Path>~ );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC RightClickInListView()
+{
+	JobsDataView( DisplayMenu,JobsListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseJobsDataView()
+{
+	if ( JobsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate( ~Would you like to save your pending changes?~ ),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	return JobsDataWindow( ForceCloseWindow );
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( JobsDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !JobsDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new jobs that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( JobsDataView( PendingChanges ) )
+	{
+		JobsDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+FirstTime = TRUE; // Only open a new window the first time
+
+NUMERIC Init( WhichJobs,DocumentQuery )
+{
+	JobsDataWindow( Set,Title,~<WhichJobs>~ == ~~ ? ~Scheduled Job Data~ : ~Scheduled Job Data - <WhichJobs>~ );
+
+	Global( WhichJobs,DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,ConnectLocal,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{
+			dBase( GetErrorDescription,0,theErr );
+			Error( ~Database Query Failed: <DocumentQuery>. <theErr>~ );
+		}
+		SetDocumentData( List(GetObject) );
+
+		if ( !JobsDataWindow( CreateWindow,Translate( ~Jobs~ ) ) )
+		{ 
+			Error( ~Failed to create the window for Jobs~ ); 
+		}
+
+		//JobsDataView( AllowRowColResizing,TRUE );
+
+		return TRUE;
+	}
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+
+if ( !GenCon( JobsTableDefinition,GetFrom,Jobs,~[DATABASE LocalTableDefinitions]~ ) )
+	{ Error( Translate( ~The Jobs Table is not properly defined~ ) ); }
+	
+
+Define:	JobsListViewMenu Using DDMenuDef AsSymbol JobsListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add Job~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	NULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	ViewAsTextItem	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&View As Text~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ViewAsText(); )			
+	}
+
+Define: JobsDataWindow Using DDWinDef
+	Fields:		Title					Translate( ~Jobs~ )
+				Position				0 25 90 25
+				IsPositionPercent		T
+				EnableStatusBar			T;
+
+	Contains:	INLISTORDER
+	{
+		Define: JobsDataView Using DDViewDef AsSymbol JobsDataView
+			Fields:	ViewType				ListView
+					GridControlTypes		JobsTableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					ButtonClickActionsText	ACTION Exec ( OnButtonClick() )
+					DoubleClickActionsText	ACTION Exec ( OpenJobs() )
+					CloseActionsText		ACTION Call ( OnCloseJobsDataView() )
+					HActionsText			ACTION SHOWHELPPAGE ( AdminHelpFile "JobsData.htm" );
+	}
+	
+

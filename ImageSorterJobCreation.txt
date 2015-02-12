@@ -1,0 +1,142 @@
+NUMERIC AddImageSorterJobToDatabase( &dBase,BatchID,OrderID,OrderItemID,OrderItemQty,OrderItemSequence,JobPath,QueueName,Priority )
+{
+	Now = ~<$Date.SharedDatabase>~;
+	Now = Time();
+
+	DataFields = ~JobPath,QueueName,SubmitDate,BatchID,OrderID,OrderItemID,OrderItemQty,OrderItemSequence,JobID,PrintStatus,Priority,Owner~;
+
+	while ( TRUE )
+	{
+		GenerateUniqueID( ~PrintJobID~,JobID );
+		//JobID = GetUniqueJobID();
+
+		Values = ~'<JobPath>','<QueueName>',<Now>,'<BatchID>','<OrderID>',<OrderItemID>,<OrderItemQty>,<OrderItemSequence>,'<JobID>',8,<Priority>,'<$App.UserName>'~;
+
+		Cmd = ~Insert Into JobQueue (<DataFields>) Values(<Values>)~;
+
+		if ( dBase( Cmd,~<Cmd>~ ) )
+			break;
+
+		dBase( GetErrorNumber,err,GetErrorDescription,theErr );
+
+		if ( !dBase( ErrorIs,<err>,~Duplicate~) )
+		{			
+			return Warning( Translate( ~Failed to add job to the JobQueue.  <Cmd>.  <theErr>~ ) );
+		}
+	}
+
+	return TRUE;
+}
+
+STR CreateJobPath( Item )
+{
+	JobPath = ~<$App.ShareDirectory>\HR500ImageSorterJobs~;
+
+	JobName = ~Job_<Item>~;
+
+	Directory( Create,~<JobPath>~ );
+
+	return ~<JobPath>\<JobName>~;
+}
+
+
+NUMERIC GetLayoutForProofProductID( &dBase,ProductID,&ProductLayoutPath,&IsPackage )	// NOT DEBUGGED YET
+{
+	if ( ~<ProductID>~ == ~~ )
+	{
+		Warning( Translate( ~No product specified~ ) );
+		return FALSE;
+	}
+
+	Query = ~Select ProductLayoutPath,Package From Products Where ID = '<BaseProductID>'~;
+
+	if ( !dBase( GetValuesFor,~<Query>~,ProductLayoutPath,IsPackage ) )
+	{
+		dBase( GetErrorDescription,theErr );		
+		Warning( Translate( ~Product <BaseProductID> does not have a layout. <theErr>~ ) );
+		return FALSE;
+ 
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CreateImageSorterProofJobs( OrderID,ProductID,QueueName )	
+{
+	ProductLayoutPath = ~~; IsPackage = FALSE;
+	
+	if ( !ADO( dBase,Connect ) )
+	{
+		List( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database Connection Failed. <theErr>~) );
+	}
+
+	if ( !GetLayoutForProofProductID( dBase,~<ProductID>~,ProductLayoutPath,IsPackage ) )
+	{
+		return Warning( Translate( ~Could not find layout for product <ProductID>~ ) );
+	}
+
+	if ( !Document( Job,ParseFile,~<ProductLayoutPath>~ ) )
+	{
+		return Warning( Translate( ~An error occured while parsing the layout at <ProductLayoutPath>~ ) );
+	}
+
+	if ( !Job( GetRenderList,0,RenderList ) )
+	{ 
+		return Warning( Translate( ~There was no render list for <ProductLayoutPath>~ ) );
+	}
+
+	ImageCount = TextCount = 0;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~Select Path,Roll,Frame From Images Where OrderID = '<OrderID>' Order By Roll,Frame~ ) )
+	{
+		return Warning( ~Query failed~ );
+	}
+
+	BatchID = UniquePrintBatchID(); 
+
+	ImageNodeCount = JobNum = OrderItemID = TextCount = 0;
+
+  	Done = FALSE;
+	while ( !<Done> )
+	{
+		while ( RenderList( GetNonNullNode,~IPrompt:~,<ImageNodeCount++>,TheNode ) )		
+		{
+			if ( !List( GetNext,Image ) )
+			{
+				Done = TRUE;
+				break;
+			}
+
+			TheNode( Set,~IFile:~,~<$pcon.Image[Path]>~ );
+			ForgetLocal( TheNode );
+
+			if ( RenderList( GetNonNullNode,~TPrompt:~,<TextCount++>,TheNode ) )
+			{
+				TheNode( Set,~Text:~,~<OrderID>\<$pcon.Image[Roll]>\<$pcon.Image[Frame]>~ );
+				ForgetLocal( TheNode );
+			}
+		}
+
+		if ( !<Done> )
+		{
+			JobPath = CreateJobPath( <++JobNum> );
+
+			if ( !RenderList( WriteJob,~<JobPath>~ ) )
+			{ 
+				return Warning( Translate( ~Failed to write <JobPath>~ ) );
+			}
+
+			AddImageSorterJobToDatabase( dBase,~<BatchID>~,~<OrderID>~,<++OrderItemID>,1,<OrderItemID>,~<JobPath>~,~<QueueName>~,50 );
+
+			ImageNodeCount = TextCount = 0;
+		}
+	}
+
+	dBase( Cmd,~Update JobQueue Set PrintStatus = 1 Where BatchID = '<BatchID>'~ );
+
+	return TRUE;
+}
+
+

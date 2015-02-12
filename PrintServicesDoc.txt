@@ -1,0 +1,154 @@
+Include: ~FormattingRoutines~;
+
+IncludeClass( BaseGrid );
+
+VOID	PrintServices::PrintServices()						// CONSTRUCTOR
+{
+	TableName = ~PrintServices~;
+	DocumentQuery = ~Select * from <TableName> Order By ID~;
+	Title = ~Print Services~;
+	WindowTop = 25;
+	WindowWidth = 50;
+	WindowHeight = 25;
+	HelpPage = ~PrintServices.htm~;
+	SplitterRows = ~2 7 93~;
+}
+
+STR		PrintServices::GetKey( &Item )					// PRIMARY KEY FOR THE TABLE
+{
+	return ~ID = <$con.Item[ID]>~;
+}
+
+NUMERIC PrintServices::ChangeRecordAudits( &Changed )		// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[ID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  ID cannot be blank.~ ) ); }
+
+	return TRUE;
+}
+
+NUMERIC PrintServices::HasRelatedRecords(&Changed,&Original,ChangedRow,IsNewRow)
+{ 
+	return !SimilarStr( ~<$con.Changed[ID]>~,~<$con.Original[ID]>~ );
+}
+
+NUMERIC PrintServices::ChangeRelatedRecords( &connection,&Changed,&Original,ChangedRow,IsNewRow )
+{ 
+	cmd = ~Update DigProductPrintServicesPrices SET ServiceID = <$con.Changed[ID]> Where ServiceID = <$con.Original[ID]>~;
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr,RollBackTransaction );
+		return Warning( ~Could not update Digital Product Print Services Prices records. <theErr>~ );
+	}
+
+	cmd = ~Delete From PrintServices Where ID = '<$con.Original[ID]>'~;
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr,RollBackTransaction );
+		return Warning( ~Could not delete the original PrintServices record. <theErr>~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC PrintServices::OnChangeComplete( &Changed,&Original,ChangedRow,IsNewRow )
+{
+	if ( !<SavingAllChanges> )
+	{
+		action = ACTION DOC ( DigitalServicesPricesDoc "RefreshDoc();" );
+		QueueContentsAfter( action, 500 );
+	}
+
+	return TRUE;
+}
+
+NUMERIC PrintServices::OnSaveAllChangesComplete()
+{
+	action = ACTION DOC ( DigitalServicesPricesDoc "RefreshDoc();" );
+	QueueContentsAfter( action, 500 );
+
+	return TRUE;
+}
+
+NUMERIC PrintServices::DeleteRelatedRecords( &connection,&Item )
+{
+	ID = ~<$con.Item[ID]>~;
+
+	cmd = ~Delete From DigProductPrintServicesPrices Where ServiceID = <ID>~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed <cmd>. <theErr>~ ) );
+	}
+
+	return TRUE;
+}
+
+NUMERIC PrintServices::OnDeleteComplete()
+{
+	action = ACTION DOC ( DigitalServicesPricesDoc "RefreshDoc();" );
+	QueueContentsAfter( action, 500 );
+
+	return TRUE;
+}
+
+NUMERIC PrintServices::UpdateServiceCategoryCombo( &ColumnDefinition, row, col )
+{
+
+	if ( !Ado( dBase,Connect ) )
+	{ 
+		return Warning( ~Unable to connect to the database to verify order ID.~ );
+	}
+
+	Query = ~Select Code From ServiceCategory~;
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		return Warning( ~Unable to query the database for service categories.~ );
+	}
+
+	List( MakeStringList, CategoryStringList,Code);
+
+	if ( !UpdateComboBox( ColumnDefinition,CategoryStringList,<col> ) )
+	{
+		return Warning(Translate(~UpdateCharacterSetCombo: Unable to update Service Category combo box.~ ) );
+	}
+
+	return TRUE;
+}
+
+NUMERIC PrintServices::UpdateUnitOfMeasureCombo( &ColumnDefinition, row, col )
+{
+
+	StringList( UOMPrintList, Is, ~<$[DATABASE FieldTypes].UnitOfMeasure[ChoiceList]>~ );
+	StringList( UOMPrintStringList,New,CopyOf, UOMPrintList );
+
+	UOMPrintStringList( DeleteStringByContents, ~PAGE~ );
+
+	if ( !UpdateComboBox( ColumnDefinition,UOMPrintStringList,<col> ) )
+	{
+		return Warning(Translate(~UpdateCharacterSetCombo: Unable to update Unit Of Measure combo box.~ ) );
+	}
+
+	return TRUE;
+}
+
+NUMERIC Init( Which,Query )
+{
+	if ( Defined( Grid ) )
+	{
+		Grid.ReOpen();
+		return TRUE;
+	}
+	else
+	{
+		Class( PrintServices,Extends,BaseGrid );
+
+		PrintServices( New,Grid );
+
+		Grid.Set( DocumentQuery,~<Query>~ );
+		Grid.DefineWindow();
+		Grid.Init();
+		return Global( Grid );
+	}
+}

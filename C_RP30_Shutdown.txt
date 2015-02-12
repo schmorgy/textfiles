@@ -1,0 +1,783 @@
+//	C_RP30_Startup.cpp
+
+ExecC() ;
+
+//	THIS FILE CONTAINS THE STARTUP SCRIPT FOR THE KPDM HOT FOLDER APPLICATION
+
+/*
+Dictionary:	DDPrinterStatus
+	Fields:	Name		~Type:~					Type	Text
+	Fields:	Name		~Action:~				Type	Long
+	Fields:	Name		~Time:~					Type	Text
+	Fields:	Name		~Code:~					Type	Long
+	Fields:	Name		~IA_Version:~			Type	Text
+	Fields:	Name		~P_Width_LHS:~			Type	Long
+	Fields:	Name		~P_Length_LHS:~			Type	Long
+	Fields:	Name		~P_Surface_LHS:~		Type	Long
+	Fields:	Name		~P_Width_RHS:~			Type	Long
+	Fields:	Name		~P_Length_RHS:~			Type	Long
+	Fields:	Name		~P_Surface_RHS:~		Type	Long
+	Fields:	Name		~Printer_Status:~		Type	Text
+	;
+
+	RP30 STATUS FILE:
+
+TYPE: STATUS
+ACTION: 0005
+TIME: 06/13/02 13:42:51
+CODE: 0000
+IA_VERSION: 2.79.13
+P_WIDTH_LHS: 
+P_LENGTH_LHS: 
+P_SURFACE_LHS: 
+P_WIDTH_RHS: 
+P_LENGTH_RHS: 
+P_SURFACE_RHS: 
+PRINTER_STATUS: 
+*/
+
+char	*NULL ;
+int		 FALSE = 0L ;
+int		 TRUE  = ! FALSE ;
+
+int		gTesting = FALSE ;
+
+main()
+{
+//	Debug(1) ;
+//	Test() ;
+//	Debug(1) ;
+}
+
+Test()
+{
+	LaunchProgram(_T("C:\\Winnt\\System32\\Notepad.exe")) ;
+}
+
+//	VERIFY THIS DEVICE HAS A POINTER TO A HOT FOLDER APPLICATION
+//	VERIFY WE HAVE THE PATH TO THE CONTRL AND RESPONSE FOLDERS
+//	WRITE THE CONFIGURATION FILE
+//	INVOKE THE HOT FOLDER APPLICATION AND RETURN
+
+int Init(UGenCon *PrinterSetup)
+{
+//	Debug(1) ;
+
+	SessionLogDirect( _T("C_RP30_Shutdown.txt Init: Version 1.01")) ;
+
+	return( 0 ) ;	//	THIS SCRIPT SEEMS TO CAUSE MORE CUSTOMER COMPLAINTS
+					//	THAN IT IS WORTH.  LET'S TRY IT THIS WAY.  02/04/03
+
+	//	WRITE THE ACTION TO STOP Netprint System and delete all batches.
+	WriteAction( PrinterSetup, _T("0006") ) ;
+
+	//	WAIT FOR STATUS
+	int ErrorCode = 0 ;
+	UGenCon *NetPrintStatusGC = WaitForStatus( PrinterSetup ) ;
+	if( NetPrintStatusGC )
+	{
+		ErrorCode = NetPrintStatusGC->GetLongValue( _T("Code:")) ;
+		delete NetPrintStatusGC ;
+	}
+
+	//	WRITE THE ACTION TO SHUTDOWN THE INTERFACE APPLICATION
+	WriteAction( PrinterSetup, _T("0999") ) ;
+
+	//	WAIT FOR STATUS
+	ErrorCode = 0 ;
+	NetPrintStatusGC = WaitForStatus( PrinterSetup ) ;
+	if( NetPrintStatusGC )
+	{
+		ErrorCode = NetPrintStatusGC->GetLongValue( _T("Code:")) ;
+		delete NetPrintStatusGC ;
+	}
+
+	Sleep(1000) ;
+	CleanFolders(PrinterSetup) ;
+	
+	return( ErrorCode ) ;
+}
+
+long LaunchProgram( TCHAR *AppPath )
+{
+	TCHAR	*verb = _T("open") ;
+	TCHAR	*file = AppPath ;
+	TCHAR	*parm = _T("C:\\Temp\\KPDM_Config.cfg") ;
+	TCHAR	 AppDir[2048] ;
+
+	GetAppDirectory( AppPath, AppDir ) ;
+
+	TCHAR	*defaultDirectory = AppDir ;
+	TCHAR	*cmd = _T("MINIMIZE") ;
+
+	long Result = ShellExecute(verb, file, parm, defaultDirectory, cmd ) ;
+	return( Result ) ;
+}
+
+int	GetAppDirectory( TCHAR *FullPath, TCHAR *Directory )
+{
+	strcpy( Directory, FullPath ) ;
+	long	loop ;
+	long	length = strlen( FullPath ) ;
+
+	while( length > 0 )
+	{
+		if( Directory[length] == '\\' )
+		{
+			Directory[length] = 0 ;
+			length = 0 ;
+		}
+		length-- ;
+	}
+}
+
+
+
+int CleanResponseFiles(UGenCon *PrinterSetup)
+{
+	TCHAR			 FilePath[2048] ;
+	TCHAR			*FileName ;
+
+	//	DELETE PREVIOUS RESPONSE FILES.
+	TCHAR	*ResponseFolder = PrinterSetup->GetStringValue(_T("ResponseFolder")) ;
+	if( ResponseFolder == NULL )	{ return( FALSE ) ; }
+
+	sprintf( FilePath, _T("%s\\*.rsp"), ResponseFolder ) ;
+
+	UList			*theResponses = GetFileList(FilePath) ;
+	UListIterator	*anIter = new UListIterator(theResponses) ;
+
+	UGenCon	*aFileGC = anIter->GetLast() ;
+	while( aFileGC )
+	{
+		FileName = aFileGC->GetStringValue(_T("FileName")) ;
+		sprintf( FilePath, _T("%s\\%s"), ResponseFolder, FileName ) ;
+		SessionLogDirect(_T("C_KPDM_Startup.CleanResponseFiles: deleting \"%s\""), FilePath ) ;
+		unlink( FilePath ) ;
+		aFileGC = anIter->GetPrev() ;
+	}
+
+	delete anIter ;
+	delete theResponses ;
+	return( TRUE ) ;
+}
+
+int CleanFolders(UGenCon *PrinterSetup)
+{
+	TCHAR		 FolderPath[2048] ;
+	TCHAR		*ImagePath = PrinterSetup->GetStringValue(_T("OutputPath")) ;
+
+	CleanFiles(PrinterSetup->GetStringValue(_T("ResponseFolder")), _T("*.*")) ;
+	CleanFiles(PrinterSetup->GetStringValue(_T("ControlFolder")), _T("*.*")) ;
+	GetFolder( ImagePath, FolderPath ) ;
+	CleanFiles(FolderPath, _T("*.*")) ;
+	return( TRUE ) ;
+}
+
+
+int GetFolder( TCHAR *ImagePath, TCHAR *FolderPath )
+{
+	strcpy( FolderPath, ImagePath ) ;
+	int		loop = strlen( FolderPath ) - 1 ;
+	int		BackSlash = '\\' ;
+
+	while( FolderPath[loop] )
+	{
+		if( FolderPath[loop] == BackSlash )
+			{ break ; }
+		loop-- ;
+	}
+	FolderPath[loop] = 0 ;
+}
+
+int CleanFiles(TCHAR *FolderPath, TCHAR *FileType)
+{
+	TCHAR			 FilePath[2048] ;
+	TCHAR			 ErrorMsg[512] ;
+	TCHAR			*FileName ;
+	int				 LastError = 0 ;
+	int				 Error = 0 ;
+	int				 Dot = '.' ;
+
+
+	//	DELETE PREVIOUS FILES.
+	if( FolderPath == NULL )	{ return( FALSE ) ; }
+
+	sprintf( FilePath, _T("%s\\%s"), FolderPath, FileType ) ;
+
+	UList			*theFiles = GetFileList(FilePath) ;
+	UListIterator	*anIter = new UListIterator(theFiles) ;
+
+	UGenCon	*aFileGC = anIter->GetLast() ;
+	while( aFileGC )
+	{
+		FileName = aFileGC->GetStringValue(_T("FileName")) ;
+		if( FileName[0] != Dot )
+		{
+			sprintf( FilePath, _T("%s\\%s"), FolderPath, FileName ) ;
+			SessionLogDirect(_T("C_RP30_Startup.CleanFiles: deleting \"%s\"\r\n"), FilePath ) ;
+			Error = unlink( FilePath ) ;
+			if( Error == -1 )
+			{
+				LastError = GetLastError() ;
+				Error = errno(ErrorMsg) ;
+				SessionLogDirect( _T("Can't unlink \"%s\" LastError: %d, Error: %d, %s"),
+														FilePath, LastError, Error, ErrorMsg ) ;
+			}
+		}
+		aFileGC = anIter->GetPrev() ;
+	}
+
+	delete anIter ;
+	delete theFiles ;
+	return( TRUE ) ;
+}
+
+
+UList *GetFileList(TCHAR *Path)
+{
+	long	*FileHandle ;
+	char	 FileData[2048] ;
+	TCHAR	 FileName[2048] ;
+	TCHAR	 FileDate[1024] ;
+	int		 Result ;
+	long	 FileAttr ;
+	long	 longHandle ;
+	UGenCon	*FileDataGC ;
+
+	UList	*theList = new UList ;
+
+	strcpy( FileName, Path ) ;
+	FileHandle = FindFirstFile( FileName, FileData ) ;
+	longHandle = FileHandle ;
+	if( longHandle != 0xFFFFFFFF )
+	{
+		FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+		Result = FindFileConvToGC( FileData, FileDataGC ) ;
+		FindFileConvTime( FileDataGC, _T("ACCESSED"), FileDate ) ;
+
+		theList->InsertBack(FileDataGC) ;
+
+		FileAttr = FileDataGC->GetLongValue(_T("FileAttributes")) ;
+		while( Result )
+		{
+			Result = FindNextFile( FileHandle, FileData ) ;
+			if( Result )
+			{
+				FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+				FindFileConvToGC( FileData, FileDataGC ) ;
+				theList->InsertBack(FileDataGC) ;
+			}
+		}
+
+		Result = FindClose( FileHandle ) ;
+	}
+	return( theList ) ;
+}
+
+WriteAction(UGenCon *PrinterSetup, TCHAR *Action)
+{
+	TCHAR	*ControlFolder	= PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+	TCHAR	 ActionPath[1024] ;
+
+	sprintf( ActionPath, _T("%s\\001.act"), ControlFolder ) ;
+
+//	SessionLogDirect(_T("C_RP30_Shutdown: Action: %s Path: %s"), Action, ActionPath ) ;
+
+	char	*fp = fopen( ActionPath, _T("wb")) ;
+	if( fp )
+	{
+		TCHAR	IOBuff[64] ;
+		IOBuff[0] = 0xFEFF ; IOBuff[1] = 0x0000 ;
+		WriteUnicode( fp, IOBuff ) ;
+
+//		SessionLogDirect(_T("C_RP30_Shutdown: Writing Action: %s Path: %s"), Action, ActionPath ) ;
+
+		sprintf( IOBuff, _T("ACTION: %s"), Action ) ;
+		WriteUnicode( fp, IOBuff ) ;
+		fclose(fp) ;
+	}
+
+	if( gTesting )
+	{
+		//	DELETE THE ACTION FILE
+		DeleteAction(PrinterSetup) ;
+
+		//	WRITE THE STATUS FILE
+		WriteStatus(PrinterSetup, Action) ;
+	}
+}
+
+
+GetPrinterSetup(UGenCon *PrinterSetup)
+{
+	UGenCon		*PrinterSetupGC = new UGenCon( GetDataDictionary(_T("DDPrinterStatus"))) ;
+	UGenCon		*aGC ;
+
+	WriteAction( PrinterSetup, _T("0001")) ;
+	aGC = WaitForStatus( PrinterSetup ) ;
+	if( aGC )
+	{
+		CombineGCs( PrinterSetupGC, aGC ) ;
+		delete aGC ;
+	}
+
+	WriteAction( PrinterSetup, _T("0002")) ;
+	aGC = WaitForStatus( PrinterSetup ) ;
+	if( aGC )
+	{
+		CombineGCs( PrinterSetupGC, aGC ) ;
+		delete aGC ;
+	}
+
+	WriteAction( PrinterSetup, _T("0003")) ;
+	aGC = WaitForStatus( PrinterSetup ) ;
+	if( aGC )
+	{
+		CombineGCs( PrinterSetupGC, aGC ) ;
+		delete aGC ;
+	}
+
+	PrintStatusGC( PrinterSetupGC ) ;
+}
+
+
+WriteStatus(UGenCon *PrinterSetup, TCHAR *Action)
+{
+	TCHAR	*StatusText1 = 
+_T("TYPE: STATUS
+ACTION: 0001
+TIME: 06/13/02 13:42:51
+CODE: 0000
+IA_VERSION: 2.79.13
+P_WIDTH_LHS: 
+P_LENGTH_LHS: 
+P_SURFACE_LHS: 
+P_WIDTH_RHS: 
+P_LENGTH_RHS: 
+P_SURFACE_RHS: 
+PRINTER_STATUS: ") ;
+
+	TCHAR	*StatusText2 = 
+_T("TYPE: STATUS
+ACTION: 0002
+TIME: 06/13/02 16:44:28
+CODE: 0000
+IA_VERSION: 2.79.13
+P_WIDTH_LHS: 
+P_LENGTH_LHS: 
+P_SURFACE_LHS: 
+P_WIDTH_RHS: 
+P_LENGTH_RHS: 
+P_SURFACE_RHS: 
+PRINTER_STATUS: 7") ;
+
+	TCHAR	*StatusText3 = 
+_T("TYPE: STATUS
+ACTION: 0003
+TIME: 06/13/02 16:45:39
+CODE: 0000
+IA_VERSION: 2.79.13
+P_WIDTH_LHS: 2030
+P_LENGTH_LHS: 0200
+P_SURFACE_LHS: 9
+P_WIDTH_RHS: 3050
+P_LENGTH_RHS: 0540
+P_SURFACE_RHS: 9
+PRINTER_STATUS: ") ;
+
+	TCHAR	*StatusText5 = 
+_T("TYPE: STATUS
+ACTION: 0005
+TIME: 06/13/02 13:42:51
+CODE: 0000
+IA_VERSION: 2.79.13
+P_WIDTH_LHS: 
+P_LENGTH_LHS: 
+P_SURFACE_LHS: 
+P_WIDTH_RHS: 
+P_LENGTH_RHS: 
+P_SURFACE_RHS: 
+PRINTER_STATUS: ") ;
+
+	TCHAR	 StatusPath[2048] ;
+	TCHAR	*ResponseFolder = PrinterSetup->GetStringValue(_T("ResponseFolder")) ;
+	
+	sprintf( StatusPath, _T("%s\\001.sta"), ResponseFolder ) ;
+
+	char	*fp = fopen( StatusPath, _T("wb")) ;
+	if( fp )
+	{
+		if( stricmp( Action, _T("0001")) == 0 )
+		{
+			fprintf( fp, StatusText1 ) ;
+		}
+		if( stricmp( Action, _T("0002")) == 0 )
+		{
+			fprintf( fp, StatusText2 ) ;
+		}
+		if( stricmp( Action, _T("0003")) == 0 )
+		{
+			fprintf( fp, StatusText3 ) ;
+		}
+		if( stricmp( Action, _T("0005")) == 0 )
+		{
+			fprintf( fp, StatusText5 ) ;
+		}
+		fclose(fp) ;
+	}
+}
+
+
+WriteUnicode( char *fp, TCHAR *Text )
+{
+	long	Length = strlen( Text ) ;
+	fwrite( Text, 2, Length, fp ) ;
+
+	long	EndOfLine = 0x000A000D ;
+	fwrite( &EndOfLine, 2, 2, fp ) ;
+}
+
+DeleteAction(UGenCon *PrinterSetup)
+{
+	TCHAR	*ControlFolder	= PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+	TCHAR	 ActionPath[1024] ;
+
+	sprintf( ActionPath, _T("%s\\001.act"), ControlFolder ) ;
+	unlink( ActionPath ) ;
+}
+
+
+UGenCon *WaitForStatus( UGenCon *PrinterSetup )
+{
+	long	 StartTime = Clock() ;
+	long	 EndTime ;
+	int		 Done = FALSE ;
+	UGenCon	*StatusGC = NULL ;
+	int		 ErrorCode = -1 ;
+
+	while( ! Done )
+	{
+		Sleep( 250 ) ;
+		StatusGC = ReadStatus( PrinterSetup ) ;
+
+		if( StatusGC )	{ Done = TRUE ; }
+
+		EndTime = Clock() ;
+		if( EndTime - StartTime > 30000 )	{ Done = TRUE ; }
+	}
+
+	if( StatusGC )
+	{
+		ErrorCode = StatusGC->GetLongValue(_T("Code:")) ;
+	}
+
+	if( ErrorCode == -1 )	{ DeleteAction(PrinterSetup) ; }
+
+	return( StatusGC ) ;
+}
+
+UGenCon *ReadStatus( UGenCon *PrinterSetup )
+{
+	TCHAR	*ResponseFolder = PrinterSetup->GetStringValue(_T("ResponseFolder")) ;
+	TCHAR	 StatusPath[1024] ;
+	UGenCon	*StatusGC = NULL ;
+	
+	sprintf( StatusPath, _T("%s\\001.sta"), ResponseFolder ) ;
+
+	TCHAR	*StatusText = GetFile( StatusPath ) ;
+//	TCHAR	*StatusText = GetTheFile( StatusPath ) ;
+	if( StatusText )
+	{
+		StatusGC = ParseStatus( StatusText ) ;
+		free( StatusText ) ;
+		unlink( StatusPath ) ;
+		return( StatusGC ) ;
+	}
+	return( StatusGC ) ;
+}
+
+TCHAR *GetTheFile(TCHAR *Path)
+{
+	TCHAR	*Text = NULL ;
+
+	char *fp = fopen( Path, _T("rb")) ;
+	if( fp )
+	{
+		fseek( fp, 0L, 2 ) ;
+		int	Length = ftell(fp) ;
+		fseek( fp, 0L, 0 ) ;
+		Text = malloc( (Length + 32) * 2 ) ;
+		fread( Text, 2, Length, fp ) ;
+		fclose( fp ) ;
+	}
+	return( Text ) ;
+}
+
+
+UGenCon *ParseStatus( TCHAR *StatusText )
+{
+	TCHAR		 Token[2048] ;
+	TCHAR		*String ;
+	long		 Length ;
+	long		 Value ;
+	UGenCon		*StatusGC = new UGenCon( GetDataDictionary(_T("DDPrinterStatus"))) ;
+
+	if( StatusGC )
+	{
+		UParser	*theParser = new UParser ;
+		if( theParser )
+		{
+			theParser->SetText(StatusText) ;
+
+			theParser->GetToken(Token) ;
+			while( Token[0] )
+			{
+				if( stricmp( Token, _T("Type:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("Type:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("Action:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("Action:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("Time:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("Time:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("Code:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("Code:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("IA_Version:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("IA_Version:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("P_Width_LHS:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("P_Width_LHS:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("P_Length_LHS:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("P_Length_LHS:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("P_Surface_LHS:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Value = atoi(Token) ;
+					if( Value > 0 )
+					{
+						String = GetPaperSurface(Token) ;
+						StatusGC->SetAttrValue(_T("P_Surface_LHS:"), String ) ;
+					}
+				}
+
+				if( stricmp( Token, _T("P_Width_RHS:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("P_Width_RHS:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("P_Length_RHS:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Length = strlen( Token ) ;
+					if( Length > 2 )
+					{
+						StatusGC->SetAttrValue(_T("P_Length_RHS:"), Token) ;
+					}
+				}
+
+				if( stricmp( Token, _T("P_Surface_RHS:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Value = atoi(Token) ;
+					if( Value > 0 )
+					{
+						String = GetPaperSurface(Token) ;
+						StatusGC->SetAttrValue(_T("P_Surface_RHS:"), String) ; 
+					}
+				}
+
+				if( stricmp( Token, _T("Printer_Status:")) == 0 )
+				{
+					theParser->GetUntil( '\n', Token, FALSE ) ;
+					Value = atoi(Token) ;
+					if( Value > 0 )
+					{
+						StatusGC->SetAttrValue(_T("Printer_Status:"), GetStatus(Token)) ;
+					}
+				}
+
+				theParser->GetToken(Token) ;
+			}
+
+			theParser->SetText(NULL) ;
+			delete theParser ;
+		}
+	}
+	return( StatusGC ) ;
+}
+
+
+TCHAR *GetStatus(TCHAR *Token)
+{
+	TCHAR	*Status = _T("") ;
+
+	int		IStat = atoi(Token) ;
+
+	if( IStat == 1 )	{ Status = _T("Reset") ; }
+	if( IStat == 2 )	{ Status = _T("Idle") ; }
+	if( IStat == 3 )	{ Status = _T("Busy") ; }
+	if( IStat == 4 )	{ Status = _T("Netprint Busy") ; }
+	if( IStat == 5 )	{ Status = _T("Common Busy") ; }
+	if( IStat == 6 )	{ Status = _T("Netprint Idle") ; }
+	if( IStat == 7 )	{ Status = _T("Common Idle") ; }
+	if( IStat == 8 )	{ Status = _T("Error") ; }
+	if( IStat == 99 )	{ Status = _T("Offline") ; }
+
+	return( Status ) ;
+}
+
+
+TCHAR	*GetPaperSurface( TCHAR *Token )
+{
+	TCHAR	*Status = _T("") ;
+
+	int		Surf = atoi(Token) ;
+
+	if( Surf ==  1 )	{ Status = _T("Other") ; }
+	if( Surf ==  2 )	{ Status = _T("Matte") ; }
+	if( Surf ==  3 )	{ Status = _T("Semi Matte") ; }
+	if( Surf ==  4 )	{ Status = _T("Glossy") ; }
+	if( Surf ==  5 )	{ Status = _T("Smooth/Luster") ; }
+	if( Surf ==  6 )	{ Status = _T("Ultra Smooth/Hi Luster") ; }
+	if( Surf ==  7 )	{ Status = _T("Fine Grained / Luster") ; }
+	if( Surf ==  8 )	{ Status = _T("Silk") ; }
+	if( Surf ==  9 )	{ Status = _T("Luster") ; }
+	if( Surf == 10 )	{ Status = _T("Deep Matte") ; }
+	if( Surf == 11 )	{ Status = _T("High Gloss") ; }
+
+	return( Status ) ;
+}
+
+
+PrintStatusGC( UGenCon *aGC )
+{
+	TCHAR		*AttrName ;
+	TCHAR		 AttrValue[2048] ;
+	long		 Order = 0L ;
+
+	//	GET THE GENCONs DATA DICTIONARY
+	UDataDict *aDD = aGC->GetDataDict() ;
+	if( aDD )
+	{
+		//	PRINT THE GENCON's NAME
+		SessionLogDirect( _T("%s"), aGC->GetName()) ;
+
+		//	FOR EACH ATTRIBUTE IN THE DICTIONARY
+		UAttribute		*anAttr = aDD->GetAttributeByOrder(Order) ;
+
+		while( anAttr )
+		{
+			//	GET THE ATTRIBUTE NAME
+			AttrName = anAttr->GetName() ;
+
+			if( aGC->AttrChanged( AttrName ))
+			{
+				//	GET THE ATTRIBUTE VALUE
+				aGC->GetAttrValue( AttrName, AttrValue ) ;
+
+				//	PRINT THE ATTRIBUTE NAME AND VALUE
+				SessionLogDirect( _T("\t%-20.20s\t%s"), AttrName, AttrValue ) ;
+			}
+
+			//	GET THE NEXT ATTRIBUTE
+			Order++ ;
+			anAttr = aDD->GetAttributeByOrder(Order) ;
+		}
+	}
+}
+
+CombineGCs( UGenCon *Dst, UGenCon *Src )
+{
+	TCHAR		*AttrName ;
+	TCHAR		 AttrValue[2048] ;
+	long		 Order = 0L ;
+
+	//	GET THE GENCONs DATA DICTIONARY
+	UDataDict *aDD = Src->GetDataDict() ;
+	if( aDD )
+	{
+		//	PRINT THE GENCON's NAME
+		SessionLogDirect( _T("%s"), Src->GetName()) ;
+
+		//	FOR EACH ATTRIBUTE IN THE DICTIONARY
+		UAttribute		*anAttr = aDD->GetAttributeByOrder(Order) ;
+
+		while( anAttr )
+		{
+			//	GET THE ATTRIBUTE NAME
+			AttrName = anAttr->GetName() ;
+
+			if( Src->AttrChanged( AttrName ))
+			{
+				//	GET THE ATTRIBUTE VALUE
+				Src->GetAttrValue( AttrName, AttrValue ) ;
+
+				//	COPY THE VALUE
+				Dst->SetAttrValue( AttrName, AttrValue ) ;
+			}
+
+			//	GET THE NEXT ATTRIBUTE
+			Order++ ;
+			anAttr = aDD->GetAttributeByOrder(Order) ;
+		}
+	}
+}

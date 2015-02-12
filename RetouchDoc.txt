@@ -1,0 +1,691 @@
+
+TableName = ~Retouch~;
+
+VOID ReOpen()
+{
+	DataWindow( SetWindowOrder,Top );
+}
+
+
+NUMERIC RefreshListView()
+{
+	if ( !DataWindow(GetWindowAddress) )
+		{ return FALSE; }
+
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( StatusBar,Text,Translate(~Querying~) );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	Count = List( NumEntries );
+
+
+	SetDocumentData( List(GetObject) );
+
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+	return DataWindow( StatusBar,Text,~~ );
+}
+
+
+STR GetKey( &Item )
+{
+	return ~OrderID = '<$con.Item[OrderID]>' AND Roll = '<$con.Item[Roll]>' AND Frame = '<$con.Item[Frame]>' AND ID = '<$con.Item[ID]>'~;
+}
+
+
+NUMERIC ChangeField()
+{
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,Changed,Original,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.Changed[OrderID]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  OrderID cannot be blank.~ ); }
+
+	if ( ~<$con.Changed[Roll]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  Roll cannot be blank.~ ); }
+
+	if ( ~<$con.Changed[Frame]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  Frame cannot be blank.~ ); }
+
+	if ( ~<$con.Changed[ID]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  ID cannot be blank.~ ); }
+
+	Key = GetKey( Original );
+	
+	Query = ~Select * From <TableName> Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,Changed,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorNumber,0,theErrNum );
+
+		if ( <theErrNum> == -21474672591 )
+		{
+			return Warning( Translate( ~You have already selected retouch code <ID>~ ) );
+		}
+		else if ( <theErrNum> == -21474672591 )
+		{
+			if ( MessageBox( ~Retouch code <ID> does not exist. Would you like to add it?~,YESNO ) == YES )
+			{ 
+				return ShowRetouchCodes();	
+			}
+			return FALSE;
+		}
+
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update <TableName> record where <Key>. <theErr>\n\n<theErrNum>~ );
+	}
+
+	List( GetConnection,dBase );
+
+	Description = GetDescription( dBase,~<$Con.Changed[ID]>~ );
+
+	DataView( SetCellValue,<ChangedRow>,Description,~<Description>~ );	
+
+	if ( ~<$Con.Changed[RetouchBatchSetup]>~ == ~None~ )
+	{
+		DataView( SetCellValue,<ChangedRow>,RetouchBatchSetup,~~ );
+	}
+	else if ( ~<$Con.Changed[RetouchBatchSetup]>~ == ~~ )
+	{
+		RetouchBatchSetup = GetBatchSetup( dBase,~<$Con.Changed[ID]>~ );
+		DataView( SetCellValue,<ChangedRow>,RetouchBatchSetup,~<RetouchBatchSetup>~ );
+	}
+
+	return DataView( CommitChanges );
+}
+
+
+STR GetDescription( &dBase,ID )
+{
+	Query = ~Select Description From RetouchCodes Where ID = '<ID>'~;
+
+	if ( dBase( GetValuesFor,~<Query>~,Description ) )
+	{
+		return ~<Description>~;
+	}
+
+	return ~~;
+}
+
+
+STR GetBatchSetup( &dBase,ID )
+{
+	Query = ~Select BatchSetup From KparsSetupCodeCrossRef Where ID = '<ID>'~;
+
+	if ( dBase( GetValuesFor,~<Query>~,BatchSetup ) )
+	{
+		return ~<BatchSetup>~;
+	}
+
+	return ~~;
+}
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,ToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	if ( MessageBox( ~Are you sure you want to delete the selected items?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	StringList( RowsToDelete,New );
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	while ( ToDelete( GetNext,Setting ) )
+	{
+		Key = GetKey( Setting );
+
+		if ( !dBase( CMD,~Delete From <TableName> Where <Key>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			Warning( ~Could not delete Retouch Instruction where ID = <$con.Setting[ID]>. <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,ToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	NewRow( Set,OrderID,~<DocumentOrderID>~ );
+	NewRow( Set,Roll,Format( ~<DocumentRoll>~,~<$[Symbols].RollFormat[Value]>~ ) );
+	NewRow( Set,Frame,Format( ~<DocumentFrame>~,~<$[Symbols].FrameFormat[Value]>~ ) );
+	NewRow( Set,ID,~~,RetouchBatchSetup,~~ );
+	
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,ID );
+
+	return TRUE;
+}
+
+
+
+NUMERIC UpdateRetouchCombo( &ColumnDefinition,Row,Col )
+{
+	DataView( GetCellValue,PrinterModel,<Row>,PrinterModel );
+
+	Query = STR ( Select ID from RetouchCodes Order By ID );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( ~Database query failed: <Query> <theErr>~ );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,Ids,ID );
+
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,Ids(GetCopyOf) );
+
+		DataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateBatchSetupCombo( &ColumnDefinition,Row,Col )
+{
+	Query = STR ( Select Name From RetouchBatchSetup Order By Name );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,Setups,Name );
+		Setups( AddString,~None~ );
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,Setups(GetCopyOf) );
+
+		DataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnComboBox()
+{
+	DataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+
+	if ( ~<ColumnName>~ == ~ID~ )
+	{
+		UpdateRetouchCombo( ColumnDefinition,<row>,<col> );
+	}
+
+	if ( ~<ColumnName>~ == ~RetouchBatchSetup~ || ~<ColumnName>~ == ~RETOUCHBATCHSETUP~ )
+	{
+		UpdateBatchSetupCombo( ColumnDefinition,<row>,<col> );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ShowRetouchCodes()
+{
+	Action = ACTION DOC ( RetouchCodesDoc OpenOnce RetouchCodesDoc );
+	return PerformActions( Action );
+}
+
+
+NUMERIC ShowKparsBatchSetups()
+{
+	Action = ACTION DOC ( RetouchBatchSetupsDoc OpenOnce RetouchBatchSetupsDoc "Init();" );
+	return PerformActions( Action );
+}
+
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	ActiveView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( ~<what> is not implemented yet!~ );
+	return TRUE;
+}
+
+NUMERIC HandleOrderIDReturnKey()
+{
+	aEntryView( GetControlValue,OrderIDField,OrderID );
+
+	if ( ~<OrderID>~ == ~~ )
+	{
+		return FALSE;
+	}
+
+	if ( !ADO( dBase,Connect,GetValuesFor,~Select ID,ImagesOrderID From Orders where ID = '<OrderID>'~,OrderID,ImagesOrderID ) )
+	{
+		if ( MessageBox( Translate(~Order <OrderID> does not exist.  Would like to add it? ~ ),YESNO ) != YES )
+		{
+			return FALSE;
+		}
+
+		ADO( dBase,Connect,Cmd,~Insert Into Orders(ID,OrderDate,ShipDate) Values('<OrderID>',<$Date.DataBaseDate.SharedDateQuoted>,<$Date.DataBaseDate.SharedDateQuoted>)~ );
+
+		if ( MessageBox( Translate(~Order <OrderID> was added.  Would like to edit it? ~ ),YESNO ) == YES )
+		{
+			Query = ~Select * From Orders Where ID = '<OrderID>'~;
+
+			Actions = ACTIONS ( Doc( ~Orders~ OpenOnce OrdersDoc "Init( ~<OrderID>~,~<Query>~);" ) );
+			PerformActions( Actions );
+		}
+	}
+	else
+	{
+		if ( !IsNULL(~<ImagesOrderID>~) )
+		{
+			dlgData( Set,ImagesOrderID,~<ImagesOrderID>~ ) ;
+		}
+	}
+
+	return UpdateRollsCombo();
+}
+
+
+NUMERIC UpdateRollsCombo( Roll )
+{
+	aEntryView( GetControlValue,OrderIDField,OrderID );
+
+	if ( IsNull( ~<OrderID>~ ) )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select Distinct Roll From Images Where OrderID = '<OrderID>' Order By Roll~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the Rolls table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		ForgetLocal( List );
+
+		Query = ~Select Distinct Roll From Rolls Where OrderID = '<OrderID>' Order By Roll~;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ 
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate( ~Failed to query the Rolls table.\n\n<Query>\n\n<theErr>~ ) ); 
+		}
+	}
+
+	List( MakeStringList,RollsList,Roll );
+
+	aEntryView( SetControlFromStringList,RollComboBox,RollsList,Selection,Update );
+
+	aEntryView( GetControlValue,RollComboBox,Roll );
+
+	if ( !IsNull( ~<Roll>~ ) )
+	{
+		aEntryView( SetControlValue,RollComboBox,~<Roll>~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC UpdateFrames( Frame )
+{
+	aEntryView( GetControlValue,OrderIDField,OrderID );
+	aEntryView( GetControlValue,RollComboBox,Roll );
+
+	if ( IsNull( ~<OrderID>~ ) || IsNULL( ~<Roll>~ ) )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select Frame From Images Where OrderID = '<OrderID>' And Roll = '<Roll>' Order By Frame~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the Images table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	List( MakeStringList,FramesList,Frame );
+
+	aEntryView( SetControlFromStringList,FrameComboBox,FramesList,Selection,Update );
+
+	if ( !IsNull( ~<Frame>~ ) )
+	{
+		aEntryView( SetControlValue,FrameComboBox,~<Frame>~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC NewImage()
+{
+	aEntryView( GetControlValue,OrderIDField,OrderID );
+	aEntryView( GetControlValue,RollComboBox,Roll );
+	aEntryView( GetControlValue,FrameComboBox,Frame );
+
+	return Init( ~<OrderID>~,~<Roll>~,~<Frame>~ );
+}
+
+FirstTime = TRUE;
+
+NUMERIC Init( OrderID,Roll,Frame )
+{
+	DocumentOrderID = ~<OrderID>~;
+	DocumentRoll = ~<Roll>~;
+	DocumentFrame = ~<Frame>~;
+
+	Fields = ~Retouch.OrderID,Retouch.Roll,Retouch.Frame,Retouch.ID,Retouch.RetouchBatchSetup,RetouchCodes.Description~;
+
+	Key = ~OrderID = '<OrderID>' AND Roll = '<Roll>' AND Frame = '<Frame>' AND Retouch.ID = RetouchCodes.ID~;
+
+	DocumentQuery = ~Select <Fields> From Retouch,RetouchCodes Where <Key>~;
+
+	if ( <FirstTime> )
+	{
+		Global(DocumentQuery,DocumentOrderID,DocumentRoll,DocumentFrame);
+
+		if ( !PGenConList( List,Connect,Cursor,Dynamic,QUERY,~<DocumentQuery>~ ) )
+			{ Error( ~Failed to query the <TableName> table~ ); }
+
+		SetDocumentData( List(GetObject) );
+
+		DataWindow( Set,Title,~Retouch Instructions For <OrderID>,<Roll>,<Frame>~ );
+
+		if ( !DataWindow( CreateWindow,~Retouch Instructions For <OrderID>,<Roll>,<Frame>~ ) )
+			{ Error( ~Failed to create the window~ ); }
+	}
+	else
+	{
+		RefreshListView();
+	}
+
+	FirstTime = FALSE;
+
+	aEntryView( SetControlValue,OrderIDField,~<OrderID>~ );
+
+	UpdateRollsCombo( ~<Roll>~ );
+	return UpdateFrames( ~<Frame>~ );
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new Retouch Instructions that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+NUMERIC AllOptions()
+{
+	return DataView( DisplayMenu,ListViewMenu,0,0 );
+}
+
+if ( !GenCon( TableDefinition,GetFrom,<TableName>,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The <TableName> Table is not properly defined~ ); }
+	
+
+Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	NULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SeeRetouchCodes	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Retouch Codes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ShowRetouchCodes(); )
+
+		Define:	NULL3 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SeeRetouchBatchSetups	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Retouch Batch Setups~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ShowKparsBatchSetups(); )
+	}
+
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 5; vGap = 5;
+
+Define: DataWindow Using DDWinDef
+	Fields:	Title					Translate(~Retouching Instructions~)
+			Position				0 40 50 50
+			IsPositionPercent		T
+			TypeName				SplitterWnd
+			SplitterRows			~3 20 10 70~
+			SplitterColumns			~1~
+
+	Contains:	INLISTORDER
+	{
+		Define: aEntryView Using DDViewDef AsSymbol aEntryView
+			Fields:	ViewType				FormView
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "<TableName>Data.htm" )
+			Contains:
+			{
+				Define: OrderIDPrompt Using DDWinCtrlDef AsSymbol OrderIDPrompt         
+					Fields: TypeName		StaticText
+							Text			Translate(~Order~)
+							RightJustified	TRUE
+							Position        $hGap,$vGap 35 $ButtonHeight  
+
+				Define: OrderIDField Using DDWinCtrlDef AsSymbol OrderIDField 
+				   Fields:	TypeName		MaskedEditText  
+							Position		OrderIDPrompt(GetRight,Position) + $hGap,OrderIDPrompt(GetTop,Position),100 $ButtonHeight
+							IActionsText	ACTIONS ( Get )
+							DActionsText	ACTIONS ( Save )
+							OActionsText	ACTIONS ( Save )
+							GenConName       THIS
+							GenConField		~OrderID~
+							Tooltip         ~Select an Order~
+							Mask			~<$[DATABASE FieldTypes].OrderID[Mask]>~
+							PromptChar		~<$[DATABASE FieldTypes].OrderID[PromptChar]>~
+							AllowedChars	~<$[DATABASE FieldTypes].OrderID[AllowedChars]>~
+							DisallowedChars ~<$[DATABASE FieldTypes].OrderID[DisallowedChars]>~
+							WantReturnKey	~T~
+							ReturnKeyActionsText ACTION EXEC ( HandleOrderIDReturnKey() )
+
+				Define: RollField Using DDWinCtrlDef AsSymbol RollField         
+					Fields: TypeName		StaticText
+							Text			Translate(~Roll~)
+							RightJustified	TRUE
+							Position        OrderIDField(GetRight,Position) + $hGap * 4,
+											OrderIDField(GetTop,Position),30 $ButtonHeight  
+
+				Define: RollComboBox Using DDWinCtrlDef AsSymbol RollComboBox 
+					Fields: TypeName		ComboBox  
+							Position		RollField(GetRight,Position) + $hGap,
+											RollField(GetTop,Position),100 $ButtonHeight * 8
+							GenConName      THIS
+							GenConField		~Roll~
+							Tooltip         ~The roll you are working on~ ;
+
+				Define: FrameField Using DDWinCtrlDef AsSymbol FrameField         
+					Fields: TypeName		StaticText
+							Text			Translate(~Frame~)
+							RightJustified	TRUE
+							Position        RollComboBox(GetRight,Position) + $hGap * 4,
+											RollComboBox(GetTop,Position),30 $ButtonHeight  
+
+				Define: FrameComboBox Using DDWinCtrlDef AsSymbol FrameComboBox 
+					Fields: TypeName		ComboBox  
+							Position		FrameField(GetRight,Position) + $hGap,
+											FrameField(GetTop,Position),100 $ButtonHeight *8
+							GenConName      THIS
+							GenConField		~Roll~
+							DActionsText	ACTION EXEC ( NewImage() )
+							Tooltip         ~The Frame you are working on~ ;
+
+				Define: InstructionsText Using DDWinCtrlDef AsSymbol InstructionsText
+					Fields:	GENCONNAME		This
+							GENCONFIELD		~TheText~
+							POSITION		$hGap FrameComboBox(GetBottom,Position) + $vgap 
+											FrameComboBox(GetRight,Position) -  OrderIDPrompt(GetLeft,Position),40
+							TEXT			Translate( ~~ )
+							TOOLTIP			Translate( ~Optional Instructions~ )
+							TYPENAME		EditText ;
+			}
+
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:	ViewType				FormView
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "<TableName>Data.htm" )
+			Contains:
+			{
+				position = DefineStdGridButtons(FilmType) + 10;
+			}
+
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					ComboBoxActionsText		ACTION Call ( OnComboBox() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "<TableName>Data.htm" )
+					CloseActionsText		ACTION Call ( OnCloseDataView() ) ;
+	}
+	
+
+Init( ~Test~,~0001~,~001~ );

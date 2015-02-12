@@ -1,0 +1,371 @@
+
+
+NUMERIC ExportToFile( FormatID,theFile )
+{
+	Query = ~Select * from FileFormats Where ID = '<FormatID>' Order by Sequence~;
+
+	if ( !PGenConList( FormatList,Connect,Cursor,Static,QUERY,~<Query>~ ) )
+		{ return Warning( ~Failed to query the FileFormats table for ID = <FormatID>~ ); }
+
+	OutputFormat = DlgData( GetNumeric,Unicode ) ? UnicodeOutput : AsciiOutput;
+
+	Directory( Create,~<$str.$theFile.Path>~ );
+
+	if ( !File( DataFile,<OutputFormat>,OPEN, ~<theFile>~, WRITE,CREATE ) )			// TRY TO OPEN IT
+		{ return Warning( Translate(~Could not open <theFile>~) ); }
+
+	Count = ErrorCount = 0;
+
+	more = SelectedItems( GetFirst,Item );
+
+	if ( Numeric( ~<$con.dlgData[ColHeadings]>~ ) )
+	{
+		field = -1;
+
+		Headings = ~~;
+
+		while ( FormatList( GetNext,Column ) )
+		{
+			ColumnName = ~<$pcon.Column[FieldName]>~;
+
+			if ( ~<Headings>~ != ~~ )
+			{
+				Headings = ~<Headings>,<ColumnName>~;
+			}
+			else
+			{
+				Headings = ~<ColumnName>~;
+			}
+		}
+
+		if ( !DataFile( WriteLine,~<Headings>~ ) )
+		{
+			return Warning( Translate( ~Failed to write to <theFile>~ ) );
+		}
+	}
+
+	while ( $more )	
+	{
+		if ( !DataFile( WriteRecordUsing,FormatList,Item ) )
+		{
+			return Warning( Translate( ~Failed to write to <theFile>~ ) );
+		}
+
+		++Count;
+
+		more = SelectedItems( GetNext,Item );
+	}
+
+	DataFile( Close );
+
+	return dlg( SetString,Translate( ~Wrote <Count> records from Table <TableName>~) ,Status,0 );
+}
+
+
+if ( !DataDict( TheDictionary,Get,DDExportDialogData ) )
+{
+	Dictionary: DDExportDialogData
+			Fields:	Name Path					Type Text
+			Fields:	Name Unicode				Type long
+			Fields:	Name ColHeadings			Type long
+			Fields:	Name Status					Type Text
+			Fields:	Name FormatID				Type Text
+}
+
+Define: DlgData Using DDExportDialogData
+
+VOID DefineDialog()
+{
+    Left = 5; Top = 5;		hGap = 5; vGap = 5;
+    TextHeight = 20;        TextWidth = 110;  
+	ButtonHeight = 20;		ButtonWidth = 80;
+	StaticTextWidth = 70;	StaticTextHeight = 20;
+    EditTextWidth = 200;	EditTextHeight = 20;
+    ComboBoxWidth = 100;	ComboBoxHeight = 120;
+	x = $Left;				y = $Top;
+
+    Define: ExportDlgDefinition Using DDWinDef
+            Fields: Position		180 50 $DialogWidth $DialogHeight
+                    Title			~Export To File From: <TableName>~
+                    TypeName		~Dialog~
+					HActionsText	ACTION SHOWHELPPAGE ( KPISHelpFile "Customer Export.htm" )
+                    OACTIONSTEXT	ACTION EXEC ( CloseDialog() ) ;
+
+    Contains: InListOrder
+    {
+	    Define: FormatPrompt Using DDWinCtrlDef AsSymbol FormatPrompt 
+            Fields: TypeName		StaticText
+                    Text			~Format~
+                    Position		$x,$y,$StaticTextWidth,$StaticTextHeight
+
+        Define: FormatComboBox Using DDWinCtrlDef AsSymbol FormatComboBox 
+            Fields: TypeName		SComboBox  
+                    Position		FormatPrompt(GetRight,Position) + $hGap,
+									FormatPrompt(GetTop,Position),
+									<EditTextWidth> ,<ComboBoxHeight> 
+					DActionsText	ACTIONS ( Save )
+					DropDownActionsText ACTION CALL ( OnFormatComboBox() )
+                    GenConName       THIS
+                    GenConField		~FormatID~
+                    Tooltip         ~Select a format~
+
+		Define: ViewFormatButton Using DDWinCtrlDef AsSymbol ViewFormatButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~?~ )
+                    Position		FormatComboBox(GetRight,Position) + $hGap,
+									FormatComboBox(GetTop,Position),
+									20 $ButtonHeight
+                    DActionsText	ACTION EXEC  ( OnViewFormatButton() ) 
+                    Tooltip			Translate( ~See the format~ );
+
+		Define: PathPrompt Using DDWinCtrlDef AsSymbol PathPrompt 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Path~ )
+                    Position		$x,FormatPrompt(GetBottom,Position) + $vGap,
+									<StaticTextWidth>,<StaticTextHeight> ;
+
+	   Define: PathField Using DDWinCtrlDef AsSymbol PathField         
+			Fields: TypeName		EditText
+					Position        PathPrompt(GetRight,Position) + $hGap
+									PathPrompt(GetTop,Position) 
+									$EditTextWidth $EditTextHeight               
+					GenConName		THIS
+					GenConField		~Path~
+					IActionsText	~[Get]~
+					OActionsText    ~[Save]~
+					Tooltip			Translate( ~Enter the path to save the exported data to~ ) ;
+
+		Define: BrowseButton Using DDWinCtrlDef AsSymbol BrowseButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~?~ )
+                    Position		PathField(GetRight,Position) + $hGap,
+									PathField(GetTop,Position),
+									20 $ButtonHeight
+                    DActionsText	ACTION EXEC  ( OnBrowseButton() ) 
+                    Tooltip			Translate( ~Find the file~ );
+
+		Define: UnicodeCheckBox Using DDWinCtrlDef AsSymbol UnicodeCheckBox 
+            Fields: TypeName		CheckBox
+                    GenConName		THIS
+                    GenConField		~Unicode~
+                    Text			Translate( ~Unicode~ )
+                    Position		PathField(GetLeft,Position),
+									PathPrompt(GetBottom,Position) + $vGap,
+                                    100, <StaticTextHeight>
+                    IActionsText    ACTIONS ( Get )
+                    DActionsText	ACTIONS ( Save ) 
+                    OActionsText	ACTIONS ( Save )
+                    Tooltip			~Export in Unicode~
+
+		Define: ColHeadingsCheckBox Using DDWinCtrlDef AsSymbol ColHeadingsCheckBox 
+            Fields: TypeName		CheckBox
+                    GenConName		THIS
+                    GenConField		~ColHeadings~
+                    Text			Translate( ~Write Column Names~ )
+                    Position		UnicodeCheckBox(GetRight,Position) + $hGap,
+									UnicodeCheckBox(GetTop,Position),
+                                    150, <StaticTextHeight>
+                    IActionsText    ACTIONS ( Get )
+                    DActionsText	ACTIONS ( Save ) 
+                    OActionsText	ACTIONS ( Save )
+                    Tooltip			~Write the column headings as the first row~
+
+
+		Define: EditFormatButton Using DDWinCtrlDef AsSymbol EditFormatButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Edit Formats~ )
+                    Position		$x,
+									UnicodeCheckBox(GetBottom,Position) + $vGap,
+									$ButtonWidth, $ButtonHeight
+                    DActionsText	ACTION EXEC  ( EditExternalFileFormats() ) 
+                    Tooltip			~Edit the File Format Data~
+
+		Define: ExportButton Using DDWinCtrlDef AsSymbol ExportButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Export~ )
+                    Position		EditFormatButton(GetRight,Position) + $hGap,
+									EditFormatButton(GetTop,Position),
+									$ButtonWidth, $ButtonHeight
+                    DActionsText	ACTION EXEC  ( OnExportButton() ) 
+                    Tooltip			~Start the export~
+
+		Define: ViewButton Using DDWinCtrlDef AsSymbol ViewButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~View File~ )
+                    Position		ExportButton(GetRight,Position) + $hGap,
+									ExportButton(GetTop,Position),
+									$ButtonWidth, $ButtonHeight
+                    DActionsText	ACTION EXEC  ( OnViewButton() ) 
+                    Tooltip			~View the file you are exporting to~
+
+		Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Cancel~ )
+                    Position		ViewButton(GetRight,Position) + <hGap>,
+									ExportButton(GetTop,Position),
+									$ButtonWidth, $ButtonHeight
+                    DActionsText	ACTION EXEC ( CloseDialog() ) 
+                    Tooltip			Translate( ~Exit~ );
+
+		DialogWidth = CancelButton(GetRight,Position) + ($hGap * 2);
+
+		Define: Status Using DDWinCtrlDef AsSymbol Status 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Path~ )
+                    Position		$x,ExportButton(GetBottom,Position) + $vGap,
+									$DialogWidth - ($hGap * 2),<StaticTextHeight> 
+					GenConName		THIS
+					GenConField		~Status~
+    };
+
+	DialogHeight = Status(GetBottom,Position) + $vGap + 20;
+
+    ExportDlgDefinition( Set,Position,~180 180 <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,ExportDlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    Global( dlg );
+
+	OnFormatComboBox();
+}
+
+NUMERIC OnFormatComboBox()
+{
+	Query = ~Select Distinct ID From FileFormats Where TableName = '<TableName>' Order By ID~;
+	
+	if ( !PGenConList( FormatsList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ return Warning( Translate( ~Failed to query the <TableName> table~ ) ); }
+
+	FormatsList( MakeStringList,FormatChoices,ID );
+
+	return dlg( SetControlFromStringList,FormatComboBox,FormatChoices,NoSelection,Update );
+}
+
+
+
+
+VOID OnBrowseButton()
+{
+	FileFilter = ~Text Files|*.txt;*.csv|All Files|*.*||~;
+	if ( !FileDialog( PATH,theFile,FILTER,~<FileFilter>~,SAVE ) )	// ASK THE USER TO FIND THE FILE
+		{ return; }
+		
+	dlg( SetString,~<theFile>~ ,Path,0 );										
+}
+
+
+VOID OnExportButton()
+{
+	dlg( GetInput,GetStrings,Path,Path,FormatID,FormatID );
+
+	if ( ~<FormatID>~ == ~~ )
+	{
+		dlg( SetString,~Format cannot be NULL~ ,Status,0 );
+		return;
+	}
+
+	if ( ~<Path>~ == ~~ )
+	{
+		dlg( SetString,~Path cannot be NULL~ ,Status,0 );
+		return;
+	}
+
+	ExportToFile( ~<FormatID>~,~<Path>~ );		
+}
+
+
+NUMERIC EditExternalFileFormats()
+{
+	Query = ~Select * From FileFormats Where TableName = '<TableName>' Order By ID,Sequence~;
+
+	action = ACTION DOC ( FileFormats Open FileFormatsDoc "Init( ~~,~<TableName>~,~<Query>~ );" );
+	
+	PerformActions( action );
+	
+	return TRUE;
+}
+
+
+NUMERIC ViewFileInEditor( FilePath )
+{
+	ProgramName = ~Notepad.exe~;
+
+	Program = ~<$Sys.Directory>\<ProgramName>~;
+
+	if ( !Files( FileExists,~<Program>~ ) )
+	{
+		return Warning( Translate(~Could not find NotePad.exe at <Program>~) );
+	}
+
+	if ( !ShellExecute( Open,~<Program>~,~<FilePath>~ ) )
+	{
+		GetLastError( ErrorString,theErr );
+		return Warning( Translate(~Could not open <FilePath>. <theErr>~) );
+	}
+
+	return TRUE;
+}
+
+
+VOID OnViewButton()
+{
+	dlg( GetInput,GetStrings,Path,Path );
+
+	if ( ~<Path>~ == ~~ )
+	{
+		dlg( SetString,~Path cannot be NULL~ ,Status,0 );
+		return;
+	}
+	
+	ViewFileInEditor( ~<Path>~ );
+}
+
+
+VOID OnViewFormatButton()
+{
+	dlg( GetInput,GetStrings,FormatID,FormatID );
+
+	Query = ~Select * From FileFormats Where TableName = '<TableName>' AND ID = '<FormatID>' Order By Sequence~;
+
+	action = ACTION DOC ( FileFormats Open FileFormatsDoc "Init( ~<FormatID>~,~<TableName>~,~<Query>~ );" );
+	
+	PerformActions( action );
+}
+
+
+VOID CloseDialog()
+{
+    dlg( END );
+    Exit();
+}
+
+
+NUMERIC GetItemsToExport( ListName )
+{
+	if ( !GenCon( SelectedItems,RemoveFrom,~<ListName>~,~[GenCons]~ ) )
+		{ return Warning( Translate(~There were no items to export~) ); }
+
+	if ( SelectedItems( Empty ) )
+		{ return Warning( Translate(~The list of items to export was empty~) ); }
+
+	Global( SelectedItems );
+
+	return TRUE;
+}
+
+
+VOID Init( ListName,TableName )
+{
+	Global( TableName );
+
+	if ( !GetItemsToExport( ~<ListName>~ ) )
+		{ Exit(); }
+
+	DefineDialog();	
+
+	SelectedItemCount = SelectedItems( ChildCount );
+
+	dlg( SetString,Translate(~<SelectedItemCount> Records available to export from the table: <TableName>~) ,Status,0 );
+}
+
+	

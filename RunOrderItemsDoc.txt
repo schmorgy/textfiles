@@ -1,0 +1,586 @@
+
+Include: ~FormattingRoutines~;
+
+if ( !DictionaryExists( DDRunOrderItemsDialog ) )
+{
+	Dictionary: DDRunOrderItemsDialog
+		Fields:	Name	OrderID				Type text
+		Fields:	Name	Items				Type text
+		Fields:	Name	FieldName			Type text
+		Fields:	Name	Criteria			Type text
+
+
+	StringList: Name RunOrderItemsOrderList
+	Hang:	RunOrderItemsOrderList ~[STRINGS]~ ;
+}
+
+
+
+
+
+VOID ReOpen()
+{
+	// COMES HERE IF SOMEONE TRIES TO OPEN THIS SCRIPT TWICE
+}
+
+
+CurrentY = hGap = vGap = 4;  StaticTextWidth = 40;	EditTextWidth =  150; ButtonWidth = 90;	ButtonHeight = 20;	
+
+VOID DefineDialog()
+{
+	Define: DlgData Using DDRunOrderItemsDialog;
+
+	Define: TheDialog Using DDWinDef
+		Fields:	POSITION				100, 100, 300,600 
+				TITLE					Translate( ~Run Selected OrderItems~ )
+				TYPENAME				Dialog 
+				OACTIONSTEXT			ACTION EXEC ( CloseDialog() )
+				StatusBar				~2 80 20~
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "RunOrderItems.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: OrderIDPrompt Using DDWinCtrlDef AsSymbol OrderIDPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Order~ )
+						RightJustified	TRUE
+						Position		$hGap,$vGap,$StaticTextWidth,$ButtonHeight
+
+			Define: OrderIDField Using DDWinCtrlDef AsSymbol OrderIDField 
+				Fields: TypeName		ComboBox  
+						Position		OrderIDPrompt(GetRight,Position) + $hGap,OrderIDPrompt(GetTop,Position),<EditTextWidth> ,<ButtonHeight> * 10
+						IActionsText	ACTIONS ( GetList(RunOrderItemsOrderList) Get )
+						DActionsText	ACTION EXEC ( OrderSelected() )
+						OActionsText	ACTIONS ( Save )
+						GenConName       THIS
+						GenConField		~OrderID~
+						Tooltip         ~Select an Order~
+						Mask			~<$[DATABASE FieldTypes].OrderID[Mask]>~
+						PromptChar		~<$[DATABASE FieldTypes].OrderID[PromptChar]>~
+						AllowedChars	~<$[DATABASE FieldTypes].OrderID[AllowedChars]>~
+						DisallowedChars ~<$[DATABASE FieldTypes].OrderID[DisallowedChars]>~
+						WantReturnKey	~T~
+						ReturnKeyActionsText ACTION EXEC ( FindOrdersLike() )
+
+			Define: FindOrdersButton Using DDWinCtrlDef AsSymbol FindOrdersButton 
+				Fields: TypeName		Button
+						Text			Translate( ~?~ )
+						RightJustified	TRUE
+						ToolTip			Translate(~Type in one or more characters of the OrderID and press this button~)
+						DActionsText	ACTION EXEC ( FindOrdersLike() )
+						Position		OrderIDField(GetRight,Position) + $hGap,OrderIDField(GetTop,Position),20 ,<ButtonHeight>
+
+
+			Define: ItemsPrompt Using DDWinCtrlDef AsSymbol ItemsPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Items~ )
+						RightJustified	TRUE
+						Position		OrderIDPrompt(GetLeft,Position),OrderIDPrompt(GetBottom,Position) + $vGap,$StaticTextWidth,$ButtonHeight
+
+			Define: ItemsField Using DDWinCtrlDef AsSymbol ItemsField 
+				Fields: TypeName		MaskedEditText  
+						Position		ItemsPrompt(GetRight,Position) + $hGap,ItemsPrompt(GetTop,Position),450 ,$ButtonHeight
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save )
+						OActionsText	ACTIONS ( Save )
+						GenConName       THIS
+						GenConField		~Items~
+						Tooltip         ~Select which items to run using commas and dashes (such as 1,2,5-10,34,50-100)~
+						Mask			RepeatStr(300,~#~)
+						PromptChar		~ ~
+						AllowedChars	~-,~;
+
+			IF 0
+			{
+
+				Define: FieldNamePrompt Using DDWinCtrlDef AsSymbol FieldNamePrompt 
+					Fields: TypeName		StaticText
+							Text			Translate( ~Field~ )
+							RightJustified	TRUE
+							Position		OrderIDPrompt(GetLeft,Position),ItemsField(GetBottom,Position) + $vGap,$StaticTextWidth,$ButtonHeight
+
+				Define: FieldNameField Using DDWinCtrlDef AsSymbol FieldNameField 
+					Fields: TypeName		MaskedEditText  
+							Position		FieldNamePrompt(GetRight,Position) + $hGap,FieldNamePrompt(GetTop,Position),90 ,$ButtonHeight
+							IActionsText	ACTIONS ( Get )
+							DActionsText	ACTIONS ( Save )
+							OActionsText	ACTIONS ( Save )
+							GenConName       THIS
+							GenConField		~FieldName~
+							Tooltip         ~Select which items using commas and dashes (such as 1,2,5-10,34,50-100)~
+							Mask			RepeatStr(32,~%~)
+							PromptChar		~ ~
+
+				Define: CriteriaField Using DDWinCtrlDef AsSymbol CriteriaField 
+					Fields: TypeName		MaskedEditText  
+							Position		FieldNameField(GetRight,Position) + $hGap,FieldNameField(GetTop,Position),360-$hGap ,$ButtonHeight
+							IActionsText	ACTIONS ( Get )
+							DActionsText	ACTIONS ( Save )
+							OActionsText	ACTIONS ( Save )
+							GenConName       THIS
+							GenConField		~Criteria~
+							Tooltip         ~Select which items using commas and dashes (such as 1,2,5-10,34,50-100)~
+							Mask			RepeatStr(350,~%~)
+							PromptChar		~ ~
+							AllowedChars	~-,~;
+
+				Define: FindButton Using DDWinCtrlDef AsSymbol FindButton
+					Fields:	GENCONNAME		THIS
+							DACTIONSTEXT	ACTION EXEC ( OnFindButton(TRUE) )
+							POSITION		CriteriaField(GetRight,Position)+$hGap CriteriaField(GetTop,Position) $ButtonWidth, $ButtonHeight
+							TEXT			~Find~
+							TOOLTIP			~Find the OrderItems that correspond to the specified criteria~
+							TYPENAME		BUTTON;
+			}
+
+			DialogWidth = ItemsField( GetRight,Position ) + $hGap * 4;
+
+			Define: ViewAsDataButton Using DDWinCtrlDef AsSymbol ViewAsDataButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnViewButton(FALSE) )
+						POSITION		$DialogWidth/2 - ($ButtonWidth+$hGap)*2 ItemsField(GetBottom,Position) + $vGap*3 $ButtonWidth, $ButtonHeight
+						TEXT			~View As Data~
+						TOOLTIP			~View the selected OrderItems as data~
+						TYPENAME		BUTTON;
+
+			Define: ViewAsImagesButton Using DDWinCtrlDef AsSymbol ViewAsImagesButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnViewButton(TRUE) )
+						POSITION		ViewAsDataButton(GetRight,Position)+$hGap ViewAsDataButton(GetTop,Position) $ButtonWidth, $ButtonHeight
+						TEXT			~View Icons~
+						TOOLTIP			~View the selected OrderItems as thumbnails~
+						TYPENAME		BUTTON;
+
+			Define: ItemsCountButton Using DDWinCtrlDef AsSymbol ItemsCountButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnItemsCount() )
+						POSITION		ViewAsImagesButton(GetRight,Position) + $hGap ViewAsImagesButton(GetTop,Position) $ButtonWidth, $ButtonHeight
+						TEXT			~Update Count~
+						TOOLTIP			~Count the number of items you have selected~
+						TYPENAME		BUTTON;
+
+			Define: RunButton Using DDWinCtrlDef AsSymbol RunButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( OnRunButton() )
+						POSITION		ItemsCountButton(GetRight,Position)+$hGap ItemsCountButton(GetTop,Position) $ButtonWidth, $ButtonHeight
+						TEXT			~Run OrderItems~
+						TOOLTIP			~Run the selected OrderItems~
+						TYPENAME		BUTTON;
+
+		}
+
+	CurrentY = RunButton(GetBottom,Position) + $vGap*2 + 30;
+
+	TheDialog( Set,Position,~200  200  <DialogWidth>  <CurrentY>~ );
+
+	GenDlg( dlg,Definition,TheDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+	Global( dlg,TheDialog,DlgData );
+}
+
+
+
+VOID CloseDialog()
+{
+	dlg( End );
+	Exit();
+}
+
+
+StringList( ItemList,New,NoDuplicateValues );
+
+
+NUMERIC GetItemsList( Items )
+{
+	NumTokens = GetTokens( ~<Items>~,~,~ );
+
+	i = 0;  Count = 0;
+
+	dlg( SetStatus,1,~<Count> Items~ );
+
+	ItemList( DeleteAll );
+
+	while ( <++i> <= <NumTokens> )
+	{
+		if ( GetTokens( ~<Token<i>>~,~-~,Start,End ) >= 2 )
+		{
+			if ( <End> < <Start> )
+			{
+				StringList( DeleteAll );
+				dlg( SetStatus,0,~<End> is less that <Start> in '<Start>-<End>'.  Fix it and try again~ );
+				return 0;
+			}
+
+			while ( <Start> <= <End> )
+			{
+				ItemList( AddString,~<Start>~ );
+				++Start;  ++Count;
+			}
+		}
+		else
+		{
+			ItemList( AddString,~<Token<i>>~ );
+			++Count;
+		}
+	}
+
+	Count = ItemList(Num);
+
+	dlg( SetStatus,1,~<Count> Items~ );
+	
+	return <Count>;
+}
+
+NUMERIC OnViewButton( AsImages )
+{
+
+	dlg( GetInput,GetStrings,OrderID,OrderID,Items,Items );
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Enter an OrderID or enter one or more characters of the OrderID and press the ?~ ) );
+	}
+
+	Query = ~Select OrderItems.*, Products.LayoutName From OrderItems  LEFT OUTER JOIN Products On OrderItems.ProductID = Products.ID Where OrderID In (<OrderID>)~;
+	if ( !IsNULL(~<Items>~) )
+	{
+		Count = GetItemsList( ~<Items>~ );
+
+		if ( !<Count> )
+		{
+			return dlg( SetStatus,0,~There are no OrderItems to view~ );
+		}
+
+		if ( !ItemList( MakeSQLList,ItemsList,FALSE ) )
+		{
+			return Warning( ~Could not formulate a Query for the selected items~ );
+		}
+
+		Query = ~<Query> AND OrderItems.ID In (<ItemsList>)~;
+	}
+
+	Query = ~<Query> ORDER BY OrderItems.Sequence,OrderItems.Subsequence~;
+
+	Actions = ACTION Doc ( ~OrderItems~ OpenOnce OrderItemsDoc "Init( ~<OrderID>~,~<Query>~,<AsImages>,TRUE,TRUE );" );
+	return PerformActions( Actions );
+}
+
+
+// I don't believe this is used (Paul Forleo 2/19/07)
+NUMERIC QueryItemsForOrders( &SelectedOrders,AsImages )
+{
+	InList = ~~;		count = 0;	OpenWindows = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		InList = ~<InList>~ == ~~ ? ~'<$con.Order[ID]>'~ : ~<InList>,'<$con.Order[ID]>'~;
+
+		if ( ++count >= 10 )		// BUILD UP A LIST OF UP TO 20 Order ID'S
+		{
+			OrderQuery( ~<InList>~,~<AsImages>~,<OpenWindows> );
+			InList = ~~;		
+			count = 0;
+			++OpenWindows;
+		}
+	}
+
+	Actions = ACTION Doc ( ~OrderItems~ <OpenMethod> OrderItemsDoc "Init( ~<List>~,~<Query>~,<AsImages> );" );
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+
+NUMERIC OrderQuery( List,AsImages,OpenWindows )
+{
+	// tested 3/1/07
+//	Query = ~Select OrderItems.*, Products.LayoutName From OrderItems,Products  Where OrderID In (<List>) And OrderItems.ProductID = Products.ID ORDER BY OrderItems.Sequence,OrderItems.Subsequence~;
+	Query = ~Select OrderItems.*, Products.LayoutName From OrderItems  LEFT OUTER JOIN Products On OrderItems.ProductID = Products.ID Where OrderID In (<List>) Order By OrderItems.Sequence,OrderItems.Subsequence~;
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	if ( <OpenWindows> > 0 )
+	{
+		OpenMethod = Open;
+	}
+
+	Actions = ACTION Doc ( ~OrderItems~ <OpenMethod> OrderItemsDoc "Init( ~<List>~,~<Query>~,<AsImages>,TRUE,TRUE );" );
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnVerifyButton()
+{
+	dlg( GetInput,GetStrings,Items,Items );
+
+	Count = GetItemsList( ~<Items>~ );
+
+	if ( !<Count> )
+	{
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+
+NUMERIC OnItemsCount()
+{
+	dlg( GetInput,GetStrings,OrderID,OrderID,Items,Items );
+
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Enter an OrderID or enter one or more characters of the OrderID and press the ?~ ) );
+	}
+
+	Count = GetItemsList( ~<Items>~ );
+	
+	return TRUE;
+}
+
+
+NUMERIC OnFindButton()
+{
+	dlg( GetInput,GetStrings,OrderID,OrderID,Items,Items,FieldName,FieldName,Criteria,Criteria );
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Enter an OrderID or enter one or more characters of the OrderID and press the ?~ ) );
+	}
+
+	if ( IsNULL(~<FieldName>~) )
+	{
+		return Warning( Translate( ~Enter a FieldName first~ ) );
+	}
+
+	if ( IsNULL(~<Criteria>~) )
+	{
+		return Warning( Translate( ~Enter a Critera first~ ) );
+	}
+
+	Query = ~Select * From OrderItems Where OrderID = '<OrderID>' And <Criteria>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	List( MakeStringList,aList,ID );
+
+	aList( MakeSQLList,SQLList,FALSE );
+
+	Comma = ISNull( ~<Items>~ ) ? ~~: ~,~;
+
+	dlg( SetStrings,Items,~<Items><Comma><SQLList>~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC OnRunButton()
+{
+	dlg( GetInput,GetStrings,OrderID,OrderID,Items,Items );
+
+
+	if ( IsNULL(~<OrderID>~) )
+	{
+		return Warning( Translate( ~Enter an OrderID or enter one or more characters of the OrderID and press the ?~ ) );
+	}
+
+	Count = GetItemsList( ~<Items>~ );
+	
+	if ( !<Count> )
+	{
+		dlg( SetStatus,0,~There are no OrderItems to run~ );
+		return 0;
+	}
+
+	return RunOrderItems( ~<OrderID>~ );
+}
+
+
+NUMERIC RunOrderItems( OrderID )
+{
+	if ( ItemList( Empty ) )
+		{ return Warning( ~There are no items to run~ ); }
+
+	Count = ItemList( Num );
+
+	if ( MessageBox( Translate(~Are you sure you want to run the <Count> selected Order Items for Order <OrderID>?~),YESNO ) != YES )
+	{ 
+		return FALSE;
+	}
+
+	Sleep( 10 );
+	
+	itemCount = 0;
+
+	if ( !Ado( dBase,Connect ) )
+	{ 
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(~<theErr>~) ); 
+	}
+
+	if ( !Ado( dbLocal,ConnectLocal,BeginTransaction ) )
+	{ 
+		dbLocal( GetErrorDescription,theErr );
+		return Warning( Translate(~<theErr>~) ); 
+	}
+
+	WaitCursor( Begin );
+
+
+	BatchID = UniquePrintBatchID();
+
+	Priority = 50;  Owner = ~~;
+	ADO( dBase,Connect,GetValuesFor,~Select Owner,Priority From Orders Where ID = '<OrderID>'~,Owner,Priority );
+
+	if ( IsNull(~<Owner>~) )	
+	{ 
+		Owner = ~<$App.UserName>~;
+	}
+
+	if ( IsNull(~<Priority>~) )	
+	{ 
+		Priority = 50;
+	}
+
+	i = -1;	SkipAll = FALSE;  Now = Time();
+
+	while ( ItemList( GetStringAt,<++i>,ID ) )
+	{
+		dlg( SetStatus,0,~Processing Order <OrderID> Item <ID>~ );
+
+		Query = ~Select * From OrderItems Where OrderID = '<OrderID>' AND ID = <ID> Order By OrderItems.Sequence,OrderItems.Subsequence~;
+		if ( !PGenConList( OrderItemsList,Connection,dBase,Cursor,Keyset,GetExistingRecordFor,~<Query>~,OrderItem ) )
+		{
+			if ( !<SkipAll> )
+			{
+				Choices = ~\n\nPress 'Cancel' to stop, 'No' to skip just this one, or 'Yes' to skip all that don't exist~;
+				
+				Choice = MessageBox( Translate(~Item <ID> does not exist.  Skip All that don't exist?<Choices>~),YESNOCANCEL );
+				
+				if ( ~<Choice>~ == ~CANCEL~ )	
+				{ 
+					dbLocal( RollBackTransaction );
+					WaitCursor( End );
+					return Warning( Translate( ~No items were submitted for printing~ ) );
+				}
+
+				SkipAll = ~<Choice>~ == ~YES~; 
+			}
+			
+			continue;			
+		}
+
+		Fields = STR ( BatchID,OrderID,OrderItemID,Sequence,Priority,Owner,ProductID,Quantity,Status,Printable,
+						JobPath,PreviewPath,SubmitDate,PrintStatus,Subsequence );
+		Values = STR ( '<BatchID>','<$pcon.OrderItem[OrderID]>',<$pcon.OrderItem[ID]>,<$pcon.OrderItem[Sequence]>,
+						<Priority>,'<Owner>','<$pcon.OrderItem[ProductID]>',
+						<$pcon.OrderItem[Quantity]>,'<$pcon.OrderItem[Status]>',<$pcon.OrderItem[Printable].numeric>,
+						'<$pcon.OrderItem[JobPath]>','<$pcon.OrderItem[PreviewPath]>','<Now>',1, <$pcon.OrderItem[Subsequence].numeric>);
+	
+		Cmd = ~Insert Into OrderItemsToQueue(<Fields>) Values(<Values>)~;
+
+		if ( !dbLocal( Cmd,~<Cmd>~ ) )
+		{
+			dbLocal( GetErrorDescription,theErr,RollBackTransaction );
+			WaitCursor( End );
+			return Warning( ~Failed to submit jobs for item <$con.OrderItem[ID]>. <theErr>~ );
+		}
+
+		++itemCount;
+	}
+
+	if ( !dbLocal( CommitTransaction ) )
+	{ 
+		dbLocal( GetErrorDescription,theErr );
+		WaitCursor( End );
+		return Warning( Translate(~Error on commit transaction.  <theErr>~) ); 
+	}
+
+	msg = ~Queued <itemCount> OrderItems for Order <OrderID> in Batch <BatchID>~;
+
+	dlg( SetStatus,0,~<msg>~ );
+
+	log( Session,~<msg>~ );
+
+	Queue( ~ProcessTheOrders()~ );
+
+	return WaitCursor( End );
+}
+
+
+VOID ProcessTheOrders()
+{
+	if ( Defined( BackgroundOrderProcessor ) )
+	{
+		RemoteJobServer( BackgroundOrderProcessor,ProcessOrders,TRUE );
+	}
+}
+
+
+
+
+NUMERIC FindOrdersLike()
+{
+	dlg( GetInput );
+
+	if ( IsNULL(~<$con.DlgData[OrderID]>~) )
+	{
+		return Warning( Translate( ~Enter an OrderID or enter one or more characters of the OrderID and press the ?~ ) );
+	}
+
+	Query = ~Select ID From Orders Where ID Like '<$con.DlgData[OrderID]>%' AND CustomerID <> 'Product'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	Count = List( NumEntries );
+
+	if ( !<Count> )
+	{
+		return dlg( SetStatus,0,~There are no orders that begin with <$con.DlgData[OrderID]>~ );
+	}
+
+	List( MakeStringList,OrdersList,ID );
+
+	dlg( SetControlFromStringList,OrderIDField,OrdersList,Selection,SelectString,OrderIDField,~~  );
+
+	return dlg( SetStatus,0,~There are <Count> order(s) that begin with <$con.DlgData[OrderID]>~ );
+}
+
+VOID OrderSelected()
+{
+	dlg( SetControlFocus,ItemsField );
+}
+
+
+FirstTime = TRUE;
+
+
+VOID Init( OrderID )
+{
+	if ( <FirstTime> )
+	{
+		DefineDialog();
+		FirstTime = FALSE;
+	}
+
+	if ( ~<OrderID>~ != ~~ )
+	{
+		dlg( SetStrings,OrderID,~<OrderID>~ );
+	}
+
+	dlg( SetControlFocus,OrderIDField );
+}
+
+//Init(~~);
+
+

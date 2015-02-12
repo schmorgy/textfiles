@@ -1,0 +1,3671 @@
+//
+// JobImport Dialog
+//
+//
+// This script provides the JobImport dialog/Action.
+// The main entry point is Init().
+//  - MainDialog prompts for the Job Import details
+//
+
+// This single include pulls in FormattingRoutines, DigitalCameraCommon, KparsCmds, Utilities2
+// and CreatePackages. 
+Include: ~../Scripts/Cmds~;
+
+// Version 16th May  - Initial version with header
+// Version 13th July - Updated to set order Status as Import to avoid premature display in Analyzer Window.
+// Version 24th July - Updated to Allow addition of Services.
+// Version 25th July - Updated to change Default Priority to 71.
+// Version 28th Aug  - Added .jpe to the allowed list of files.
+// Version 27th Oct  - Added Single Product Support.
+// Version 7th  Nov  - Added order review post Queue.
+// Version 30th Apr  - Restrict categories displayed to "DP2 8".
+// Version 19th Sep  - Added Navision Support.
+JobImportVersion = ~Version 19th September 2007~;
+ 
+// Define some configurable Global values
+
+MaxFileName = 31; // Dont know why but the frame is limited to 31 elsewhere in DP2
+
+ConversionPending    = 1; // Used for marking new orders as queued. See conversionStation.txt for the other side.
+ConversionCompleted  = 10;
+
+RenameID = 1; // Initialise the Global used for renaming long filenames.
+
+ProcessingFiles = FALSE;
+
+// FUNCTION: StartProgress()
+//           StepProgress()
+//
+// These functions handle the progress bar.
+VOID    StartProgress(MaxValue)  { dlg( ProgressBar,ProgressBox,SetRange,0,<MaxValue>,SetStep,1 ); }
+VOID    StepProgress()           { dlg( ProgressBar,ProgressBox,Stepit ); }
+
+// FUNCTION: ConnectToDatabase()
+//
+// This function connects to DP2 own database
+NUMERIC ConnectToDatabase()
+{
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Log( Session, ~JobImport: Could not connect to database~ );
+        Warning( ~JobImport: Could not connect to database, Please Try Again~ );
+        return FALSE;
+    }
+    Global( database );
+    return TRUE;
+}
+
+// FUNCTION: ConnectToPowerlabOrNavision()
+//
+// This function connects to the remote accounting database.
+NUMERIC ConnectToPowerlabOrNavision()
+{
+    // Decide on Powerlab or Navision as the accounting databse to query
+    if (!GetSystemSettings( ~Default~,~AccountDbase~,AccountDbase,Enabled ) )
+    {
+        Log( Session, ~Search:********* Default PowerLab database set~ );
+        SetSystemSettings( ~Default~,~AccountDbase~,~Powerlab~,TRUE );
+        AccountDbase = ~Powerlab~;
+    }
+
+    // Load up the username and Password for the database.
+    if (!GetSystemSettings( ~Default~,~AccountDbaseUser~, AccountDbaseUser,Enabled ) )
+    {
+        Log( Session, ~Search:********* Default database username set~ );
+        SetSystemSettings( ~Default~,~AccountDbaseUser~,~sysdba~,TRUE ); 
+        AccountDbaseUser = ~sysdba~;
+    }
+
+    if (!GetSystemSettings( ~Default~,~AccountDbasePassword~,AccountDbasePassword,Enabled ) )
+    {
+        Log( Session, ~Search:********* Default database password set~ );
+        SetSystemSettings( ~Default~,~AccountDbasePassword~,~masterkey~,TRUE ); 
+        AccountDbasePassword = ~masterkey~;
+    }
+    Global( AccountDbase );
+
+    // Setup the connect based on the database
+    if (~<AccountDbase>~ == ~Powerlab~)
+    { 
+        Invoke( ShowProgress, Translate( ~Connecting to PowerLab....~) );
+        connected = ADO( powerlab,User,~<AccountDbaseUser>~,Password,~<AccountDbasePassword>~,Provider,~Microsoft OLE DB Provider For ODBC Drivers~,Source,~powerlab~,Connect );
+    if ( !<connected> ) 
+    {
+        Log( Session, ~JobImport: Could not connect to PowerLab~ );
+        Warning( ~JobImport: Could not connect to PowerLab, Please Try Again~ );
+        Invoke( ShowProgress, Translate( ~Could not connect to PowerLab, Please Check and Retry~) );
+        return FALSE;
+    }
+    Global( powerlab );
+    Invoke( ShowProgress, Translate( ~Connected To PowerLab~) );
+    }
+    else
+    {
+        Invoke( ShowProgress, Translate( ~Connecting to Navision....~) );
+        connected = ADO( Navision_Sql,User,~<AccountDbaseUser>~,Password,~<AccountDbasePassword>~,Provider,~SQLOLEDB.1;Integrated Security=SSPI;Persist Security Info=False;Initial Catalog=navision_sql;Data Source=loxsql2005-1~,Source,~Provider=SQLOLEDB.1;Persist Security Info=True;Initial Catalog=navision_sql;Data Source=loxsql2005-1~,Connect );
+        if ( !<connected> ) 
+        {
+            Log( Session, ~JobImport: Could not connect to Navision~ );
+            Warning( ~JobImport: Could not connect to Navision, Please Try Again~ );
+            Invoke( ShowProgress, Translate( ~Could not connect to Navision, Please Check and Retry~) );
+            return FALSE;
+        } 
+        Global( Navision_Sql );
+        Invoke( ShowProgress, Translate( ~Connected To PowerLab~) );
+    }
+    return TRUE;
+}
+
+// Variables to dictate the geometry of the JobImport window and allowable characters.
+vGap = 5;  // The verticle gap between boxes
+hGap = 10; // The horizontal Gap....
+DialogWidth  = 430;
+DialogHeight = 305;
+PromptWidth  = 70;
+BigValueWidth= 140;
+PromptHeight = 20;
+ValueWidth   = 115;
+DetailsWidth = 43;
+IDWidth      = 100;
+IntroWidth   = $DialogWidth - $hGap * 2;
+ButtonWidth  = 80;
+SquareButton = 52;
+LargeButtonWidth = 100;
+ButtonHeight = 30;
+ComboBoxHeight = 200; // How high the drop down will be (MAX).
+CheckBoxWidth = 100;
+DragHeight    = $DialogWidth;
+DragStart     = $hGap-5;
+AllowableChrs = ~<$[Symbols].AllowableSpecialCharacters[Value]>~;
+ShadeDensity  = ~220~;
+LightShadeDensity  = ~240~;
+CustomerDetailsWidth = 155;
+
+// FUNCTION: CalcXPosition()
+//
+// Calculate the X coordinate at which to position the Window.
+// Place starting half-way across the screen, unless it is too wide for the
+//  screen resolution - in which case position is calculated to fit.
+//
+NUMERIC CalcXPosition()
+{
+    ScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+    x = $ScreenWidth / 2;
+    RightEdge = <x> + <DialogWidth>;
+    If ( <RightEdge> > <ScreenWidth> )
+    {
+        x = <ScreenWidth> - <DialogWidth> - 10;
+    }
+    return $x;
+}
+
+// FUNCTION: CalcXPosition()
+//
+// Calculate the Y coordinate at which to position the Window.
+//
+NUMERIC CalcYPosition()
+{
+    ScreenHeight = App( thisApp,MainWindow,GetClientHeight );
+    y = $ScreenHeight / 2;
+    BottomEdge = <y> + <DialogHeight>;
+    If ( <BottomEdge> > <ScreenHeight> )
+    {
+        y = <ScreenHeight> - <DialogHeight> - 10;
+    }
+    return $y;
+}
+
+
+/***************************************************************************************************/
+NUMERIC OnExplorerButton()
+{
+    if (!GetWorkStationSettings( ~<$Job.Name>~ ,StorageRoot,StorageRoot,Enabled ))
+    {
+        Log( Session, ~StorageRoot Setting Unconfigured!!!!!!~);
+        Invoke( ShowWarning, ~Failed to read the StorageRoot from Settings. Try again.
+Or report to your administrator.~ );
+        return FALSE;
+    }
+
+    DlgData( GetValues,OrderID,OrderID);
+
+    // By default open an explorer window for the entire PC
+    Actions = ACTION DOC ( Explorer Open ExplorerDoc "Init(~Explore~,~~);" );
+
+    // If theres an order ID check for the storag directory existing
+    if ( !IsNULL( ~<OrderID>~ ) )
+    {
+        WorkOrderDirectory = ~<StorageRoot>\DFV_<$Date.ShortMonthName>_<$Date.YearWithOutCentury>\sRGB\<OrderID>~;
+        if ( Files( DirectoryExists, ~<WorkOrderDirectory>~) )
+        {
+            // We have a storage directory and it exists so change the Action to open it up
+            Actions = ACTION DOC ( Explorer Open ExplorerDoc "Init(~Explore~,~<WorkOrderDirectory>~);" );
+        }
+    }
+
+    return PerformActions( Actions );
+}
+// FUNCTION: DisableChanges()
+//
+//  This function disables all the entry widgets..
+//
+VOID DisableChanges()
+{
+    dlg( EnableControls,FALSE, OrderIDField );
+    dlg( EnableControls,FALSE, CustomerIDField );
+    dlg( EnableControls,FALSE, ProductCombo );
+    dlg( EnableControls,FALSE, ProductCatCombo );
+    dlg( EnableControls,FALSE, PriorityCombo );
+    dlg( EnableControls,FALSE, ServiceMountCombo );
+    dlg( EnableControls,FALSE, ServiceFinishCombo );
+    dlg( EnableControls,FALSE, ServiceWrapCombo );
+    dlg( EnableControls,FALSE, ServiceFrameCombo );
+    dlg( EnableControls,FALSE, ServiceFrameMountCombo );
+    dlg( EnableControls,FALSE, QuantityEditBox );
+    dlg( EnableControls,FALSE, ColourCorrectCheckBox );
+    dlg( EnableControls,FALSE, BlackAndWhiteRadioButton );
+    dlg( EnableControls,FALSE, SepiaRadioButton );
+    dlg( EnableControls,FALSE, CopperToneRadioButton );
+    dlg( EnableControls,FALSE, BlueToneRadioButton );
+    dlg( EnableControls,FALSE, IndexCardCheckBox );
+    dlg( EnableControls,FALSE, NumIndexCardsField );
+    dlg( EnableControls,FALSE, ExportSetupsComboBox );
+    dlg( EnableControls,FALSE, BravoCDRequiredCheckBox );
+    dlg( EnableControls,FALSE, CropCheckBox );
+    dlg( EnableControls,FALSE, ROESProxiesRequiredCheckBox );
+}
+
+// FUNCTION: EnableChanges()
+//
+//  This function reenables  all the entry widgets..
+//
+VOID EnableChanges()
+{
+    dlg( EnableControls,TRUE, OrderIDField );
+    dlg( EnableControls,TRUE, CustomerIDField );
+    dlg( EnableControls,TRUE, ProductCombo );
+    dlg( EnableControls,TRUE, ProductCatCombo );
+    dlg( EnableControls,TRUE, PriorityCombo );
+    dlg( EnableControls,TRUE, ServiceMountCombo );
+    dlg( EnableControls,TRUE, ServiceFinishCombo );
+    dlg( EnableControls,TRUE, ServiceWrapCombo );
+    dlg( EnableControls,TRUE, ServiceFrameCombo );
+    dlg( EnableControls,TRUE, ServiceFrameMountCombo );
+    dlg( EnableControls,TRUE, QuantityEditBox );
+    dlg( EnableControls,TRUE, ColourCorrectCheckBox );
+    dlg( EnableControls,TRUE, BlackAndWhiteRadioButton );
+    dlg( EnableControls,TRUE, SepiaRadioButton );
+    dlg( EnableControls,TRUE, CopperToneRadioButton );
+    dlg( EnableControls,TRUE, BlueToneRadioButton );
+    dlg( EnableControls,TRUE, IndexCardCheckBox );
+    dlg( EnableControls,TRUE, NumIndexCardsField );
+    dlg( EnableControls,TRUE, ExportSetupsComboBox );
+    dlg( EnableControls,TRUE, BravoCDRequiredCheckBox );
+    dlg( EnableControls,TRUE, CropCheckBox );
+    dlg( EnableControls,TRUE, ROESProxiesRequiredCheckBox );
+}
+// FUNCTION: UpdateCustomerID
+//
+// Called From The Search HTML page to use the record Selected.
+// 
+VOID UpdateCustomerID( CustomerID )
+{
+    dlg(SetStrings, CustomerID,~<CustomerID>~ );
+    dlg(SetStrings, OrderID,~~ );
+    dlg(SetStrings, Contact, ~~);
+    dlg(SetStrings, Company, ~~);
+    dlg(SetStrings, Quantity, ~1~);
+    dlg(SetStrings, BlueTone, ~0~);
+    dlg(SetStrings, CopperTone, ~0~);
+    dlg(SetStrings, BlackAndWhite, ~0~);
+    dlg(SetStrings, Sepia, ~0~);
+    dlg(SetStrings, ColourCorrect, ~1~);
+    dlg(SetStrings, IndexCard, ~1~);
+    dlg(SetStrings, BravoCDRequired, ~0~);
+    dlg(SetStrings, Crop, ~0~);
+    dlg(SetStrings, ROESProxiesRequired, ~0~);
+    dlg(SetStrings, IndexCardRequired, ~1~);
+
+    MakeNewPowerlabOrder();
+}
+// FUNCTION: ValidEmailAddress
+//
+// Called when the Finalise Button is Pressed (GO) to check the address exists.
+// 
+NUMERIC ValidEmailAddress()
+{
+    DlgData( GetValues, CustomerID, CustomerID ); 
+
+    Query = ~Select Email from Customers where ID='<CustomerID>'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    { 
+        List( GetErrorDescription,0,theErr );
+        ShowWarning( Translate( ~Failed to query the Customer table.\n\n<Query>\n\n<theErr>~ ) ); 
+
+        Log( Session, ~JobImport1: ValidEmailAddress = FALSE for ID <CustomerID>~ );
+        return FALSE;
+    }
+
+    List(GetFirst, email);
+    if (IsNULL(~<$pcon.email[email]>~))
+    {
+        Log( Session, ~JobImport2: ValidEmailAddress = FALSE for ID <CustomerID>~ );
+        return FALSE;
+    }
+    Log( Session, ~JobImport: ValidEmailAddress = TRUE for ID <CustomerID>~ );
+    return TRUE;
+}
+
+// FUNCTION: FinaliseButton
+//
+// Called when the Finalise Button is Pressed (GO).
+// 
+// This performs the following steps
+// 1) Adds a row to the conversion table to queue this order to convert.
+// 2) Creates the Pof File if a new order has been created within DP2
+// 3) Prints the Order form.
+// 4) Verifies that a valid email address exists if this is a proxies order.
+NUMERIC FinaliseButton()
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return TRUE;
+    } 
+
+    // Check we can get a valid OrderID.
+    DlgData( GetValues,OrderID,OrderID);
+    if ( ~<OrderID>~ == ~~ )
+    {
+        return Warning( Translate(~Please Enter a Work Order ID or Customer ID and select Images before attemting to Finalise the Order~) );
+    }
+
+    // If this is for proxies check we have an email address
+    dlg( GetControlValue, ROESProxiesRequiredCheckBox, ROESValue);
+
+    if (~<ROESValue>~ == ~1~)
+    {
+        if (!ValidEmailAddress())
+        {
+            return Warning( Translate(~This customer does not have a valid email address to send Proxies!~) );
+        }
+    }
+
+    // Add the directory to the list to be converted.
+    if (QueueOrderToConvert(<OrderID>))
+    {
+        Invoke( ShowProgress,Translate( ~Images Sent For Conversion via PhotoShop.~ ) );
+    }
+
+    // Set the order status to convert.
+    if ( !ADO( dBase,Connect,Cmd,~Update Orders Set Status='Convert' Where ID = '<OrderID>'~ ) )
+    {
+        dBase( GetErrorDescription,theErr );
+        Log( Session,~JobImport: **** SetOrderStatus failed to set order <OrderID> to status of 'Convert', <theErr>~ ) ;
+    }
+    else
+    {
+        Log( Session,~JobImport: **** SetOrderStatus set order <OrderID> to status of 'Convert'~ ) ;
+    }
+
+    // Now create the pof file to import the work order back to Powerlab via PowerImporter if this
+    // was a locally generated Workorder
+    CreatePofFile(<OrderID>);
+
+    // Print the page
+//    Actions = ACTION Doc ( BrowserDoc "PrintNoDefault();" );
+//    PerformActions( Actions );
+
+//    Actions = ACTION Doc ( BrowserDoc "CloseWindow();" );
+//    PerformActions( Actions );
+
+    // Clear the WorkOrder, Account ID, Qty, Options etc.
+    dlg(SetStrings, OrderID,~~ );
+    dlg(SetStrings, CustomerID, ~~);
+    dlg(SetStrings, Contact, ~~);
+    dlg(SetStrings, Company, ~~);
+    dlg(SetStrings, Quantity, ~1~);
+    dlg(SetStrings, BlueTone, ~0~);
+    dlg(SetStrings, CopperTone, ~0~);
+    dlg(SetStrings, BlackAndWhite, ~0~);
+    dlg(SetStrings, Sepia, ~0~);
+    dlg(SetStrings, ColourCorrect, ~1~);
+    dlg(SetStrings, IndexCard, ~1~);
+    dlg(SetStrings, BravoCDRequired, ~0~);
+    dlg(SetStrings, Crop, ~0~);
+    dlg(SetStrings, ROESProxiesRequired, ~0~);
+    dlg(SetStrings, IndexCardRequired, ~1~);
+//  dlg(SetStrings, NumIndexCards, ~1~); Shaun requested this got left as is.
+    dlg(SetStrings, Priority, ~71~);
+
+    // Initialise the list of Mounts 
+    UpdateMountChoices();
+
+    // Initialise the list of Finishes 
+    UpdateFinishChoices();
+
+    // Initialise the list of Wraps 
+    UpdateWrapChoices();
+
+    // Initialise the list of Frames 
+    UpdateFrameChoices();
+
+    // Initialise the list of Frame Mounts
+    UpdateFrameMountChoices();
+
+
+    // Disable the button for now to avoid multiple attempts to send the same order
+    Invoke( DisableGoButton ); 
+
+    return TRUE;
+}
+
+// FUNCTION: AbortDialogAndExit
+//
+// Called when user closes the window (by clicking the 'X' button).
+// - Causes current reorder details to be lost.
+//
+VOID AbortDialogAndExit()
+{
+    // Close all open order Windows. Includes OrderItems and OrderImages.
+    CloseOrderWindows();
+
+    CloseDialogAndExit();
+}
+
+/***************************************************************************************************/
+Stop = FALSE;
+
+VOID OnStopButton()
+{
+    Stop = TRUE;
+    dlg( EnableControls,FALSE,StopButton );    
+}
+
+/***************************************************************************************************/
+VOID DisableStopButton()
+{
+    dlg( EnableControls,FALSE,StopButton );
+}
+/***************************************************************************************************/
+/***************************************************************************************************/
+VOID DisableGoButton()
+{
+    dlg( EnableControls,FALSE,GoButton );
+}
+
+/***************************************************************************************************/
+VOID EnableStopButton()
+{
+    dlg( EnableControls,TRUE,StopButton );
+}
+/***************************************************************************************************/
+VOID EnableGoButton()
+{
+    dlg( EnableControls,TRUE,GoButton );
+}
+
+// FUNCTION: UpdateColourCorrect()
+//
+// This function handles changing the order status via the ColourCorrect Checkbox.
+VOID UpdateColourCorrect()
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return;
+    } 
+
+    // Capture the state of the checkbox.
+    dlg( GetControlValue, ColourCorrectCheckBox, ColourCorrectValue);
+    dlg( GetControlValue, CustomerIDField, accountid);
+    if ( IsNULL( ~<accountid>~) )
+    {
+        return;
+    } 
+
+// We now leave the status at import for ConversionStation to update later.
+//    if (~<ColourCorrectValue>~ == ~1~)
+//    {
+//        AddOrder( ~<$con.DlgData[OrderID]>~,~<accountid>~, ~~, ~~, ~~, ~Import~ );
+//    }
+//    else
+//    {
+//        AddOrder( ~<$con.DlgData[OrderID]>~,~<accountid>~, ~~, ~~, ~~, ~Proof~ );
+//    }
+
+    Actions = ACTION Doc ( BrowserDoc "Refresh();" );
+    PerformActions( Actions );
+}
+
+// FUNCTION: ToggleProxiesAndBravo()
+//
+// This function handles turning the Bravo/Proxies on or off.
+// The boxes are mutually exclusive so this just turns all buttons off 
+// other than the one selected. 
+VOID ToggleProxiesAndBravo (ButtonPressed)
+{
+    return; // For now do nothing, we may in future want to add bravo/proxies
+            // to the summary.
+
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return;
+    } 
+
+    Actions = ACTION Doc ( BrowserDoc "Refresh();" );
+    PerformActions( Actions );
+
+    return;
+}
+
+// FUNCTION: ToggleBoxes()
+//
+// This function handles turning the colourtone checkboxes on or off.
+// The boxes are mutually exclusive so this just turns all buttons off 
+// other than the one selected.
+VOID ToggleBoxes (ButtonPressed)
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return;
+    } 
+
+    // Capture the state of all buttons.
+    dlg( GetControlValue, BlackAndWhiteCheckBox, BlackAndWhiteValue);
+    dlg( GetControlValue, SepiaCheckBox, SepiaValue);
+    dlg( GetControlValue, CopperToneCheckBox, CopperToneValue);
+    dlg( GetControlValue, BlueToneCheckBox, BlueToneValue);
+
+    // Find the button and set the others off.......
+    if ((~<ButtonPressed>~ == ~BlackAndWhite~) && <BlackAndWhiteValue>)
+    {
+        dlg( SetCheck, False, BlueToneCheckBox);
+        dlg( SetCheck, False, CopperToneCheckBox);
+        dlg( SetCheck, False, SepiaCheckBox);
+        return;
+    }
+
+    if ((~<ButtonPressed>~ == ~Sepia~) && <SepiaValue>)
+    {
+        dlg( SetCheck, False, BlueToneCheckBox);
+        dlg( SetCheck, False, CopperToneCheckBox);
+        dlg( SetCheck, False, BlackAndWhiteCheckBox);
+        return;
+    }
+
+    if ((~<ButtonPressed>~ == ~BlueTone~) && <BlueToneValue>)
+    {
+        dlg( SetCheck, False, SepiaCheckBox);
+        dlg( SetCheck, False, CopperToneCheckBox);
+        dlg( SetCheck, False, BlackAndWhiteCheckBox);
+        return;
+    }
+
+    if ((~<ButtonPressed>~ == ~CopperTone~) && <CopperToneValue>)
+    {
+        dlg( SetCheck, False, SepiaCheckBox);
+        dlg( SetCheck, False, BlueToneCheckBox);
+        dlg( SetCheck, False, BlackAndWhiteCheckBox);
+        return;
+    }
+}
+// FUNCTION: ToggleButtons()
+//
+// This function handles turning the colourtone Radio buttons on or off.
+// The buttons are mutually exclusive so this just turns all buttons off 
+// other than the one selected.
+VOID ToggleButtons (ButtonPressed)
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return;
+    } 
+
+    //Debug(1);
+    // Capture the state of all buttons.
+    dlg( GetControlValue, BlackAndWhiteRadioButton, BlackAndWhiteValue);
+    dlg( GetControlValue, SepiaRadioButton, SepiaValue);
+    dlg( GetControlValue, CopperToneRadioButton, CopperToneValue);
+    dlg( GetControlValue, BlueToneRadioButton, BlueToneValue);
+
+    // Find the button and set the others off.......
+    if (~<ButtonPressed>~ == ~BlackAndWhite~)
+    {
+        if (~<BlackAndWhiteValue>~ == ~1~)
+        {
+            dlg( SetCheck, FALSE, BlackAndWhiteRadioButton ); 
+            dlg( SetControlValue, BlackAndWhite, ~0~);
+        }
+        else
+        {
+            dlg( SetControlValue, BlackAndWhite, ~1~);
+            dlg( SetCheck, TRUE, BlackAndWhiteRadioButton ); 
+            dlg( SetCheck, FALSE, BlueToneRadioButton ); 
+            dlg( SetCheck, FALSE, CopperToneRadioButton ); 
+            dlg( SetCheck, FALSE, SepiaRadioButton ); 
+        }
+        return;
+    }
+
+    if (~<ButtonPressed>~ == ~Sepia~)
+    {
+        if (~<SepiaValue>~ == ~1~)
+        {
+            dlg( SetCheck, FALSE, SepiaRadioButton ); 
+            dlg( SetControlValue, Sepia, ~0~);
+        }
+        else
+        {
+            dlg( SetControlValue, Sepia, ~1~);
+            dlg( SetCheck, TRUE, SepiaRadioButton ); 
+            dlg( SetCheck, FALSE, BlueToneRadioButton ); 
+            dlg( SetCheck, FALSE, CopperToneRadioButton ); 
+            dlg( SetCheck, FALSE, BlackAndWhiteRadioButton ); 
+        }
+        return;
+    }
+
+    if (~<ButtonPressed>~ == ~BlueTone~)
+    {
+        if (~<BlueToneValue>~ == ~1~)
+        {
+            dlg( SetCheck, FALSE, BlueToneRadioButton ); 
+            dlg( SetControlValue, BlueTone, ~0~);
+        }
+        else
+        {
+            dlg( SetControlValue, BlueTone, ~1~);
+            dlg( SetCheck, TRUE,  BlueToneRadioButton ); 
+            dlg( SetCheck, FALSE, SepiaRadioButton ); 
+            dlg( SetCheck, FALSE, CopperToneRadioButton ); 
+            dlg( SetCheck, FALSE, BlackAndWhiteRadioButton ); 
+        }
+        return;
+    }
+
+    if (~<ButtonPressed>~ == ~CopperTone~)
+    {
+        if (~<CopperToneValue>~ == ~1~)
+        {
+            dlg( SetCheck, FALSE, CopperToneRadioButton ); 
+            dlg( SetControlValue, CopperTone, ~0~);
+        }
+        else
+        {
+            dlg( SetControlValue, CopperTone, ~1~);
+            dlg( SetCheck, TRUE,  CopperToneRadioButton ); 
+            dlg( SetCheck, FALSE, SepiaRadioButton ); 
+            dlg( SetCheck, FALSE, BlueToneRadioButton ); 
+            dlg( SetCheck, FALSE, BlackAndWhiteRadioButton ); 
+        }
+        return;
+    }
+}
+
+VOID UpdateBravoSetupsList()
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return;
+    } 
+
+    //Debug(1);
+    StringList( SetupsList, New );
+
+    Query = ~Select Setup From ExportImageSetups Order By Setup~;
+
+    if ( !PGenConList( ExportSetupsList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    { 
+        ExportSetupsList( GetErrorDescription,0,theErr );
+        ShowWarning( Translate( ~Failed to query the ExportImageSetups table.\n\n<Query>\n\n<theErr>~ ) ); 
+        return;
+    }
+    Count = ExportSetupsList( NumEntries );
+
+    if (<Count> > 0)
+    {
+        ExportSetupsList( MakeStringList,BravoSetups,Setup );
+    }
+
+    dlg( SetControlFromStringList,ExportSetupsComboBox,BravoSetups,NoSelection );
+}
+
+VOID AuditField( FieldName,LowValue,HighValue,DefaultValue, Stringname )
+{
+    dlg(GetInput);
+
+    dlg( GetControlValue,~<FieldName>~,Value );
+
+    if ( ~<Value>~ == ~-~ )
+    {
+        if ( <LowValue> < 0 )
+        {
+            return;
+        }
+        else
+        {
+            dlg(SetStrings, ~<Stringname>~, ~<LowValue>~);
+
+            MessageBox(~Value must be greater than or equal to <LowValue>~ );
+                        
+            // Now set the focus back to that control
+            if (~<FieldName>~ != ~~)
+            {
+                dlg( SetControlFocus, ~<FieldName>~ );
+            }
+
+            return;
+        }
+    }
+
+    if ( Numeric(~<Value>~) < <LowValue> )
+    {
+        dlg(SetStrings, ~<Stringname>~, ~<LowValue>~);
+        MessageBox(~Value must be greater than or equal to <LowValue>~ );
+        
+        // Now set the focus back to that control
+        if (~<FieldName>~ != ~~)
+        {
+            dlg( SetControlFocus, ~<FieldName>~ );
+        }
+    }
+    else if ( Numeric(~<Value>~) > <HighValue> )
+    {
+        dlg(SetStrings, ~<Stringname>~, ~<HighValue>~);
+
+        MessageBox(~Value must be less than or equal to <HighValue>~ );
+
+        // Now set the focus back to that control
+        if (~<FieldName>~ != ~~)
+        {
+            dlg( SetControlFocus, ~<FieldName>~ );
+        }
+    }
+}
+
+SeeServices = FALSE;
+
+VOID OnServicesBox()
+{
+    SeeServices = !<SeeServices>;
+
+//    SetQty( 1 );
+
+    if ( <SeeServices> )
+    {
+        dlg( SetControlTitle,SeeServicesBox,~<--~ );
+        dlg( SetWindowSize,<DialogWidthWithServices>,$DialogHeight );
+    }
+    else
+    {
+        dlg( SetControlTitle,SeeServicesBox,~-->~ );
+        dlg( SetWindowSize,<DialogWidthWithoutServices>,$DialogHeight );
+    }
+}
+
+// FUNCTION: DefineMainDialog
+//
+// Defines the main dialog to prompt the user for information on the next
+// image to add to the reorder.
+//
+VOID DefineMainDialog()
+{
+    Fields:    
+               ColourCorrect           1
+               IndexCardRequired       1
+               NumIndexCards           1
+               BravoCDRequired         0
+               Crop                    0
+               ROESProxiesRequired     0
+               Quantity                1
+               BlackAndWhite           0
+               Sepia                   0
+               CopperTone              0
+               BlueTone                0
+               SeeServices             FALSE
+    ;
+
+    Define: MainDialog Using DDWinDef
+        Fields: POSITION                100, 100, $DialogWidth, 300
+                TITLE                   Translate(~JobImport~)
+                TYPENAME                ~Dialog~ 
+                IsCenteredHorizontal TRUE 
+                IsCenteredVertical   TRUE
+                StatusBar               ~1 100~
+                WantsMinimizeBox        TRUE
+                OACTIONSTEXT            ACTION EXEC ( AbortDialogAndExit() )
+                HACTIONSTEXT            ACTION SHOWHELPPAGE ( KPISHelpFile "JobImport.htm" )
+                DropActionsText         ACTION EXEC ( HandleDrop() )
+
+        Contains: INLISTORDER
+        {
+            Define: TheIntroText Using DDWinCtrlDef AsSymbol TheIntroText
+                Fields: POSITION    5, $vGap, $IntroWidth, $PromptHeight
+                        FontSize    15 
+                        TEXT        ~Enter Work Order or Customer ID, Then Select Options and Drag Images Into the Box~
+                        TextColorRed    255,    TextColorGreen 0,    TextColorBlue 0 
+                        BGColorRed      $LightShadeDensity BGColorGreen    $LightShadeDensity BGColorBlue $LightShadeDensity
+                        TYPENAME    StaticText;
+
+            Define: ExplorerButton Using DDWinCtrlDef AsSymbol ExplorerButton 
+                Fields: TypeName        Button
+                        Text            Translate( ~Explorer~ )
+                        Position        $DialogWidth - ($ButtonWidth+$hGap), $DialogHeight - ($ButtonHeight*2 +$vGap) ,$ButtonWidth, $ButtonHeight
+                        DActionsText    ACTION EXEC ( OnExplorerButton() ) 
+                        IsEnabled       T
+//                      BGColorGreen    Defined(G) ? ~<G>~ : ~300~
+                        ImageFile       ~<$App.Directory>\loxley.bmp~
+                        Tooltip         Translate( ~Open an Explorer Window or if it Exists the Work Order Directory~ );
+
+            Define: StopButton Using DDWinCtrlDef AsSymbol StopButton 
+            Fields: TypeName        Button
+                    Text            Translate( ~Stop~ )
+                    Position        ExplorerButton(GetLeft,Position)-$hGap-$SquareButton,ExplorerButton(GetTop,Position) - 22,$SquareButton, $SquareButton
+                    DActionsText    ACTION EXEC ( OnStopButton() ) 
+                    IsEnabled       F
+                    ImageFile       ~<$App.Directory>\stop.bmp~
+                    Tooltip         Translate( ~Stop Importing Files. Only Active When Files are Being Copied~ );
+
+                    Global( StopButton );
+
+            Define: GoButton Using DDWinCtrlDef AsSymbol GoButton 
+            Fields: TypeName        Button
+                    Text            Translate( ~Finalise~ )
+                    Position        ExplorerButton(GetLeft,Position)-($hGap*2)-($SquareButton*2),ExplorerButton(GetTop,Position) - 22,$SquareButton, $SquareButton
+                    DActionsText    ACTION EXEC ( FinaliseButton() ) 
+                    IsEnabled       F
+                    ImageFile       ~<$App.Directory>\go.bmp~
+                    Tooltip         Translate( ~Send Images for Conversion to sRGB, Commit Order Items and if Necessary Import Order Details to PowerLab for Billing~ );
+
+            Define: OrderIDPrompt Using DDWinCtrlDef AsSymbol OrderIDPrompt 
+               Fields: TypeName        StaticText
+                        Text            Translate( ~Work Order ID~ )
+                        RightJustified    TRUE
+                        Position        $hGap,TheIntroText(GetBottom,Position)+$vGap,$PromptWidth, $PromptHeight
+
+            Define: OrderIDField Using DDWinCtrlDef AsSymbol OrderIDField 
+                Fields: TypeName        MaskedEditText
+                        WantReturnKey    ~T~
+                        ReturnKeyActionsText    ACTION EXEC ( MakeNewOrderIfNecessary() )
+                        Position        OrderIDPrompt(GetRight,Position) + $hGap, TheIntroText(GetBottom,Position)+$vGap,$IDWidth, $PromptHeight 
+                        IActionsText    ACTIONS ( Get )
+                        DActionsText    ACTIONS ( Save )
+                        OActionsText    ACTIONS ( Save )
+                        GenConName       THIS
+                        GenConField     ~OrderID~
+                        Mask            ~<$[DATABASE FieldTypes].OrderID[Mask]>~
+                        PromptChar      ~<$[DATABASE FieldTypes].OrderID[PromptChar]>~
+                        AllowedChars    ~<$[DATABASE FieldTypes].OrderID[AllowedChars]>~
+                        DisallowedChars ~<$[DATABASE FieldTypes].OrderID[DisallowedChars]>~
+                        Tooltip         ~Enter the Existing Work Order ID~
+
+
+            Define: CustomerIDPrompt Using DDWinCtrlDef AsSymbol CustomerIDPrompt 
+                Fields: TypeName        StaticText
+                        Text            Translate( ~Customer ID~ )
+                        RightJustified  TRUE
+                        Position        $hGap,OrderIDField(GetBottom,Position) + $vGap,$PromptWidth, $PromptHeight
+
+            Define: CustomerIDField Using DDWinCtrlDef AsSymbol CustomerIDField
+                Fields:    TypeName        MaskedEditText
+                        POSITION        OrderIDPrompt(GetRight,Position) + $hGap,OrderIDField(GetBottom,Position) +$vGap,$IDWidth, $PromptHeight 
+                        Tooltip         ~The customers ID.~
+                        Tooltip         ~Enter a Customer ID to Create a New Order. This Will be Imported to PowerLab~
+                        Mask            ~<$[DATABASE FieldTypes].CustomerID[Mask]>~
+                        PromptChar      ~<$[DATABASE FieldTypes].CustomerID[PromptChar]>~
+                        AllowedChars    ~<$[DATABASE FieldTypes].CustomerID[AllowedChars]>~
+                        DisallowedChars ~<$[DATABASE FieldTypes].CustomerID[DisallowedChars]>~
+                        IsTabStop        1
+                        WantReturnKey    ~T~
+                        GENCONNAME        This
+                        GENCONFIELD        ~CustomerID~
+                        IACTIONSTEXT    ACTIONS ( Get )
+                        DACTIONSTEXT    ACTIONS ( Save )
+                        OACTIONSTEXT    ACTIONS ( Save )
+                        InsertValueIntoList ~T~
+                        ReturnKeyActionsText    ACTION EXEC ( MakeNewPowerlabOrder() )
+//                      DropDownActionsText ACTION CALL ( FindCustomersLike() );
+
+//////////////////
+            Define: PrioritytPrompt Using DDWinCtrlDef AsSymbol PrioritytPrompt
+                Fields: POSITION        $hGap, CustomerIDPrompt(GetBottom,Position)+$vGap, $PromptWidth, $PromptHeight
+                        TEXT            ~Priority~
+                        TOOLTIP         ~This selects the priority of the order. Defaults to 71 and ranges from 10 - Low to 90 - High~
+                        IsEnabled       T
+                        RightJustified  TRUE
+                        TYPENAME        StaticText ;
+
+            Define: PriorityCombo Using DDWinCtrlDef AsSymbol PriorityCombo
+                Fields: POSITION        PrioritytPrompt(GetRight,Position) + $hGap, PrioritytPrompt(GetTop,Position), $ValueWidth-70, $ComboBoxHeight
+                        GENCONNAME      THIS
+                        GENCONFIELD     ~Priority~
+                        IACTIONSTEXT    ACTIONS ( Get )
+                        OACTIONSTEXT    ACTIONS ( Save )
+                        DACTIONSTEXT    ACTIONS ( Save )
+                        TOOLTIP         ~This selects the priority of the order. Defaults to 71 and ranges from 10 - Low to 90 - High~
+                        TypeName        SComboBox ;
+
+//////////////////////////
+
+
+            Define:DetailsArea Using DDWinCtrlDef AsSymbol DetailsArea
+                Fields: TypeName    GroupBox
+                        Position    OrderIDField(GetRight,Position) + $hGap OrderIDField(GetTop,Position) - 4 220 75;
+
+            Define: CustomerNamePrompt Using DDWinCtrlDef AsSymbol CustomerNamePrompt 
+                Fields: TypeName        StaticText
+                        Text            Translate( ~Name~ )
+                        RightJustified  TRUE
+                        Position        DetailsArea(GetLeft,Position) + $hGap,DetailsArea(GetTop,Position) + $vGap+2, $DetailsWidth, $PromptHeight
+
+            Define: CustomerNameField Using DDWinCtrlDef AsSymbol CustomerNameField
+                Fields:    TypeName        StaticText
+                        POSITION        CustomerNamePrompt(GetRight,Position) + $hGap,CustomerNamePrompt(GetTop,Position),$CustomerDetailsWidth, $PromptHeight *2
+                        Mask            ~<$[DATABASE FieldTypes].Contact[Mask]>~
+                        PromptChar      ~<$[DATABASE FieldTypes].Contact[PromptChar]>~
+                        AllowedChars    ~<$[DATABASE FieldTypes].Contact[AllowedChars]>~
+                        DisallowedChars ~<$[DATABASE FieldTypes].Contact[DisallowedChars]>~
+                        GENCONNAME      This
+                        GENCONFIELD     ~Contact~
+                        IACTIONSTEXT    ACTIONS ( Get )
+                        DACTIONSTEXT    ACTIONS ( Save )
+                        OACTIONSTEXT    ACTIONS ( Save )
+                        TextColorRed    0,    TextColorGreen 0,    TextColorBlue 255 
+                        BGColorRed      $ShadeDensity BGColorGreen    $ShadeDensity BGColorBlue $ShadeDensity
+
+            Define: CompanyPrompt Using DDWinCtrlDef AsSymbol CompanyPrompt 
+                Fields: TypeName        StaticText
+                        Text            Translate( ~Company~ )
+                        RightJustified  TRUE
+                        Position        DetailsArea(GetLeft,Position) + $hGap,CustomerNamePrompt(GetBottom,Position) + $vGap, $DetailsWidth, $PromptHeight
+
+            Define: CompanyField Using DDWinCtrlDef AsSymbol CompanyField
+                Fields:    TypeName        StaticText
+                        POSITION        CompanyPrompt(GetRight,Position) + $hGap,CompanyPrompt(GetTop,Position),$CustomerDetailsWidth, $PromptHeight * 2
+                        Mask            ~<$[DATABASE FieldTypes].Contact[Mask]>~
+                        PromptChar      ~<$[DATABASE FieldTypes].Contact[PromptChar]>~
+                        AllowedChars    ~<$[DATABASE FieldTypes].Contact[AllowedChars]>~
+                        DisallowedChars ~<$[DATABASE FieldTypes].Contact[DisallowedChars]>~
+                        GridLines    TRUE 
+                        GENCONNAME      This
+                        GENCONFIELD     ~Company~
+                        IACTIONSTEXT    ACTIONS ( Get )
+                        DACTIONSTEXT    ACTIONS ( Save )
+                        OACTIONSTEXT    ACTIONS ( Save )
+                        TextColorRed    0,    TextColorGreen 0,    TextColorBlue 255 
+                        BGColorRed      $ShadeDensity BGColorGreen    $ShadeDensity BGColorBlue $ShadeDensity
+
+            Define: ProductCatPrompt Using DDWinCtrlDef AsSymbol ProductCatPrompt
+                Fields: POSITION        $hGap, DetailsArea(GetBottom,Position)+$vGap, $PromptWidth, $PromptHeight
+                        TEXT            ~Category~
+                        TOOLTIP         ~This Selects the Subcategory of Products to List in the Product Box Below.~
+                        IsEnabled       T
+                        RightJustified  TRUE
+                        TYPENAME        StaticText ;
+
+            // When the product category combo/dropdown value is changed, it
+            // automatically calls UpdateProductChoices() to update the
+            // contents of the products combo/dropdown.
+            //
+            Define: ProductCatCombo Using DDWinCtrlDef AsSymbol ProductCatCombo
+                Fields: POSITION        ProductCatPrompt(GetRight,Position) + $hGap, ProductCatPrompt(GetTop,Position), $ValueWidth, $ComboBoxHeight
+                        GENCONNAME      THIS
+                        GENCONFIELD     ~ProductCat~
+                        IACTIONSTEXT    ACTIONS ( Get )
+                        OACTIONSTEXT    ACTIONS ( Save )
+                        DACTIONSTEXT    ACTIONS ( Save "Exec(UpdateProductChoices())" )
+                        TOOLTIP         ~This Selects the Subcategory of Products to List in the Product Box Below.~
+                        TypeName        SComboBox ;
+
+            Define: ProductPrompt Using DDWinCtrlDef AsSymbol ProductPrompt
+                Fields: POSITION        $hGap, ProductCatPrompt(GetBottom,Position)+$vGap, $PromptWidth, $PromptHeight
+                        TEXT            ~Product~
+                        TOOLTIP         ~This Product Will be Applied to Images Dragged Into This Dialog. Multiple Products Can be Applied By Dragging Images Into the Dialog More Than Once. NOTE. Files Are Only Copied Once.~
+                        IsEnabled       T
+                        RightJustified  TRUE
+                        TYPENAME        StaticText ;
+
+            Define: ProductCombo Using DDWinCtrlDef AsSymbol ProductCombo
+                Fields: POSITION        ProductPrompt(GetRight,Position) + $hGap, ProductPrompt(GetTop,Position), $ValueWidth, $ComboBoxHeight
+                        GENCONNAME      THIS
+                        GENCONFIELD     ~Product~
+                        DropDownActionsText ACTION EXEC ( UpdateProductChoices() )
+                        IACTIONSTEXT    ACTIONS ( Get )
+                        OACTIONSTEXT    ACTIONS ( Save )
+                        DACTIONSTEXT    ACTIONS ( Save )
+                        TOOLTIP         ~This Product Will be Applied to Images Dragged Into This Dialog. Multiple Products Can be Applied By Dragging Images Into the Dialog More Than Once. NOTE. Files Are Only Copied Once.~
+                        TypeName        SComboBox ;
+
+            Define: QuantityEditBox Using DDWinCtrlDef AsSymbol QuantityEditBox
+                Fields: TYPENAME        MaskedEditText
+                        GENCONFIELD     ~Quantity~
+                        GENCONNAME      THIS
+                        ISTABSTOP       TRUE
+                        IActionsText    ACTIONS ( Get )
+                        DActionsText    ACTIONS ( Save )
+                        OActionsText    ACTIONS ( Save )
+                        POSITION        ProductCombo(GetLeft,Position), ProductPrompt(GetBottom,Position) +$vGap, 50, $PromptHeight
+                        TOOLTIP         ~Enter The Number of Prints Required (Maximum 9999).~
+                        Mask            ~####~ 
+                        PromptChar      ~ ~ ;
+
+            Define: QuantityPrompt Using DDWinCtrlDef AsSymbol QuantityPrompt
+                Fields: POSITION        $hGap, ProductPrompt(GetBottom,Position)+$vGap, $PromptWidth, $PromptHeight
+                        TEXT            ~Quantity~
+                        TOOLTIP         ~Enter The Number of Prints Required.~
+                        IsEnabled       T
+                        RightJustified  TRUE
+                        TYPENAME        StaticText ;
+
+        Define: ProgressBox Using DDWinCtrlDef AsSymbol ProgressBox Private
+            Fields: TYPENAME        Progress
+                    POSITION        $hGap QuantityPrompt(GetBottom,Position) + $vGap DetailsArea(GetRight,Position) - $hGap 7 
+                    ISSMOOTH        1;
+
+        Define: ColourCorrectCheckBox Using DDWinCtrlDef AsSymbol ColourCorrectCheckBox
+            Fields: TypeName        CheckBox  
+                    Position        $hGap, ProgressBox(GetBottom, Position)+$vGap, $CheckBoxWidth, 20
+                    IActionsText    ACTIONS ( Get )
+                    DActionsText    ACTION EXEC ( UpdateColourCorrect() )
+                    OActionsText    ACTIONS ( Save )
+                    GenConName      THIS
+                    GenConField     ~ColourCorrect~
+                    Text            ~Colour Correct~
+                    Tooltip         ~Check This Box to Indicates that Colour Correcton is Required.~;
+
+        Define:BlackAndWhiteRadioButton Using DDWinCtrlDef AsSymbol BlackAndWhiteRadioButton
+            Fields: TypeName        RadioButton  
+                    Position        ProductCatCombo(GetRight, Position) + $hGap, ProductCatCombo(GetTop, Position), $CheckBoxWidth, 20
+                    IActionsText    ACTIONS ( Get )
+                    DActionsText    ACTION EXEC ( ToggleButtons(~BlackAndWhite~) )
+                    OActionsText    ACTIONS ( Save )
+                    GenConName      THIS
+                    GenConField     ~BlackAndWhite~
+                    RadioTrueValue  ~1~
+                    Text            ~Black and White~
+                    Tooltip         ~This Button Selects Black and White.~;
+
+        Define:SepiaRadioButton Using DDWinCtrlDef AsSymbol SepiaRadioButton
+            Fields: TypeName        RadioButton  
+                    Position        BlackAndWhiteRadioButton(GetLeft, Position), BlackAndWhiteRadioButton(GetBottom, Position)+ $vGap, $CheckBoxWidth, 20
+                    IActionsText    ACTIONS ( Get )
+                    DActionsText    ACTION EXEC ( ToggleButtons(~Sepia~) )
+                    OActionsText    ACTIONS ( Save )
+                    GenConName      THIS
+                    GenConField     ~Sepia~
+                    RadioTrueValue  ~1~
+                    Text            ~Sepia~
+                    Tooltip         ~This Button Selects Sepia.~;
+
+        Define:CopperToneRadioButton Using DDWinCtrlDef AsSymbol CopperToneRadioButton
+            Fields: TypeName        RadioButton  
+                    Position        BlackAndWhiteRadioButton(GetLeft, Position) + $hGap + $CheckBoxWidth, BlackAndWhiteRadioButton(GetTop, Position), $CheckBoxWidth, 20
+                    IActionsText    ACTIONS ( Get )
+                    DActionsText    ACTION EXEC ( ToggleButtons(~CopperTone~) )
+                    OActionsText    ACTIONS ( Save )
+                    GenConName      THIS
+                    GenConField     ~CopperTone~
+                    RadioTrueValue  ~1~
+                    Text            ~Copper Tone~
+                    Tooltip         ~This Button Selects Copper Tone.~;
+
+        Define:BlueToneRadioButton Using DDWinCtrlDef AsSymbol BlueToneRadioButton
+            Fields: TypeName        RadioButton  
+                    Position        CopperToneRadioButton(GetLeft, Position), CopperToneRadioButton(GetBottom, Position)+ $vGap, $CheckBoxWidth, 20
+                    IActionsText    ACTIONS ( Get )
+                    DActionsText    ACTION EXEC ( ToggleButtons(~BlueTone~) )
+                    OActionsText    ACTIONS ( Save )
+                    GenConName      THIS
+                    GenConField     ~BlueTone~
+                    RadioTrueValue  ~1~
+                    Text            ~Blue Tone~
+                    Tooltip         ~This Button Selects Blue Tone.~;
+
+       Define: IndexCardCheckBox Using DDWinCtrlDef AsSymbol IndexCardCheckBox 
+            Fields: TypeName        CheckBox  
+                    Position        ColourCorrectCheckBox(GetLeft, Position),ColourCorrectCheckBox(GetBottom,Position) +$vGap, $CheckBoxWidth, 20 
+                    IActionsText    ACTIONS ( Get )
+                    DActionsText    ACTIONS ( Save )
+                    OActionsText    ACTIONS ( Save )
+                    GenConName      THIS
+                    GenConField     ~IndexCardRequired~
+                    Text            ~Index Cards (Qty)~
+                    Tooltip         ~If checked, Appropriate Sized Index Card(s) Will be Printed.~;
+
+        Define: NumIndexCardsField Using DDWinCtrlDef AsSymbol NumIndexCardsField 
+            Fields: TypeName        MaskedEditText  
+                    POSITION        IndexCardCheckBox(GetRight,Position) + $hGap, IndexCardCheckBox(GetTop, Position), 40, 20
+                    DACTIONSTEXT    ACTIONS ( Save "Exec(AuditField(NumIndexCardsField, 0, 300, 1, NumIndexCards);)" )
+                    IACTIONSTEXT    ~[Get]~
+                    OACTIONSTEXT    ~[Save]~
+                    GENCONNAME        THIS
+                    GENCONFIELD     ~NumIndexCards~
+                    MASK            ~###~
+                    AllowedChars    ~-~
+                    PROMPTCHAR      ~ ~
+                    TOOLTIP         ~The Number of Index Card Copies Required. Range is 1 to 300~;
+
+ Define: ExportSetupsComboBox Using DDWinCtrlDef AsSymbol ExportSetupsComboBox 
+            Fields: TypeName        SComboBox  
+            Position        ColourCorrectCheckBox(GetRight,Position) + $hGap, ColourCorrectCheckBox(GetTop,Position),<ValueWidth>,<ComboBoxHeight>
+            DropDownActionsText    ACTION EXEC ( UpdateBravoSetupsList() )
+            DActionsText    ACTIONS ( Save )
+            OActionsText    ACTIONS ( Save )
+            GenConName        THIS
+            GenConField     ~BravoSetup~
+            Mask            ~<$[DATABASE FieldTypes].ScanSetupName[Mask]>~
+            PromptChar      ~<$[DATABASE FieldTypes].ScanSetupName[PromptChar]>~
+            AllowedChars    ~<$[DATABASE FieldTypes].ScanSetupName[AllowedChars]>~
+            DisallowedChars ~<$[DATABASE FieldTypes].ScanSetupName[DisallowedChars]>~
+            Tooltip         ~Selects the Setup Profile to Use for Bravo CD Writing~
+
+       Define: BravoCDRequiredCheckBox Using DDWinCtrlDef AsSymbol BravoCDRequiredCheckBox 
+            Fields: TypeName        CheckBox  
+                    Position        ExportSetupsComboBox(GetLeft, Position) + $ValueWidth + $hGap ,ColourCorrectCheckBox(GetTop,Position), $CheckBoxWidth -5 , 20 
+                    IActionsText    ACTIONS ( Get )
+                    DActionsText    ACTION EXEC ( ToggleProxiesAndBravo(~Bravo~) )
+                    OActionsText    ACTIONS ( Save )
+                    GenConName      THIS
+                    GenConField     ~BravoCDRequired~
+                    Text            ~Bravo CD~
+                    Tooltip         ~If checked, Files Will be Written to CD Via The Bravo.~;
+
+ Define: CropCheckBox Using DDWinCtrlDef AsSymbol CropCheckBox 
+            Fields: TypeName        CheckBox  
+                    Position        ProductCombo(GetRight, Position) + $hGap ,QuantityEditBox(GetTop,Position), $CheckBoxWidth, 20 
+                    IActionsText    ACTIONS ( Get )
+//                    DActionsText    ACTION EXEC ( UpdateCrop() )
+                    OActionsText    ACTIONS ( Save )
+                    GenConName      THIS
+                    GenConField     ~Crop~
+                    Text            ~Check To Fit~
+                    Tooltip         ~If checked images will be resized to fit the product, otherwise they will be auto cropped.~;
+
+
+    Define: SeeServicesBox Using DDWinCtrlDef AsSymbol SeeServicesBox 
+                Fields: TypeName     Button
+                        Text         Translate( ~-->~ )
+                        GenConName   THIS
+                        GenConField  ~SeeServices~
+                        IsTabStop    F    
+                        Position     CropCheckBox(GetRight,Position) + $hGap*8,CropCheckBox(GetTop,Position), 25, 20
+                        DActionsText ACTIONS (  "Exec(OnServicesBox())" ) 
+                        Tooltip      Translate( ~See/Hide Service Options~ );
+
+       Define: ROESProxiesRequiredCheckBox Using DDWinCtrlDef AsSymbol ROESProxiesRequiredCheckBox 
+            Fields: TypeName        CheckBox  
+                    Position        ColourCorrectCheckBox(GetLeft, Position),NumIndexCardsField(GetBottom,Position) +$vGap, $CheckBoxWidth + 40, 20 
+                    IActionsText    ACTIONS ( Get )
+                    DActionsText    ACTION EXEC ( ToggleProxiesAndBravo(~Proxies~) )
+                    OActionsText    ACTIONS ( Save )
+                    GenConName      THIS
+                    GenConField     ~ROESProxiesRequired~
+                    Text            ~ROES Proxies via Email~
+                    Tooltip         ~If checked, proxies will be generated and an email sent to the customer when they are rendered.~;
+
+            Define: ReOpenSummaryButton Using DDWinCtrlDef AsSymbol ReOpenSummaryButton
+                Fields: TypeName        DefaultButton
+                        Text            ~Open Summary~
+                        IsEnabled       F
+                        DActionsText    ACTION EXEC ( ReOpenOrderSummary() )
+                        Position        ExplorerButton(GetLeft,Position), GoButton(GetTop,Position), $ButtonWidth, $PromptHeight
+                        TOOLTIP         ~Reopen the Order Summary Window in the Event it Has Been Accidentally Closed.~;
+
+            Define: OpenSearchButton Using DDWinCtrlDef AsSymbol OpenSearchButton
+                Fields: TypeName        DefaultButton
+                        Text            ~Find Account~
+                        IsEnabled       T
+                        DActionsText    ACTION EXEC ( OpenSearch(Dlg) )
+                        Position        ExplorerButton(GetLeft,Position), ReOpenSummaryButton(GetTop,Position) - $PromptHeight -5, $ButtonWidth, $PromptHeight
+                        TOOLTIP         ~Open The Customer Search Window. This Enables You To Locate a Customers Account Number~;
+
+            Define: ServiceMountPrompt Using DDWinCtrlDef AsSymbol ServiceMountPrompt
+                Fields: POSITION        CustomerNameField(GetRight,Position)+$vGap, CustomerNameField(GetTop,Position), $DetailsWidth, $PromptHeight
+                        TEXT            ~Mount~
+                        TOOLTIP         ~This selects the mount to apply.~
+                        IsEnabled       T
+                        RightJustified  TRUE
+                        TYPENAME        StaticText ;
+
+            Define: ServiceMountCombo Using DDWinCtrlDef AsSymbol ServiceMountCombo
+                Fields: POSITION        ServiceMountPrompt(GetRight,Position) + $hGap, ServiceMountPrompt(GetTop,Position), $BigValueWidth, $ComboBoxHeight
+                        GENCONNAME      THIS
+                        GENCONFIELD     ~Mount~
+                        IACTIONSTEXT    ACTIONS ( Get )
+                        OACTIONSTEXT    ACTIONS ( Save )
+                        DACTIONSTEXT    ACTIONS ( Save )
+                        TOOLTIP         ~This selects the mount to apply.~
+                        TypeName        SComboBox ;
+
+            Define: ServiceFinishPrompt Using DDWinCtrlDef AsSymbol ServiceFinishPrompt
+                Fields: POSITION        CustomerNameField(GetRight,Position)+$vGap, ServiceMountPrompt(GetBottom,Position)+ $vGap, $DetailsWidth, $PromptHeight
+                        TEXT            ~Finish~
+                        TOOLTIP         ~This selects the finish to apply.~
+                        IsEnabled       T
+                        RightJustified  TRUE
+                        TYPENAME        StaticText ;
+
+            Define: ServiceFinishCombo Using DDWinCtrlDef AsSymbol ServiceFinishCombo
+                Fields: POSITION        ServiceFinishPrompt(GetRight,Position) + $hGap, ServiceFinishPrompt(GetTop,Position), $BigValueWidth, $ComboBoxHeight
+                        GENCONNAME      THIS
+                        GENCONFIELD     ~Finish~
+                        IACTIONSTEXT    ACTIONS ( Get )
+                        OACTIONSTEXT    ACTIONS ( Save )
+                        DACTIONSTEXT    ACTIONS ( Save )
+                        TOOLTIP         ~This selects the finish to apply.~
+                        TypeName        SComboBox ;
+
+            Define: ServiceWrapPrompt Using DDWinCtrlDef AsSymbol ServiceWrapPrompt
+                Fields: POSITION        CustomerNameField(GetRight,Position)+$vGap, ServiceFinishPrompt(GetBottom,Position)+ $vGap, $DetailsWidth, $PromptHeight
+                        TEXT            ~Wrap~
+                        TOOLTIP         ~This selects the canvas wrap type.~
+                        IsEnabled       T
+                        RightJustified  TRUE
+                        TYPENAME        StaticText ;
+
+            Define: ServiceWrapCombo Using DDWinCtrlDef AsSymbol ServiceWrapCombo
+                Fields: POSITION        ServiceWrapPrompt(GetRight,Position) + $hGap, ServiceWrapPrompt(GetTop,Position), $BigValueWidth, $ComboBoxHeight
+                        GENCONNAME      THIS
+                        GENCONFIELD     ~Wrap~
+                        IACTIONSTEXT    ACTIONS ( Get )
+                        OACTIONSTEXT    ACTIONS ( Save )
+                        DACTIONSTEXT    ACTIONS ( Save )
+                        TOOLTIP         ~This selects the canvas wrap type.~
+                        TypeName        SComboBox ;
+
+            Define: ServiceFramePrompt Using DDWinCtrlDef AsSymbol ServiceFramePrompt
+                Fields: POSITION        CustomerNameField(GetRight,Position)+$vGap, ServiceWrapPrompt(GetBottom,Position)+ $vGap, $DetailsWidth, $PromptHeight
+                        TEXT            ~Frame~
+                        TOOLTIP         ~This selects the frame to apply.~
+                        IsEnabled       T
+                        RightJustified  TRUE
+                        TYPENAME        StaticText ;
+
+            Define: ServiceFrameCombo Using DDWinCtrlDef AsSymbol ServiceFrameCombo
+                Fields: POSITION        ServiceFramePrompt(GetRight,Position) + $hGap, ServiceFramePrompt(GetTop,Position), $BigValueWidth, $ComboBoxHeight
+                        GENCONNAME      THIS
+                        GENCONFIELD     ~Frame~
+                        IACTIONSTEXT    ACTIONS ( Get )
+                        OACTIONSTEXT    ACTIONS ( Save )
+                        DACTIONSTEXT    ACTIONS ( Save )
+                        TOOLTIP         ~This selects the frame to apply.~
+                        TypeName        SComboBox ;
+
+            Define: ServiceFrameMountPrompt Using DDWinCtrlDef AsSymbol ServiceFrameMountPrompt
+                Fields: POSITION        CustomerNameField(GetRight,Position)+$vGap, ServiceFramePrompt(GetBottom,Position)+ $vGap, $DetailsWidth, $PromptHeight *2
+                        TEXT            ~Frame Mount~
+                        TOOLTIP         ~This selects frame mount to use.~
+                        IsEnabled       T
+                        RightJustified  TRUE
+                        TYPENAME        StaticText ;
+
+            Define: ServiceFrameMountCombo Using DDWinCtrlDef AsSymbol ServiceFrameMountCombo
+                Fields: POSITION        ServiceFrameMountPrompt(GetRight,Position) + $hGap, ServiceFrameMountPrompt(GetTop,Position), $BigValueWidth, $ComboBoxHeight
+                        GENCONNAME      THIS
+                        GENCONFIELD     ~FrameMount~
+                        IACTIONSTEXT    ACTIONS ( Get )
+                        OACTIONSTEXT    ACTIONS ( Save )
+                        DACTIONSTEXT    ACTIONS ( Save )
+                        TOOLTIP         ~This selects frame mount to use.~
+                        TypeName        SComboBox ;
+
+        }
+
+    DialogWidthWithoutServices = $DialogWidth;
+
+    DialogWidthWithServices = $DialogWidth + ($hGap * 21);
+
+    Global( DialogHeight,DialogWidthWithoutServices,DialogWidthWithServices );
+
+    DialogLeft = App( thisApp,MainWindow,GetClientWidth ) * .9 - $DialogWidthWithServices - 10;
+
+    MainDialog( Set,Position,~<DialogLeft> 8 <DialogWidth> <DialogWidthWithoutServices>~ );
+    
+    Global(MainDialog);
+}
+
+// FUNCTION: StartWODialog
+//
+// Display the dialog to prompt the user for the work order for the ReOrder.
+//
+VOID StartSummaryDialog()
+{
+    x = CalcXPosition();
+
+    // This defines the structure of the Summary dialog.
+    // - i.e. where the buttons and text boxes  are, what they do, etc.
+    DefineSummaryDialog();
+
+    // Both dialogs in this script will be set to the same size, so that
+    //  one can replace the other without a nasty window size change.
+    SummaryDialog(  Set,Position,~<x>  10  <DialogWidth>  <DialogHeight>~ );
+
+    // This kicks the WorkOrderDialog into life and stores its handle in
+    //  a variable called 'dlg'.
+    //
+    GenDlg( summary,Definition,SumaryDialog,Data,SummaryDlgData,Document,$Doc.This,
+            New,Temporary );
+
+    // Make 'dlg' globally available in this script.
+    Global( summary);
+}
+
+// FUNCTION: StartMainDialog
+//
+// Display the main dialog to prompt the user for information on the next
+// image to add to the reorder.
+//
+VOID StartMainDialog()
+{
+    x = CalcXPosition();
+
+    y = CalcYPosition();
+
+    DefineMainDialog();
+
+    // dialogs in this script will be set to the same size, so that
+    // one can replace the other without a nasty window size change.
+    MainDialog( Set,Position,~<x>  <y>  <DialogWidth>  <DialogHeight>~ );
+
+    GenDlg( dlg,Definition,MainDialog,Data,DlgData,Document,$Doc.This,
+            New,Temporary );
+    dlg( SetControlFocus,~OrderID~ );
+    Global( dlg);
+
+    // Populate the product category drop-down, so that it doesn't need to
+    // wait when the user clicks the drop-down for the first time.
+    // Doing this here also avoids a little ugliness when the drop-down is
+    // first displayed where the drop-down may be the wrong size and have
+    // blanks (if there are only a few categories specified).
+    // The first (alphabetically) category will be displayed in the box
+    // initially.
+    UpdateProductCatChoices();
+
+    // Ok - now populate the product choices dropdown with choices from the
+    // first category (as set just above).
+    // The first (alphabetically) product in the category  will be displayed
+    // in the box initially.
+    //
+    UpdateProductChoices();
+
+    // Initialise the list of Priorities
+    UpdatePriorityChoices();
+
+    // Initialise the list of Mounts 
+    UpdateMountChoices();
+
+    // Initialise the list of Finishes 
+    UpdateFinishChoices();
+
+    // Initialise the list of Wraps 
+    UpdateWrapChoices();
+
+    // Initialise the list of Frames 
+    UpdateFrameChoices();
+
+    // Initialise the list of Frame Mounts
+    UpdateFrameMountChoices();
+
+    // Initialise the list of Bravo Setups.
+    UpdateBravoSetupsList();
+}
+
+// FUNCTION: UpdatePriorityChoices
+//
+// Get hold of all the Product category choices from the DB and set them as
+//  options in the Product Category drop-down in the main dialog.
+// This is called when the user clicks on the dropdown box.
+//  
+VOID UpdatePriorityChoices()
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return;
+    } 
+
+    StringList( PriorityStringsList, New, InListOrder, AddStrings,71,10,20,30,50,70,90 );
+
+    dlg( SetControlFromStringList, PriorityCombo, PriorityStringsList, NoSelection );
+}
+
+// FUNCTION: UpdateMountChoices
+//
+//  
+VOID UpdateMountChoices()
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return;
+    } 
+
+    StringList( MountStringsList, New);
+
+    StringList( MountStringsList, AddString,~None~);
+
+    Query = ~SELECT Label FROM PrintServices where ServiceCategory='MOUNT'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Warning( ~Failed to retrieve the Mount list~ );
+        return;
+    }
+
+    Count = List( NumEntries );
+
+    if ( <Count> > 0 ) 
+    {
+        List( MakeStringList, MountStringsList, Label );
+    }
+
+    dlg( SetControlFromStringList, ServiceMountCombo, MountStringsList, Selection, SelectString, ServiceMountCombo, ~None~);
+}
+
+// FUNCTION: UpdateFinishChoices
+//
+//  
+VOID UpdateFinishChoices()
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return;
+    } 
+
+    StringList( FinishStringsList, New );
+    StringList( FinishStringsList, AddString,~None~);
+
+    Query = ~SELECT Label FROM PrintServices where ServiceCategory='FINISH'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Warning( ~Failed to retrieve the Finish list~ );
+        return;
+    }
+
+    Count = List( NumEntries );
+
+    if ( <Count> > 0 ) 
+    {
+        List( MakeStringList, FinishStringsList, Label );
+    }
+
+    dlg( SetControlFromStringList, ServiceFinishCombo, FinishStringsList, Selection, SelectString, ServiceFinishCombo, ~None~ );
+}
+
+// FUNCTION: UpdateWrapChoices
+//
+//  
+VOID UpdateWrapChoices()
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return;
+    } 
+
+    StringList( WrapStringsList, New, InListOrder, AddStrings,~None~);
+
+    Query = ~SELECT Label FROM PrintServices where ServiceCategory='WRAP'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Warning( ~Failed to retrieve the Wrap list~ );
+        return;
+    }
+
+    Count = List( NumEntries );
+
+    if ( <Count> > 0 ) 
+    {
+        List( MakeStringList, WrapStringsList, Label );
+    }
+
+    dlg( SetControlFromStringList, ServiceWrapCombo, WrapStringsList, Selection, SelectString, ServiceWrapCombo, ~None~ );
+}
+
+// FUNCTION: UpdateFrameChoices
+//
+//  
+VOID UpdateFrameChoices()
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return;
+    } 
+
+    StringList( FrameStringsList, New, InListOrder, AddStrings,~None~);
+
+    Query = ~SELECT ID, Label FROM PrintServices where ServiceCategory='FRAME'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Warning( ~Failed to retrieve the Mount list~ );
+        return;
+    }
+
+    Count = List( NumEntries );
+
+    if ( <Count> > 0 ) 
+    {
+        List( MakeStringList, FrameStringsList, Label );
+    }
+
+    dlg( SetControlFromStringList, ServiceFrameCombo, FrameStringsList, Selection, SelectString, ServiceFrameCombo, ~None~);
+}
+
+// FUNCTION: UpdateFrameMountChoices
+//
+//  
+VOID UpdateFrameMountChoices()
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return;
+    } 
+
+    StringList( FrameMountStringsList, New, InListOrder, AddStrings,~None~);
+
+    Query = ~SELECT Label FROM PrintServices where ServiceCategory='FMOUNT'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Warning( ~Failed to retrieve the Frame Mount list~ );
+        return;
+    }
+
+    Count = List( NumEntries );
+
+    if ( <Count> > 0 ) 
+    {
+        List( MakeStringList, FrameMountStringsList, Label );
+    }
+
+    dlg( SetControlFromStringList, ServiceFrameMountCombo, FrameMountStringsList, Selection, SelectString, ServiceFrameMountCombo, ~None~);
+}
+
+// FUNCTION: UpdateProductCatChoices
+//
+// Get hold of all the Product category choices from the DB and set them as
+//  options in the Product Category drop-down in the main dialog.
+// This is called when the user clicks on the dropdown box.
+//  
+VOID UpdateProductCatChoices()
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return;
+    } 
+
+    StringList( ProductCatStringsList, New );
+
+    Query = ~SELECT DISTINCT Category FROM Products where (Category like 'DP2 8 %') ORDER BY Category~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Warning( ~Failed to retrieve the Product Category list~ );
+        return;
+    }
+
+    Count = List( NumEntries );
+
+    if ( <Count> > 0 ) 
+    {
+        List( MakeStringList, ProductCatStringsList, Category );
+    }
+
+    dlg( SetControlFromStringList, ProductCatCombo, ProductCatStringsList, NoSelection );
+}
+
+// FUNCTION: UpdateProductChoices
+//
+// Get hold of all the Product choices from the DB and set them as options
+//  in the Product drop-down in the main dialog.
+// This is called when the user clicks on the dropdown box.
+//  
+VOID UpdateProductChoices()
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return;
+    } 
+
+    StringList( ProductIDStringsList, New );
+
+    // Access the value currently set in the category dropdown of the Main
+    // dialog window.
+    dlg( GetInput );
+    DlgData( GetValues,ProductCat,ProductCat ); 
+
+    // If no product category has been selected then list all products.
+    // Otherwise, list all the products in the given category.
+    //
+    if ( ~<ProductCat>~ == ~~ )
+    {
+        // This should never happen since ProductCatChoices() is called
+        // the first time before UpdateProductChoices() and thereafter a
+        // ProductCat MUST be set. However, just in case someone changes
+        // the order a little - this'll catch it.
+        Query = ~SELECT DISTINCT ID FROM Products ORDER BY ID~;
+    }
+    else
+    {
+        Query = ~SELECT DISTINCT ID FROM Products WHERE Category='<ProductCat>' ORDER BY ID~;
+    }
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Warning( ~Failed to retrieve the Products list~ );
+        return;
+    }
+
+    count = List(NumEntries);
+    if ( <count> > 0 ) 
+    {
+//        List( MakeStringList, ProductIDStringsList, ID );
+
+        StringList( ProductIDStringsList,New );
+
+        while ( List( GetNext, Product) )
+        {
+            Length = strlen( ~<$pcon.Product[ID]>~);
+            substr(~<$pcon.Product[ID]>~, <Length> - 1, <Length>, LastChar);
+
+    //        Log(Session, ~LastChar = <LastChar>~);
+
+            if ((~<LastChar>~ == ~G~) ||
+               (~<LastChar>~ == ~L~) ||
+               (~<LastChar>~ == ~Y~))
+            {
+                ProductIDStringsList( AddString, ~<$pcon.Product[ID]>~ );
+            }
+            else
+            {
+                ProductIDStringsList( AddString, ~<$pcon.Product[ID]>G~ );
+                ProductIDStringsList( AddString, ~<$pcon.Product[ID]>L~ );
+                ProductIDStringsList( AddString, ~<$pcon.Product[ID]>Y~ );
+            }
+        }
+    }
+
+    dlg( SetControlFromStringList, ProductCombo, ProductIDStringsList, NoSelection );
+}
+
+// FUNCTION: MaintainMainFocus
+//
+// Get the focus back onto the HashK field.
+// Used when an image is entered successfully, but also when an image
+// entry failed.
+//
+VOID MaintainMainFocus()
+{
+    dlg( SetFocus );
+//  dlg( SetControlFocus,~HashKEditBox~ ); 
+//  dlg( EditText,HashKEditBox,SetSel,0,999,TRUE );
+}
+
+// FUNCTION: CloseDialog
+//
+// Closes the currently open dialog - but leaves window open so that another
+//  dialog can take over in the same window.
+//
+VOID CloseDialog()
+{
+    dlg( End );
+}
+
+// FUNCTION: CloseDialogAndExit
+//
+// Closes the currently open dialog and window.
+//
+VOID CloseDialogAndExit()
+{
+    CloseDialog();
+    Exit();
+}
+
+// FUNCTION: CloseBrowserWindow()
+//
+//  This function closes all windows that may fail the conversion.
+//
+NUMERIC CloseBrowserWindow()
+{
+    Log( Session, ~selected.kpl: ****** Closing Windows ~ );
+    Count = Index = 0;
+    app( ThisApp,MessagePump,3 );
+
+    while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+    {
+        if ( Window( GETNEXT,aView ) )
+        {
+            aView( GET,ViewType,ViewType );
+            Log( Session, ~CloseBrowserWindow: ****** Type <ViewType>  ~ );
+            if ( ~<ViewType>~ == ~HtmlView~ )
+            {
+                Log( Session, ~ConversionStation: ****** Closing Window Type <ViewType>  ~ );
+                Window( CloseWindow );
+                ThisApp( MessagePump,3 );
+                ++Count;
+                Index = 0;
+            }
+        }
+    }
+
+    ThisApp( MessagePump,0 );
+    Log( Session, ~ConversionStation: ****** Closed All Image Windows. ~ );
+    return TRUE;
+}
+
+// FUNCTION: CloseOrderWindows
+//
+// Find all windows associated with entry of an order and close them.
+//
+VOID CloseOrderWindows()
+{
+    Index = 0;
+
+    while ( GenCon( aWindow,GetWindowByIndex,<Index++> ) )
+    {
+        aWindow( Get,Purpose,Purpose );
+
+        if ( ~<Purpose>~ == ~Orders~ )
+        {
+            aWindow( CloseWindow );
+        }   
+        else if ( aWindow( GetNext,aView ) )
+        {
+            aView( Get,ViewType,ViewType );
+
+            if ( ~<ViewType>~ == JobView || ~<ViewType>~ == LayoutView || ~<ViewType>~ == ImageView )
+            {
+                aWindow( CloseWindow );
+            }
+        }
+
+        ForgetLocal( aWindow );
+    }
+}
+// FUNCTION: GetOrderSequence()
+//
+// This function gets the next seqence number to use for the order
+//
+NUMERIC GetOrderSequence(OrderID)
+{
+    Query = ~Select * From ImportOrderItemsTemp Where OrderID = '<OrderID>'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Warning( ~Failed to retrieve Next Sequence Number~ );
+        return -1;
+    }
+
+    count = List(NumEntries); 
+
+    return $count;
+}
+// FUNCTION: GetSafeKPLVarName()
+//
+// Take an input value and make it safe enough to be used as a KPL
+// variable name, by stripping out any and all suspicious characters.
+// There may be a neater DP2 built-in way of doing this, but not found
+// it so far.
+//
+// The resulting string is returned.
+//
+STR GetSafeKPLVarName( name )
+{
+    // This next call seems to remove a bunch of characters including:
+    //  *()&|'",
+    MakePathSafe( name );
+
+    // Replace any dots with underscore.
+    // Simply remove any other characters that would not look nice in a variable
+    // name.
+    name = String( Replace,~<name>~,~.~,~_~ );
+    name = String( RemoveCharFromString,~ ~,~<name>~ );
+    name = String( RemoveCharFromString,~+~,~<name>~ );
+//  name = String( RemoveCharFromString,~-~,~<name>~ ); // Leave hyphens.
+    name = String( RemoveCharFromString,~/~,~<name>~ );
+    name = String( RemoveCharFromString,~\~,~<name>~ );
+    name = String( RemoveCharFromString,~%~,~<name>~ );
+    name = String( RemoveCharFromString,~$~,~<name>~ );
+    name = String( RemoveCharFromString,~!~,~<name>~ );
+    name = String( RemoveCharFromString,~#~,~<name>~ );
+    name = String( RemoveCharFromString,~@~,~<name>~ );
+    name = String( RemoveCharFromString,~;~,~<name>~ );
+    name = String( RemoveCharFromString,~:~,~<name>~ );
+    name = String( RemoveCharFromString,~`~,~<name>~ );
+    name = String( RemoveCharFromString,~{~,~<name>~ );
+    name = String( RemoveCharFromString,~}~,~<name>~ );
+    name = String( RemoveCharFromString,~[~,~<name>~ );
+    name = String( RemoveCharFromString,~]~,~<name>~ );
+
+    return ~<name>~;
+}
+
+// FUNCTION: MakeAUniqueFileName()
+//
+// This function generates a unique filename.
+STR MakeAUniqueFileName( PartialPath,FileName, Ext )
+{
+    Path = ~<PartialPath>\<Filename>-<RenameID>.<Ext>~;
+
+    while  ( Files( FileExists,~<Path>~ ) )
+    {
+        Path = ~<PartialPath>\<Filename>-<++RenameID>.<Ext>~;
+    }
+    FileName = ~<$Str.$Path.FileName>~;
+    Log( Session, ~MakeAUniqueFileName returned <$Str.$FileName.WithOutExt> FileName =<FileName>~);
+    return ~<$Str.$FileName.WithOutExt>~;
+}
+
+// FUNCTION: AlreadyProcessed()
+//
+// This function checks for this image having been processed already for this order.
+// If it has it returns the same name as created before to avoid duplicate images being copied.
+NUMERIC AlreadyProcessed(ImagePath, &NewFileName, OrderID)
+{
+//    MakeSQLSafeRemoveQuotes(~<ImagePath>~);
+    ImagePath = String( RemoveCharFromString,~'~,~<ImagePath>~ );
+
+    // Truncate the Roll if its > MaxFileName to avoid failing to store it.
+    RollLength         = strlen(~<ImagePath>~);
+    if ( $RollLength > <MaxFileName> )
+    {
+         substr(~<ImagePath>~, 0, <MaxFileName>, Roll);
+    }
+
+    Query = ~Select Frame From ImportImagesTemp where OriginalPath='<ImagePath>' and OrderID='<OrderID>'~;
+
+    if (!database( GetValuesFor,~<Query>~, Frame))
+    { 
+        return False;
+    }
+    Log( Session, ~AlreadyProcessed Frame = <Frame>~);
+    NewFileName = ~<Frame>~;
+    return TRUE;
+}
+
+// FUNCTION: GetFixedFilename()
+//
+// This function removes the ' ~ ( and ) characters from the given pathname.
+// NOTE: This should only be done if the filename is what needs fixing, rather than a folder.
+NUMERIC GetFixedFilename(&Image, &NewFileName, WorkOrderDirectory, OrderID)
+{
+    ImagePath = ~<$con.Image[Text]>~;
+    SubDir    = ~<$Str.$ImagePath.Folder>~;
+    FileName  = ~<$Str.$ImagePath.FileName>~;
+    FileNameNoExt  = ~<$Str.$FileName.WithOutExt>~;
+    OldExt         = ~<$Str.$ImagePath.Ext>~;
+
+    // Need to remove colons as they screw up the copy.
+    SubDir = String( RemoveCharFromString,~:~,~<SubDir>~ );
+
+    // Check we have not already processed this file
+    if (AlreadyProcessed(~<ImagePath>~, NewFileName, ~<OrderID>~))
+    {
+        Log( Session, ~GetFixedFilename returned TRUE Already Processed~);
+        return TRUE;
+    }
+
+    MakeSQLSafeRemoveQuotes(~<FileNameNoExt>~);
+
+    NewFileName = GetSafeKPLVarName(~<FileNameNoExt>~);
+
+    Length = strlen(~<NewFileName>~);
+
+    if ( $Length > (<MaxFileName> - 6) )
+    { 
+        // Truncate the filename at MaxFileName characters. 
+        Start = 0;
+
+        substr(~<NewFileName>~, <Start>, <MaxFileName> - 6, ShortFileName);
+        TempFileName = ~<ShortFileName>~;
+
+        //If this will overwrite an existing file then remove another character
+        if (Files(FileExists, ~<WorkOrderDirectory>\<SubDir>\<TempFileName>.<OldExt>~))
+        {
+            TempFileName = MakeAUniqueFileName(~<WorkOrderDirectory>\<SubDir>~, ~<TempFileName>~, ~<OldExt>~);
+
+            Log( Session, ~%%%%%%%%%%%%%%%% Renamed to <TempFileName> ~);
+        }
+        NewFileName = ~<TempFileName>~;
+    } 
+    return TRUE;
+}
+
+// FUNCTION: ShowProgress()
+//
+// This function updates the progress line
+NUMERIC ShowProgress( Msg )
+{
+    return dlg( SetStatus,0,~<Msg>~ );
+}
+
+// FUNCTION: NextAssemblyPoint()
+//
+// This function returns the assembly point and in. These cycle through A-F
+STR NextAssemblyPoint()
+{
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~NextAssemblyPoint~,AssemblyPoint,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,NextAssemblyPoint,~A~,TRUE ); 
+        AssemblyPoint = ~A~;
+    }
+
+    // Increment the Assembly Point
+    if (~<AssemblyPoint>~ == ~A~)
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,NextAssemblyPoint,~B~,TRUE ); 
+    }
+
+    if (~<AssemblyPoint>~ == ~B~)
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,NextAssemblyPoint,~C~,TRUE ); 
+    }
+
+    if (~<AssemblyPoint>~ == ~C~)
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,NextAssemblyPoint,~D~,TRUE ); 
+    }
+
+    if (~<AssemblyPoint>~ == ~D~)
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,NextAssemblyPoint,~E~,TRUE ); 
+    }
+
+    if (~<AssemblyPoint>~ == ~E~)
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,NextAssemblyPoint,~F~,TRUE ); 
+    }
+
+    if (~<AssemblyPoint>~ == ~F~)
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,NextAssemblyPoint,~A~,TRUE ); 
+    }
+
+    return ~<AssemblyPoint>~;
+}
+// FUNCTION: AlreadyQueued()
+//
+// This function checks if the order ID provided has been queued to convert.
+NUMERIC AlreadyQueued(OrderID, &Path)
+{
+    // Check this work order is not queued already
+    Query = ~Select ConversionStatus, Path from Conversion where OrderID='<OrderID>'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Invoke( ShowProgress, ~Failed to Query Conversion list~);
+        return FALSE;
+    }
+
+    ConversionCount = List( NumEntries );
+
+    if (<ConversionCount> > 0)
+    {
+        List(GetFirst, Order);
+        Path = ~<$pcon.Order[Path]>~;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+// FUNCTION: QueueOrderToConvert()
+//
+// This function adds a entry to the Conversion table. This is monitored 
+// by workstations that are configured to perform sRGB conversion. It is 
+// then upto them to add the images and order items once the conversion has
+// completed successfully.
+NUMERIC QueueOrderToConvert(OrderID)
+{
+    //Debug(1);
+    if (!GetWorkStationSettings( ~<$Job.Name>~ ,StorageRoot,StorageRoot,Enabled ))
+    {
+        Log( Session, ~StorageRoot Setting Unconfigured!!!!!!~);
+        Invoke( ShowWarning, ~Failed to read the StorageRoot from Settings. Try again.
+Or report to your administrator.~ );
+        return FALSE;
+    }
+
+    // First thing is to check what the work order directory is
+    WorkOrderDirectory = ~<StorageRoot>\DFV_<$Date.ShortMonthName>_<$Date.YearWithOutCentury>\sRGB\<OrderID>~;
+
+    // TBD we may to look back a month incase this has been queued a while after being imported.
+
+    // Check this work order is not queued already
+    Query = ~Select ConversionStatus from Conversion where OrderID='<OrderID>'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Invoke( ShowProgress, ~Failed to Query Conversion list~);
+        return FALSE;
+    }
+
+    ConversionCount = List( NumEntries );
+
+    if (<ConversionCount> > 0)
+    {
+        if (!database( GetValuesFor,~<Query>~, Status))
+        {
+            Invoke( ShowProgress, Translate( ~~) );
+        }
+
+        if (<Status> == <ConversionCompleted>)
+        {
+            MessageBox( Translate(~This Work Order <OrderID> is already Converted~ ),OK );
+            Invoke( ShowProgress, ~This Work Order is already Converted~);
+        }
+        else
+        {
+            if (<Status> == <ConversionPending>)
+            {
+                MessageBox( Translate(~This Work Order <OrderID> has already been queued for processing~ ),OK );
+                Invoke( ShowProgress, ~This Work Order is already awaiting Conversion~);
+            }
+            else
+            {
+                MessageBox( Translate(~This Work Order <OrderID> is already getting processed~ ),OK );
+                Invoke( ShowProgress, ~This Work Order is already getting processed~);
+            }
+        }
+        Log( Session, ~JobImport:********* Attempted to send an order <OrderID> for conversion that was already in "<Status>" State ~ );
+        return FALSE;
+    }
+
+    BravoCDProfile = ~~;
+    dlg( GetControlValue, ROESProxiesRequiredCheckBox, ROESValue);
+    dlg( GetControlValue, BravoCDRequiredCheckBox, BravoValue);
+
+    if ( ~<BravoValue>~ == ~1~)
+    {
+        BravoCDProfile = ~<$con.DlgData[BravoSetup]>~;
+    }
+
+    NumIndexCards = 0;
+    if ( ~<$con.DlgData[IndexCardRequired]>~ == ~1~)
+    {
+        NumIndexCards = ~<$con.DlgData[NumIndexCards]>~;
+    }
+
+    ImageCount     = database( RecordCountFor,~Select Frame from ImportImagesTemp where OrderID = '<OrderID>'~ );
+
+    // Add the order to the queue
+    cmd = ~INSERT INTO Conversion (OrderID, ConversionStatus, ImagesToProcess, Priority, ImportWorkStation, ImportUser, ColourCorrect, IndexCards, BravoCDProfile, ROESProxies, Path ) VALUES ('<OrderID>', '<ConversionPending>', '<ImageCount>','<$con.DlgData[Priority]>', '<$App.ComputerName>','<$App.UserName>','<$con.DlgData[ColourCorrect]>','<NumIndexCards>','<BravoCDProfile>','<ROESValue>', '<WorkOrderDirectory>')~;
+
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Invoke( ShowProgress, ~FAILED to Queue item for Conversion (OrderID <OrderID>)~);
+        return FALSE;
+    }
+    Log( Session, ~JobImport:********* BravoCDProfile = <BravoCDProfile>, ROESProxies = <ROESValue>~ ); 
+    database( LogActivity, Msg, ~Order <OrderID> Queued for conversion~, Type, Info );
+    return TRUE; 
+}
+
+// FUNCTION: RemoveFromQueue()
+//
+// This function removes an entry from the Conversion table.
+NUMERIC RemoveFromQueue(OrderID)
+{
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect to Remove Job for <OrderID>~ ) );
+        Log( Session, ~JobImport:********* Could not connect to database to RemoveConversionJob !!!!!~ );
+        return FALSE;
+    }
+
+    // Query outstanding orders to convert Oldest first 
+    Cmd = ~DELETE from Conversion WHERE(OrderID='<OrderID>')~;
+    database( BeginTransaction );
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to Remove Job for <OrderID>~ ) );
+        Log( Session, ~JobImport:********* FAILED to Delete OrderID <OrderID> from the conversion list !!!!!~ );
+        database( RollBackTransaction );
+        return FAILED;
+    }
+    database( CommitTransaction );
+    return TRUE;
+}
+// FUNCTION: DeleteSemaphoreFiles()
+//
+//  This function removes any semaphore files.
+//
+VOID DeleteSemaphoreFiles ( OrderID, Path )
+{
+    Log( Session, ~****** Deleting Semaphore files for <OrderID> at <$Date.hour>:<$Date.minute>:<$Date.second> !!!!!!~ );
+
+    Semaphore = ~<Path>\converting.txt~;
+    if (!Files( Delete, ~<Semaphore>~))
+    {
+        Log( Session, ~****** Problem deleting the <Semaphore> Semaphore for <OrderID> at <$Date.hour>:<$Date.minute>:<$Date.second> !!!!!!~ );
+    } 
+    Semaphore = ~<Path>\done.txt~;
+    if (!Files( Delete, ~<Semaphore>~))
+    {
+        Log( Session, ~****** Problem deleting the <Semaphore> Semaphore for <OrderID> at <$Date.hour>:<$Date.minute>:<$Date.second> !!!!!!~ );
+    }
+    Semaphore = ~<Path>\exif.txt~;
+    if (!Files( Delete, ~<Semaphore>~))
+    {
+        Log( Session, ~****** Problem deleting the <Semaphore> Semaphore for <OrderID> at <$Date.hour>:<$Date.minute>:<$Date.second> !!!!!!~ );
+    }
+
+    Semaphore = ~<Path>\Exiflog.txt~;
+    if (!Files( Delete, ~<Semaphore>~))
+    {
+       Log( Session, ~****** Problem deleting the <Semaphore> Semaphore for <OrderID> at <$Date.hour>:<$Date.minute>:<$Date.second> !!!!!!~ );
+    }
+}
+
+// FUNCTION: StripOrderItems()
+//
+// This function removes any index/batch cards for an order.
+NUMERIC StripOrderItems(OrderID, Path)
+{
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Invoke( UserMessage,Translate( ~Failed to connect to Remove Job for <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* Could not connect to database to StripOrderItems for <OrderID> !!!!!~ );
+        return FALSE;
+    }
+
+    Cmd = ~DELETE from OrderItems WHERE(OrderID='<OrderID>')~;
+    database( BeginTransaction );
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Invoke( UserMessage,Translate( ~Failed to Remove Index Cards for <OrderID>~ ) );
+        Log( Session, ~ConversionStation:********* FAILED to remove Index cards for OrderID <OrderID> from OrderItems !!!!!~ );
+        database( RollBackTransaction );
+        return FAILED;
+    }
+    database( CommitTransaction );
+
+    DeleteSemaphoreFiles(~<OrderID>~, ~<Path>~);
+
+    return TRUE;
+}
+
+// FUNCTION: CopyFileToRepostory()
+//
+// This function copies the file supplied to the destination if it
+// does not already exist.
+//
+NUMERIC CopyFileToRepostory( SourceFile, DestinationFile, Target, OrderID, Frame )
+{
+    //Debug(1);
+    // Copy to the repository if its not already there
+    if ( !Files(FileExists, ~<DestinationFile>~ ))
+    {
+        if ( Files( Copy, ~<SourceFile>~, ~<DestinationFile>~ ) )
+        {
+            Log( Session, ~Filename <SourceFile> copied~);
+
+            if ( !Files( Chmod,~<DestinationFile>~,ReadWrite ) )
+            {
+                err = GetLastErrorMsg();
+                Invoke( ShowWarning,Translate( ~Failed to make <DestinationFile> Writable.  Can't Continue.  <err>~ ) );
+                return FALSE;
+            }
+
+            // Now add the image to the order. This initiates adding a thumbnail.
+            SubDir             = ~<$Str.$SourceFile.Folder>~;
+            FileName           = ~<$Str.$SourceFile.FileName>~;
+            FileNameNoExt      = ~<$Str.$FileName.WithOutExt>~;
+
+            // Add the image to our list 
+            if (!CreateImportImage( ~<OrderID>~, ~<SubDir>~, ~<Frame>~, ~<Target>~, ~<SourceFile>~))
+            {
+                Warning( ~Failed to CreateImportImage(). Try again.~);
+            }
+        }
+        else 
+        {
+            return FALSE;
+        }
+    }
+    else
+    {
+        Log( Session, ~Filename <DestinationFile> already exists~);
+    }
+
+    return TRUE;
+}
+// FUNCTION: CreateImportOrderItem()
+//
+// This function adds the supplied item to the temp import order items queue.
+//
+NUMERIC CreateImportOrderItem( OrderID, Roll, ItemID, ProductID, Quantity, Path, Keyword, Value, Crop, Mount, Finish, Wrap, Frame, FrameMount )
+{
+    Path = String( RemoveCharFromString,~'~,~<Path>~ );
+    Roll = String( RemoveCharFromString,~'~,~<Roll>~ ); 
+    Roll = String( RemoveCharFromString,~:~,~<Roll>~ );
+
+    // Truncate the Roll if its > MaxFileName to avoid failing to store it.
+    RollLength         = strlen(~<Roll>~);
+    if ( $RollLength > <MaxFileName> )
+    {
+         substr(~<Roll>~, 0, <MaxFileName>, Roll);
+    }
+
+    cmd = ~INSERT INTO ImportOrderItemsTemp (OrderID, Roll, ItemID, ProductID, Quantity, Path, Keyword, Value, Crop, Mount, Finish, Wrap, Frame, FrameMount) VALUES ('<OrderID>', '<Roll>', '<ItemID>', '<ProductID>','<Quantity>', '<Path>', '<Keyword>', '<Value>', '<Crop>', '<Mount>', '<Finish>', '<Wrap>', '<Frame>','<FrameMount>')~;
+
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Warning( ~FAILED to add new item to ImportOrderItemsTemp for OrderID <OrderID>~ );
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+// FUNCTION: CreateImportImage()
+//
+// This function adds the supplied image to the temp image queue. It also stored the original 
+// Filename incase we attempt to change it again.
+//
+NUMERIC CreateImportImage( OrderID, Roll, Frame, Path, OriginalPath )
+{
+    OriginalPath = String( RemoveCharFromString,~'~,~<OriginalPath>~ );
+    Path = String( RemoveCharFromString,~'~,~<Path>~ );
+    Roll = String( RemoveCharFromString,~'~,~<Roll>~ );
+    Roll = String( RemoveCharFromString,~:~,~<Roll>~ );
+
+    // Truncate the Roll if its > MaxFileName to avoid failing to store it.
+    RollLength         = strlen(~<Roll>~);
+    if ( $RollLength > <MaxFileName> )
+    {
+         substr(~<Roll>~, 0, <MaxFileName>, Roll);
+    }
+
+    cmd = ~INSERT INTO ImportImagesTemp (OrderID, Roll, Frame, Path, OriginalPath) VALUES ('<OrderID>', '<Roll>', '<Frame>', '<Path>', '<OriginalPath>')~;
+
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Warning( ~FAILED to add new image to ImportImagesTemp for OrderID <OrderID> See Session Log for more details.~ );
+        return FALSE;
+    }
+    return TRUE;
+}
+
+// FUNCTION: GetColourToneValues()
+//
+// This function captures the dlg settings that control the colour tone settings.
+//
+VOID GetColourToneValues ( &KeyWord, &Value )
+{
+    // Capture the state of all buttons.
+    dlg( GetControlValue, BlackAndWhiteRadioButton, BlackAndWhiteValue);
+    dlg( GetControlValue, SepiaRadioButton, SepiaValue);
+    dlg( GetControlValue, CopperToneRadioButton, CopperToneValue);
+    dlg( GetControlValue, BlueToneRadioButton, BlueToneValue);
+
+    if (~<BlackAndWhiteValue>~ == ~1~)
+    {
+        Keyword = ~Sepia~;
+        GetWorkStationSettings( ~<$Job.Name>~ ,BlackAndWhite,Value,Enabled );
+        return;
+    }
+    if (~<SepiaValue>~ == ~1~)
+    {
+        Keyword = ~Sepia~;
+        GetWorkStationSettings( ~<$Job.Name>~ ,Sepia,Value,Enabled );
+        return;
+    }
+    if (~<CopperToneValue>~ == ~1~)
+    {
+        Keyword = ~Sepia~;
+        GetWorkStationSettings( ~<$Job.Name>~ ,CopperTone,Value,Enabled );
+        return;
+    }
+    if (~<BlueToneValue>~ == ~1~)
+    {
+        Keyword = ~Sepia~;
+        GetWorkStationSettings( ~<$Job.Name>~ ,BlueTone,Value,Enabled );
+        return;
+    }
+}
+
+NUMERIC GetServiceID( Label )
+{
+    if (~<Label>~ == ~None~)
+    {
+        return 0;
+    }
+    Query = ~Select ID From PrintServices Where Label = '<Label>'~;
+
+    if (!database( GetValuesFor,~<Query>~, ID))
+    {
+        Log(Session, ~*** GetServiceID:  Failed to find the ID for <Label>~);
+        return 0;
+    }
+
+    return $ID;
+
+}
+
+// FUNCTION: GetServiceIDs()
+//
+// This function returns the service ID for the given Services.
+//
+VOID GetServiceIDs( Mount, &MountID, Finish, &FinishID, Wrap, &WrapID, Frame, &FrameID, FrameMount, &FrameMountID)
+{
+    MountID      = GetServiceID(~<Mount>~);
+    FinishID     = GetServiceID(~<Finish>~);
+    WrapID       = GetServiceID(~<Wrap>~);
+    FrameID      = GetServiceID(~<Frame>~);
+    FrameMountID = GetServiceID(~<FrameMount>~);
+}
+
+// FUNCTION: ProcessDraggedFiles()
+//
+// This function processed the list of files dragged onto to the Import Images dialog box.
+// So as to not tie up the rest of the GUI, it runs on a thread.
+//
+// The following steps are performed on the list of files.
+// 1) All paths and filenames are checked and renamed if required.
+//    a) Invalid characters removed 
+//    b) Length checked.
+// 2) They are copied to the RAID array.
+// 3) They will be moved to sRGB colourspace and changed to .jpg by the 
+//    KPL created here but run on a conversion station.
+// 
+// The Raid directory will be named as Follows
+// \\StorageRoot\DFV_mmm_yy\sRGB\<roll>\<frame>
+//
+NUMERIC ProcessDraggedFiles( FileListReference, OrderID, CustomerID)
+{
+    //Debug(1);
+    // Error out immediately if the Order ID is NULL
+    if ( IsNULL( ~<OrderID>~ ) )
+    {
+        Warning( Translate(~OrderID cannot be NULL~) );
+        return FALSE;
+    }
+    //Debug(1); 
+    GenCon( DraggedFileList,Is,<FileListReference>,Temporary );
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~ ,StorageRoot,StorageRoot,Enabled ))
+    {
+        Log( Session, ~StorageRoot Setting Unconfigured!!!!!!~);
+        Invoke( ShowWarning, ~Failed to read the StorageRoot from Settings. Try again.
+Or report to your administrator.~ );
+        return FALSE;
+    }
+
+    // Work out where we should be copying files to based on the date.
+    StorageDirectory   = ~<StorageRoot>\DFV_<$Date.ShortMonthName>_<$Date.YearWithOutCentury>\sRGB~;
+
+    // Now work out the path including the work order directory
+    WorkOrderDirectory = ~<StorageDirectory>\<OrderID>~;
+
+    NumImages = DraggedFileList( ChildCount );
+
+    Invoke( ~StartProgress~,<NumImages> );
+
+    Log( Session, ~ProcessDraggedFiles() Importing <NumImages> Images~ ); 
+
+    // Create the months Directory if its not already there.
+    if ( !Files( DirectoryExists, ~<StorageDirectory>~) )
+    {
+        Directory( Create, ~<StorageDirectory>~ );
+        Log( Session, ~Directory = <StorageDirectory> does not exist, making directory now~ );
+    }
+
+    // Now make the work order directory
+    if ( !Files( DirectoryExists, ~<WorkOrderDirectory>~) )
+    {
+        Directory( Create, ~<WorkOrderDirectory>~);
+        Log( Session, ~Directory = <WorkOrderDirectory> does not exist, making directory now~ );
+    } 
+
+    // Check that the target directory now exists and exit if its not there.
+    if ( !Files( DirectoryExists, ~<WorkOrderDirectory>~) )
+    {
+        Warning(~Unable to create the Work Order Directory <WorkOrderDirectory>. Contact the IT Department!~);
+        Log( Session, ~Unable to create the Work Order Directory <WorkOrderDirectory>!~);
+        Invoke( ~StartProgress~,0 );
+        return FALSE;
+    } 
+
+    // If we get this far then we can start copying the files.
+    // We need to validate the filenames as we go.
+
+    // This gets the last Sequence ID for this order.
+    ItemID = GetOrderSequence(<OrderID>);
+
+    more = DraggedFileList( GetFirst,Image );
+
+    Total = DraggedFileList( ChildCount );
+
+    Count = 0;
+    Invoke( EnableStopButton );
+
+    Invoke( DisableChanges );
+
+    Invoke( DisableGoButton );
+
+    // Set this to avoid updates to settings during teh copy.
+    ProcessingFiles = TRUE;
+
+    // This is the Main loop, where we validate (and repair, if necessary) the list of files
+    // and import them.
+    while ( <more> && !<Stop> )
+    {
+        //Debug(1);
+        ImagePath          = ~<$con.Image[Text]>~;
+        SubDir             = ~<$Str.$ImagePath.Folder>~;
+        FileName           = ~<$Str.$ImagePath.FileName>~;
+        FileNameNoExt      = ~<$Str.$FileName.WithOutExt>~;
+        OldExt             = ~<$Str.$ImagePath.Ext>~;
+        Ext                = ~.jpg~;
+ 
+        // Hopefully get rid of any tildes.
+        SafeImagePath = ~<ImagePath>~;
+        SafeFileName  = ~<FileName>~;
+        SafeFileNameNoExt  = ~<FileNameNoExt>~;
+        SafeSubDir  = ~<SubDir>~;
+
+        MakeTildeSafe( SafeImagePath );
+        MakeTildeSafe( SafeFileName );
+        MakeTildeSafe( SafeFileNameNoExt );
+        MakeTildeSafe( SafeSubDir );
+
+        Invoke( ~StepProgress~ );
+
+        //Remove any colons as present for a root directory as would screw up the copy
+        SafeSubDir = String( RemoveCharFromString,~:~,~<SafeSubDir>~ );
+        SafeSubDir = String( RemoveCharFromString,~'~,~<SafeSubDir>~ ); 
+
+        ++Count;
+        if (SQLSafe(~<SafeImagePath>~))
+        {
+            Invoke( ShowProgress,Translate( ~Processing <SafeFileName> (<Count> of <Total>)~ ) );
+        } 
+
+        // Fix any invalid filenames
+        GetFixedFilename(Image, NewFileName, ~<WorkOrderDirectory>~, ~<OrderID>~);
+
+        SafeFileName      = ~<NewFileName>~;
+        SafeFileNameNoExt = ~<$Str.$SafeFileName.WithOutExt>~;
+
+        TargetPath = ~<WorkOrderDirectory>\<SafeSubDir>\<SafeFileNameNoExt><Ext>~;
+        TargetPathPreConvert = ~<WorkOrderDirectory>\<SafeSubDir>\<SafeFileName>.<OldExt>~;
+
+        if (CheckValidImageFile( Image ))
+        {
+            //Debug(1);
+            // Copy to the repository
+            if (!CopyFileToRepostory( ~<ImagePath>~, ~<TargetPathPreConvert>~, ~<TargetPath>~, ~<OrderID>~,~<SafeFileNameNoExt>~))
+            {
+                // There was a problem copying the file
+                Log( Session, ~File NOT copied "<SafeImagePath>" "<TargetPath>"~);
+                Warning( ~Unable to copy the image "<SafeImagePath>" into the repository. Paths containing a tilde must be manually renamed before import.~ );
+                Invoke( ShowProgress,Translate( ~Copy Aborted~ ) ); 
+                Invoke( DisableStopButton );
+                Invoke( EnableChanges );
+                Invoke( ~StartProgress~,0 );
+                ProcessingFiles = FALSE;
+                return FALSE;
+            }
+
+            ++ItemID;
+
+            DlgData( GetValues,Product,Product, Quantity, Quantity, CustomerID, CustomerID, Crop, Crop, Mount, Mount, Finish, Finish, Wrap, Wrap, Frame, Frame, FrameMount, FrameMount ); 
+
+            // Depending on the colour tone settings setup the macro....
+            Keyword = ~~;
+            Value   = ~~;
+
+            GetColourToneValues( Keyword, Value );
+
+            MountID = 0;
+            FinishID = 0;
+            WrapID = 0;
+            FrameID = 0;
+            FrameMountID = 0;
+
+            GetServiceIDs( ~<Mount>~, MountID, ~<Finish>~, FinishID, ~<Wrap>~, WrapID, ~<Frame>~, FrameID, ~<FrameMount>~, FrameMountID);
+
+            //Create the order item unless these images are destined for the Bravo or Proxies.
+            if ((~<$con.DlgData[ROESProxiesRequired]>~ == ~0~) &&
+                (~<$con.DlgData[BravoCDRequired]>~ == ~0~))
+            {
+                if (!CreateImportOrderItem(~<OrderID>~, ~<SafeSubDir>~, ~<ItemID>~, ~<Product>~, ~<Quantity>~, ~<TargetPath>~, ~<Keyword>~, ~<Value>~, ~<Crop>~, ~<MountID>~, ~<FinishID>~, ~<WrapID>~, ~<FrameID>~, ~<FrameMountID>~ ))
+                {
+                    Log( Session, ~ProcessDraggedFiles: Failed to create order item (<OrderID>, <Product>,<Quantity>,<TargetPath>,<Keyword>,<Value>).~ );
+                    Warning( ~Failed to create order item. Try again. Or report to your administrator.~ );
+                    Invoke( ShowProgress,Translate( ~Creation of Order Item Aborted~ ) ); 
+                    Invoke( DisableStopButton );
+                    Invoke( EnableChanges );
+                    Invoke( ~StartProgress~,0 );
+                    ProcessingFiles = FALSE; 
+                    return FALSE;
+                }
+                else
+                {
+                    Log( Session, ~ProcessDraggedFiles: Created Import order item (<OrderID>, <Product>, x<Quantity>).~ );
+                }
+            }
+            else
+            {
+                Log( Session, ~Bravo or Proxy Order so no order Item Created. Proxies = <$con.DlgData[ROESProxiesRequired]>, BravoCD = <$con.DlgData[BravoCDRequired]>~ );
+            }
+        }
+        else
+        {
+            if (SQLSafe(~<ImagePath>~))
+            {
+                Invoke( ShowProgress,Translate( ~Skipping <SafeImagePath>~ ) );
+                Log( Session, ~ProcessDraggedFiles: Skipped unsafe Image~ );
+            } 
+        }
+        
+        more = DraggedFileList( GetNext,Image );
+    }
+
+    Query = ~SELECT DISTINCT ProductID FROM ImportOrderItemsTemp where OrderID = '<OrderID>'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Warning( ~Failed to retrieve the Product list~ );
+        Invoke( ~StartProgress~,0 );
+        Invoke( EnableChanges );
+        ProcessingFiles = FALSE; 
+        return FALSE;
+    }
+
+    OrderItemCount = List( NumEntries );
+
+    if (<OrderItemCount> > 1)
+    {
+        Invoke( ShowProgress,Translate( ~Work Order <OrderID> contains <OrderItemCount> Items~ ) ); 
+    }
+    else
+    {
+        Invoke( ShowProgress,Translate( ~Work Order <OrderID> contains <OrderItemCount> Item~ ) ); 
+    }
+    Invoke( DisableStopButton );
+    Invoke( EnableGoButton );
+
+    ProcessingFiles = FALSE; 
+    Invoke( EnableChanges );
+
+    Actions = ACTION Doc ( BrowserDoc "Refresh();" );
+    PerformActions( Actions );
+    Invoke( ~StartProgress~,0 );
+    return FALSE;
+}
+
+// FUNCTION: CheckValidImageFile()
+//
+// Accepts or rejects the supplied file as one we want to process.
+// Reject all but .jpg .jpeg .jpe .JPG .JPEG, .BMP, .bmp, .tiff, .tif, .TIFF, .TIF and PSD
+//
+NUMERIC CheckValidImageFile( &Image )
+{
+    ImagePath = ~<$con.Image[Text]>~;
+    FileName = ~<$Str.$ImagePath.FileName>~;
+
+    if ( !SimilarStr( ~<$Str.$ImagePath.ext>~, ~jpg~, ~jpeg~, ~jpe~, ~bmp~, ~tiff~, ~tif~, ~psd~))
+    {
+        Log( Session, ~JobImport: Skipping <FileName> due to an invalid extension.~ );
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+// FUNCTION: CheckFileName()
+//
+// Attempts to validate the filename of the supplied image.
+//
+NUMERIC CheckFileName( &Image )
+{
+    ImagePath = ~<$con.Image[Text]>~;
+
+    // Don't try to dereference the filename if it's not SQLSafe! The script parser will choke on it.
+    if (!SQLSafe(~<ImagePath>~))
+    {
+        Log( Session, ~Can't handle a path with a ' or tilde in it.~ ));
+        return FALSE; 
+    } 
+ 
+    FileName = ~<$Str.$ImagePath.FileName>~;
+    FilePath = ~<$Str.$ImagePath.Path>~;
+
+    // Need to figure out if it's the filename or a foldername that needs fixing. 
+    //        If it's a folder, then you're out of luck. We're not going to fix that. 
+    //        If it's a filename, than we can fix it.
+    if (!SQLSafe(~<FilePath>~))
+    {
+        return FALSE;
+    }
+
+    if (!PathSafe(~<FilePath>~))
+    {
+        return FALSE;
+    }
+
+    if (AuditPathString(~<FilePath>~) )
+    {
+        return FALSE;
+    }
+
+    // Check for long filenames
+    if ( strlen(~<FileName>~) > <MaxFileName> )
+    { 
+        return FALSE;
+    } 
+
+    return TRUE;
+}
+
+/***************************************************************************************************/
+NUMERIC OrderSelected()
+{
+    return dlg( SetControlFocus,OrderIDField );
+}
+
+/***************************************************************************************************/
+NUMERIC CustomerSelected()
+{
+    return dlg( SetControlFocus,CustomerIDField );
+}
+/***************************************************************************************************/
+NUMERIC HandleDrop()
+{
+    if ( !GenCon( DragDropInfo,GetDropInfo ) )
+    { 
+        return FALSE;
+    }
+    
+    Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );    // REMOVE THE DRAG INFO FROM THE TREE
+
+    ExternalDrop(DragDropInfo);    
+    
+    dlg( EnableControls,FALSE,StopButton );    
+
+    return TRUE;
+}
+Thread(aThread);   
+
+SummaryOpen = FALSE;
+SearchOpen = FALSE;
+
+// FUNCTION: OpenSearchWindow()
+//
+// This function opens the Customer Search window.
+NUMERIC OpenSearchWindow(&Dlg)
+{
+    Actions = ACTION Doc ( BrowserDoc Open BrowserDoc "Init(~<$App.HTTPServer>/Reports/CustomerSearch.kpl~,~Customer Search~,0,0,70,35,0,0,0);" );
+    SearchOpen = TRUE;
+
+    PerformActions( Actions );
+    return TRUE;
+}
+
+// FUNCTION: OpenImportSummary()
+//
+// This function opens the Import Summary window.
+NUMERIC OpenImportSummary(OrderID, CustomerID, Force)
+{
+    // Close any search Window....
+//    Actions = ACTION Doc ( BrowserDoc "CloseWindow();" );
+//    PerformActions( Actions );
+
+    if ( ~<OrderID>~ == ~~ )
+    {
+        return Warning( Translate(~There is no OrderID~) );
+    }
+
+    // If the page is already open then just refresh
+    if (( $SummaryOpen ) && !<Force>)
+    {
+        Actions = ACTION Doc ( BrowserDoc "Refresh();" );
+    }
+    else
+    {
+//        Actions = ACTION Doc ( BrowserDoc Open BrowserDoc "Init(~<$App.HTTPServer>/Reports/ImportSummary.kpl?OrderID=<OrderID>~,~<OrderID> Import Summary Report~,25,0,50,90,0,0,0);" );
+        Actions = ACTION Doc ( BrowserDoc Open BrowserDoc "Init(~<$App.HTTPServer>/Reports/ImportSummary.kpl?OrderID=<OrderID>~,~<OrderID> Import Summary Report~,0,0,50,90,0,0,0);" );
+        SummaryOpen = TRUE;
+    }
+
+    PerformActions( Actions );
+    dlg( EnableControls,TRUE,ReOpenSummaryButton );
+    return TRUE;
+}
+// FUNCTION: OpenSearch()
+//
+// This function opens the search window.
+VOID OpenSearch(&Dlg)
+{
+    OpenSearchWindow(Dlg);
+}
+
+// FUNCTION: ReOpenOrderSummary()
+//
+// This function re-opens the Import Summary window.
+VOID ReOpenOrderSummary()
+{
+    DlgData( GetValues,OrderID,OrderID);
+    DlgData( GetValues,CustomerID,CustomerID);
+    OpenImportSummary(~<OrderID>~, ~<CustomerID>~, TRUE);
+}
+
+// FUNCTION: ExternalDrop()
+//
+// This function handles the image drop.
+NUMERIC ExternalDrop( &DragDropInfo )
+{
+    if ( aThread( IsActive ) )
+    {
+        return Warning( Translate(~You are still processing files~) );
+    }
+
+    if ( !DragDropInfo( GetCopyOfDraggedFiles,DraggedFileList ) )
+    { 
+        return Warning( Translate(~There were no files in the object you dragged~) );
+    }
+
+    count = DraggedFileList( ChildCount );
+        
+    if ( $count <= 0 )
+    { 
+        return Warning( ~There were no files in the object you dragged~; )
+    }
+
+    if ( <count> > 1 )
+    {
+        GetUserSettings(~ImportImages~, ~DefaultSortOrder~, DefaultSortOrder, Enabled);
+        if (!DefinedAndNotNULL( DefaultSortOrder ))
+        {
+            DefaultSortOrder = 1;
+        }
+        if ( <DefaultSortOrder> == 1 )
+        {
+            DraggedFileList( SortListBy,~Text~,~CreationTime~ );
+        }
+        else if ( <DefaultSortOrder> == 2 )
+        {
+            DraggedFileList( SortListBy,~CreationTime~,~Text~ );
+        }
+        else
+        {
+            DraggedFileList( SortListBy,~Text~,~CreationTime~ );
+        }
+    }
+
+    dlg( GetInput );
+
+    // First make sure that they specified the Order ID, since we can't continue if it's NULL
+    DlgData( GetValues,OrderID,OrderID);
+    if ( ~<OrderID>~ == ~~ )
+    {
+        return Warning( Translate(~Please Enter a Work Order ID or Customer ID Before Attempting to Add Files.~) );
+    }
+
+    // Allow modification of an order unless its Adjusting, Printing of Converting.
+    Path = ~~;
+    if (AlreadyQueued(~<OrderID>~, Path))
+    {
+        Query = ~Select Status From Orders Where ID = '<OrderID>' Order By ID~;
+
+        if (!database( GetValuesFor,~<Query>~, OrderStatus))
+        {
+            return Warning( Translate(~Cannot find the Status for OrderID <OrderID>~) );
+        }
+
+        if (~<OrderStatus>~ == ~Converting~)
+        {
+            return Warning( Translate(~Cannot modify order mid conversion Please Wait until the order has moved through conversion and retry~) );
+        }
+
+        if (~<OrderStatus>~ == ~Adjusting~)
+        {
+            return Warning( Translate(~Cannot modify order while it is being colour corrected. Please Wait until the order has been corrected and retry~) );
+        }
+
+        if (~<OrderStatus>~ == ~Printing~)
+        {
+            return Warning( Translate(~Cannot modify order while it is being printed~) );
+        }
+
+        if ( MessageBox( ~This Order is Already Queued for Processing. Do you want to set its Status back to Import?.~,YESNO ) == YES )
+        {
+            Log( Session, ~JobImport: Order <OrderID> is is already processing. User Opted to set order back to import~ );
+
+            // Set the order status to Import.
+            if ( !ADO( dBase,Connect,Cmd,~Update Orders Set Status='Import' Where ID = '<OrderID>'~ ) )
+            {
+                dBase( GetErrorDescription,theErr );
+                Log( Session,~JobImport: **** SetOrderStatus failed to set order <OrderID> to status of 'Convert', <theErr>~ ) ;
+                database( LogActivity, Msg, ~Order <OrderID> failed to Set Back To Import!!~, Type, Warning );
+                return Warning( Translate(~Failed to set order back to Import.~) );
+            }
+            else
+            {
+                // Now remove the order from the conversion table and delete any order Items as these will be recreated
+                // when the order is recreated.
+                RemoveFromQueue(~<OrderID>~);
+                StripOrderItems(~<OrderID>~, ~<Path>~);
+                database( LogActivity, Msg, ~Order <OrderID> Set Back To Import~, Type, Warning );
+            }            
+        }
+        else
+        {
+            Log( Session, ~JobImport: Order <OrderID> is is already processing. User Opted not to set order back to import~ );
+            database( LogActivity, Msg, ~Order <OrderID> Already imported user opted not not change the order~, Type, Warning );
+            return Warning( Translate(~This Order is Already Queued for Processing.~) );
+        }
+    }
+
+    // Now grab the rest of the pertinent information from the GUI
+    DlgData(GetValues,CustomerID, CustomerID);
+
+    DraggedFileList( SortListBy,~Text~ );
+
+    Stop = FALSE;
+
+    TheObject = DraggedFileList(Permanent,GetObject);
+
+    aThread( New,~ProcessDraggedFiles~,~<TheObject>~,~<OrderID>~,~<CustomerID>~); 
+
+//  ProcessDraggedFiles( <TheObject>,<OrderID>,<CustomerID> );
+    return TRUE;
+}
+
+// FUNCTION: MakeNewOrderIfNecessary()
+//
+//  This function queries the DP2 database for the provided Order ID.
+//  If its not located we query Powerlab for it, then add the customer details for
+//  that Work Order to DP2 along with the Work Order set to Import.
+//
+NUMERIC MakeNewOrderIfNecessary( )
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return TRUE;
+    } 
+
+    dlg( GetInput );
+
+    if (IsNULL(~<$con.DlgData[OrderID]>~))
+    {
+        Warning( Translate( ~Work Order ID Required~ ) );
+        return FALSE;
+    }
+    else
+    {
+       dlg( SetStrings,OrderID,Upper(~<$con.DlgData[OrderID]>~ ));
+       dlg( GetInput );
+    }
+
+    Query = ~Select ID,CustomerID From Orders Where ID = '<$con.DlgData[OrderID]>' Order By ID~;
+    Log( Session, ~MakeNewOrderIfNecessary Query = (<Query>) ~);
+    if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+    {
+        OrderSelected();
+        List( GetErrorDescription,0,theErr );
+        Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+        return FALSE;
+    }
+
+    if (!database( GetValuesFor,~<Query>~, ID, CustomerID))
+    {
+        Invoke( ShowProgress, Translate( ~Cannot Locate Work Order <$con.DlgData[OrderID]> in DP2, Checking <AccountDbase>....~) );
+
+        if (!ConnectToPowerlabOrNavision())
+        {
+            MessageBox( Translate(~JobImport: Cannot Query <AccountDbase>, Please try again~ ),OK );
+            Invoke( ShowProgress, Translate( ~Cannot Query <AccountDbase>, Please Check and Retry~) );
+            return FALSE;
+        }
+
+        if (~<AccountDbase>~ == ~Powerlab~)
+        { 
+            Query = ~Select acct_id From workhead Where workorderid='<$con.DlgData[OrderID]>' and Deleted='F'~;
+            Log( Session, ~MakeNewOrderIfNecessary <AccountDbase> Query = (<Query>) ~);
+            if (!powerlab( GetValuesFor,~<Query>~, CustomerID ))
+            {
+                MessageBox( Translate(~JobImport: Cannot Locate OrderID '<$con.DlgData[OrderID]>' in PowerLab, Please try again~ ),OK );
+                Invoke( ShowProgress, Translate( ~Cannot Locate OrderID '<$con.DlgData[OrderID]>' in PowerLab, Please Check and Retry~) );
+                return FALSE;
+            }
+
+            if ( ~<accountid>~ == ~~)
+            {
+                // Prompt the user via a popup and the status bar that the work order could not be located.
+                MessageBox( Translate(~Work Order ID '<$con.DlgData[OrderID]>' Cannot be found in PowerLab, Please try again~ ),OK );
+                Invoke( ShowProgress, Translate( ~Work Order '<$con.DlgData[OrderID]>' does not exist in PowerLab~) );
+                return FALSE;
+            }
+        }
+        else
+        {
+            Query = ~Select No_ From [Loxley Colour$sales line] Where [Doucument No_]='<$con.DlgData[OrderID]>'~;
+            Log( Session, ~MakeNewOrderIfNecessary <AccountDbase> Query = (<Query>) ~);
+            if (!navision_sql( GetValuesFor,~<Query>~, CustomerID ))
+            {
+                MessageBox( Translate(~JobImport: Cannot Locate OrderID '<$con.DlgData[OrderID]>' in Navision, Please try again~ ),OK );
+                Invoke( ShowProgress, Translate( ~Cannot Locate OrderID '<$con.DlgData[OrderID]>' in Navision, Please Check and Retry~) );
+                return FALSE;
+            }
+
+            if ( ~<accountid>~ == ~~)
+            {
+                // Prompt the user via a popup and the status bar that the work order could not be located.
+                MessageBox( Translate(~Work Order ID '<$con.DlgData[OrderID]>' Cannot be found in Navision, Please try again~ ),OK );
+                Invoke( ShowProgress, Translate( ~Work Order '<$con.DlgData[OrderID]>' does not exist in Navision~) );
+                return FALSE;
+            }
+
+        }
+    }
+
+    Count = List( NumEntries );
+
+    // Check if we're adding a new order or not.
+    if ( !<Count> )
+    {
+        Invoke( ShowProgress,Translate( ~Adding a new order '<$con.DlgData[OrderID]>', Importing customer details from <AccountDbase>~ ) );
+
+        // Connect to Powerlab or Navision and extract the data we need to add to the DP2 database.
+        if (!ConnectToPowerlabOrNavision())
+        {
+            return FALSE;
+        }
+
+        // Now zap the details.
+        accountid     = ~~;
+        billtoname    = ~~;
+        billtocity    = ~~;
+        billtocompany = ~~;
+        billtocity    = ~~;
+        billtozip     = ~~;
+        billtoemail   = ~~;
+        billtofax     = ~~;
+        billtophone1  = ~~;
+        billtophone2  = ~~;
+
+        if (~<AccountDbase>~ == ~Powerlab~)
+        { 
+            Query = ~select a.acct_id, a.billtoname, a.billtocity, a.billtocompany, a.billtozip, a.billtoemail, a.billtofax, a.billtophone1, a.billtophone2 from account a inner join workhead wh on wh.acct_id =a.acct_id where wh.workorderid='<$con.DlgData[OrderID]>' and wh.Deleted='F' and a.Deleted='F'~;
+            Log( Session, ~MakeNewOrderIfNecessary Powerlab Query #2 = (<Query>) ~);
+            if (!powerlab( GetValuesFor,~<Query>~, accountid, billtoname, billtocity, billtocompany, billtozip, billtoemail, billtofax, billtophone1, billtophone2 ))
+            {
+                MessageBox( Translate(~Work Order ID '<$con.DlgData[OrderID]>' Cannot be found in PowerLab, Please try again~ ),OK );
+                Invoke( ShowProgress, Translate( ~Cannot Query PowerLab, Please Check and Retry~) );
+                return FALSE;
+            }
+        }
+        else
+        {
+            Query = ~select a.No_, a.contact, a.city, a.name, a.[Post Code], a.[e-mail], a.[phone no_], a.mobile from [loxley colour$customer] a inner join [loxley colour$sales line] on wh.No_ =a.No_ where wh.[Document No_] ='<$con.DlgData[OrderID]>'~;
+
+            Log( Session, ~MakeNewOrderIfNecessary Navision Query #2 = (<Query>) ~);
+            if (!Navision_sql( GetValuesFor,~<Query>~, accountid, billtoname, billtocity, billtocompany, billtozip, billtoemail, billtophone1, billtophone2 ))
+            {
+                MessageBox( Translate(~Work Order ID '<$con.DlgData[OrderID]>' Cannot be found in Navision, Please try again~ ),OK );
+                Invoke( ShowProgress, Translate( ~Cannot Query Navision, Please Check and Retry~) );
+                return FALSE;
+            }
+
+        }
+
+        if ( ~<accountid>~ == ~~)
+        {
+            // Prompt the user via a popup and the status bar that the work order could not be located.
+            MessageBox( Translate(~Work Order ID '<$con.DlgData[OrderID]>' Cannot be found in <AccountDbase>, Please try again~ ),OK );
+            Invoke( ShowProgress, Translate( ~Work Order '<$con.DlgData[OrderID]>' does not exist in <AccountDbase>~) );
+            return FALSE;
+        }
+        else 
+        {
+            // Display the customers details on the Status bar
+            Invoke( ShowProgress, Translate( ~Imported CustomerID <accountid>, <billtoname> From <AccounutDbase>~ ) ); 
+
+            ID = ~<$con.DlgData[OrderID]>~;
+            CustomerID =  ~<accountid>~;
+
+            // Update the customer record with any changes in DP2 
+            if (DefinedAndNotNULL( billtoemail ))
+            {
+                UpdateCustomer( ~<accountid>~,
+                                Name,~<billtoname>~,
+                                Contact,~<billtocompany>~,
+                                City,~<billtocity>~,
+                                Zipcode,~<billtozip>~,
+                                Email,~<billtoemail>~,
+                                Fax,~<billtofax>~,
+                                Phone1,~<billtophone1>~,
+                                Phone2,~<billtophone2>~,
+                                Copyright,~<billtocompany>~ );
+            }
+            else
+            {
+                UpdateCustomer( ~<accountid>~,
+                                Name,~<billtoname>~,
+                                Contact,~<billtocompany>~,
+                                City,~<billtocity>~,
+                                Zipcode,~<billtozip>~,
+                                Fax,~<billtofax>~,
+                                Phone1,~<billtophone1>~,
+                                Phone2,~<billtophone2>~,
+                                Copyright,~<billtocompany>~ );
+            }
+
+            // Now add the order to DP2 with status Import if its not there already.
+            if (!OrderExists(~<$con.DlgData[OrderID]>~))
+            {
+                AddOrder( ~<$con.DlgData[OrderID]>~,~<accountid>~, ~~, ~~, ~~, ~Import~ );
+            }
+
+            // Update the Customers details for the dialog
+            dlg( SetStrings,CustomerID,~<accountid>~ );
+            dlg( SetStrings,Contact,~<billtoname>~ );
+            dlg( SetStrings,Company,~<billtocompany>~ );
+
+            SummaryOpen = FALSE;
+            SearchOpen = FALSE;
+        }
+    }
+    else
+    {
+        // The work order already exists to extract the Customer ID and Name from DP2
+        Query = ~Select Name, Contact From Customers Where ID = '<CustomerID>' Order By ID~;
+        Log( Session, ~MakeNewOrderIfNecessary DP2 Query #2 = (<Query>) ~);
+        if (!database( GetValuesFor,~<Query>~, Name, Company))
+        {
+            MessageBox( Translate(~Cannot connect to DP2's Database, Please try again~ ),OK );
+            Invoke( ShowProgress, Translate( ~Cannot Connect to DP2, Please Check and Retry~) );
+            return FALSE;
+        }
+
+        // If there are items ready to go then Enable the Go button
+        Query = ~Select * From ImportOrderItemsTemp Where OrderID = '<ID>'~;
+        Log( Session, ~MakeNewOrderIfNecessary DP2 Query #3 = (<Query>) ~);
+        if ( !PGenConList( ImageList,Connect,Cursor,Forward,Query,~<Query>~ ) )
+        {
+            ImageList( GetErrorDescription,0,theErr );
+            Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+        }
+
+        if (ImageList( NumEntries ))
+        {
+            EnableGoButton();
+        }
+
+        Path = ~~;
+        if (AlreadyQueued(~<$con.DlgData[OrderID]>~, Path))
+        {
+            Invoke( ShowProgress,Translate( ~Order Already Processing '<$con.DlgData[OrderID]>'.~ ) );
+            DisableGoButton();
+        }
+        else
+        {
+            Invoke( ShowProgress,Translate( ~Appending to existing Order '<$con.DlgData[OrderID]>'.~ ) );
+        }
+
+        dlg( SetStrings,CustomerID,~<CustomerID>~ );
+        dlg( SetStrings,Contact,~<Name>~ );
+        dlg( SetStrings,Company,~<Company>~ );
+    }
+
+    // Open the Import Summary Window
+    OpenImportSummary(<ID>, <CustomerID>, TRUE);
+    RenameID = 1;
+    return TRUE;
+}
+
+// FUNCTION: GetNewID()
+//
+// This function adds a new local work order and returns the 
+// number formatted as required.
+// 
+// The importID table contains an incrementing key against which a customer
+// ID is stored. This is kept along with the account ID we are adding an order 
+// for and the username of who added it.
+NUMERIC GetNewID( customerID, &newID )
+{
+    newID = ~~;
+
+    cmd = ~INSERT INTO importID (CustomerID, Operator) VALUES ('<customerID>', '<$App.UserName>')~;
+    Log( Session, ~GetNewID cmd #1 = (<cmd>)~);
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Warning( ~FAILED to add new local Work Order ID~ );
+        return FALSE;
+    }
+    // Now recall the primary key we just added.
+    Query = ~SELECT @@identity from importID~;
+    Log( Session, ~GetNewID query #1 = (<Query>)~);
+    if ( !database( GetValuesFor,~<Query>~, ID) )
+    {
+        Warning( ~FAILED to calculate new Work Order ID, Contact The IT Department~ );
+        return FALSE;
+    }
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~ ,DP2Prefix,DP2Prefix,Enabled ))
+    {
+        Log( Session, ~DP2Prefix Setting Unconfigured!!!!!!~);
+        Warning( ~Failed to read the DP2Prefix from Settings. Try again. Or report to your administrator.~ );
+        return FALSE;
+    }
+
+    // Prepend the DP2 Prefix
+    newID = ~<DP2Prefix><ID>~;
+    return TRUE;
+}
+
+// FUNCTION: CreatePofFile()
+//
+// This function creates a Pof file in a temporary folder, then 
+// copies it to the target PowerImporter Directory.
+//
+// NOTE: At the moment PowerImporter will only import on the email address
+// Therefore if the email address is NULL the contact details are incorrect.
+// It is required that PowerImporter will correctly import via Account ID.
+//
+// NOTE2: Only Work orders that have been created locally (ie start JR) will
+// trigger creation of a POF file.
+// 
+// The format of the Pof file generated is a follows.....
+// [BEGIN_ORDER_HEADER]
+// Schema=6
+// OrderNumber=LR000048
+// CustomerName=Joe Bloggs
+// CustomerNumber=111111
+// ConfirmTo=davef@mailinator.com
+// OrderTypeID=
+// OrderDate=20050929154214
+// Reference=
+// PurchaseOrder=
+// OriginalOrder=
+// ProductDescription=
+// ProductQty=
+// ProductCode=
+// ShipToName=
+// ShipToLines=
+// ShipToPhone=
+// ShipToAltPhone=
+// ShipToNotes=
+// OrderNotes=Test Order
+// ProductDescription=COLOUR CORRECT 
+// ProductQty=1
+// ProductCode=
+// ProductDescription=First Class 
+// ProductQty=1
+// ProductCode=
+// ProductDescription=Lab Account 
+// ProductQty=1
+// ProductCode=
+// CatalogID=
+// PaymentMethod=
+// DateExpected=
+// RushDate=
+// OrderAmount=
+// [BEGIN_ORDER_DETAIL]
+// [BEGIN_ALBUMS_ORDER]
+// NumberOfAlbums=0
+// [BEGIN_CD_ORDER]
+// NumberOfCDs=0
+// [BEGIN_WEB_UPLOAD_ORDER]
+// [BEGIN_NEG_SERVICES]
+// [BEGIN_CROP_SERVICES]
+// [BEGIN_DIGITAL_ORDER]
+// PackageID=0001
+// StudioPackageID=
+// ProductDescription=SBI
+// ProductCode=SBI
+// ProductQty=1
+// ProductCode=SBI.txt
+// Instructions=
+// ProductDescription=Colour 
+// ProductQty=1
+// ProductCode=
+// TemplateID=SBI.txt
+// Qty=1
+// NodeID=10000
+// ImagePath=\\Storage1\ROES Orders\Images\LR000048\IMG_3906f-1.jpg
+// PSImageID=
+// ImageCrop=50.00;49.67;50;50;99.86;88.82;0.00;0;0
+// Text=
+// CropID=
+// LogoScale=
+// LogoAutoRotate=
+// LogoRotation=
+// LogoPath1=
+// LogoPosition1=
+// LogoColor1=
+// LogoPath2=
+// LogoPosition2=
+// LogoColor2=
+// [END_OF_ORDER]
+NUMERIC CreatePofFile(OrderID)
+{
+    if (!GetWorkStationSettings( ~<$Job.Name>~ ,TempPath,TempPath,Enabled ))
+    {
+        Log( Session, ~TempPath Setting Unconfigured!!!!!!~);
+        Invoke( ShowWarning, ~Failed to read the TempPath from Settings. Try again.
+Or report to your administrator.~ );
+        return FALSE;
+    }
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~ ,DP2Prefix,DP2Prefix,Enabled ))
+    {
+        Log( Session, ~DP2Prefix Setting Unconfigured!!!!!!~);
+        Invoke( ShowWarning, ~Failed to read the DP2Prefix from Settings. Try again.
+Or report to your administrator.~ );
+        return FALSE;
+    }
+    theFile = ~<TempPath>\<OrderID>.pof~;
+
+    // Return if the work ID indicates this is a powerlab generated order ID.
+    substr(~<OrderID>~, 0, 2, StartStr);
+
+    if (~<StartStr>~ != ~<DP2Prefix>~)
+    {
+        // If the prefix indicates its not a Locally generated order then creating a POF
+        // file is pointless
+        return FALSE;
+    }
+
+    // Open up a temp pof file in the temp directory
+    if ( !File( Job, AsciiOutput, OPEN, ~<theFile>~, WRITE, CREATE ) )
+    {
+        Invoke( ShowWarning, ~Could not open <theFile> Contact the IT Department~);
+        return FALSE;
+    }
+
+    Name  = ~~;
+    Email = ~~;
+
+    Query = ~Select Name, Email From Customers Where ID = '<$con.DlgData[CustomerID]>'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+    {
+        OrderSelected();
+        List( GetErrorDescription,0,theErr );cal.)
+        Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+        return FALSE;
+    }
+
+    if (!database( GetValuesFor,~<Query>~, Name, Email))
+    {
+        MessageBox( Translate(~JobImport: Cannot Query DP2, Please try again~ ),OK );
+        Invoke( ShowProgress, Translate( ~Cannot Query DP2, Please Check and Retry~) );
+        return FALSE;
+    }
+
+    // Create the POF
+    Job( ~[BEGIN_ORDER_HEADER]~);
+    Job( ~Schema=6~);
+    Job( ~OrderNumber=<OrderID>~);
+    Job( ~CustomerName=<Name>~);
+    Job( ~CustomerNumber=<$con.DlgData[CustomerID]>~);
+    Job( ~ConfirmTo=<Email>~);
+    Job( ~OrderTypeID=~);
+    Job( ~OrderDate=<$Date.Year><$Date.Month><$Date.Day><$Date.hour><$Date.minute><$Date.second>~);
+    Job( ~Reference=~);
+    Job( ~PurchaseOrder=~);
+    Job( ~OriginalOrder=~);
+    Job( ~ProductDescription=~);
+    Job( ~ProductQty=~);
+    Job( ~ProductCode=~);
+    Job( ~ShipToName=~);
+    Job( ~ShipToLines=~);
+    Job( ~ShipToPhone=~);
+    Job( ~ShipToAltPhone=~);
+    Job( ~ShipToNotes=~);
+    Job( ~OrderNotes=JobImport Order for <OrderID> CustomerID <$con.DlgData[CustomerID]>~);
+    if (~<$con.DlgData[ColourCorrect]>~ == ~1~)
+    {
+        Job( ~ProductDescription=COLOUR CORRECT~); 
+    }
+    else
+    {
+        Job( ~ProductDescription=DO NOT COLOUR CORRECT~); 
+    }
+    Job( ~ProductQty=1~ );
+    Job( ~ProductCode=~ );
+    Job( ~ProductDescription=First Class~ ); 
+    Job( ~ProductQty=1~ );
+    Job( ~ProductCode=~ );
+    Job( ~ProductDescription=Lab Account~ );
+    Job( ~ProductQty=1~ );
+    Job( ~ProductCode=~ );
+    Job( ~CatalogID=~ );
+    Job( ~PaymentMethod=~ );
+    Job( ~DateExpected=~ );
+    Job( ~RushDate=~ );
+    Job( ~OrderAmount=~ );
+    Job( ~[BEGIN_ORDER_DETAIL]~ );
+    Job( ~[BEGIN_ALBUMS_ORDER]~ );
+    Job( ~NumberOfAlbums=0~ );
+    Job( ~[BEGIN_CD_ORDER]~ );
+    Job( ~NumberOfCDs=0~ );
+    Job( ~[BEGIN_WEB_UPLOAD_ORDER]~ );
+    Job( ~[BEGIN_NEG_SERVICES]~ );
+    Job( ~[BEGIN_CROP_SERVICES]~ );
+    Job( ~[BEGIN_DIGITAL_ORDER]~ );
+    Job( ~PackageID=0001~ );
+    Job( ~StudioPackageID=~ );
+    Job( ~ProductDescription=SBI~ );
+    Job( ~ProductCode=SBI~ );
+    Job( ~ProductQty=1~ );
+    Job( ~[END_OF_ORDER]~ );
+
+    Job( Close );
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~ ,PofTargetPath,PofTargetPath,Enabled ))
+    {
+        Log( Session, ~PofTargetPath Setting Unconfigured!!!!!! NOT copied~);
+        ShowWarning( ~Failed to read the target Directory from Settings. Try again.
+Or report to your administrator.~ );
+        return FALSE;
+    }
+
+    // Copy the file to the PowerImporter target directory.
+    if ( !Files( Copy, ~<theFile>~, ~<PofTargetPath>\<OrderID>.pof~ ) )
+    {
+       // There was a problem copying the file
+       Log( Session, ~Pof file for <OrderID> NOT copied~);
+       MessageBox(~Failed to copy the POF file to the target Directory (<PofTargetPath>. Try again.
+Or report to your administrator.~ );
+       return FALSE;
+    }
+
+    return TRUE;
+}
+
+
+// FUNCTION: MakeNewPowerlabOrder()
+//
+// This function queries the Powerlab database for the provided Customer ID.
+// If its not located we we create a new work order for that customer
+// within DP2 in the form JR1000001. This is later encapsulated in a Pof file and copied
+// to the PowerImporter directory to be actioned.
+NUMERIC MakeNewPowerlabOrder( )
+{
+    // Avoid problems while processing files.
+    if (<ProcessingFiles>)
+    {
+        return TRUE;
+    } 
+
+    dlg( GetInput );
+
+    if (IsNULL(~<$con.DlgData[CustomerID]>~))
+    {
+        Warning( Translate( ~Customer ID Required~ ) );
+        return FALSE;
+    }
+
+    // Connect to Powerlab and extract the data we need to add to create a new work order to Powerlab and the
+    // bits required to add to the DP2 database.
+    if (!ConnectToPowerlabOrNavision())
+    {
+        return FALSE;
+    }
+
+    // Now zap the details.
+    accountid = ~~;
+    company   = ~~;
+    firstname = ~~;
+    lastname  = ~~;
+    city      = ~~;
+    zip       = ~~;
+    email     = ~~;
+    fax       = ~~;
+    address   = ~~;
+    phone1    = ~~;
+    phone2    = ~~;
+
+//    Query = ~SELECT C.company, C.firstname, C.lastname, C.city, A.Acct_ID FROM Contact C, Account A WHERE A.InternalID = C.Acct_IID and Acct_ID = '<$con.DlgData[CustomerID]>'~;
+//    Log( Session, ~MakeNewPowerlabOrder Query #1 = (<Query>) ~);
+//    if (!powerlab( GetValuesFor,~<Query>~, company, firstname, lastname, city, accountid))
+//    {
+//        Invoke( ShowProgress, Translate( ~Customer ID <$con.DlgData[CustomerID]> does not exist in PowerLab, Please Check and Retry~) );
+//        MessageBox( Translate(~Customer ID <$con.DlgData[CustomerID]> does not exists in PowerLab, Please try again~ ), OK );
+//
+//        // Zap any residual dialog details.
+//        dlg( SetStrings,OrderID,~~ );
+//        dlg( SetStrings,Contact,~~ );
+//        dlg( SetStrings,Company,~~ );
+//        return FALSE;
+//    }
+
+//    if ( ~<accountid>~ == ~~)
+//    {
+//        // Prompt the user via a popup and the status bar that the account could not be located.
+//        MessageBox( Translate(~Customer ID '<$con.DlgData[CustomerID]>' Cannot be found in PowerLab, Please try again~ ),OK );
+//        Invoke( ShowProgress, Translate( ~Customer ID '<$con.DlgData[CustomerID]>' does not exist in PowerLab, Please Check and Retry~) );
+
+//        // Zap any residual dialog details.
+//        dlg( SetStrings,OrderID,~~ );
+//        dlg( SetStrings,Contact,~~ );
+//        dlg( SetStrings,Company,~~ );
+//        return FALSE;
+//    }
+
+    if (~<AccountDbase>~ == ~Powerlab~)
+    { 
+        Query = ~SELECT a.billtoname, a.billtozip, a.billtocompany, a.billtoemail, a.billtofax, a.billtophone1, a.billtophone2 FROM Account A WHERE Acct_ID = '<$con.DlgData[CustomerID]>' and Deleted='F'~;
+        Log( Session, ~MakeNewPowerlabOrder Query #2 = (<Query>) ~);
+        if (!powerlab( GetValuesFor,~<Query>~,billtoname, zip, company, email, fax, phone1, phone2))
+        {
+            MessageBox( Translate(~Customer ID '<$con.DlgData[CustomerID]>' does not exist in PowerLab, Please Check and Retry~ ),OK );
+            Invoke( ShowProgress, Translate( ~Customer ID '<$con.DlgData[CustomerID]>' does not exist in PowerLab, Please Check and Retry~) );
+
+            // Zap any residual dialog details.
+            dlg( SetStrings,OrderID,~~ );
+            dlg( SetStrings,Contact,~~ );
+            dlg( SetStrings,Company,~~ );
+            return FALSE;
+        }
+    }
+    else
+    {
+        Query = ~SELECT a.contact, a.[Post Code], a.name, a.[e-mail], a.[phone no_], a.mobile FROM [loxley colour$customer] A WHERE No_ = '<$con.DlgData[CustomerID]>'~;
+        Log( Session, ~MakeNewPowerlabOrder Query #2 = (<Query>) ~);
+        if (!Navision_sql( GetValuesFor,~<Query>~,billtoname, zip, company, email, phone1, phone2))
+        {
+            MessageBox( Translate(~Customer ID '<$con.DlgData[CustomerID]>' does not exist in Navision, Please Check and Retry~ ),OK );
+            Invoke( ShowProgress, Translate( ~Customer ID '<$con.DlgData[CustomerID]>' does not exist in Navision, Please Check and Retry~) );
+
+            // Zap any residual dialog details.
+            dlg( SetStrings,OrderID,~~ );
+            dlg( SetStrings,Contact,~~ );
+            dlg( SetStrings,Company,~~ );
+            return FALSE;
+        }
+
+    }
+    // Now create a new Work order Number locally.
+    newID = ~~;
+    if (!GetNewID(~<$con.DlgData[CustomerID]>~, newID))
+    {
+        Log( Session, ~JobImport: Failed To get New JR Work ID~ ); 
+        return FALSE;
+    }
+ 
+    dlg( SetStrings,OrderID,~<newID>~ );
+
+    Invoke( ShowProgress, Translate( ~New Work Order '<newID>' Created.~ ) ); 
+    Log( Session, ~MakeNewPowerlabOrder Update customer...~);
+    Log( Session, ~Name,<billtoname>~);
+    Log( Session, ~Company,<company>~);
+
+    substr(~<fax>~, 0, 15, fax);
+    substr(~<phone1>~, 0, 15, phone1);
+    substr(~<phone2>~, 0, 15, phone2);
+
+    if (DefinedAndNotNULL( email ))
+    {
+        // Update the customer record with any changes in DP2 
+        UpdateCustomer( ~<$con.DlgData[CustomerID]>~,
+                         Name,~<billtoname>~,
+                         Contact,~<company>~,
+                         City,~<city>~,
+                         ZipCode,~<zip>~,
+                         Email,~<email>~,
+                         Fax,~<fax>~,
+                         Phone1,~<phone1>~,
+                         Phone2,~<phone2>~,
+                         Copyright,~<company>~ );
+    }
+    else
+    {
+        // Update the customer record with any changes in DP2 
+        // Skipping the email address since this may have been filled into DP2.
+        UpdateCustomer( ~<$con.DlgData[CustomerID]>~,
+                         Name,~<billtoname>~,
+                         Contact,~<company>~,
+                         City,~<city>~,
+                         ZipCode,~<zip>~,
+                         Fax,~<fax>~,
+                         Phone1,~<phone1>~,
+                         Phone2,~<phone2>~,
+                         Copyright,~<company>~ );
+    }
+    Log( Session, ~MakeNewPowerlabOrder customer updated~);
+
+    // Now add the order to DP2 with Status Import if its not there.
+    if (!OrderExists(~<$con.DlgData[OrderID]>~))
+    {
+        Log( Session, ~MakeNewPowerlabOrder New Order...~);
+        AddOrder( ~<$con.DlgData[OrderID]>~,~<$con.DlgData[CustomerID]>~, ~~, ~~, ~~, ~Import~ );
+    }
+    Log( Session, ~MakeNewPowerlabOrder Update dialog...~);
+    // Update the Customers details for the dialog
+    dlg( SetStrings,CustomerID,~<$con.DlgData[CustomerID]>~ );
+    dlg( SetStrings,Contact,~<billtoname>~ );
+    dlg( SetStrings,Company,~<company>~ );
+    Log( Session, ~MakeNewPowerlabOrder Update done~);
+
+    // Open the Import Summary Window
+    OpenImportSummary(<newID>, ~<$con.DlgData[CustomerID]>~, TRUE);
+    RenameID = 1;
+    return TRUE;
+}
+
+// Make sure that the DDJobImport dictionary exists.
+// This type is used to retrieve user-entered fields from our dialog
+//
+if ( !DictionaryExists( DDJobImport ) )
+{
+    Dictionary: DDJobImport
+        Fields: Name    OrderID             Type Text
+        Fields: Name    CustomerID          Type Text
+        Fields: Name    Contact             Type text
+        Fields: Name    Company             Type Text
+        Fields: Name    Product             Type text
+        Fields: Name    Priority            Type text
+        Fields: Name    ProductCat          Type text
+        Fields: Name    BravoSetup          Type text
+        Fields: Name    Quantity            Type short
+        Fields: Name    IndexCardRequired   Type Long 
+        Fields: Name    NumIndexCards       Type Long 
+        Fields: Name    BravoCDRequired     Type Long 
+        Fields: Name    Crop                Type Long 
+        Fields: Name    ROESProxiesRequired Type Long 
+        Fields: Name    ColourCorrect       Type Long 
+        Fields: Name    BlackAndWhite       Type Long 
+        Fields: Name    Sepia               Type Long 
+        Fields: Name    CopperTone          Type Long 
+        Fields: Name    BlueTone            Type Long 
+        Fields: Name    SeeServices         Type Long
+        Fields: Name    Mount               Type text
+        Fields: Name    Finish              Type text
+        Fields: Name    Wrap                Type text
+        Fields: Name    Frame               Type text
+        Fields: Name    FrameMount          Type text
+}
+
+// FUNCTION: ApplyWorkStationDefaults()
+//
+//  This function sets up default workstation settings.
+//  Where a setting already exists it will be left as is.
+//  This is to avoid Ross having to hack files.
+//
+VOID ApplyWorkStationDefaults()
+{
+    //Debug(1);
+    //Add the settings if they do not exist
+
+    // Colour Tone mappings. These control the file or macro used for Sepia, Bluetone etc...
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~Sepia~,Temp,Enabled ) )
+    {
+      
+        SetWorkStationSettings( ~<$Job.Name>~,~Sepia~,~<$@Func.CustomerSepiaForNode(10000)>~,TRUE ); 
+    }
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~BlackAndWhite~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~BlackAndWhite~,~\\Storage1\DP2\Tables\BW.lut~,TRUE );
+    } 
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~BlueTone~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~BlueTone~,~\\Storage1\DP2\Tables\Blue Tone -25r  40b.txt~,TRUE ); 
+    }
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~CopperTone~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~CopperTone~,~\\Storage1\DP2\Tables\Copper_tone_35r_-10g_-40b.txt~,TRUE ); 
+    }
+
+    // Default Paths...
+
+    // The location where the generated pof file is created.
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~PofTargetPath~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,~PofTargetPath~, ~H:\PofImport~,TRUE ); 
+    }
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~TempPath~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,TempPath,~c:\temp~,TRUE );
+    }
+
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~StorageRoot~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,StorageRoot,~\\Storage1~,TRUE ); 
+    }
+
+    // The prefix for DP2 Initiated Orders.
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~DP2Prefix~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,DP2Prefix,~JR~,TRUE ); 
+    }
+
+    // The Next Assembly Point
+    if (!GetWorkStationSettings( ~<$Job.Name>~,~NextAssemblyPoint~,Temp,Enabled ) )
+    {
+        SetWorkStationSettings( ~<$Job.Name>~,NextAssemblyPoint,~A~,TRUE ); 
+    }
+
+}
+
+AlreadyOpen = FALSE;
+
+// FUNCTION: Init()
+//
+//  This function kicks off the JobImport Dialog
+//
+VOID Init(CustomerID)
+{
+    // Don't allow the init routine of a given JobImport window to be called
+    // twice.
+    if ( $AlreadyOpen )
+    {
+        Log( Session, ~JobImport: Init routine called more than once~ );
+        Warning( ~The JobImport panel is already open~ );
+        return;
+    }
+    Log(Session, ~***********************************************************************~);
+    Log(Session, ~          JobImport Dialog Opened (<JobImportVersion>)~);
+    Log(Session, ~***********************************************************************~);
+
+    // Connect to DP2's database.
+    if (!ConnectToDatabase())
+    {
+        return;
+    }
+
+    // Instantiates an object called DlgData which has fields of the type
+    // given by DDJobImport above.
+    Define: DlgData Using DDJobImport;
+
+    // Make these quantities global in the context of this script.
+    Global( CustomerID, DlgData );
+
+    // Apply default Values to the WorkStation Setting 
+    ApplyWorkStationDefaults();
+
+    // Start up the dialog
+    StartMainDialog();
+
+    // Display a prompt to guide the User
+    Invoke( ShowProgress,Translate( ~Ready For First Work Order or Customer ID~ ) );
+
+    AlreadyOpen = TRUE;
+}

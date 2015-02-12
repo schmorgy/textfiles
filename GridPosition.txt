@@ -1,0 +1,682 @@
+
+TableName = ~GridPosition~;
+Include: ~ExportSelectedToFile~;
+
+NUMERIC RefreshListView()
+{
+	if ( !DataWindow(GetWindowAddress) )
+		{ return FALSE; }
+
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( StatusBar,Text,Translate(~Querying~) );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	Count = List( NumEntries );
+
+	IF 0
+	{
+		if ( <Count> > 300 )
+		{
+			if ( MessageBox( ~Your query:\n\n   <DocumentQuery>\n\nwill retrieve <Count> records\n\nAre you sure you want to continue?~,YESNO ) != YES )
+			{
+				if ( <FirstTime> ) { Exit(); }
+				return TRUE;
+			}
+		}
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+
+	return DataWindow( StatusBar,Text,~~ );
+}
+
+
+STR GetKey( &Item )
+{
+	return ~ID = '<$con.Item[ID]>' AND Images = <$con.Item[Images]> AND Node = <$con.Item[Node]>~;
+}
+
+
+NUMERIC ChangeField()
+{
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,Changed,Original,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.Changed[ID]>~ == ~~ )
+		{ return Warning( ~Unable to save pending changes.  TableName cannot be blank.~ ); }
+
+	Key = GetKey( Original );
+	
+	Query = ~Select * From <TableName> Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,Changed,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update <TableName> record where <Key>. <theErr>~ );
+	}
+
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,ToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	if ( MessageBox( ~Are you sure you want to delete the selected items?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	StringList( RowsToDelete,New );
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	while ( ToDelete( GetNext,Item ) )
+	{
+		Key = GetKey( Item );
+
+		if ( !dBase( CMD,~Delete From <TableName> Where <Key>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			Warning( ~Could not delete where <Key>. <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,ToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	NewRow( Set,TableName,~<WhichTable>~ );
+	
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,ID );
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	ActiveView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( ~<what> is not implemented yet!~ );
+	return TRUE;
+}
+
+
+NUMERIC PopulateColumnNamesCombo( Columns )
+{
+	StringList( ColumnNamesList,New,ParseFrom,~<Columns>~,~,~ );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	Fields( GetByName,ColumnName,ColumnDefinition );
+
+	ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,ColumnNamesList(GetCopyOf) );
+
+	DataView( SetComboBox,ColumnDefinition,ColumnName );
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC AddOrUpdate( &Grid,Table,ID,Images,Attr,Value )
+{
+	Grid( GetConnection,db );
+
+	Cmd = ~Delete From <Table> Where ID = '<ID>' AND Images = <Images> AND Attr = '<Value>'~;
+
+	db( Cmd,~<Cmd>~ );
+
+	Cmd = ~Insert Into <Table>(ID,Images,Attr,Val) Values('<ID>',<Images>,'<Attr>','<Value>')~;
+
+	StatusBarText( ~<Attr> = <Value>~ );
+
+	return db( Cmd,~<Cmd>~ );
+}
+
+
+NUMERIC CalculateSizes( &Params,ID,Images )
+{
+	if ( !Params(GetFields,Attr,Val,nRows,nCols,Images,MaxImageWidth,MaxImageHeight,MinHorizGap,
+					MinVertGap,TextWidth,TextHeight,TextGap,PageWidth,PageHeight,
+					LeftMargin,TopMargin,RightMargin,BottomMargin ) )
+	{
+		return Warning( Translate( ~Could not find value for <Attr>~ ) );
+	}
+	
+	theImageWidth = MakeNumber(~<maxImageWidth>~) ;
+	theImageLength = MakeNumber(~<maxImageHeight>~) ;
+	theHorizGap = MakeNumber(~<minHorizGap>~);
+	theVertGap = MakeNumber(~<minVertGap>~);
+	orgtextWidth = MakeNumber(~<textWidth>~);
+	imagingWidth = MakeNumber(~<pageWidth>~) - ( MakeNumber(~<LeftMargin>~) + MakeNumber(~<RightMargin>~));
+	imagingLength = MakeNumber(~<PageHeight>~) - (MakeNumber(~<TopMargin>~) + MakeNumber(~<BottomMargin>~));
+	
+	if ( <nCols> < 2 || <nRows> < 2 )
+	{
+		return ( Warning( ~Must be at least twos rows and columns~ ) );
+	}
+		
+	if ( <maxImageWidth> <= 0 )
+	{
+		return ( Warning( ~Zero image width specified~ ) );
+	}
+
+	tries = 0;
+
+	start = ticks();
+
+	while ( <++tries> < 1000 )
+	{	  					
+		objWidth  = ( <textWidth> > <theImageWidth> ) ? <textWidth> : <theImageWidth>;
+		objLength  = <theImageLength> + <textGap> + <textHeight>;
+		
+		requiredWidth = (<nCols> * <objWidth>) + ((<nCols>-1) * <minHorizGap>);
+		requiredLength = (<nRows> * <objLength>) + ((<nRows>-1) * <minVertGap> );
+
+		StatusBarText( ~<ObjWidth> by <objLength> Needs <requiredWidth> by <requiredLength>~ );
+		
+		if ( (<requiredWidth> > <imagingWidth>) || (<requiredLength> > <imagingLength>) )
+		{
+			if ( (<requiredWidth> > <imagingWidth>) && (<textWidth> > <theImageWidth>) )
+			{
+				textWidth = <TextWidth> - .1;
+				continue;
+			}
+			else
+			{
+				theImageLength = (<maxImageHeight> * (<theImageWidth>-.1)) / <maxImageWidth>;
+				theImageWidth  = <theImageWidth> - .1;
+				
+				if ( <theImageWidth> > .5 )
+					continue;
+			}
+
+	
+			Debug( 1 );
+			return Warning( ~Can't shrink images (or Text) enough to generate the layout for size <Images>~ );
+		}
+
+		AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,ImageWidth,~<theImageWidth>~ );
+		AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,ImageHeight,~<theImageLength>~ );
+		AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,ObjWidth,~<objWidth>~ );
+		AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,ObjLength,~<ObjLength>~ );
+		AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,HorizGap,~<theHorizGap>~ );
+		AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,VertGap,~<theVertGap>~ );
+		AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,TextWidth,~<theImageWidth>~ );
+		AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,TextWidth,~<textWidth>~ );
+
+		textOverHang  = (<textWidth> > <theImageWidth>) ? ((<textWidth> - <theImageWidth>) / 2) : 0;
+		AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,textOverHang,~<textOverHang>~ );
+	
+		if ( <textWidth> < <theImageWidth> )
+		{
+			AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,TextLeft,~(($ImageWidth - $TextWidth) / 2)~ );
+		}
+		else
+		{
+			AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,TextLeft,~(0 - $TextOverHang)~ );
+		}
+
+		AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,TextTop,~$ImageHeight + $TextGap~ );
+		
+		theHorizGap = <minHorizGap>;
+		if ( (<requiredWidth> < <imagingWidth>) && (<nCols> > 1) )
+		{
+			theHorizGap = (<imagingWidth> - (<nCols> * <objWidth>)) / (<nCols>-1);
+		}			
+		AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,theHorizGap,~<theHorizGap>~ );
+		
+		theVertGap = <minVertGap>;
+		if ( (<requiredLength> < <imagingLength>) && (<nRows> > 1) )
+		{
+			theVertGap = (<imagingLength> - (<nRows> * <objLength>)) / (<nRows>-1);
+		}
+		AddOrUpdate( Params,Grid,~<ID>~,~<Images>~,theVertGap,~<theVertGap>~ );
+			
+		break;
+	}
+
+	duration = ticks() - <start>;
+	PerIteration = <duration> / <tries>;
+		
+//	Warning( ~Tries = <Tries>.  <duration>.   <PerIteration>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC CalcLeftEdges( &Grid,&Pattern,ID,Images )
+{
+	if ( !Grid( GetFields,Attr,Val,nRows,nCols ) )
+	{
+		return Warning( Translate( ~Could not find value for <Attr>~ ) );
+	}
+
+	i = 0;
+	
+	while ( <++i> <= <nRows> )	
+	{
+		ncols = getNumColsForRow(Pattern,<i>);
+
+		AddOrUpdate( Grid,Grid,~<ID>~,~<Images>~,~Row<i>LeftEdge~,~$LeftEdge + (($ImagingWidth - ((<ncols> * $objWidth) + (((<ncols> > 1) ? $ncols-1 : 0) * $horizGap))) / 2~ );		
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC CalcRowPositions( &Grid,&Data,ID,Images )
+{
+	if ( !Grid( GetFields,Attr,Val,nRows ) )
+	{
+		return Warning( Translate( ~Could not find value for <Attr>~ ) );
+	}
+
+	AddOrUpdate( Grid,Grid,~<ID>~,~<Images>~, ~Row1~,~$TopEdge~ );		
+
+	i = 1;
+
+	while ( <++i> < <nRows>+1 )
+	{
+		PreviousRow = <i> - 1;
+		AddOrUpdate( Grid,Grid,~<ID>~,~<Images>~, ~Row<i>~,~$Row<PreviousRow> + $ImageHeight + $TextGap + $TextHeight + $VertGap~ );		
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC CalcColPositions( &Grid,ID,Images )
+{	
+	if ( !Grid( GetFields,Attr,Val,nCols ) )
+	{
+		return Warning( Translate( ~Could not find value for <Attr>~ ) );
+	}
+
+	AddOrUpdate( Grid,Grid,~<ID>~,~<Images>~, ~Col1~,~$TextOverHang~ );
+
+	i = 1;
+
+	while ( <++i> < <nCols>+1 )
+	{
+		PreviousCol = <i> - 1;
+		AddOrUpdate( Grid,Grid,~<ID>~,~<Images>~, ~Col<i>~,~$Col<PreviousCol> + $ImageWidth + $TextOverHang + $HorizGap + $TextOverHang~ );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC CalcImagePositions( &Grid,&Pattern,totalImages,ID,Images  )
+{
+	i = 0;
+	
+	while (  <++i> <= <totalImages> )
+	{	
+		row = col = 0;		
+		
+		if ( !ImageNRowCol( Pattern,<i>,Row,Col ) )
+		{
+			return Warning( ~Could not find position <i>~ );
+		}
+
+		AddOrUpdate( Grid,Grid,~<ID>~,~<Images>~, ~IX_<i>~,~($Row<row>LeftEdge + $Col<col>)~ );
+		AddOrUpdate( Grid,Grid,~<ID>~,~<Images>~, ~IY_<i>~,~$Row<row>~ );
+		AddOrUpdate( Grid,Grid,~<ID>~,~<Images>~, ~IWidth_<i>~,~$ImageWidth~ );
+		AddOrUpdate( Grid,Grid,~<ID>~,~<Images>~, ~IHeight_<i>~,~$ImageHeight~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ImageNRowCol( &Pattern,N,&Row,&Col )
+{
+	Pattern( Filter,~Where Node = '<N>'~ );
+
+	if ( Pattern( GetFirst,Node ) )
+	{
+		Row = ~<$pcon.Node[Row]>~;
+		Cow = ~<$pcon.Node[Row]>~;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC GetNumColsForRow( &Pattern,N )
+{
+	Pattern( Filter,~Row = <N>~ );
+
+	return ( Pattern( NumEntries ) );
+}
+
+
+
+NUMERIC AddNodes( &Layout, <numImages> )
+{
+	ImageNumber = 1;	i = 0;
+	
+	while ( <++i> <= <numImages> )
+	{			
+		Layout( ~IL: <ImageNumber>~ );
+		Layout( ~    ILocation: $IX_<i>   $IY_<i>  $IWidth_<i>  $IHeight_<i>~ );
+		ImageNumber = ~^+1~;
+	}
+}
+
+
+NUMERIC CalcImageLocations(ID, numImages)
+{
+	Query = ~Select * From Grid Where ID = '<ID>'~;
+
+	if ( !PGenConList( Grid,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		Grid( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	Query = ~Select * From GridPattern Where ID = '<ID>'~;
+
+	if ( !PGenConList( GridPattern,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		GridParameters( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	Query = ~Select * From GridPosition Where ID = '<ID>'~;
+
+	if ( !PGenConList( GridPosition,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		GridPosition( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	CalculateSizes(Grid,~<ID>~,~<numImages>~);
+	CalcLeftEdges( Grid,GridPattern,~<ID>~,~<numImages>~ );
+	CalcRowPositions( Grid,~<ID>~,~<numImages>~ );
+	CalcColPositions( Grid,~<ID>~,~<numImages>~ );
+	CalcImagePositions( Grid,GridPattern,<numImages>,~<ID>~,~<numImages>~ );
+
+	UpdateImageLocations( GridPosition,<numImages> );
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateImageLocations( &Position,TotalImages )
+{
+	i = 0;
+
+	while ( <++i> <= <TotalImages> )
+	{
+		if ( !Position( Filter,~Node = <i>~ ) )
+		{
+			Position( GetErrorDescription,0,theErr );
+			return Warning( ~Filter Failed: ~Node = <i>~. <theErr>~ );
+		}
+
+		if ( !Position( GetFirst,Node ) )
+		{
+			Position( GetErrorDescription,0,theErr );
+			return Warning( ~Could not find Node <i>. <theErr>~ );
+		}
+
+		Node( Set,IX,~$IX_<i>~ );
+		Node( Set,IY,~$IY_<i>~ );
+		Node( Set,IW,~$IWidth_<i>~ );
+		Node( Set,IH,~$IHeight_<i>~ );
+
+		Position( Update );
+	}
+
+	return TRUE;
+}
+
+
+
+FirstTime = TRUE;
+
+NUMERIC Init( Title,DocumentQuery )
+{
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		Global(DocumentQuery);
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+			{ Error( ~Failed to query the <TableName> table~ ); }
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !DataWindow( CreateWindow,~<Title>~ ) )
+			{ Error( ~Failed to create the window~ ); }
+
+		DataView( AllowRowColResizing,TRUE );
+
+	}
+	else
+	{
+		RefreshListView();
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new records that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+NUMERIC AllOptions()
+{
+	return DataView( DisplayMenu,ListViewMenu,0,0 );
+}
+
+if ( !GenCon( TableDefinition,GetFrom,<TableName>,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The <TableName> Table is not properly defined~ ); }
+	
+
+Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add ~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	CreateLayout	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Create Layout~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( CreateLayout( test,10 ); )
+
+		Define:	CalculateImageLocations	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Calculate Image Locations~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( CalcImageLocations( test,10 ); )
+
+		Define:	Export	using	DDMenuItemDef
+
+			Fields:	Text		Translate( UIMenuText,MenuExport )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ExportSelectedToFile(Dataview,<TableName>) )
+					
+	}
+
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+Define: DataWindow Using DDWinDef
+	Fields:	Title					Translate(~Grid Layout Positions~)
+			Position				0 0 85 25
+			IsPositionPercent		T
+			TypeName				SplitterWnd
+			SplitterRows			~2 14 90~
+			SplitterColumns			1
+
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:	ViewType				FormView
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "<TableName>Data.htm" )
+			Contains:
+			{
+				position = DefineStdGridButtons(GridPositions) + 10;
+			}
+
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+					FONTSIZE				10
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "<TableName>Data.htm" )
+					CloseActionsText		ACTION Call ( OnCloseDataView() ) ;
+	}
+	
+
+//Init( ~Test~,~Select * From GridPosition~ );

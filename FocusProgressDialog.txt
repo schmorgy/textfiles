@@ -1,0 +1,135 @@
+//ScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+
+//Left = <ScreenWidth> * .55;	
+Top = 50;	
+DialogWidth = 325; DialogHeight = 160;
+vGap = 5; hGap = 5; ButtonWidth = 90; ButtonHeight = 20;
+
+focusCanceled = FALSE;
+FirstTime = TRUE;
+
+NUMERIC DefineDialog(Left,Top)
+{
+	if ( !DictionaryExists( DDFocusProgressDialog ) )
+	{
+        Dictionary: DDFocusProgressDialog 
+            Fields: Name	FocusProgressDialog		type text
+ 	}
+
+	Define: DlgData Using DDFocusProgressDialog;
+
+	Define: aDialog Using DDWinDef
+		Fields:	POSITION				<left>,<Top>,$DialogWidth,$DialogHeight 
+				TYPENAME				~Dialog~ 
+                Title					~Focus Progress~
+				WANTSMINIMIZEBOX		FALSE
+				//OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				//HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "" ) 
+
+		Contains: INLISTORDER
+		{
+		   Define: FocusProgressText Using DDWinCtrlDef AsSymbol FocusProgressText 
+				Fields: TypeName        StaticText 
+						Position		10,$vGap,200,$ButtonHeight
+						LeftJustified	TRUE
+						GenConName		THIS
+						Text			Translate( ~Focusing...~ )
+
+		   Define: FocusRangeText Using DDWinCtrlDef AsSymbol FocusRangeText 
+				Fields: TypeName        StaticText 
+						Position		FocusProgressText(GetLeft,Position),FocusProgressText(GetBottom,Position)+$vGap,
+										300,$ButtonHeight
+						LeftJustified	TRUE
+						GenConName		THIS
+						Text			Translate( ~The scanner will attempt to focus 3 times at each range.The cancel will be processed after the third attempt.~ )
+
+		   Define: FocusProgressCaveat Using DDWinCtrlDef AsSymbol FocusProgressCaveat 
+				Fields: TypeName        StaticText 
+						Position		FocusRangeText(GetLeft,Position),FocusRangeText(GetBottom,Position)+$vGap,
+										300,$ButtonHeight*2
+						LeftJustified	TRUE
+						GenConName		THIS
+						Text			Translate( ~The scanner will attempt to focus 3 times at each range.  If selected, cancel will take affect after the third attempt.~ )
+
+			Define: CancelFocusButton Using DDWinCtrlDef AsSymbol CancelFocusButton 
+				Fields: TypeName		Button
+						IsEnabled		T
+						Text			~Cancel  Focus~
+						Position		122,FocusProgressCaveat(GetBottom,Position)+$vGap,80, $ButtonHeight
+						DActionsText	ACTIONS  ( "Exec(OnCancelFocusButton())" ) 
+						Tooltip			~Cancel the focus operation~
+		}
+
+	aDialog( Set,Position,~<Left> <Top> <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,aDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DlgData );
+
+	return TRUE;
+}
+
+
+NUMERIC OnCancelFocusButton( )
+{
+	dlg( SetControlValue,~FocusProgressText~,Translate( ~Cancelling Focus...~ ) );
+	focusCanceled = TRUE;
+	dlg( EnableControls,FALSE,CancelFocusButton );
+
+	Actions = ACTION Doc ( ~<Caller>Doc~ OpenOnce <Caller>Doc "CancelFocus();" );
+	PerformActions( Actions );
+	return TRUE;
+}
+
+NUMERIC UpdateStatusText( Msg )
+{
+	if ( !<focusCanceled> )
+	{
+		dlg( SetControlValue,~FocusProgressText~,Translate( ~<Msg>~ ) );
+	}
+	return TRUE;
+
+}
+
+NUMERIC UpdateRangeText( Msg )
+{
+	dlg( SetControlValue,~FocusRangeText~,Translate( ~<Msg>~ ) );
+	return TRUE;
+}
+
+NUMERIC OpenFocusProgressWindow( Msg,FocusRange,xPosition,yPosition,Caller )
+{
+	App( ThisApp,MessagePump,100 );
+
+	Global( Caller );
+
+	if ( !DefinedAndNotNull(xPosition) )
+	{
+		xPosition = thisApp(MainWindow,GetClientWidth) / 2;
+	}
+
+	if ( !DefinedAndNotNull(yPosition) )
+	{
+		yPosition = thisApp(MainWindow,GetClientHeight) / 2;
+	}
+
+	if ( <FirstTime> )
+	{
+		xPosition = <xPosition> - ($DialogWidth / 2.0);
+		DefineDialog( ~<xPosition>~,~<yPosition>~ );
+
+		FirstTime = FALSE;
+	}
+
+	focusCanceled = FALSE;
+	UpdateStatusText( ~<Msg>~ );
+	UpdateRangeText( ~Focusing with a range of <FocusRange>.~ );
+	return TRUE;
+}
+
+
+NUMERIC DoCancelButton()
+{
+	dlg( End );
+	Exit();
+	return TRUE;
+}

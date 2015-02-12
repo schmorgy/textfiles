@@ -1,0 +1,184 @@
+IncludeClass( BaseGrid );
+
+VOID RImage::RImage()					// CONSTRUCTOR
+{
+	TableName = ~RImage~;
+	DocumentQuery = ~Select * from <TableName> Order By ID~;
+	Title = RunningVersion(14) ? ~CD/DVD Media Writers~ : ~RImage Writers~;
+	WindowTop = 0;
+	WindowWidth = 90;
+	WindowHeight = 25;
+	HelpPage = ~RimageWriter.htm~;
+	InsertActiveCell = ~ID~;
+}
+
+STR RImage::GetKey( &Item )	{ return ~ID = '<$con.Item[ID]>'~; }				// PRIMARY KEY FOR THE TABLE
+
+
+NUMERIC RImage::ChangeRecordAudits( &Changed )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[ID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  ID cannot be blank.~ ) ); }
+
+	return TRUE;
+}
+
+VOID RImage::AddMenuItems()					// ADD ADDITIONAL RIGHT CLICK MENU ITEMS
+{
+	AddMenuSeparator();
+	AddMenuItem( TRUE,FALSE,Translate(~Open Driver~),ACTION EXEC ( <THIS>.OnDriverButton() ) );
+}
+
+NUMERIC RImage::AddControls( position )
+{
+	Define: StartButton Using DDWinCtrlDef AsSymbol StartButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnDriverButton() )
+				POSITION		$position + $hGap, $vGap 70 $ButtonHeight
+				TEXT			Translate( ~Driver~ )
+				TOOLTIP			Translate( ~Open the driver for the selected RImage writer~ );
+
+	Define: ConnectButton Using DDWinCtrlDef AsSymbol ConnectButton Private
+		Fields:	TYPENAME			Button
+				GENCONNAME			THIS
+				Text				~Connect~
+				ToolTip				~Make a network connection to the RImage Computer~
+				Position			StartButton(GetRight,Position)+$hGap*4 StartButton(GetTop,Position),StartButton(GetWidth,Position) 20
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnConnectButton() )
+
+				
+	return StartButton( GetRight,Position );
+}
+
+VOID	RImage::OnConnectButton()			{ WNet( ConnectionDialog ); }
+
+NUMERIC RImage::ProcessTextDrop( &Item )	{ return TRUE; }
+
+
+NUMERIC RImage::OnAddRecord( &NewRow )
+{
+	NewRow( Set,Computer,~<$App.ComputerName>~ );
+	NewRow( Set,ProgramPath,~<$App.Path>\<$App.Name>~ );
+	NewRow( Set,MaxBuilds,~1~ );
+	return NewRow( Set,Log,TRUE );
+}
+
+NUMERIC RImage::OnDuplicateRecord( &NewRow )	{ return NewRow( Set,ID,~~ ); }
+
+
+NUMERIC RImage::OpenSelected()	{ return OnDoubleClick(); }
+
+
+NUMERIC RImage::OnDoubleClick()
+{
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( ~There were no selected items~ ); }
+
+	while ( SelectedItems( GetNext,Item ) )
+	{
+		ID = ~<$con.Item[ID]>~;
+
+		if ( IsNull(~<ID>~) )	{ return Warning( ~ID can't be null~ ); }
+
+		Query = ~Select * From RImageOrders Where Writer = '<ID>' Order By Progress, Priority desc,SubmitDate~;
+		Actions = ACTION DOC ( RImageOrdersDoc OpenOnce RImageOrdersDoc "Init(~<ID>~,~<Query>~);" );
+		PerformActions( Actions );
+	}
+
+	return TRUE;
+}
+
+NUMERIC	RImage::OnButtonClickWantFile(Row,Col)
+{ 
+	if ( IsColumnName(<Col>,~ImagePath~ ) )					{ return FALSE; }
+	return TRUE;
+}
+
+STR RImage::OnButtonClickTitle(Row,Col)
+{
+	if ( IsColumnName(<Col>,~ImagePath~ ) )					{ return Translate(~Find Directory To Build Images~); }
+	if ( IsColumnName(<Col>,~ImagingOrderFile~ ) )			{ return Translate(~Find IOFile.IOF on the RImage Server~); }
+	if ( IsColumnName(<Col>,~ProductionOrderFile~ ) )		{ return Translate(~Find POFile.POF on the RImage Server~); }
+	if ( IsColumnName(<Col>,~DiskImagingOrderFile~ ) )		{ return Translate(~Find Diskette Image Order File~); }
+	if ( IsColumnName(<Col>,~DiskProductionOrderFile~ ) )	{ return Translate(~Find Diskette Production Order File~); }
+	if ( IsColumnName(<Col>,~LogFilePath~ ) )				{ return Translate(~Find pwrtool.log on the RImage Server~); }
+
+	return BaseGrid::OnButtonClickTitle(<Row>,<Col>);
+}
+
+
+STR RImage::OnButtonClickFilter(Row,Col)
+{
+	if ( IsColumnName(<Col>,~ImagingOrderFile~ ) )			{ return ~IOFile.iof|*.iof||~; }
+	if ( IsColumnName(<Col>,~ProductionOrderFile~ ) )		{ return ~POFile.pof|*.pof||~; }
+	if ( IsColumnName(<Col>,~LogFilePath~ ) )				{ return ~Pwrtool.log|*.log||~; }
+
+	return BaseGrid::OnButtonClickFilter(<Row>,<Col>);
+}
+
+
+
+NUMERIC RImage::OnDriverButton()
+{
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( Translate(~There were no selected items~) ); }
+
+	while ( SelectedItems( GetNext,Item ) )
+	{
+		Actions = ACTION DOC ( RImageDriverDoc OpenOnce RImageDriverDoc "Init(~<$con.Item[ID]>~);" );
+		PerformActions( Actions );
+	}
+
+	return TRUE;
+}
+
+NUMERIC RImage::OnStopButton()
+{
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( Translate(~There were no selected items~) ); }
+
+	while ( SelectedItems( GetNext,Item ) )
+	{
+		// Do something( ~<$con.Item[<WhichPath>]>~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC RImage::DeleteRelatedRecords( &connection,&Item )
+{
+	Writer = ~<$con.Item[ID]>~;
+
+	Cmd = ~Delete From RImageEditList Where ID IN (Select Distinct ID From RImageOrders Where Writer = '<Writer>')~;
+
+	if ( !connection( Cmd,~<Cmd>~ ) )
+	{
+		return Warning(~Failed to delete the Edit lists for RImage Writer '<Writer>'~ );
+	}
+
+	Cmd = ~Delete From RImageOrders Where Writer = '<Writer>'~;
+
+	if ( !connection( Cmd,~<Cmd>~ ) )
+	{
+		return Warning(~Failed to delete the Jobs for RImage Writer '<Writer>'~ );
+	}
+	
+	return TRUE;
+}
+
+NUMERIC Init()
+{
+	if ( Defined(Grid) )
+	{
+		Grid.ReOpen();
+		return TRUE;
+	}
+
+	Class( RImage,Extends,BaseGrid );
+
+	RImage( New,Grid );
+
+	Grid.DefineWindow();
+	Grid.Init();
+
+	return Global( Grid );
+}
+
+

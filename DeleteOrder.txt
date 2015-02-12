@@ -1,0 +1,1442 @@
+// DeleteOrder.txt
+//
+// Common code for deleting an Order, and all images, order items, rolls, subjectinfo,
+//								OrderDeliverables,Composites, CompositeDetails
+// etc. that are associated with the order id.
+//
+// Normal entry routines are (w/ dBase connection already made):
+//     CanDeleteOrder(dBase,OrderID);
+//     DeleteOrdersItemsAndImages(dBase,OrderID,DeleteImages,DeleteRawImages,DeleteKparsOriginals);
+//
+//     DeleteImagesForOrder(dbase,OrderID,DeleteImages,DeleteRawImages,DeletingKparsOriginals);
+//     DeleteSelectedImages(dbase,ImagesToDelete,DeleteImageFile,DeleteRawImages,DeleteKparsOriginals,WindowView)
+//
+// When being called from Customers, etc. will want to verify can delete all the orders
+//   for the specified customer before deleting each individual one.
+
+
+if (!Defined(DeleteOrderMessages))
+{
+Define:	DeleteOrderMessages Using DDSymbol
+	Fields:	Value	~These strings are DeleteOrder related strings used by the user interface.~
+	Contains:
+	{
+		Define: ALogDeletedImages		using DDText	Fields: Text ~Deleted %1 image records for OrderID = %2~
+		Define: ALogDeletedImageFiles	using DDText	Fields: Text ~Deleted %1 images and files for OrderID = %2~
+		Define: CantDeleteSubInfo		using DDText	Fields: Text ~Could not Remove SubjectInfo for Order where ID = %1. %2~
+		Define: SLogDeletingCmd			using DDText	Fields: Text ~Deleting from order: %1~
+		Define: SLogCantDelSubInfo		using DDText	Fields: Text ~Could not delete SubjectInfo for type %1.  Table does not exist~
+		Define: DeletingImgFiles		using DDText	Fields: Text ~Deleting Image Files for Order = %1~
+		Define: DeletingRawImgFiles		using DDText	Fields: Text ~Deleting Raw Image Files for Order = %1~
+	}
+}
+
+// Messages beginning with "SLog" are commands written to the Session Log
+// Messages beginning with "ALog" are commands written to the Activity Log dBase
+
+// Hang:	DeleteOrderMessages	~[STRINGS]~ ;	No need to hang these
+
+
+
+// Determine if the order can be deleted.  Open image and job files related
+// to the order would be a reason that deleting an order could fail since
+// we try to remove all order image and order item information and files
+// associated with the order.
+
+// returns: TRUE - can delete Order
+//			-1	 - an Image file is not deletable
+//          -2	 - an Items file or preview file is not deletable
+//			-3   - a Raw Image file is not deletable
+
+NUMERIC CanDeleteOrder( &dBase,OrderID )
+{
+	if ( !CheckImagesForOrder( dBase,~<OrderID>~ ) )
+	{ 
+		return -1;
+	}
+
+	if ( !CheckItemsForOrder( dBase,~<OrderID>~ ) )
+	{ 
+		return -2;
+	}
+
+	if ( !CheckRawImagesForOrder( dBase,~<OrderID>~ ) )
+	{ 
+		return -3;
+	}
+	
+	if ( !CheckMoviesForOrder( dBase,~<OrderID>~ ) )
+	{ 
+		return -4;
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CheckMoviesForOrder( &dBase,ID )
+{
+	Query = ~Select OrderID From AnimotoMovie Where OrderID = '<ID>'~;
+	
+	count = dBase( RecordCountFor,~Select count(*) From AnimotoMovie Where OrderID = '<ID>'~ );
+
+	return <count> <= 0;
+}
+
+
+NUMERIC CheckImagesForOrder( &dBase,ID )
+{
+	Query = ~Select * From Images Where OrderID = '<ID>'~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	while ( List( GetNext,OrderImage ) )
+	{
+		if ( !IsNULL(~<$pcon.OrderImage[Path]>~) )
+		{
+			if ( !Files( IsFileDeleteable,~<$pcon.OrderImage[Path]>~ ) )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CheckRawImagesForOrder( &dBase,ID )
+{
+	Query = ~Select * From RawImages Where OrderID = '<ID>'~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	while ( List( GetNext,OrderImage ) )
+	{
+		if ( !IsNULL(~<$pcon.OrderImage[Path]>~) )
+		{
+			if ( !Files( IsFileDeleteable,~<$pcon.OrderImage[Path]>~ ) )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CheckItemsForOrder( &dBase,ID )
+{
+	Query = ~Select * From OrderItems Where OrderID = '<ID>'~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	while ( List( GetNext,OrderItem ) )
+	{
+		// Check the job file.
+		if ( !IsNULL(~<$pcon.OrderItem[JobPath]>~) )
+		{
+			if ( !Files( IsFileDeleteable,~<$pcon.OrderItem[JobPath]>~ ) )
+			{
+				return FALSE;
+			}
+		}
+
+		// Check the job preview.
+		if ( !IsNULL(~<$pcon.OrderItem[PreviewPath]>~) )
+		{
+			if ( Files( FileExists,~<$pcon.OrderItem[PreviewPath]>~ ) )
+			{
+				if ( !Files( IsFileDeleteable,~<$pcon.OrderItem[PreviewPath]>~ ) )
+				{
+					return FALSE;
+				}
+			}
+		}
+
+		Path = ~<$pcon.OrderItem[JobPath].Path>\Preview\<$pcon.OrderItem[JobPath].Filename>.jpg~;
+		
+		if ( Files( FileExists,~<Path>~ ) )
+		{
+			if ( !Files( IsFileDeleteable,~<Path>~ ) )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC DeleteImagesForOrder( &dBase,ID,DeletingImageFiles,DeletingRawFiles,DeletingKparsOriginals )
+{
+	if ( <DeletingImageFiles> )
+	{
+		Query = ~Select * From Images Where OrderID = '<ID>'~;
+
+		if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		}
+
+		count = 0;
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, Translate( DeleteOrderMessages,DeletingImgFiles, ~<ID>~) ) );
+		while ( List( GetNext,OrderImage ) )
+		{
+			if ( !IsNULL(~<$pcon.OrderImage[Path]>~) )
+			{
+				if ( !Files( Delete,~<$pcon.OrderImage[Path]>~ ) )
+				{
+					Warning( Translate( UIMessages,CouldNotDeleteFile,~<$pcon.OrderImage[Path]>~ ) );
+				}
+				else
+				{
+					++count;
+				}
+				
+				DeleteAnImageFile( ~<$pcon.OrderImage[Path]>.pdb~ );
+
+				ImagePath = ~<$pcon.OrderImage[Path]>~;
+				OutputFolder = ~<$Str.$ImagePath.Path>~ + ~\Original Image~;
+				CopyPath = ~<OutputFolder>~ + ~\~ + ~<$Str.$ImagePath.Filename>~;
+				DeleteAnImageFile( ~<CopyPath>~ );	// NOTE: We don't care if this fails, since it's just the copy.
+				Directory( Remove, ~<OutputFolder>~ ) ;
+
+				OutputFolder = ~<$Str.$ImagePath.Path>~ + ~\AE~;	//	REMOVE ANY SHASTA IMAGES
+				CopyPath = ~<OutputFolder>~ + ~\~ + ~<$Str.$ImagePath.Filename>~;
+				DeleteAnImageFile( ~<CopyPath>~ );	// NOTE: We don't care if this fails, since it's just the copy.
+				Directory( Remove, ~<OutputFolder>~ ) ;
+				
+				Directory( Remove,~<$pcon.OrderImage[Path].path>~ );
+				Directory( RemoveParent,~<$pcon.OrderImage[Path].path>~ );
+			}
+		}
+	}
+
+	if ( <DeletingRawFiles> )
+	{
+		Query = ~Select * From RawImages Where OrderID = '<ID>'~;
+
+		if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		}
+
+		count = 0;
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, Translate( DeleteOrderMessages,DeletingRawImgFiles, ~<ID>~) ) );
+		while ( List( GetNext,OrderImage ) )
+		{
+			if ( !IsNULL(~<$pcon.OrderImage[Path]>~) )
+			{
+				if ( !Files( Delete,~<$pcon.OrderImage[Path]>~ ) )
+				{
+					Warning( Translate( UIMessages,CouldNotDeleteFile,~<$pcon.OrderImage[Path]>~ ) );
+				}
+				else
+				{
+					++count;
+				}
+
+				Directory( Remove,~<$pcon.OrderImage[Path].path>~ );
+				Directory( RemoveParent,~<$pcon.OrderImage[Path].path>~ );
+			}
+		}
+	}
+
+
+	cmd = ~Delete From OrderItemImages Where OrderID = '<ID>' OR ItemOrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From SBAImages Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From DSBAImages Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From CompSbaData Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From ImageSorterSummary Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From ImageCorrections Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From Retouch Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( CMD,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~ ) );
+	}
+
+	if ( <DeletingKparsOriginals> )
+	{
+		DeleteKPARSOrderOriginals( dBase,~<ID>~ );
+	}
+
+	cmd = ~Delete From RetouchImages Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( CMD,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~ ) );
+	}
+
+	cmd = ~Delete From KparsData Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( CMD,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~ ) );
+	}
+
+	cmd = ~Delete From RawImages Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( CMD,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~ ) );
+	}
+
+	cmd = ~Delete From DCImageProperties Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( CMD,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~ ) );
+	}
+
+	cmd = ~Delete From DCQueue Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( CMD,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~ ) );
+	}
+
+	cmd = ~Delete From Images Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	Count = dBase( RecordsAffected );
+
+	if ( <DeletingImageFiles> )
+	{
+		dBase( LogActivity,Msg,Translate( DeleteOrderMessages,ALogDeletedImageFiles,<count>,~<ID>~ ),Type,Info );
+	}
+	else
+	{
+		dBase( LogActivity,Msg,Translate( DeleteOrderMessages,ALogDeletedImages,<count>,~<ID>~ ),Type,Info );
+	}
+	
+	cmd = ~Delete From ImagesServices Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}	
+
+	cmd = ~Delete From OrderItemsServices Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From CropServices Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From OrderServices Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	if ( BibbleServer(Exists) )
+	{		
+		if ( !ADO( gDP2DBLocal,ConnectLocal ) )
+		{
+			gDP2DBLocal( GetErrorDescription,theErr );
+			return Warning( Translate(DBMessages,ConnectionFailed,~<cmd>~,~<theErr>~) );
+		}
+		
+		cmd = ~Delete From RawQueue Where OrderID = '<ID>'~;
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+		if ( !gDP2DBLocal( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~ ) );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC DeleteItemsForOrder( &dBase,ID )
+{
+	Query = ~Select * From OrderItems Where OrderID = '<ID>'~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	while ( List( GetNext,OrderItem ) )
+	{
+		// Delete the job file.
+		if ( !IsNULL(~<$pcon.OrderItem[JobPath]>~) )
+		{
+			if ( !Files( Delete,~<$pcon.OrderItem[JobPath]>~ ) )
+			{
+				Warning( Translate( UIMessages,CouldNotDeleteFile,~<$pcon.OrderItem[JobPath]>~ ) );
+			}
+
+			Directory( Remove,~<$pcon.OrderItem[JobPath].path>~ );
+		}
+
+		if ( SimilarStr( ~<$pcon.OrderItem[ProductID]>~, ~IMA~ ) && Authorized( ~KCPS~ ) )
+		{
+			// Don't remove the Image Mastering Preview Image, as it is the cd icon.
+		}
+		else
+		{
+			// Delete the job preview.
+			if ( !IsNULL(~<$pcon.OrderItem[PreviewPath]>~) )
+			{
+				if ( Files( FileExists,~<$pcon.OrderItem[PreviewPath]>~ ) )
+				{
+					if ( !Files( Delete,~<$pcon.OrderItem[PreviewPath]>~ ) )
+					{
+						Warning( Translate( UIMessages,CouldNotDeleteFile,~<$pcon.OrderItem[PreviewPath]>~ ) );
+					}
+				}
+					
+				Directory( Remove,~<$pcon.OrderItem[PreviewPath].path>~ );
+				Directory( RemoveParent,~<$pcon.OrderItem[PreviewPath].path>~ );
+				
+			}
+		}
+		
+		Path = ~<$pcon.OrderItem[JobPath].Path>\Preview\<$pcon.OrderItem[JobPath].Filename>.jpg~;
+	
+		if ( Files( FileExists,~<Path>~ ) )
+		{
+			if ( !Files( Delete,~<Path>~ ) )
+			{
+				Warning( Translate( UIMessages,CouldNotDeleteFile,~<Path>~ ) );
+			}
+		}
+			
+		Directory( Remove,~<$str.$Path.path>~ );
+		Directory( RemoveParent,~<$str.$Path.path>~ );
+	}
+
+	cmd = ~Delete From OrderItems Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+	
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	// Delete the Manual Paper Fill entries for an order being deleted
+	cmd = ~Delete From ManualPaperFill Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+	
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From Books Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From BookAttributes Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From BookDescription Where OrderID = '<ID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+	return TRUE;
+}
+
+// *********
+// returns: TRUE  - the Order and associated data where deleted successfully
+//			FALSE - something was not deleted successfully
+
+NUMERIC DeleteOrdersItemsAndImages( &dBase,OrderID,DeletingImageFiles,DeleteRawImages,DeleteKparsOriginals )
+{
+
+	if ( Authorized( ~KCPS~ ) )
+	{
+		// If KCPS delete any outstanding CD/DVD orders that have already been submitted.
+		if ( !DeleteIMOrders( dBase, ~<OrderID>~ ) )
+		{
+			return FALSE;
+		}
+	}
+
+	if ( !DeleteImagesForOrder( dBase,~<OrderID>~,<DeletingImageFiles>,<DeleteRawImages>,<DeleteKparsOriginals> ) )
+	{ 
+		return FALSE;
+	}
+
+	if ( !DeleteItemsForOrder( dBase,~<OrderID>~ ) )
+	{ 
+		return FALSE;
+	}
+
+
+	if ( !DeleteSubjectInfoIfAble(dBase,~<OrderID>~) )
+	{	return FALSE;	}
+
+
+	cmd = ~Delete From Rolls Where OrderID = '<OrderID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+
+	cmd = ~Delete From OrderDlvrbl Where OrderID = '<OrderID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+
+	cmd = ~Delete From Composite Where OrderID = '<OrderID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+
+	cmd = ~Delete From NodeDetails Where OrderID = '<OrderID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+	
+	cmd = ~Delete From BremsonScanList Where OrderID = '<OrderID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+
+	cmd = ~Delete From OrderNotifications Where OrderID = '<OrderID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From EndUserInfo Where OrderID = '<OrderID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From Orders Where ID = '<OrderID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From ProductXRef Where OrderID = '<OrderID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+	
+	cmd = ~Delete From Tracking Where OrderID = '<OrderID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+	
+	cmd = ~Delete From WorkInProgress Where OrderID = '<OrderID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+	
+	cmd = ~Delete From ProSeriesImagesXref Where OrderID = '<OrderID>'~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+	
+	if ( Authorized( ~KCPS~ ) )
+	{
+		// If the delete is occurring at the CLO, we have to find the extra artwork that might have been copied in
+		artworkDir = ~~;
+		// Check for a system setting that defines the image save location.
+		if ( GetSystemSettings( ~RteImporter~,~ImageLocation~,ImageLocation,Enabled ) )
+		{
+			if ( <Enabled> )
+			{
+				artworkDir = ~<ImageLocation>~;
+			}
+		}
+
+		if ( IsNull( ~<artworkDir>~ ) )
+		{
+			artworkDir = ~<$App.ShareDirectory>\OrderImages~;
+		}
+		
+		// check for artwork and delete it if it exists and the rest of the order has been successfully deleted.
+		if ( Files( DirectoryExists, ~<artworkDir>\<OrderID>\Artwork~ ) )
+		{
+			Directory( DeleteRecursive,~<artworkDir>\<OrderID>\Artwork~,~*.*~ );
+			Directory( Remove,~<artworkDir>\<OrderID>\Artwork~ );
+			Directory( Remove,~<artworkDir>\<OrderID>~ );
+		}
+
+	}
+	
+	return TRUE;
+}
+
+NUMERIC DeleteIMOrders( &dBase, OrderID )
+{
+	numRecs = 0;
+	Query = ~Select Count(*) From JobQueue Where OrderID = '<OrderID>' and QueueName = 'IM_DiskPrinterQueue'~;
+	dBase( GetValuesFor,~<Query>~,numRecs );
+
+	// Clear the job queue of IM orders that haven't been rendered yet.
+	Cmd = ~Update JobQueue Set PrintStatus = 0 Where OrderID = '<OrderID>' and QueueName = 'IM_DiskPrinterQueue' and (PrintStatus = 1 or PrintStatus = 0)~;
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~Database update failed: <Cmd>  <theErr>~ );
+		Warning( TR( Standard, UnabletoUpdate) );
+		break;
+	}
+
+	Count = dBase( RecordsAffected );
+
+	if ( <Count> < <numRecs> )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select * from JobQueue Where OrderID = '<OrderID>' and QueueName = 'IM_DiskPrinterQueue' and PrintStatus = 0~; 
+	if ( !PGenConList( JobList,Connection,dBase,Query,~<Query>~ ) )
+	{
+		JobList( GetErrorDescription,0,theErr );
+		return FALSE;
+	}
+
+	while ( JobList( GetNext, Job ) )
+	{
+		JobPath = ~<$pcon.Job[JobPath]>~;
+		if ( Files( FileExists,~<JobPath>~ ) )
+		{
+			Files( Delete,~<JobPath>~ );
+		}
+	}
+
+	Cmd = ~Delete From JobQueue Where OrderID = '<OrderID>' and QueueName = 'IM_DiskPrinterQueue' and PrintStatus = 0~;
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~Database update failed: <Cmd>  <theErr>~ );
+		Warning( TR( Standard, UnabletoUpdate) );
+		break;
+	}
+
+	Cmd = ~Update RImageOrders Set Progress = 0 Where OrderID = '<OrderID>' and Progress = 1~;
+
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~Database update failed: <Cmd>  <theErr>~ );
+		Warning( TR( Standard, UnabletoUpdate) );
+		break;
+	}
+
+	Query = ~Select * from RImageOrders Where OrderID = '<OrderID>' and Progress = 0~;
+
+	if ( !PGenConList( RImageList,Connection,dBase,Query,~<Query>~ ) )
+	{
+		RImageList( GetErrorDescription,0,theErr );
+		return FALSE;
+	}		
+
+	Count = RImageList( ChildCount );
+
+	if ( <Count> <= 0 )
+	{
+		return TRUE;
+	}
+
+	while ( RImageList( GetNext,Item ) )
+	{
+		if ( !DeleteIMRelatedRecords( dBase,Item ) )
+			break;
+
+		Key = ~<$pcon.Item[ID]>~;
+		 
+		Cmd = ~Delete From RImageOrders Where ID = <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Log( Session, ~Database update failed: <Cmd>  <theErr>~ );
+			Warning( TR( Standard, UnabletoUpdate) );
+			break;
+		}
+	}
+
+	WaitCursor( END );
+	
+	return TRUE;
+}
+
+NUMERIC DeleteIMRelatedRecords( &dBase,&Item )
+{
+	// Delete the images that are waiting to be burned before deleting the entry in the edit list.
+	Query = ~Select * From RImageEditList Where ID = '<$pcon.Item[ID]>'~;
+
+	if ( !PGenConList( EditList,Connection,dBase,Query,~<Query>~ ) )
+	{
+		EditList( GetErrorDescription,0,theErr );
+		return FALSE;
+	}	
+
+	while ( EditList(GetNext, Image ) )
+	{
+		Path = ~<$pcon.Image[FromPath]>~;
+
+		if ( Files( FileExists,~<Path>~ ) )
+		{
+			Files( Delete,~<Path>~ );
+		}
+		Directory( Remove,~<$str.$Path.path>~ );
+
+	}
+
+	Cmd = ~Delete From RImageEditList Where ID = '<$pcon.Item[ID]>'~;
+
+	if ( !dBase( Cmd,~<Cmd>~ ) )
+	{
+		return Warning(~Failed to delete the Edit list for ID = '<$pcon.Item[ID]>'~ );
+	}
+
+	Cmd = ~Delete From RImageMerge Where ID = '<$pcon.Item[ID]>'~;
+
+	if ( !dBase( Cmd,~<Cmd>~ ) )
+	{
+		return Warning(~Failed to delete the Merge list for ID = '<$pcon.Item[ID]>'~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC DeleteSubjectInfoIfAble(&dbase,OrderID)
+{
+	InfoType = ~~;
+
+	theQuery = ~Select ImagesOrderID,InfoType,ShootDescID,ShootDescType From Orders Where ID = '<OrderID>'~;
+
+	if ( !dBase( GetValuesFor,~<theQuery>~,ImagesOrderID,InfoType,ShootDescID,ShootDescType ) )
+	{
+		// Not an error to not exist
+
+		ImagesOrderID = ~~;
+		InfoType = ~~;
+		ShootDescID = ~~;
+		ShootDescType = ~~;
+		
+		//dBase( GetErrorDescription,theErr );
+		//return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+	}
+
+	if (~<ImagesOrderID>~ == ~~)
+	{
+		if ( doNewWay() && (~<ShootDescID>~ != ~~))
+		{
+			theQuery = ~Select ID from ShootDescription<ShootDescType> where ID = '<ShootDescID>'~;			
+			if ( dBase( GetValuesFor,~<theQuery>~,theID ) )  // ShootDesc record exists
+			{	return TRUE; 	}
+
+			if (~<InfoType>~ != ~~)
+			{
+				theQuery = ~Select Count(1) From Orders Where ShootDescID = '<ShootDescID>' And InfoType = '<InfoType>' And ImagesOrderID Is Null~;
+			}
+			else
+			{
+				theQuery = ~Select Count(1) From Orders Where ShootDescID = '<ShootDescID>' And InfoType Is NUll And ImagesOrderID Is Null~;
+			}
+
+			if ( !dBase( GetValuesFor,~<theQuery>~, numRecs) )  
+			{
+				dBase( GetErrorDescription,theErr );
+				return Warning( Translate(DBMessages,QueryFailed,~<theQuery>~,~<theErr>~) );
+			}
+
+			if ( <NumRecs> > 1 )  // Other orders use the SubjectInfo table
+			{	return TRUE;	}
+
+			cmd = ~Delete From SubjectInfo<InfoType> Where OrderID = '<ShootDescID>'~;
+			
+		}
+		else
+		{
+			// if doNewWay, should I make sure that a ShootDesc record does not exist?
+			cmd = ~Delete From SubjectInfo<InfoType> Where OrderID = '<OrderID>'~;
+		}
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,GetErrorNumber,errNumber );
+
+			if ( <errNumber> == dBase(GetErrorConstant,NoTable) )
+			{
+				Log( Session,Translate( DeleteOrderMessages,SLogCantDelSubInfo,<InfoType>) );
+			}
+			else
+			{
+				return Warning( Translate( DeleteOrderMessages,CantDeleteSubInfo,~<$Con.Order[ID]>~,~<theErr>~ ) );			
+			}
+		}	
+	}
+
+	return TRUE;
+}
+
+
+//** Deleting individual images
+
+NUMERIC DeleteAnImageFile( Path )
+{
+	if ( ~<Path>~ == ~~ )	{ return TRUE; }
+
+	if ( !BroadcastMessageToAllViews( CanReleaseImage,~<Path>~ ) )
+		{ return Warning( Translate( ~Could not delete\n\n<Path>\n\nbecause it is still open in a job or layout.~ ) ); }
+
+	if ( !BroadcastMessageToAllViews( ReleaseImage,~<Path>~ ) )		
+		{ return Warning( Translate( ~Could not delete\n\n<Path>\n\nbecause it is still open in a job or layout.~ ) ); }
+
+	if ( !Files( Delete,~<Path>~ ) )
+	{
+		err = GetLastErrorMsg();
+
+		if ( MessageBox( Translate( ~Could not delete <Path>.\n\nEither you have the image open or\n\n<err>\n\nDelete from the database anyway? ~),YESNO ) == NO )
+			{ return FALSE; }
+	}
+	
+	return TRUE;
+}
+
+
+
+NUMERIC RemoveAnImageFile( Path )
+{
+	if ( ~<Path>~ == ~~ )	{ return TRUE; }
+
+	if ( !BroadcastMessageToAllViews( CanReleaseImage,~<Path>~ ) )
+		{ return Warning( Translate( ~Could not remove\n\n<Path>\n\nbecause it is still open in a job or layout.~ ) ); }
+
+	if ( !BroadcastMessageToAllViews( ReleaseImage,~<Path>~ ) )		
+		{ return Warning( Translate( ~Could not remove\n\n<Path>\n\nbecause it is still open in a job or layout.~ ) ); }
+
+	return TRUE;
+}
+
+
+NUMERIC DeleteSelectedImages(&dbase,&ImagesToDelete,DeleteImageFile,DeleteRawImages,DeleteKparsOriginals,&WindowView)
+{
+	while ( ImagesToDelete( GetNext,Image ) )
+	{
+		if ( <DeleteImageFile> )
+		{
+			ImagePath = ~<$con.Image[Path]>~;
+
+			if (~<ImagePath>~ != ~~)
+			{
+				if ( !DeleteAnImageFile( ~<$con.Image[Path]>~ ) )
+					{ break; }
+					
+				DeleteAnImageFile( ~<$con.Image[Path]>.pdb~ );	// a dust busting original
+
+				Key = ~OrderID = '<$con.Image[OrderID]>' AND Roll = '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>'~;
+				Cmd = ~Select count(1) From Images Where <Key>~;
+
+				dbase( GetValuesFor, ~<Cmd>~, numRecs);
+				if (<numRecs> > 0)
+				{
+					ImagePath = ~<$con.Image[Path]>~;
+					OutputFolder = ~<$Str.$ImagePath.Path>~ + ~\Original Image~;
+					CopyPath = ~<OutputFolder>~ + ~\~ + ~<$Str.$ImagePath.Filename>~;
+					DeleteAnImageFile( ~<CopyPath>~ );	// NOTE: We don't care if this fails, since it's just the copy.
+					
+					OutputFolder = ~<$Str.$ImagePath.Path>~ + ~\AE~;	//	REMOVE ANY SHASTA IMAGES
+					CopyPath = ~<OutputFolder>~ + ~\~ + ~<$Str.$ImagePath.Filename>~;
+					DeleteAnImageFile( ~<CopyPath>~ );	// NOTE: We don't care if this fails, since it's just the copy.
+				}
+			}
+		}
+		else
+		{
+			if ( !RemoveAnImageFile( ~<$con.Image[Path]>~ ) )
+				{ break; }
+		}
+
+		Key = ~OrderID = '<$con.Image[OrderID]>' AND Roll = '<$con.Image[Roll]>' AND Frame = '<$con.Image[Frame]>'~;
+
+		if ( <DeleteKparsOriginals> )
+		{
+			DeleteKPARSImageOriginal( dBase,~<$con.Image[OrderID]>~,~<$con.Image[Roll]>~,~<$con.Image[Frame]>~ );
+		}
+
+		Cmd = ~Delete From Images Where <Key>~;
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+			break;
+		}
+
+		Cmd = ~Delete From ImageCorrections Where <Key>~;
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+		}
+
+
+		Cmd = ~Delete From SBAImages Where <Key>~;
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+		}
+
+		Cmd = ~Delete From DSBAImages Where <Key>~;
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+		}
+
+		cmd = ~Delete From CompSbaData Where <Key>~;
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+		if ( !dBase( Cmd,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+		}
+
+		Cmd = ~Delete From RetouchImages Where <Key>~;
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+		}
+
+		Cmd = ~Delete From KparsData Where <Key>~;
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Log( Session, Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+		}
+
+		if ( <DeleteRawImages> )
+		{
+			Cmd = ~Select Path from RawImages Where <Key>~;
+			if ( dBase( GetValuesFor,~<Cmd>~,thePath ) )
+			{
+				DeleteAnImageFile( ~<thePath>~ );
+			}
+		}
+
+		Cmd = ~Delete From RawImages Where <Key>~;
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+		}
+
+		Cmd = ~Delete From DCImageProperties Where <Key>~;
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+		}
+
+		Cmd = ~Delete From DCQueue Where <Key>~;
+
+		Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+		}
+
+		Operation = <DeleteImageFile> ? Translate(~Deleted Image~) : Translate(~Removed Image Info for~);
+
+		if ( DefinedAndNotNull(WindowView) )
+		{
+			WindowView( StatusBar,Text,~<Operation> <$con.Image[OrderID]>/<$con.Image[Roll]>/<$con.Image[Frame]>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+// the path is configurable and must be recreated for the delete.
+NUMERIC DeleteKPARSOrderOriginals( &database,OrderID )
+{
+	Key1 = ~OrderID = '<OrderID>' AND OverwriteOriginal = 0 AND RetouchState = 'Complete'~;
+	fields = ~Roll,Frame,OriginalPath,OriginalPrefix,OriginalSuffix~;
+	query1 = ~SELECT <fields> FROM RetouchImages WHERE <Key1>~;
+
+	if ( !PGenConList( List,Connection,database,Lock,Pessimistic,Cursor,Keyset,Query,~<query1>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return FALSE;
+	}
+
+	Count = List( NumEntries );
+	if ( <Count> == 0 )
+	{
+		return TRUE;
+	}
+
+	newPath			= ~~;
+	Key2			= ~~;
+	drive			= ~~;
+	dir				= ~~;
+	originalFile	= ~~;
+	ext				= ~~;
+
+	while ( List( GetNext,Item ) ) 
+	{
+		Key2 = ~OrderID = '<OrderID>' AND Roll = '<$pCon.Item[Roll]>' AND Frame = '<$pCon.Item[Frame]>'~;
+
+		pathQuery = ~Select Path from Images Where <Key2>~;
+		if ( !database( GetValuesFor,~<pathQuery>~,path ) )
+		{
+			database( GetErrorDescription,theErr );
+			Log( Session, Translate(~Could not retrieve path for <Key2>. <theErr>~) );
+			continue;
+		}
+		Files( SplitPath,~<path>~,drive,dir,originalFile,ext );
+
+		if ( ~<$pCon.Item[OriginalPath]>~ == ~~ )
+		{
+			newPath = ~<drive><dir><$pCon.item[OriginalPrefix]><originalFile><$pCon.item[OriginalSuffix]><ext>~;
+		}
+		else
+		{
+			newPath = ~<$pCon.item[OriginalPath]>\<OrderID>\<$pCon.item[Roll]>~;
+			newPath = ~<newPath>\<$pCon.item[OriginalPrefix]><originalFile><$pCon.item[OriginalSuffix]><ext>~;
+		}
+
+		Files( Delete, ~<newPath>~ );
+	}
+
+	return TRUE;
+	
+}
+
+NUMERIC DeleteKPARSImageOriginal( &database,OrderID,Roll,Frame )
+{
+	Key  = ~OrderID = '<OrderID>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+	Key1 = ~<Key> AND OverwriteOriginal = 0 AND RetouchState = 'Complete'~;
+	fields = ~OriginalPath,OriginalPrefix,OriginalSuffix~;
+	query1 = ~SELECT <fields> FROM RetouchImages WHERE <Key1>~;
+
+	Count = database( RecordCountFor,~SELECT count(*) FROM RetouchImages WHERE <Key1>~ ); 
+	if ( <Count> == 0 )
+	{
+		return TRUE;
+	}
+
+	if ( !database( GetValuesFor,~<query1>~,OriginalPath,OriginalPrefix,OriginalSuffix ) )
+	{
+		database( GetErrorDescription,theErr );
+		Log( Session, Translate(~Could not retrieve original path for <Key1>. <theErr>~) );
+		return FALSE;
+	}
+
+	pathQuery = ~Select Path from Images Where <Key>~;
+	if ( !database( GetValuesFor,~<pathQuery>~,path ) )
+	{
+		database( GetErrorDescription,theErr );
+		Log( Session, Translate(~Could not retrieve path for <Key>. <theErr>~) );
+		return FALSE;
+	}
+	Files( SplitPath,~<path>~,drive,dir,originalFile,ext );
+
+	newPath = ~~;
+
+	if ( ~<OriginalPath>~ == ~~ )
+	{
+		newPath = ~<drive><dir><OriginalPrefix><originalFile><OriginalSuffix><ext>~;
+	}
+	else
+	{
+		newPath = ~<OriginalPath>\<OrderID>\<Roll>~;
+		newPath = ~<newPath>\<OriginalPrefix><originalFile><OriginalSuffix><ext>~;
+	}
+
+	Files( Delete, ~<newPath>~ );
+
+	return TRUE;
+	
+}
+
+// delete anything that may have happened to the image after it was converted from raw
+NUMERIC ResetImagesForReprocess( &dbase,Order,Roll,Frame,ImagePath )
+{
+	// make sure there's an entry in the RawImages table before proceeding
+	
+	Key = ~OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+	if (~<ImagePath>~ != ~~)
+	{
+		// If the output file exists, we must remove it.
+		UNCPath = MakePath(type, unc, ~<ImagePath>~);
+		if ( Files( FileOrDirectoryExists,~<UNCPath>~ ) )
+		{
+			Invoke( CloseWindowOfPath, ~<ImagePath>~ );
+
+			if (Files(IsFileDeleteable, ~<UNCPath>~))
+			{
+				Files(Delete, ~<UNCPath>~);
+			} else
+			{
+				// Try this again
+				Invoke( CloseWindowOfPath, ~<ImagePath>~ );
+
+				Sleep( 500 );
+
+				if (Files(IsFileDeleteable, ~<UNCPath>~))
+				{
+					Files(Delete, ~<UNCPath>~);
+				} else
+				{
+					dBase( LogActivity, Msg,~File <UNCPath> could not be removed. You will need to fix the problem and delete this file manually.~,Type,Error );
+				}
+			}
+			
+			BroadcastMessageToAllViews( RedrawByPath,~<ImagePath>~,TRUE );
+		}
+		
+		Cmd = ~Select ApplyShasta From Images Where <Key>~;
+
+		dbase( GetValuesFor, ~<Cmd>~, ApplyShasta);
+		if (<ApplyShasta> > 0)
+		{
+			OutputFolder = ~<$Str.$ImagePath.Path>~ + ~\AE~;	//	REMOVE ANY SHASTA IMAGES
+			CopyPath = ~<OutputFolder>~ + ~\~ + ~<$Str.$ImagePath.Filename>~;
+			DeleteAnImageFile( ~<CopyPath>~ );	// NOTE: We don't care if this fails, since it's just the copy.
+
+			Cmd = ~Update Images Set ApplyShasta=0,ShastaHighlight=0,ShastaMidTone=0,ShastaShadow=0,PostKPTPBrt=0,PostKPTPRed=0,PostKPTPGrn=0,PostKPTPBlu=0,PostKPTPCon=0,PostKPTPGam=0~;
+			if ( !dBase( Cmd,~<cmd>~ ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+			}
+		}
+		
+		DeleteKPARSImageOriginal( dBase,~<Order>~,~<Roll>~,~<Frame>~ );
+
+	}
+
+	Cmd = ~Delete From SBAImages Where <Key>~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+	}
+
+	Cmd = ~Delete From DSBAImages Where <Key>~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+	}
+
+	cmd = ~Delete From CompSbaData Where <Key>~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<cmd>~ ) );
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	Cmd = ~Delete From RetouchImages Where <Key>~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+	}
+	
+	Cmd = ~Delete From KparsData Where <Key>~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session,Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+	}
+	
+	Cmd = ~Delete From DCQueue Where <Key>~;
+
+	Log( Session,Translate( DeleteOrderMessages,SLogDeletingCmd, ~<Cmd>~ ) );
+
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+	}
+	
+	Cmd = ~Update Images Set ICCProfile='srgb',Brt=0,Red=0,Grn=0,Blu=0,Con=0,Saturation=0,Sharpen=0,Gamma=1.0,GammaRed=1.0,GammaGreen=1.0,GammaBlue=1.0,AutoRetouchComplete=0,Inspect=1,AutoBalance=1 Where <Key>~;
+
+	if ( !dBase( CMD,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+	}
+	
+	cmd = ~Delete From ImageCorrections Where <Key>~;
+
+	if ( !dBase( Cmd,~<cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+	}
+
+	return TRUE;
+}
+
+NUMERIC DoWarning( Msg )
+{
+	if ( FunctionDefined(ShowWarning) ) // Thread's function
+	{	Invoke( ShowWarning,~<Msg>~ );	}
+
+	else
+	{	Warning( ~<Msg>~ );	}
+
+	return FALSE;
+
+}
+
+

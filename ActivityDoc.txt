@@ -1,0 +1,586 @@
+
+
+
+
+
+VOID RefreshDoc()
+{
+	RefreshListView();
+}
+
+
+NUMERIC RefreshListView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+	DataWindow( StatusBar,Text,~~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,Changed,Original,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate( ~There was no changed row~ ) ); }
+
+	if ( ~<$Con.Changed[DateEntered]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Date cannot be blank.~ ) ); }
+
+	if ( ~<$Con.Changed[TimeEntered]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Time cannot be blank.~ ) ); }
+
+	if ( ~<$Con.Changed[UserName]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  UserName cannot be blank.~ ) ); }
+
+	Key = ~DateEntered = '<$Con.Original[DateEntered]>' AND TimeEntered = '<$Con.Original[TimeEntered]>' AND UserName = '<$Con.Original[UserName]>'~;	
+
+	Query = ~Select * From Activity Where <Key>~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <Query>. <theErr>~ ) );
+	}
+
+	if ( !List( UpdateFrom,Changed,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate( ~Could not update Activty record where <Key>. <theErr>~ ) );
+	}
+	
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( Translate( ~There was no row selected to delete~ ) ); }
+
+	count = SelectedRows( ChildCount );
+
+	if ( MessageBox( Translate(~Are you sure you want to delete the <count> selected rows(s)?~),YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( SelectedRows( GetNext,Item ) )
+	{
+		Key = ~DateEntered = '<$Con.Item[DateEntered]>' AND TimeEntered = '<$Con.Item[TimeEntered]>' AND UserName = '<$Con.Item[UserName]>'~;	
+
+		Cmd = ~Delete From Activity Where <Key>~;
+
+		if ( !dBase( CMD,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Database update failed. <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,SelectedRows(GetCurrentPosition) );
+	}
+		
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+NUMERIC SetActivity( Status )
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( Translate( ~There were no rows selected~ ) ); }
+
+	count = SelectedRows( ChildCount );
+
+	if ( <count> <= 0 )
+		{ return Warning( Translate( ~There were no rows selected~ ) ); }
+
+	while ( SelectedRows( GetNext,Item ) )
+	{
+		row = Item(GetRow);
+
+		if ( <row> > 0 )
+		{
+			DataView( SetCellValue,<row>,Status,~<Status>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AssignSelectedToUser( UserName )
+{
+	if ( !DataView( GetSelectedRows,SelectedRows ) )		
+		{ return Warning( Translate( ~There were no rows selected~ ) ); }
+
+	count = SelectedRows( ChildCount );
+
+	if ( <count> <= 0 )
+		{ return Warning( Translate( ~There were no rows selected~ ) ); }
+
+	while ( SelectedRows( GetNext,Item ) )
+	{
+		row = Item(GetRow);
+
+		if ( <row> > 0 )
+		{
+			DataView( SetCellValue,<row>,Destination,~<UserName>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnAssignButton()
+{
+	Query = ~Select UserName From Users Order By UserName~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( ~Database query failed: <Query> <theErr>~ );
+	}
+
+	GenCon( ListMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+	count = 0;
+
+	while ( List( GetNext,User ) )
+	{
+		GenCon( User<++count>,New,DDMenuItemDef,SetValues,Text,~<$pcon.User[UserName]>~,IDText,~ID~ );
+		theAction = ACTION EXEC ( AssignSelectedToUser(~<$pcon.User[UserName]>~); );
+		User<count>( SetValuesFrom,ActionsText,theAction );
+		ListMenu( InsertBack,User<count> );
+	}
+	
+	DisplayMenu_OnAssignButton( ListMenu );
+
+	DataView( DisplayMenu,ListMenu,AssignButton(GetLeft,Position),AssignButton(GetTop,Position) );
+
+	return TRUE;
+}
+
+
+VOID DisplayMenu_OnAssignButton( &Menu )	{ }		// OVERRIDE
+
+
+VOID CalcNextDateTime(&Today,&Now)	
+{
+	while ( TRUE )
+	{
+		Today = ~<$Date.DateYMD>~;
+		Now = ~<$Date.SystemTime>~;
+
+		Query = ~Select DateEntered From Activity Where DateEntered = '<Today>' AND TimeEntered = '<Now>'~;
+
+		if ( Ado( dbase,Connect,RecordCountFor,~<Query>~ ) == 0 )
+		{ 
+			return; 
+		}
+
+		Sleep( 10 );
+	}
+}
+
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	Now = ~~; Today = ~~;
+	CalcNextDateTime(Today,Now);
+
+	NewRow( SetValues,DateEntered,~<Today>~,TimeEntered,~<Now>~,ActivityType,~Memo~,Status,~Pending~,
+				UserName,~<$App.UserName>~,Destination,~<$App.UserName>~,ComputerName,~<$App.ComputerName>~ );
+
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Msg );
+
+	return TRUE;
+}
+
+
+NUMERIC DuplicateRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	if ( !DataView( GetSelectedRows,RowsToImitate ) )	
+	{
+		return Warning( Translate( ~You must select a row to duplicate~ ) );	
+	}
+
+	RowsToImitate( GetFirst,RowToImitate );
+
+	RowToImitate( SetValues,DateEntered,~<$Date.DateYMD>~,TimeEntered,~<$Date.SystemTime>~ );
+
+	RowBeingAdded = DataView( AddRow, RowToImitate );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Msg );
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	DataView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new information that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnComboBox()
+{
+	DataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+
+	if ( ~<ColumnName>~ == ~USERNAME~ || ~<ColumnName>~ == ~DESTINATION~ )
+	{
+		RefreshUsersList(ColumnDefinition,<Row>,<Col>);
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RefreshUsersList( &ColumnDefinition,Row,Col )
+{
+	Query = ~Select UserName From Users Order By UserName~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( ~Database query failed: <Query> <theErr>~ );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,UserNames,UserName );
+
+		UserNames( AddStrings,~*~,~Accunet~ );	// ALL USERS AND THE BREMSON ACCUENT SYSTEM
+
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,UserNames(GetCopyOf) );
+
+		DataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OldRefreshUsersList()
+{
+	Query = ~Select UserName From Users Order By UserName~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Users table. <theErr>~ );
+	}
+
+	List( MakeStringList,UserNames,UserName );
+
+	UserNames( AddStrings,~*~,~Accunet~ );	// ALL USERS AND THE BREMSON ACCUENT SYSTEM
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	Fields( GetByName,UserName,UserNameField );
+
+	UserNameField( DeleteReference,ChoiceList,Set,ChoiceList,UserNames(GetCopyOf) );	
+
+	Fields( GetByName,Destination,DestinationField );
+
+	return DestinationField( DeleteReference,ChoiceList,Set,ChoiceList,UserNames(GetCopyOf) );
+}
+
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+
+NUMERIC Init( Which,DocumentQuery )
+{
+	Title = ~<Which>~ == ~~ ? ~Activity Data~ : ~Activity Data - <Which>~;
+
+	DataWindow( Set,Title,~<Title>~ );
+
+	Global( Which,DocumentQuery );
+
+	if ( String( StringInString,~Order By~,~<DocumentQuery>~ ) == ~~ )
+	{
+		DocumentQuery = ~<DocumentQuery> Order By DateEntered,TimeEntered~;
+	}
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+		
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{ 
+			List( GetErrorDescription,0,theErr );
+			Error( ~Database query failed: <DocumentQuery>. <theErr>~ );
+		}
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !DataWindow( CreateWindow,~Activity~ ) )
+		{ 
+			Error( ~Failed to create the window~ );
+		}
+
+		DataView( AllowRowColResizing,TRUE );
+
+		return TRUE;
+	}
+
+	Document( Doc,This,SetTitle,~<Title>~ );
+
+	RefreshListView();
+	
+	return TRUE;
+}
+
+NUMERIC Search()
+{
+	Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( Activity );" ) );
+	return PerformActions( Actions );
+}
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,ListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,ListViewMenu,0,0  );
+	}
+}
+
+
+if ( !GenCon( TableDefinition,GetFrom,Activity,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The Activty Table is not properly defined~ ); }
+
+
+Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add Activity Record~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord() )
+
+		Define:	DuplicateRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Duplicate Activity~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DuplicateRecord() )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord() )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE) )
+
+		Define:	NULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SearchItem	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Find~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( Search() )
+
+		Define:	CloseActivity	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Set Resolved~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SetActivity(Resolved) )
+}
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+
+Define: DataWindow Using DDWinDef
+	Fields:		Title					~Activity~
+				Position				0 0 90 25
+				IsPositionPercent		T
+				EnableStatusBar			F
+				TypeName				SplitterWnd
+				SplitterRows			~2 14 90~
+				SplitterColumns			1
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "Activity.htm" )
+
+				Contains:
+				{
+					position = DefineStdGridButtons(Activity) + 10;
+
+					Define: ResolvedButton Using DDWinCtrlDef AsSymbol ResolvedButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( SetActivity(Resolved) )
+								POSITION		$position + $hGap, $vGap $ButtonWidth $ButtonHeight
+								TEXT			Translate( ~Resolved~ )
+								TOOLTIP			Translate( ~Set the selected items to Resolved~ )
+								TYPENAME		BUTTON
+
+					Define: AssignButton Using DDWinCtrlDef AsSymbol AssignButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( OnAssignButton() )
+								POSITION		ResolvedButton(GetRight,Position) + $hGap, $vGap $ButtonWidth $ButtonHeight
+								TEXT			Translate( ~Assign~ )
+								TOOLTIP			Translate( ~Assign the selected items to another user~ )
+								TYPENAME		BUTTON
+
+
+					Define: DuplicateButton Using DDWinCtrlDef AsSymbol DuplicateButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( DuplicateRecord() )
+								POSITION		AssignButton(GetRight,Position) + $hGap, $vGap $ButtonWidth $ButtonHeight
+								TEXT			Translate( ~Duplicate~ )
+								TOOLTIP			Translate( ~Duplicate the selected row~ )
+								TYPENAME		BUTTON
+				}
+
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord(); )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord(); )
+					//DoubleClickActionsText	ACTION Exec ( ViewImageForSubject() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView(); )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "Activity.htm" )
+					CloseActionsText		ACTION Call ( OnCloseDataView() ) 
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					ComboBoxActionsText		ACTION Call ( OnComboBox() )
+	}
+	
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\<$Job.Name>~ );
+
+

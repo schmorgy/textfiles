@@ -1,0 +1,328 @@
+NUMERIC DefineDialog( ID )
+{
+	if ( !DictionaryExists( DDScaleLayoutDialog ) )
+	{
+        Dictionary: DDScaleLayoutDialog 
+            Fields: Name	ID				type text
+			Fields: Name	Width			type double
+			Fields: Name	Height			type double
+			Fields: Name	Units			type text
+ 	}
+
+	Define: DlgData Using DDScaleLayoutDialog
+		Fields:		ID		~<ID>~;
+
+	Left = 100;	Top = 100;	DialogWidth = 380;	DialogHeight = 300;
+	StaticTextWidth = 90;   StaticTextHeight = 20;
+	EditTextWidth = 150;     EditTextHeight = 20;
+	vGap = 5; hGap = 5;		ButtonWidth = 90;	ButtonHeight = 20;
+
+	Define: aDialog Using DDWinDef
+		Fields:	POSITION				100,100,$DialogWidth,$DialogHeight 
+				TITLE					~Scale Layout(s) to a New Size~
+				TYPENAME				~Dialog~ 
+				STATUSBAR				~1 100~
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "ScaleLayout.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			 Define: ProductIDStaticText Using DDWinCtrlDef AsSymbol ProductIDStaticText 
+				Fields: TypeName        StaticText
+						Text            ~Product ID~
+						RightJustified	TRUE
+						Position        <hGap> , <vGap>,  <StaticTextWidth> , <StaticTextHeight>
+
+			Define: ProductIDEditText Using DDWinCtrlDef AsSymbol ProductIDEditText 
+				fields: TYPENAME		MaskedEditText
+						Mask			~<$[DATABASE FieldTypes].ProductID[Mask]>~
+						AllowedChars	~<$[DATABASE FieldTypes].ProductID[AllowedChars]>~
+						DisallowedChars	~<$[DATABASE FieldTypes].ProductID[DisallowedChars]>~
+						PromptChar		~<$[DATABASE FieldTypes].ProductID[PromptChar]>~ 
+						Position		ProductIDStaticText(GetRight,Position) + $hGap,ProductIDStaticText(Gettop,Position),<EditTextWidth>, <EditTextHeight>
+						GenConName		THIS
+						GenConField		~ID~
+						IActionsText	~[Get]~
+						OActionsText    ~[Save]~
+						IsTabStop		T
+						WantReturnKey	~T~
+						ReturnKeyActionsText ACTION EXEC ( HandleProductIDReturnKey() )
+						Tooltip			~The Product ID of the layout you wish to scale~
+
+			 Define: WidthPromptStaticText Using DDWinCtrlDef AsSymbol WidthPromptStaticText 
+				Fields: TypeName        StaticText
+						Text            ~Width~
+						RightJustified	TRUE
+						Position		ProductIDStaticText(GetLeft,Position),ProductIDStaticText(GetBottom,Position)+$vGap,<StaticTextWidth>, <StaticTextHeight>
+
+			 Define: WidthEditText Using DDWinCtrlDef AsSymbol WidthEditText 
+				Fields: TypeName        MaskedEditText
+						Mask			~########~
+						AllowedChars	~.~
+						GenConName		THIS
+						GenConField		~Width~
+						Position		WidthPromptStaticText(GetRight,Position)+$hGap,WidthPromptStaticText(GetTop,Position),<StaticTextWidth>, <StaticTextHeight>
+
+			 Define: WidthUnitsStaticText Using DDWinCtrlDef AsSymbol WidthUnitsStaticText 
+				Fields: TypeName        StaticText
+						GenConField		~Units~
+						Position		WidthEditText(GetRight,Position)+$hGap,WidthEditText(GetTop,Position),<StaticTextWidth>, <StaticTextHeight>
+
+			 Define: HeightPromptStaticText Using DDWinCtrlDef AsSymbol HeightPromptStaticText 
+				Fields: TypeName        StaticText
+						Text            ~Height~
+						RightJustified	TRUE
+						Position		WidthPromptStaticText(GetLeft,Position),WidthPromptStaticText(GetBottom,Position)+$vGap,<StaticTextWidth>, <StaticTextHeight>
+
+			 Define: HeightEditText Using DDWinCtrlDef AsSymbol HeightEditText 
+				Fields: TypeName        MaskedEditText
+						Mask			~########~
+						AllowedChars	~.~
+						GenConName		THIS
+						GenConField		~Height~
+						Position		HeightPromptStaticText(GetRight,Position)+$hGap,HeightPromptStaticText(GetTop,Position),<StaticTextWidth>, <StaticTextHeight>
+	
+			 Define: HeightUnitsStaticText Using DDWinCtrlDef AsSymbol HeightUnitsStaticText 
+				Fields: TypeName        StaticText
+						GenConField		~Units~
+						Position		HeightEditText(GetRight,Position)+$hGap,HeightEditText(GetTop,Position),<StaticTextWidth>, <StaticTextHeight>
+
+			Define: GoButton Using DDWinCtrlDef AsSymbol GoButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( GoButton() )
+						POSITION		($DialogWidth/2) - ($ButtonWidth) - $hGap,HeightPromptStaticText(GetBottom,Position)+$vGap, $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Go~ )
+						TOOLTIP			Translate( ~Perform the main function of this dialog~ )
+						TYPENAME		BUTTON
+
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( DoCancelButton() )
+						POSITION		GoButton(GetRight,Position) + $hGap,GoButton(GetTop,Position),
+										$ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Cancel~ )
+						TOOLTIP			Translate( ~Exit without performing the operation~ )
+						TYPENAME		BUTTON
+		}
+
+
+	DialogHeight = aDialog(GetMaxBottom,Position) + $vGap + 30;
+
+	aDialog( Set,Position,~<Left> <Top> <DialogWidth> <DialogHeight>~ );
+
+	if ( GenCon( PreviewOptions,GetFrom,PreviewOptions,~[GENCONS]~ ) )
+	{
+		PreviewOptions(GetValue,PreferredUnits,value);
+		DlgData(SetValue,Units,~<value>~);
+	}
+	GenDlg( dlg,Definition,aDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+	Global( dlg,aDialog,DlgData );
+
+	return TRUE;
+}
+
+NUMERIC HandleProductIDReturnKey()
+{
+	dlg( GetInput );
+	
+	dlg( GetStrings,ID,ID );
+
+	if ( !ADO( dBase,Connect,GetValuesFor,~Select ID,LayoutName,ProductLayoutPath,Multiple From Products Where ID = '<ID>'~,ID,LayoutName,Path,Multiple ) )
+	{
+		return Warning( Translate( ~Product <ID> is not a valid product~ ) );
+	}
+
+	if ( <Multiple> )
+	{
+		if ( MessageBox( ~<$con.Product[ID]> has multiple layouts.  You are about convert all layouts for product <$con.Product[ID]> to simple patterns that contain only positional information.  Are you sure you wish to continue?  ~,YESNO ) != YES )
+		{ 
+			return FALSE;
+		}
+
+		return ScaleTheLayouts( ~<Path>~ );
+	}
+
+	ScaleTheLayout( ~<Path>~ );
+
+	return TRUE;
+}
+
+
+VOID ReOpen()
+{
+}
+
+NUMERIC GoButton()
+{
+	dlg( GetInput );
+	
+	dlg( GetStrings,ID,ID );
+
+	if ( IsNull(~<ID>~) )
+	{
+		return Warning( Translate(~You must select a product id~ ) );
+	}
+
+	Width = DlgData( GetNumeric,Width );
+	Height = DlgData( GetNumeric,Height );
+	DlgData( GetValue,Units ,Units);
+
+	if ( <Width> == 0 && <Height> == 0  )
+	{
+		return Warning( Translate(~Select either the new width or the new height.  The other dimension will be calculated.~ ) );
+	}
+	
+	if ( <Width> != 0 && <Height> != 0 )
+	{
+		return Warning( Translate(~Select either the new width or the new height.  The other dimension will be calculated.~ ) );
+	}
+
+	if ( !ADO( dBase,Connect,GetValuesFor,~Select ID,LayoutName,ProductLayoutPath,Multiple From Products Where ID = '<ID>'~,ID,LayoutName,Path,Multiple ) )
+	{
+		return Warning( Translate( ~Product <ID> is not a valid product~ ) );
+	}
+
+	 if ( ~<Units>~ == ~Centimeters~)
+	{
+		// convert to inches
+		Width = <Width> / 2.54;
+		Height = <Height>/ 2.54;
+	}
+ 
+	else if ( ~<Units>~ == ~Millimeters~)
+	{
+
+		// convert to inches
+		Width = <Width> / 25.4;
+		Height = <Height>/ 25.4;
+	}
+ 
+	if ( <Multiple> )
+	{
+		if ( MessageBox( ~<ID> has multiple layouts.  You are about scale all layouts for product <ID>.  Are you sure you wish to continue?  ~,YESNO ) != YES )
+		{ 
+			return FALSE;
+		}
+
+		return ScaleTheLayouts( ~<Path>~,~<Width>~,~<Height>~ );
+	}
+
+	ScaleTheLayout( ~<Path>~,~<Width>~,~<Height>~  );
+
+	return TRUE;
+}
+
+
+NUMERIC ScaleTheLayout( Path,Width,Height )
+{
+	if ( !Document( theLayout,ParseFile,~<Path>~ ) )
+	{
+		Warning( ~An error occured while parsing the job at <Path>~ );
+		return FALSE;
+	}
+
+	if ( !theLayout( GetRenderList,0,aRenderList ) )
+	{ 
+		return Warning( ~There was no render list for <Path>~ );
+	}
+
+	if ( !aRenderList( Scale,~<Width>~,~<Height>~ ) )
+	{
+		minWidthPixels = aRenderList(minWidthPixels);
+		maxWidth = aRenderList(maxWidth);
+		if ( GenCon( PreviewOptions,GetFrom,PreviewOptions,~[GENCONS]~ ) )
+		{
+			PreviewOptions(GetValue,PreferredUnits,Units);
+		}
+		if (SimilarStr(~<Units>~,Inches))
+		{
+			Msg =~Failed to scale <Path>.  One of the sides would be less than <minWidthPixels> pixels or greater than <maxWidth> inches.~;
+		}
+		else if (SimilarStr(~<Units>~,Centimeters))
+		{
+			maxWidth *= 2.54;
+			Msg = ~Failed to scale <Path>.  One of the sides would be less than <minWidthPixels> pixels or greater than <maxWidth> centimeters.~;
+		}
+		else if (SimilarStr(~<Units>~,Millimeters))
+		{
+			maxWidth *= 25.4;
+			Msg = ~Failed to scale <Path>.  One of the sides would be less than <minWidthPixels> pixels or greater than <maxWidth> millimeters.~;
+		}
+		else
+		{
+			Msg =~Failed to scale <Path>.  One of the sides would be less than <minWidthPixels> pixels or greater than <maxWidth> inches.~;
+		}
+		return Warning( ~<Msg>~ );
+	}
+
+	if ( !aRenderList( WriteJob,~<Path>~ ) )
+	{
+		return Warning( ~Failed to write <Path>.~ );
+	}
+
+	dlg( SetStatus,0,~Scaled <Path>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ScaleTheLayouts( DirPath,Width,Height )
+{
+	Count = 0;
+
+    MoreFiles = findfile( aDirectoryEntry,Find,~<DirPath>\*.*~ );
+
+	WaitCursor( Begin );
+
+    while ( $Morefiles )
+    {
+        Morefiles = aDirectoryEntry( Next );
+
+        aDirectoryEntry( Get,Path,aPath );
+                
+        if ( aDirectoryEntry( Dots ) )
+                continue;
+                
+        if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+			continue;
+
+		if ( !ScaleTheLayout( ~<aPath>~,~<Width>~,~<Height>~ ) )
+		{
+			WaitCursor( End );
+			return FALSE;
+		}
+
+		++Count;
+    }
+
+	WaitCursor( End );
+
+	dlg( SetStatus,0,~Scaled <Count> layouts~ );
+
+	return TRUE;
+}
+
+
+NUMERIC DoCancelButton()
+{
+	dlg( End );
+	Exit();
+}
+
+
+FirstTime = TRUE;
+
+VOID Init( ID )
+{
+	if ( <FirstTime> )
+	{
+		DefineDialog( ~<ID>~ );
+		FirstTime = FALSE;
+	}
+	else
+	{
+		dlg( SetStrings,ID,~<ID>~ );
+	}
+}
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\ScaleOrderItemDoc.txt~ );

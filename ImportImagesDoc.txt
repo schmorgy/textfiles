@@ -1,0 +1,3410 @@
+Include: ~DigitalCameraCommon~;
+Include: ~Utilities2~;
+
+IncludeClass( ~BaseEnterText~ );
+
+
+NumThumbnailAddsFailed = 0;
+
+if ( !DataDict( TheDictionary,Get,DDImportImages ) )
+{
+	Dictionary: DDImportImages
+		Fields:	Name OrderID			Type Text
+		Fields:	Name CustomerID			Type Text
+		Fields:	Name Roll				Type Text
+		Fields:	Name Frame				Type Text
+		Fields:	Name SubjectID			Type Text
+		Fields:	Name MakeWritable		Type Long
+		Fields:	Name AutoBalance		Type Long
+		Fields:	Name EnableProfile		Type Long
+		Fields:	Name ProfileName		Type Text
+		Fields:	Name CheckKodakRaw		Type Long
+		Fields:	Name UseEmbeddedProfile	Type Long
+		Fields:	Name ImportSetup		Type Text
+		Fields:	Name SharpenDelta		Type Long
+		Fields:	Name OrderStatus		Type Text
+		Fields:	Name BackupERI			Type Long
+		Fields:	Name BackupOther		Type Long
+		Fields:	Name LutName			Type Text
+};
+
+		
+VOID DefineDialog()
+{
+	Define: ImportImagesDlgData Using DDImportImages ;
+	Global( ImportImagesDlgData );
+
+	Fields:	MakeWritable			0
+			AutoBalance				0
+			EnableProfile			1
+			CheckKodakRaw			0
+			UseEmbeddedProfile		1
+			SharpenDelta			0
+			BackupERI				0
+			BackupOther				0
+			OrderStatus				~Adjust~
+	;
+
+    Left = 5; Top = 5;		hGap = 5; vGap = 2;
+    TextHeight = 20;        TextWidth = 110;  
+	ButtonHeight = 20;		ButtonWidth = 70;
+	StaticTextWidth = 90;	StaticTextHeight = 20;
+    EditTextWidth = 250;	EditTextHeight = 20;
+    ComboBoxWidth = 100;	ComboBoxHeight = 120;
+	x = $Left;				y = $Top;
+	SmallButtonWidth = 20;
+	SmallButtonHeight = 20;
+
+    Define: DlgDefinition Using DDWinDef
+        Fields: Position		180 50 $DialogWidth $DialogHeight
+                Title			Translate( ~Import Images~ )
+                TypeName		~Dialog~
+				StatusBar		~1 100~
+				WantsMinimizeBox TRUE
+				HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "ImportImages.htm" ) 
+				DropActionsText	ACTION EXEC ( HandleDrop() )
+                OACTIONSTEXT	ACTION EXEC ( CloseDialog() ) ;
+
+    Contains: InListOrder
+    {
+	    Define: OrderIDPrompt Using DDWinCtrlDef AsSymbol OrderIDPrompt 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Order~ )
+					RightJustified	TRUE
+                    Position		$x,$y,$StaticTextWidth,$StaticTextHeight
+
+        Define: OrderIDField Using DDWinCtrlDef AsSymbol OrderIDField 
+            Fields: TypeName		MaskedEditText
+					WantReturnKey	~T~
+					ReturnKeyActionsText	ACTION EXEC ( MakeNewOrderIfNecessary() )
+                    Position		OrderIDPrompt(GetRight,Position) + $hGap,OrderIDPrompt(GetTop,Position),<EditTextWidth> ,<EditTextHeight> 
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+                    GenConName       THIS
+                    GenConField		~OrderID~
+					Mask			~<$[DATABASE FieldTypes].OrderID[Mask]>~
+					PromptChar		~<$[DATABASE FieldTypes].OrderID[PromptChar]>~
+					AllowedChars	~<$[DATABASE FieldTypes].OrderID[AllowedChars]>~
+					DisallowedChars ~<$[DATABASE FieldTypes].OrderID[DisallowedChars]>~
+                    Tooltip         ~Select an Order~
+
+		Define: ViewOrderDataButton Using DDWinCtrlDef AsSymbol ViewOrderDataButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~?~ )
+					Position		OrderIDField(GetRight,Position)+$hGap,OrderIDField(GetTop,Position),20,20
+                    DActionsText	ACTION EXEC ( SeeOrder() ) 
+                    Tooltip			Translate( ~See Order~ )
+					IsHidden		<DP2> ? F : T;
+
+	    Define: RollPrompt Using DDWinCtrlDef AsSymbol RollPrompt
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Roll~ )
+					RightJustified	TRUE
+                    Position		OrderIDPrompt(GetLeft,Position),OrderIDPrompt(GetBottom,Position) + $vGap,$StaticTextWidth,$StaticTextHeight
+
+        Define: RollField Using DDWinCtrlDef AsSymbol RollField 
+            Fields: TypeName		MaskedEditText  
+                    Position		RollPrompt(GetRight,Position) + $hGap,RollPrompt(GetTop,Position),<EditTextWidth>,<EditTextHeight> 
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save  )
+					OActionsText	ACTIONS ( Save )
+                    GenConName       THIS
+                    GenConField		~Roll~
+					Mask			~<$[DATABASE FieldTypes].Roll[Mask]>~
+					PromptChar		~<$[DATABASE FieldTypes].Roll[PromptChar]>~
+					AllowedChars	~<$[DATABASE FieldTypes].Roll[AllowedChars]>~
+					DisallowedChars ~<$[DATABASE FieldTypes].Roll[DisallowedChars]>~
+                    Tooltip         ~Select a roll or leave blank to use the parent directory as the roll~;
+
+		Define: ViewRollDataButton Using DDWinCtrlDef AsSymbol ViewRollDataButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~?~ )
+					Position		RollField(GetRight,Position)+$hGap,RollField(GetTop,Position),20,20
+                    DActionsText	ACTION EXEC ( SeeRollsForOrder() ) 
+                    Tooltip			Translate( ~See the roll data for this order~ )
+					IsHidden		<DP2> ? F : T;
+
+	    Define: FramePrompt Using DDWinCtrlDef AsSymbol FramePrompt 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Starting Frame~ )
+					RightJustified	TRUE
+                    Position		RollPrompt(GetLeft,Position),RollPrompt(GetBottom,Position) + $vGap,$StaticTextWidth,$StaticTextHeight
+
+        Define: FrameField Using DDWinCtrlDef AsSymbol FrameField 
+            Fields: TypeName		MaskedEditText  
+                    Position		FramePrompt(GetRight,Position) + $hGap,FramePrompt(GetTop,Position),<EditTextWidth>,<EditTextHeight> 
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save  )
+					OActionsText	ACTIONS ( Save )
+                    GenConName       THIS
+                    GenConField		~Frame~
+					Mask			RepeatStr(31,~#~)
+					PromptChar		~<$[DATABASE FieldTypes].Frame[PromptChar]>~
+                    Tooltip         ~Starting frame number or leave blank to use the file name as the frame ID~;
+
+		Define: ViewFrameDataButton Using DDWinCtrlDef AsSymbol ViewFrameDataButton 
+			Fields: TypeName		Button
+					Text			Translate( ~?~ )
+					Position		FrameField(GetRight,Position)+$hGap,FrameField(GetTop,Position),20,20
+					DActionsText	ACTION EXEC ( SeeFramesForOrder(FALSE) ) 
+					Tooltip			Translate( ~See the frame data for this roll~ )
+					IsHidden		<DP2> ? F : T;
+
+	    Define: CustomerIDPrompt Using DDWinCtrlDef AsSymbol CustomerIDPrompt 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Customer~ )
+					RightJustified	TRUE
+                    Position		OrderIDPrompt(GetLeft,Position),FrameField(GetBottom,Position) + $vGap,$StaticTextWidth,$StaticTextHeight
+
+		Define: CustomerIDField Using DDWinCtrlDef AsSymbol CustomerIDField
+			Fields:	TypeName		ComboBox
+					POSITION		OrderIDField(GetLeft,Position)+1,CustomerIDPrompt(GetTop,Position),<EditTextWidth> - 1, 100 
+					Tooltip         ~Type one or more characters of a Customer ID and press the down arrow to see Customer IDs that begin with those characters. A customer ID is only assigned when importing images.~
+					ReturnKeyActionsText	ACTION EXEC ( LoadCustomerSettings() )
+					Mask			~<$[DATABASE FieldTypes].CustomerID[Mask]>~
+					PromptChar		~<$[DATABASE FieldTypes].CustomerID[PromptChar]>~
+					AllowedChars	~<$[DATABASE FieldTypes].CustomerID[AllowedChars]>~
+					DisallowedChars ~<$[DATABASE FieldTypes].CustomerID[DisallowedChars]>~
+					IsTabStop		1
+					WantReturnKey	~T~
+					GENCONNAME		This
+					GENCONFIELD		~CustomerID~
+					IACTIONSTEXT	ACTIONS ( Get )
+					DACTIONSTEXT	ACTIONS ( Save )
+					DActionsText	ACTIONS ( Save "Exec(LoadCustomerSettings())" )
+					OACTIONSTEXT	ACTIONS ( Save )
+					InsertValueIntoList ~T~
+					DropDownActionsText ACTION CALL ( FindCustomersLike() );
+
+		Define: EnableProfileCheckBox Using DDWinCtrlDef AsSymbol EnableProfileCheckBox
+			Fields: TypeName		CheckBox  
+					Position		CustomerIDPrompt(GetLeft,Position)+15,CustomerIDPrompt(GetBottom,Position) + $vGap,76,$StaticTextHeight
+					// FramePrompt(GetLeft,Position)+15,FramePrompt(GetBottom,Position) + $vGap,76,$StaticTextHeight
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save "Exec(OnEnableInputProfileChanged())" )
+					OActionsText	ACTIONS ( Save )
+					GenConName       THIS
+					GenConField		~EnableProfile~
+					Text			~Input Profile~
+					RightJustified	TRUE
+					IsHidden		RunningVersion(4.0) ? F : T
+					Tooltip         ~Ignored for Raw Digital Camera Files.  If checked, each imported image will have its input profile set to the selected profile, unless the Use Embedded Input Profile box is checked AND the image has an embedded input profile.~;
+
+		Define: ProfileComboBox Using DDWinCtrlDef AsSymbol ProfileComboBox
+			Fields:	TypeName		SComboBox
+					Position		FrameField(GetLeft,Position),
+									EnableProfileCheckBox(GetTop,Position),
+									FrameField(GetWidth,Position), ($ButtonHeight * 10)
+					DActionsText	ACTIONS ( Save )
+					GenConName		THIS
+					GenConField		ProfileName
+					IsTabStop		1
+					IsHidden		RunningVersion(4.0) ? F : T
+					DropDownActionsText ACTION CALL ( RefreshProfilesComboBox() )
+					Tooltip			~Set the input profile for the imported images.  Images imported through Bibble will be converted to the sRGB color space.~;
+
+		Define: UseEmbeddedProfileCheckBox Using DDWinCtrlDef AsSymbol UseEmbeddedProfileCheckBox
+            Fields: TypeName		CheckBox  
+                    Position		ProfileComboBox(GetLeft, Position), EnableProfileCheckBox(GetBottom, Position)+$vGap, 13,<StaticTextHeight>
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+                    GenConName      THIS
+                    GenConField		~UseEmbeddedProfile~
+					Text			~~
+                    Tooltip         ~Checking this box will guarantee that the embedded input profile will be used, unless the image is a Kodak Raw Digital Camera File.  Uncheck this box only if you want to use the profile selected above instead of the embedded input profile.~;
+					
+		Define: UseEmbeddedProfileText Using DDWinCtrlDef AsSymbol UseEmbeddedProfileText
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Use Embedded Input Profile if available for images which are not Raw Digital Camera files.~ )
+					DActionsText	~[ Save "Exec(OnUseEmbeddedProfileText())" ]~
+					RightJustified	FALSE
+                    Position		UseEmbeddedProfileCheckBox(GetRight,Position) + $hGap, EnableProfileCheckBox(GetBottom,Position) + $vGap*2 + 2, <EditTextWidth>, <EditTextHeight>+10
+                    Tooltip         ~Checking this box will guarantee that the embedded input profile will be used, unless the image is a Raw Digital Camera File.  Uncheck this box only if you want to use the profile selected above instead of the embedded input profile.~;
+
+		Define: EmbeddedProfileNotUsedText Using DDWinCtrlDef AsSymbol EmbeddedProfileNotUsedText
+            Fields: TypeName		StaticText
+                    Text			Translate( ~NOTE: The Embedded Input Profile will be used, if one is present.~ )
+					RightJustified	FALSE
+                    Position		EnableProfileCheckBox(GetLeft, Position), EnableProfileCheckBox(GetBottom,Position) + $vGap*2 + 2, <EditTextWidth> + 90, <EditTextHeight>+10
+					IsHidden		T;
+
+		Define: ViewProfilesButton Using DDWinCtrlDef AsSymbol ViewProfilesButton 
+			Fields: TypeName		Button
+					Text			Translate( ~?~ )
+					Position		ProfileComboBox(GetRight,Position)+$hGap,ProfileComboBox(GetTop,Position),20,20
+					DActionsText	ACTION EXEC ( ViewProfiles() ) 
+					IsHidden		<DP2> ? F : T
+					Tooltip			Translate( ~View table of profiles~ );
+if ( 0 )
+{
+		Define: ProfilesText Using DDWinCtrlDef AsSymbol ProfilesText
+            Fields: TypeName		StaticText
+                    Text			Translate( ~NOTE: The Input Profile settings above have no effect on Raw Digital Camera Images. An Input Profile will be automatically assigned as appropriate.~)
+					RightJustified	FALSE
+                    Position		EnableProfileCheckBox(GetLeft,Position),UseEmbeddedProfileText(GetBottom,Position) +$vGap* 2,<EditTextWidth> + 140,<EditTextHeight>+7 
+					Tooltip         ~The Input Profile check box has no effect on Raw Digital Camera Images. Images imported through Bibble will be converted to the sRGB color space.~;
+                    // Tooltip         ~Kodak Raw Digital Camera images will be converted to the current working space (or SRGB if no working space is set) and assigned the working space profile. The Input Profile check box has no effect on Kodak Raw Digital Camera Images.~;
+}
+       Define: WritableCheckBox Using DDWinCtrlDef AsSymbol WritableCheckBox 
+            Fields: TypeName		CheckBox  
+                    Position		UseEmbeddedProfileCheckBox(GetLeft, Position) /*FramePrompt(GetRight,Position) + $hGap*/,UseEmbeddedProfileText(GetBottom,Position) +$vGap* 2,<EditTextWidth>,<EditTextHeight> 
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+                    GenConName      THIS
+                    GenConField		~MakeWritable~
+					Text			~Make Images Writable for Thumbnails~
+                    Tooltip         ~If checked, write protected images will be made writable so a thumbnail may be added to the image~;
+
+//       Define: AutoBalImagesCheckBox Using DDWinCtrlDef AsSymbol AutoBalImagesCheckBox 
+//            Fields: TypeName		CheckBox  
+//                  Position		WritableCheckBox(GetLeft, Position) /*FramePrompt(GetRight,Position) + $hGap*/,WritableCheckBox(GetBottom,Position) +$vGap* 2,<EditTextWidth>,<EditTextHeight> 
+//					IActionsText	ACTIONS ( Get )
+//					DActionsText	ACTIONS ( Save )
+//					OActionsText	ACTIONS ( Save )
+//                  GenConName      THIS
+//                  GenConField		~AutoBalance~
+//					Text			~Mark Images for Auto Balance~
+//                  Tooltip         ~If checked, the images will be flagged for Auto Balance.~;
+
+		Define: CheckDigitalCheckBox Using DDWinCtrlDef AsSymbol CheckDigitalCheckBox
+            Fields: TypeName		CheckBox  
+ //                    Position		AutoBalImagesCheckBox(GetLeft, Position) /*FramePrompt(GetRight,Position) + $hGap*/, AutoBalImagesCheckBox(GetBottom,Position)+$vGap,<EditTextWidth>,<EditTextHeight> 
+                    Position		WritableCheckBox(GetLeft, Position) /*FramePrompt(GetRight,Position) + $hGap*/,WritableCheckBox(GetBottom,Position) +$vGap* 2,<EditTextWidth>,<EditTextHeight> 
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+                    GenConName      THIS
+                    GenConField		~CheckKodakRaw~
+					Text			~Test *.tif for Kodak Raw Camera Files~
+					IsHidden		T
+                    Tooltip         ~Opens the file header to determine if the file is a Kodak raw camera file~;
+
+		Define: UseDCRLegacyRadioButton Using DDWinCtrlDef AsSymbol UseDCRLegacyRadioButton
+			Fields: TypeName		RadioButton
+					Position		WritableCheckBox(GetLeft,Position) + $hGap,
+									WritableCheckBox(GetBottom,Position) + $vGap* 9, 230, 20
+					IActionsText	~[Get]~
+					DActionsText	~["Exec(OnChangeRawConvert(0);)"]~
+					OActionsText	~[Save]~
+					RadioTrueValue	~0~
+					GenConName		THIS
+					GenConField		~CheckKodakRaw~
+					Text			Translate(~Kodak RAW Only~)
+					IsEnabled		T
+					Tooltip			Translate(~Check this button to use the method utilized in DP2 v8.0 and earlier versions to convert KODAK raw camera files (.dcr or .tif)~);
+
+		Define: UseBibbleRadioButton Using DDWinCtrlDef AsSymbol UseBibbleRadioButton
+			Fields: TypeName		RadioButton
+					Position		UseDCRLegacyRadioButton(GetLeft,Position),
+									UseDCRLegacyRadioButton(GetBottom,Position) + $vGap, 150, 20
+					IActionsText	~[Get]~
+					DActionsText	~["Exec(OnChangeRawConvert(1);)"]~
+					OActionsText	~[Save]~
+					RadioTrueValue	~1~
+					GenConName		THIS
+					GenConField		~CheckKodakRaw~
+					Text			Translate(~Bibble~)
+					Tooltip			Translate(~Check this button to convert raw camera files from other vendors, including Kodak raw camera files. Files will be converted to the sRGB color space.~);
+					
+		Define: RawFileSetupButton Using DDWinCtrlDef AsSymbol RawFileSetupButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Bibble Setup~ )
+					Position		UseBibbleRadioButton(GetRight,Position) + $hGap,UseBibbleRadioButton(GetTop,Position),$ButtonWidth,$ButtonHeight
+                    DActionsText	ACTION EXEC ( OpenRawSetup() ) 
+                    Tooltip			Translate( ~Setup for Bibble raw digital camera file conversion~ )			
+
+		Define: ConversionTypeGroupBox Using DDWinCtrlDef
+			Fields:	TypeName		GroupBox
+					Position		WritableCheckBox(GetLeft,Position),
+									WritableCheckBox(GetBottom,Position) + $vGap* 2, 238, 60
+					Text			Translate(~Raw Camera File Conversion Method~);
+
+		// SHARPENING
+		Define: DeltaSharpeningText Using DDWinCtrlDef AsSymbol DeltaSharpeningText 
+			Fields: TypeName		StaticText
+					Text			~Delta Sharpening~
+					RightJustified	TRUE
+					Position		OrderIDPrompt(GetLeft, Position), UseBibbleRadioButton(GetBottom,Position) + $vGap + 10, 85, 20
+
+		Define: DeltaSharpeningField Using DDWinCtrlDef AsSymbol DeltaSharpeningField 
+			Fields: TypeName		MaskedEditText  
+					POSITION		ProfileComboBox(GetLeft,Position) - 1, DeltaSharpeningText(GetTop, Position)-2, 50, 20
+					DACTIONSTEXT	ACTIONS ( Save "Exec(AuditField(DeltaSharpeningField, -300, 300, 0, SharpenDelta);)" )
+					IACTIONSTEXT    ~[Get]~
+					OACTIONSTEXT    ~[Save]~
+					GENCONNAME		THIS
+					GENCONFIELD		~SharpenDelta~
+					MASK			~#####~
+					AllowedChars	~-~
+					PROMPTCHAR		~ ~
+					TOOLTIP			~Specify a delta sharpening amount to be used for the image in the database. Range is -300 to +300~;
+
+		Define: StatusPrompt Using DDWinCtrlDef AsSymbol StatusPrompt Private
+			Fields: TypeName		StaticText  
+					Text			~Initial Order Status~
+					Position		DeltaSharpeningText(GetLeft,Position), DeltaSharpeningText(GetBottom,Position) + $vGap + 4,
+									100,20;
+
+		Define: StatusComboBox Using DDWinCtrlDef AsSymbol StatusComboBox Private
+			Fields: TypeName		EComboBox  
+					Position		ProfileComboBox(GetLeft,Position) - 1, StatusPrompt(GetTop, Position) - 2,160 ,20*10
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+					IActionsText	ACTION EXEC ( LoadStatusComboBox(TRUE) )
+					DropDownActionsText ACTION CALL ( LoadStatusComboBox(FALSE)  )
+					GenConField		~OrderStatus~
+					IsTabStop		T
+					Tooltip			~Select the initial status for the order~;
+
+		Define: LutPrompt Using DDWinCtrlDef AsSymbol LutPrompt
+			Fields:	TypeName		StaticText
+					Text			~Rendering LUT~
+					Position		StatusPrompt(GetLeft,Position), StatusPrompt(GetBottom,Position) + $vGap + 4,
+									100,20;
+
+		Define: LutComboBox Using DDWinCtrlDef AsSymbol LutComboBox
+			Fields: TypeName		SComboBox  
+					Position		ProfileComboBox(GetLeft,Position) - 1, LutPrompt(GetTop, Position) - 2,300,110
+					DActionsText	~[Save ]~
+					OActionsText    ~[Save]~
+					GenConField      ~LutName~
+					Tooltip          ~Select the Lut that will be used when rendering the selected orders~;
+
+		// SETUPS
+		Define: LoadImportSetupsButton Using DDWinCtrlDef AsSymbol LoadImportSetupsButton 
+			Fields: TypeName		Button
+					Text			~Load Setup~
+					DActionsText	ACTION EXEC ( OnLoadSetupButton(TRUE) )
+					Tooltip			~Load the settings stored in the currently selected setup.~
+					Position		LutPrompt(GetLeft,Position), LutPrompt(GetBottom, Position) + $hGap + 10, 75, <SmallButtonHeight>
+
+		Define: ImportSetupsComboBox Using DDWinCtrlDef AsSymbol ImportSetupsComboBox 
+			Fields: TypeName        ComboBox  
+					Position		LoadImportSetupsButton(GetRight,Position) + $hGap, LoadImportSetupsButton(GetTop,Position),<EditTextWidth>,<ComboBoxHeight>
+					DropDownActionsText	ACTION EXEC ( UpdateSetupsList() )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName		THIS
+					GenConField		~ImportSetup~
+					Mask			~<$[DATABASE FieldTypes].ScanSetupName[Mask]>~
+					PromptChar		~<$[DATABASE FieldTypes].ScanSetupName[PromptChar]>~
+					AllowedChars	~<$[DATABASE FieldTypes].ScanSetupName[AllowedChars]>~
+					DisallowedChars ~<$[DATABASE FieldTypes].ScanSetupName[DisallowedChars]>~
+					Tooltip			~Choose a setup to load here. The setup will be loaded when you press the 'Load Setup' button. Type in a name to create a new setup.~
+
+		Define: EditSetups_Button Using DDWinCtrlDef AsSymbol EditSetups_Button 
+			Fields:	TypeName		Button
+					Text			Translate( ~?~ )
+					Position		ImportSetupsComboBox(GetRight,Position)+$hGap,ImportSetupsComboBox(GetTop,Position), <SmallButtonWidth>, <SmallButtonHeight>
+					DActionsText	ACTION EXEC  ( OnEditSetups() ) 
+					Tooltip			Translate( ~View Setups~ );
+
+		Define: SaveSetup_Button Using DDWinCtrlDef AsSymbol SaveSetup_Button 
+			Fields:	TypeName		Button
+					Text			Translate( ~Save~ )
+					Position		EditSetups_Button(GetRight,Position) + $hGap,EditSetups_Button(GetTop,Position), <ButtonWidth>, <SmallButtonHeight>
+					DActionsText	ACTION EXEC ( OnSaveImportSetup() ) 
+					Tooltip			Translate( ~Save the current settings in the selected setup.~ );
+
+		IF 0
+		{
+			Define: SubjectIDPrompt Using DDWinCtrlDef AsSymbol SubjectIDPrompt 
+				Fields: TypeName		StaticText
+						Text			Translate( ~Starting Frame~ )
+						RightJustified	TRUE
+						Position		FramelPrompt(GetLeft,Position),FramelPrompt(GetBottom,Position) + $vGap,$StaticTextWidth,$StaticTextHeight
+
+			Define: SubjectIDField Using DDWinCtrlDef AsSymbol SubjectIDField 
+				Fields: TypeName		EditText  
+						Position		SubjectIDPrompt(GetRight,Position) + $hGap,SubjectIDPrompt(GetTop,Position),<EditTextWidth>,<EditTextHeight> 
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save  )
+						OActionsText	ACTIONS ( Save )
+						GenConName       THIS
+						GenConField		~SubjectID~
+						Tooltip         ~Starting Subject ID or blank to use the frame as the Subject ID~;
+		}
+
+		DialogWidth = SaveSetup_Button(GetRight,Position) + ($hGap * 3);
+
+		Define:DragArea Using DDWinCtrlDef AsSymbol DragArea
+            Fields: TypeName	GroupBox
+					Tooltip		~Drag images from explore that you wish to add to the database~
+					Position	$X LoadImportSetupsButton(GetBottom,Position)+$vGap $DialogWidth-$hGap*3  72;
+
+		Define: Instructions Using DDWinCtrlDef AsSymbol Instructions 
+            Fields: TypeName	StaticText
+					Text		~Drag images here from explorer~
+					Tooltip		~Drag images here from explorer that you wish to add to the database~
+					Position	DragArea(GetLeft,Position)+$hGap+110 DragArea(GetTop,Position)+36 DragArea(GetWidth,Position)-$hGap*3-110 20;
+		
+		Define: ExplorerButton Using DDWinCtrlDef AsSymbol ExplorerButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Explorer~ )
+					Position		$DialogWidth/2 - ($ButtonWidth+$hGap)*2.5+$hGap,DragArea(GetBottom,Position) + $vgap*3,$ButtonWidth, $ButtonHeight
+                    DActionsText	ACTION EXEC ( OnExplorerButton() ) 
+					IsEnabled		T
+                    Tooltip			Translate( ~Find images to import and drag on to this dialog~ );
+
+		Define: DirectoryButton Using DDWinCtrlDef AsSymbol DirectoryButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Directory~ )
+					Position		ExplorerButton(GetRight,Position)+$hGap,ExplorerButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+                    DActionsText	ACTION EXEC ( OnDirectoryButton() ) 
+					IsEnabled		T
+                    Tooltip			Translate( ~Find directory to import images from~ );
+
+		Define: StopButton Using DDWinCtrlDef AsSymbol StopButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Stop~ )
+					Position		DirectoryButton(GetRight,Position)+$hGap,DirectoryButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+                    DActionsText	ACTION EXEC ( OnStopButton() ) 
+					IsEnabled		F
+                    Tooltip			Translate( ~Stop Importing~ );
+
+		Global( StopButton );
+
+					
+		Define: ManageImagesButton Using DDWinCtrlDef AsSymbol ManageImagesButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Manage~ )
+                    Position		StopButton(GetRight,Position) + $hGap,StopButton(GetTop,Position),$ButtonWidth,$ButtonHeight
+
+                    DActionsText	ACTION EXEC ( ManageImagesForOrder() ) 
+                    Tooltip			Translate( ~Manage the images that were imported~ )
+					IsHidden		<DP2> ? F : T;
+					
+		Define: ViewImagesButton Using DDWinCtrlDef AsSymbol ViewImagesButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~View~ )
+                    Position		ManageImagesButton(GetRight,Position) + $hGap,ManageImagesButton(GetTop,Position),$ButtonWidth,$ButtonHeight
+                    DActionsText	ACTION EXEC ( SeeFramesForOrder(TRUE) ) 
+                    Tooltip			Translate( ~View the images that were imported~ )
+					IsHidden		<DP2> ? F : T;
+
+								
+    };
+
+	DialogHeight = ViewImagesButton(GetBottom,Position) + $vGap + 35;
+
+    DlgDefinition( Set,Position,~180 180 <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( ImportImagesDlg,Definition,DlgDefinition,Data,ImportImagesDlgData,Document,$Doc.This,New,Temporary );
+
+    Global( ImportImagesDlg );
+}
+
+
+/***************************************************************************************************/
+/***************************************************************************************************/
+/***																							 ***/
+/***									GUI HANDLERS											 ***/
+/***																							 ***/
+/***************************************************************************************************/
+/***************************************************************************************************/
+
+/***************************************************************************************************/
+NUMERIC SeeOrder()
+{
+	ImportImagesDlg( GetInput );
+
+	ImportImagesDlgData( GetValues,OrderID,OrderID );
+
+	Criteria = ~~;
+
+	if ( ~<OrderID>~ == ~~ )
+	{
+		Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( ~Orders~ );" ) );
+		return PerformActions( Actions );
+	}
+
+	Query = ~Select * From Orders Where ID Like '<OrderID>%'~;
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	//OpenMethod = Open;
+
+	Actions = ACTION DOC ( ~OrdersDoc~ <OpenMethod> OrdersDoc "Init( ~<OrderID>~,~<Query>~ );" );
+
+	return PerformActions( Actions );
+}
+
+/***************************************************************************************************/
+NUMERIC SeeRollsForOrder()
+{
+	ImportImagesDlg( GetInput );
+
+	ImportImagesDlgData( GetValues,OrderID,OrderID,Roll,Roll );
+
+	if ( ~<OrderID>~ == ~~ )
+	{
+		return Warning( Translate( ~OrderID cannot be NULL~ ) );
+	}
+
+	Query = ~Select * From Rolls Where OrderID In ('<OrderID>') Order By OrderID,Roll~;
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	Actions = ACTION Doc ( ~Rolls~ <OpenMethod> RollsDoc "Init( ~'<OrderID>'~,~<Query>~ );" );
+
+	return PerformActions( Actions );
+}
+
+/***************************************************************************************************/
+NUMERIC MakeNewOrderIfNecessary( )
+{
+	ImportImagesDlg( GetInput );
+
+	if (IsNULL(~<$con.ImportImagesDlgData[OrderID]>~))
+	{
+		return FALSE;
+	}
+
+	Query = ~Select ID,CustomerID From Orders Where ID = '<$con.ImportImagesDlgData[OrderID]>' Order By ID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		OrderSelected();
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+		return FALSE;
+	}
+
+	Count = List( NumEntries );
+
+
+
+	// Check if we're adding a new order or not.
+	if ( !<Count> )
+	{
+		if ( MessageBox( Translate(~Order '<$con.ImportImagesDlgData[OrderID]>' does not exist.\n\nAdd a new order? ~ ),YESNO ) != YES )
+		{
+			return FALSE;
+		}
+
+		List( GetConnection,dBase );
+
+		CustomerID = ~<$con.ImportImagesDlgData[CustomerID]>~;
+
+		if (IsNULL(~<$con.ImportImagesDlgData[CustomerID]>~))
+		{
+			if ( MessageBox( Translate(~You did not specify a Customer ID for this order. \n\nDid you want to? ~ ),YESNO ) == YES )
+			{
+				MessageBox( Translate(~Please enter a Customer ID and try again.~));
+				return FALSE;
+			}
+		} else
+		{
+			CustomerID = ~<$con.ImportImagesDlgData[CustomerID]>~;
+
+			// If it's a new customer ID, let's make sure it's already there.
+			if ( !dBase( RecordCountFor,~Select ID From Customers Where ID = '<CustomerID>'~ ) )
+			{
+				Msg = Translate(~The Customer '<CustomerID>' does not exist. \n\nDo you want to create it?~ );
+
+				if ( MessageBox( ~<Msg>~,YESNO ) != YES )
+				{ 
+					CustomerID = ~~;
+				} else
+				{
+					if ( !dbase( CMD,~Insert Into Customers(ID) Values('<CustomerID>')~ ) )
+					{
+						dBase( GetErrorDescription,theErr );
+						Invoke( ShowWarning,Translate(~Could not add Order <OrderID>. <theErr>~) );
+						return FALSE;
+					}
+
+				}
+			}
+		}
+
+		Cmd =  ~Insert Into Orders(ID,OrderDate,ShipDate,CustomerID,Status) Values('<$con.ImportImagesDlgData[OrderID]>',<$Date.DataBaseDate.SharedDateQuoted>,<$Date.DataBaseDate.SharedDateQuoted>,'<$con.ImportImagesDlgData[CustomerID]>','<$con.ImportImagesDlgData[OrderStatus]>')~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			// We've seen this fail in race conditions where the order was added somewhere
+			// else but was not yet flushed to the database when this function checked. So,
+			// if we get an error trying the Insert, then we'll check again if it's already 
+			// there, and if it is, we know we're OK to open it. Otherwise, report an error.
+
+			Query = ~Select ID From Orders Where ID = '<$con.ImportImagesDlgData[OrderID]>' Order By ID~;
+
+			if ( !PGenConList( ListB,Connect,Cursor,Forward,Query,~<Query>~ ) )
+			{
+				OrderSelected();
+				ListB( GetErrorDescription,0,theErr );
+				Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+				return FALSE;
+			}
+
+			Count = ListB( NumEntries );
+
+			if (!<Count>)
+			{
+				dBase( GetErrorDescription,theErr );
+				Warning( Translate( ~Database update Failed.\n\n<Cmd>\n\n<theErr>~ ) ); 
+
+				OrderSelected();
+				
+				return FALSE;
+			} else
+			{
+				return TRUE;
+			}
+		}
+	}
+	else
+	{
+		if ( List( GetFirst,Order ) )
+		{
+			ImportImagesDlg( SetStrings,CustomerID,~<$pcon.Order[CustomerID]>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC LoadCustomerSettings( )
+{
+	ImportImagesDlg( GetInput );
+
+	if (IsNULL(~<$con.ImportImagesDlgData[CustomerID]>~))
+	{
+		return FALSE;
+	}
+
+	Query = ~Select ID,LutIndex From Customers Where ID = '<$con.ImportImagesDlgData[CustomerID]>' Order By ID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+		return FALSE;
+	}
+
+	LutIndex = 10;
+	Count = List( NumEntries );
+	if ( <Count> )
+	{
+		if ( List( GetFirst,Customer ) )
+		{
+			LutIndex = ~<$pcon.Customer[LutIndex]>~;
+		}
+	}
+
+	if ( DefinedAndNotNull( LutIndex ) )
+	{
+		if ( <LutIndex> )
+		{
+			LutName = GetLutName( ~<LutIndex>~ );
+			if ( !IsNull( ~<LutName>~ ) )
+			{
+				ImportImagesDlg( ComboBox,LutComboBox,SelectString,~<LutName>~,-1 );
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+/***************************************************************************************************/
+NUMERIC OrderSelected()
+{
+	return ImportImagesDlg( SetControlFocus,OrderIDField );
+}
+
+/***************************************************************************************************/
+NUMERIC AuditCustomerID()
+{
+	if ( IsNULL(~<$con.ImportImagesDlgData[CustomerID]>~) )
+	{
+		Warning( Translate( ~Enter a Customer ID or enter one or more characters of the Customer ID and then press F4 or the Customer down arrow.~ ) );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+/***************************************************************************************************/
+NUMERIC FindCustomersLike( )
+{
+	ImportImagesDlg( GetInput );
+	
+	if ( !AuditCustomerID() )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select ID From Customers Where ID Like '<$con.ImportImagesDlgData[CustomerID]>%' Order By ID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		OrderSelected();
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	Count = List( NumEntries );
+
+	if ( <count> )
+	{
+		List( MakeStringList, CustomersList, ID);
+
+		ImportImagesDlg( SetControlFromStringList, CustomerIDField, CustomersList, Selection);
+	}
+
+	return TRUE;
+}
+
+/**************************************************************************************************/
+VOID OpenRawSetup()
+{
+	Action = ACTION DOC ( RawCameraSetupDoc OpenOnce RawCameraSetupDoc "Init();" );
+	PerformActions( Action );
+}
+
+VOID OnChangeRawConvert( ConvertMethod )
+{
+	if ( <ConvertMethod> == 0 )
+	{
+		ImportImagesDlg(SetCheck, TRUE, UseDCRLegacyRadioButton);
+		ImportImagesDlg(SetCheck, FALSE, UseBibbleRadioButton);
+
+		ImportImagesDlg(Save, UseDCRLegacyRadioButton);
+	}
+	else // either 1 or default.
+	{
+		ImportImagesDlg(SetCheck, FALSE, UseDCRLegacyRadioButton);
+		ImportImagesDlg(SetCheck, TRUE, UseBibbleRadioButton);
+
+		ImportImagesDlg(Save, UseBibbleRadioButton);
+	}
+
+}
+
+/***************************************************************************************************/
+NUMERIC SeeFramesForOrder(AsImages)
+{
+	ImportImagesDlg( GetInput );
+	ImportImagesDlgData( GetValues,OrderID,OrderID,Roll,Roll );
+
+	if ( ~<OrderID>~ == ~~ )
+	{
+		return Warning( Translate( ~OrderID cannot be NULL~ ) );
+	}
+
+	if (<AsImages>)
+	{
+		if (!MakeNewOrderIfNecessary())
+		{
+			return FALSE;
+		}
+	}
+
+//	RollClause = ~<Roll>~ == ~~ ? ~~ : ~ AND Roll = '<Roll>' ~;
+//	Query = ~Select * From Images Where OrderID In ('<OrderID>') <RollClause> Order By OrderID,Roll,Frame~;
+
+	Query = ~Select * From Images Where OrderID In ('<OrderID>') Order By OrderID,Roll,Frame~;
+
+	WhichDoc = <AsImages> ? ImagesDoc : ImagesDataDoc;
+
+	Actions = ACTION Doc ( ~OrderImages~ OpenOnce <WhichDoc> "Init( ~<OrderID>~,<AsImages>,~<Query>~,0 );" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC ManageImagesForOrder()
+{
+	ImportImagesDlg( GetInput );
+	ImportImagesDlgData( GetValues,OrderID,OrderID );
+
+	if ( ~<OrderID>~ == ~~ )
+	{
+		return Warning( Translate( ~OrderID cannot be NULL~ ) );
+	}
+
+	if ( ADO( dBase,Connect,RecordCountFor,~Select ID From Orders Where ID='<OrderID>'~ ) != 1 )
+	{
+		return Warning( Translate( ~OrderID does not exist yet~ ) );
+	}
+	
+	action = ACTION DOC ( GreenScreenDoc Open "<$App.HTMLPages>\GreenScreen\GreenScreenDoc.txt" "InitWithOrders(~'<OrderID>'~);" );
+	return PerformActions( action );
+}
+
+
+/***************************************************************************************************/
+VOID OnEnableInputProfileChanged( )
+{
+	ImportImagesDlg(GetInput);
+	ImportImagesDlg(EnableControls, ~<$con.ImportImagesDlgData[EnableProfile]>~, ProfileComboBox );
+
+	if (Numeric(~<$con.ImportImagesDlgData[EnableProfile]>~))
+	{
+		SetupEmbeddedProfileControls(TRUE);
+	} else
+	{
+		SetupEmbeddedProfileControls(FALSE);
+	}
+}
+
+/***************************************************************************************************/
+VOID SetupEmbeddedProfileControls(bSpecifyingInputProfile)
+{
+	ImportImagesDlg(ShowControls, <bSpecifyingInputProfile>, UseEmbeddedProfileCheckBox, UseEmbeddedProfileText);
+	ImportImagesDlg(ShowControls, !<bSpecifyingInputProfile>, EmbeddedProfileNotUsedText);
+}
+
+/***************************************************************************************************/
+NUMERIC RefreshProfilesComboBox()
+{
+	Query = ~Select * From Profiles Where Type = 'Input' OR Type = 'WorkingSpace' And Path IS NOT NULL Order By Type,Name~;
+
+	if ( !PGenConList( ProfilesList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		ProfilesList( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the Profiles table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	ProfilesList( MakeStringList,ScannerProfiles,Name );
+
+	ImportImagesDlg( SetControlFromStringList,ProfileComboBox,ScannerProfiles,~NoSelection~ );
+
+	return ImportImagesDlg( SelectString,ProfileComboBox,~<$con.ImportImagesDlgData[ProfileName]>~ );
+}
+
+/***************************************************************************************************/
+VOID OnUseEmbeddedProfileText()
+{
+	ImportImagesDlg(GetInput);
+
+	value = ~<$con.ImportImagesDlgData[UseEmbeddedProfile]>~;
+	value = !<value>;
+
+	ImportImagesDlg( SetCheck, <value>, UseEmbeddedProfileCheckBox);
+}
+
+/***************************************************************************************************/
+NUMERIC ViewProfiles()
+{
+	action = ACTION DOC ( Profiles Open ProfilesDoc "Init(~~,~Select * From Profiles Where Type = 'Input' OR Type = 'WorkingSpace' Order By Type, Name~);" );
+
+	return PerformActions( action );
+}
+
+/***************************************************************************************************/
+NUMERIC LoadStatusComboBox( FirstEntry )
+{
+	ImportImagesDlg( ComboBox,StatusComboBox,ResetContent );
+
+	Query = ~Select * From WorkstationSettings Where Computer = '<$App.ComputerName>' AND Category = 'OrderStatus' AND Enabled <> 0 Order By Item~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the WorkstationSettings table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		ForgetLocal( List );
+
+		Query = ~Select * From SystemSettings Where Category = 'OrderStatus' AND Enabled <> 0 Order By Item~;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ 
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate( ~Failed to query the SystemSettings table.\n\n<Query>\n\n<theErr>~ ) ); 
+		}
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		StringList( theStringList,New,Is,~<$[DATABASE FieldTypes].OrderStatus[ChoiceList]>~ );
+
+		more = theStringList( GetFirstString,aString );
+
+		while ( <more> )
+		{
+			ImportImagesDlg( ComboBox,StatusComboBox,AddString,~<aString>~ );
+			more = theStringList( GetNextString,aString );
+		}
+	}
+	else
+	{
+		while ( List( GetNext,Item ) )
+		{
+			ImportImagesDlg( ComboBox,StatusComboBox,AddString,~<$pcon.Item[SettingsText]>~ );
+		}
+	}
+
+	if ( <FirstEntry> )
+	{
+		ImportImagesDlg( ComboBox,StatusComboBox,SelectString,~Adjust~,-1 );
+	}
+
+	return TRUE;
+}
+
+/***************************************************************************************************/
+NUMERIC OnLoadSetupButton( DisplayWarning )
+{
+	ImportImagesDlg( GetInput );
+
+	SetupName = ~<$con.ImportImagesDlgData[ImportSetup]>~;
+
+	if ( IsNull( ~<SetupName>~ ) )
+	{
+		if ( !<DisplayWarning> )
+		{
+			return FALSE;
+		}
+
+		return Warning(Translate(~You must select a setup to load~));
+	}
+
+	Key = ~Setup = '<SetupName>'~;
+
+	Query = ~Select * from ImportImagesSetups Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <Query>. <theErr>~ ) );
+	}
+
+	if ( !List( GetFirst, Setup ) )
+	{
+		return Warning( Translate( ~Could not find a setup named <SetupName>~ ) );
+	}
+
+	if ( !Setup( UpdateIn,ImportImagesDlgData ) )
+	{
+		return Warning( Translate( ~Failed to update the dialog from <SetupName>~ ) );
+	}
+
+	if (Numeric(~<$con.ImportImagesDlgData[EnableProfile]>~))
+	{
+		ImportImagesDlg(EnableControls, TRUE, ProfileComboBox);
+
+		SetupEmbeddedProfileControls(TRUE);
+	} else
+	{
+		ImportImagesDlg(EnableControls, FALSE, ProfileComboBox);
+
+		SetupEmbeddedProfileControls(FALSE);
+	}
+
+	RefreshProfilesComboBox();
+
+	ProfileName = ~<$con.ImportImagesDlgData[ProfileName]>~;
+	if (!IsNULL(~<ProfileName>~))
+	{
+		ImportImagesDlg(SetStrings, ProfileName, ~<ProfileName>~);
+	}
+
+	ImportImagesDlg( Update );
+
+	Setup( GetValues,LutIndex,LutIndex );
+	LutName = GetLutName( ~<LutIndex>~ );
+	if ( !IsNull( ~<LutName>~ ) )
+	{
+		ImportImagesDlg( ComboBox,LutComboBox,SelectString,~<LutName>~,-1 );
+	}
+	else
+	{
+		ImportImagesDlg( ComboBox,LutComboBox,SetSelectedIndex,0 );
+	}
+
+	ImportImagesDlg( SetStatus,0,~Loaded Setup: <SetupName>~ );
+
+	return TRUE;
+}
+
+/***************************************************************************************************/
+VOID UpdateSetupsList()
+{
+	SelectedSetup = ~<$con.ImportImagesDlgData[ImportSetup]>~;
+
+	Query = ~Select Setup From ImportImagesSetups Order By Setup~;
+
+	if ( !PGenConList( SetupsList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		SetupsList( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Failed to query the ImportImagesSetups table.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	SetupsList( MakeStringList, ~ImportSetup~, Setup);
+
+	ImportImagesDlg( SetControlFromStringList, ~ImportSetupsComboBox~, ~ImportSetup~, ~Selection~ );
+
+	if (~<SelectedSetup>~ != ~~)
+	{
+		ImportImagesDlg(SelectString, ~ImportSetupsComboBox~, ~<SelectedSetup>~);
+	}
+}
+
+/***************************************************************************************************/
+// This is the function that gets called when you press the '?' button.
+VOID OnEditSetups()
+{
+	Actions = ACTION Doc ( ImportImagesSetupDoc OpenOnce ImportImagesSetupDoc "Init(~Import Images Setups~);" );
+
+	PerformActions( Actions );
+}
+
+/***************************************************************************************************/
+NUMERIC OnSaveImportSetup()
+{
+	ImportImagesDlg( GetInput );
+
+	SetupName = ~<$con.ImportImagesDlgData[ImportSetup]>~;
+
+	if ( ~<SetupName>~ == ~~ )
+	{
+		return Warning( Translate( ~No setup name specified~ ) );
+	}
+
+	Key = ~Setup = '<SetupName>'~;
+
+	Query = ~Select * From ImportImagesSetups Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <Query>. <theErr>~ ) );
+	}
+
+	if ( !List( GetFirst,Item ) )
+	{
+		if ( MessageBox( Translate(~Create a new setup called <$con.ImportImagesDlgData[ImportSetup]>?~),YESNO ) != YES )
+		{
+			return FALSE;
+		}
+
+		if ( !List( AddNew,Item ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate( ~AddNew for ImportImagesSetups Failed:. <theErr>~ ) );
+		}
+
+		Item( Set, Setup, ~<$con.ImportImagesDlgData[ImportSetup]>~ );
+	}
+	else
+	{
+		if ( MessageBox( Translate(~Update the existing setup called <$con.ImportImagesDlgData[ImportSetup]>?~),YESNO ) != YES )
+		{
+			return FALSE;
+		}
+	}
+
+	if ( !Item( UpdateFrom,ImportImagesDlgData ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+		return Warning( Translate( ~Could not update ImportImagesSetups record where <Key>. <theErr>~ ) );
+	}
+
+	ImportImagesDlgData( GetValues,LutName,LutName );
+	LutIndex = GetLutIndex( ~<LutName>~ );
+	Item( Set,LutIndex,~<LutIndex>~ );
+
+	if ( !List( Update ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+		return Warning( Translate( ~Could not update ImportImagesSetups record where <Key>. <theErr>~ ) );
+	}
+
+	return TRUE;
+}
+
+/***************************************************************************************************/
+// NOTE: This function won't work for situations where you have a minvalue of, say, 10, since when you
+// enter '100', it chokes on the '1' that you entered first...
+VOID AuditField( FieldName,LowValue,HighValue,DefaultValue, Stringname )
+{
+	ImportImagesDlg(GetInput);
+
+	ImportImagesDlg( GetControlValue,~<FieldName>~,Value );
+
+	if ( ~<Value>~ == ~-~ )
+	{
+		if ( <LowValue> < 0 )
+		{
+			return;
+		}
+		else
+		{
+			MessageBox( ~Value must be greater than or equal to <LowValue>~ );
+			ImportImagesDlg(SetStrings, ~<Stringname>~, ~<LowValue>~);
+
+			// Now set the focus back to that control
+			if (~<FieldName>~ != ~~)
+			{
+				ImportImagesDlg( SetControlFocus, ~<FieldName>~ );
+			}
+
+			return;
+		}
+	}
+
+	if ( Numeric(~<Value>~) < <LowValue> )
+	{
+		MessageBox( ~Value must be greater than or equal to <LowValue>~ );
+		ImportImagesDlg(SetStrings, ~<Stringname>~, ~<LowValue>~);
+		// Now set the focus back to that control
+		if (~<FieldName>~ != ~~)
+		{
+			ImportImagesDlg( SetControlFocus, ~<FieldName>~ );
+		}
+	}
+	else if ( Numeric(~<Value>~) > <HighValue> )
+	{
+		MessageBox( ~Value must be less than or equal to <HighValue>~ );
+		ImportImagesDlg(SetStrings, ~<Stringname>~, ~<HighValue>~);
+
+		// Now set the focus back to that control
+		if (~<FieldName>~ != ~~)
+		{
+			ImportImagesDlg( SetControlFocus, ~<FieldName>~ );
+		}
+	}
+}
+
+/***************************************************************************************************/
+NUMERIC OnDirectoryButton()
+{
+	Title = Translate( ~Select one or more image files to import~ );
+
+	FileFilter = ~TIFF Files|*.tif;*.tiff|JPEG Files|*.jpg;*.jpeg|DCR Files|*.dcr|All Files|*.*||~;
+
+	if ( !FileDialog( Title,~<Title>~,DropInfo,DragDropInfo,FILTER,~<FileFilter>~,ALLOWMULTISELECT,OPEN ) )
+	{
+		return FALSE;
+	}
+
+	ExternalDrop( DragDropInfo );
+
+	return TRUE;
+}
+
+/***************************************************************************************************/
+NUMERIC OnExplorerButton()
+{
+	Actions = ACTION DOC ( Explorer Open ExplorerDoc "Init(~Explore~,~~);" );
+	return PerformActions( Actions );
+}
+
+/***************************************************************************************************/
+NUMERIC CloseDialog()
+{
+	if ( aThread( IsActive ) )
+	{
+		return Warning( Translate(~You are still importing image files.  You can minimize this window, but you can't close it until processing is done.~) );
+	}
+
+    ImportImagesDlg( END );
+
+    Exit();
+    
+    return TRUE;
+}
+
+/***************************************************************************************************/
+NUMERIC ForceCloseDialog()
+{
+	count = 0;
+	while ( aThread( IsActive ) && <count> < 10 )
+	{
+		Sleep(100);
+		++count;
+	}
+
+    ImportImagesDlg( END );
+
+    Exit();
+    
+    return TRUE;
+}
+
+/***************************************************************************************************/
+Stop = FALSE;
+
+VOID OnStopButton()
+{
+	Stop = TRUE;
+	ImportImagesDlg( EnableControls,FALSE,StopButton );	
+}
+
+/***************************************************************************************************/
+NUMERIC HandleDrop()
+{
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+	{ 
+		return FALSE;
+	}
+	
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );	// REMOVE THE DRAG INFO FROM THE TREE
+
+	ExternalDrop(DragDropInfo);	
+	
+	ImportImagesDlg( EnableControls,FALSE,StopButton );	
+
+	return TRUE;
+}
+
+/***************************************************************************************************/
+NUMERIC ExternalDrop( &DragDropInfo )
+{
+	if ( aThread( IsActive ) )
+	{
+		return Warning( Translate(~You are still processing files~) );
+	}
+
+	if ( !DragDropInfo( GetCopyOfDraggedFiles,DraggedFileList ) )
+	{ 
+		return Warning( Translate(~There were no files in the object you dragged~) );
+	}
+
+	count = DraggedFileList( ChildCount );
+		
+	if ( $count <= 0 )
+	{ 
+		return Warning( ~There were no files in the object you dragged~; )
+	}
+
+	if ( <count> > 1 )
+	{
+		PromptForSortOrder = TRUE;
+		GetUserSettings(~ImportImages~, ~PromptForSortOrder~, PromptForSortOrder, Enabled);
+		if ( <PromptForSortOrder> )
+		{
+			GenCon( MbInfo,New,DDCustomMessageBox );
+			MbInfo( SetValues,Title,~Import Images~,
+						Message,~Sort files by ...~,
+						Button1,~&File Name~,
+						Button2,~Creation &Date~,
+						Button3,~Cancel~,
+						CheckBox,~Don't show this message again~,
+						SetWindowPos,1,X,-1,Y,-1,Width,350,Height,215 );
+			CustomMessageBox(MbInfo);
+			SortOrder = MbInfo(GetNumeric, ButtonPressed);
+			dontShowMessageAgain = MbInfo(GetNumeric, CheckBoxChecked);
+			if ( <dontShowMessageAgain> && ( <SortOrder> == 1 || <SortOrder> == 2 ) )
+			{
+				SetUserSettings( ~ImportImages~,~PromptForSortOrder~,~0~,TRUE );
+				SetUserSettings( ~ImportImages~,~DefaultSortOrder~,~<SortOrder>~,TRUE );
+			}
+
+			if ( <SortOrder> == 1 )
+			{
+				DraggedFileList( SortListBy,~Text~,~CreationTime~ );
+			}
+			else if ( <SortOrder> == 2 )
+			{
+				DraggedFileList( SortListBy,~CreationTime~,~Text~ );
+			}
+			else 
+			{
+				return FALSE;
+			}
+		}
+		else
+		{
+			GetUserSettings(~ImportImages~, ~DefaultSortOrder~, DefaultSortOrder, Enabled);
+			if ( <DefaultSortOrder> == 1 )
+			{
+				DraggedFileList( SortListBy,~Text~,~CreationTime~ );
+			}
+			else if ( <DefaultSortOrder> == 2 )
+			{
+				DraggedFileList( SortListBy,~CreationTime~,~Text~ );
+			}
+			else
+			{
+				DraggedFileList( SortListBy,~Text~,~CreationTime~ );
+			}
+		}
+	}
+
+	ImportImagesDlg( GetInput );
+
+	// First make sure that they specified the Order ID, since we can't continue if it's NULL
+	ImportImagesDlgData( GetValues,OrderID,OrderID);
+	if ( ~<OrderID>~ == ~~ )
+	{
+		return Warning( Translate(~Order ID cannot be NULL.~) );
+	}	
+
+	ConfirmImport = TRUE;
+	GetUserSettings(~ImportImages~, ~ConfirmImport~, ConfirmImport, Enabled);
+	if ( <ConfirmImport> )
+	{
+		GenCon( MbInfo,New,DDCustomMessageBox );
+		MbInfo( SetValues,Title,~Import Images~,
+					Message,~Are you sure you would like to assign the <count> image(s) to this order?~,
+					Button1,~OK~,
+					Button2,~Cancel~,
+					CheckBox,~Don't show this message again (perform import without prompting)~,
+					SetWindowPos,1,X,-1,Y,-1,Width,400,Height,215 );
+		CustomMessageBox(MbInfo);
+		result = MbInfo(GetNumeric, ButtonPressed);
+		dontShowMessageAgain = MbInfo(GetNumeric, CheckBoxChecked);
+		if ( <dontShowMessageAgain> && <result> == 1 )
+		{
+			SetUserSettings( ~ImportImages~,~ConfirmImport~,~0~,TRUE );
+		}
+
+		if ( <result> == 0 || <result> == 2 )
+		{
+			return FALSE;
+		}
+	}
+
+	// Now grab the rest of the pertinent information from the GUI
+	ImportImagesDlgData(GetValues,Roll,Roll,Frame,Frame,MakeWritable,MakeWritable,EnableProfile,EnableProfile,ProfileName,ProfileName);
+	ImportImagesDlgData(GetValues,CheckKodakRaw, CheckKodakRaw, UseEmbeddedProfile, UseEmbeddedProfile, CustomerID, CustomerID);
+	ImportImagesDlgData(GetValues,OrderStatus, OrderStatus );
+
+	//DraggedFileList( SortListBy,~Text~ );
+
+	Stop = FALSE;
+
+	TheObject = DraggedFileList(Permanent,GetObject);
+
+	aThread( New,~ProcessDraggedFiles~,~<MakeWritable>~,~<TheObject>~,~<OrderID>~,~<Roll>~,~<Frame>~,~<ProfileName>~,~<EnableProfile>~,
+			~<CheckKodakRaw>~, ~<UseEmbeddedProfile>~, ~<CustomerID>~, ~<OrderStatus>~ );
+
+	return TRUE;
+}
+
+/***************************************************************************************************/
+VOID DisableStopButton()
+{
+	ImportImagesDlg( EnableControls,FALSE,StopButton );
+}
+
+/***************************************************************************************************/
+VOID EnableStopButton()
+{
+	ImportImagesDlg( EnableControls,TRUE,StopButton );
+}
+
+/***************************************************************************************************/
+NUMERIC ShowWarning( Msg )
+{
+	return Warning( ~<Msg>~ );
+}
+
+/***************************************************************************************************/
+NUMERIC ShowProgress( Msg )
+{
+	return ImportImagesDlg( SetStatus,0,~<Msg>~ );
+}
+
+
+NUMERIC ShowPopupMessage( Msg )
+{
+	return PopupMsg( ~<Msg>~ );
+}
+
+/***************************************************************************************************/
+/***************************************************************************************************/
+/***																							 ***/
+/***									CORE FUNCTIONALITY										 ***/
+/***																							 ***/
+/***************************************************************************************************/
+/***************************************************************************************************/
+
+
+DigitalCamera(ImportDCObject, CreatePictureProcessor);
+
+Thread(aThread);	// ADD THE PARAMETER DEBUG TO RUN AS A SUBROUTINE RATHER THAN A THREAD FOR SOURCE DEBUGGING
+//aThread( Debug );
+/***************************************************************************************************/
+// The user is prompted to pick an output folder for their Kodak Raw Camera Files
+// NOTE: This function requires ImagePath to be a fixed path. Otherwise, the user will get a syntax error
+// if the message is displayed.
+NUMERIC GetOutputPath(&OutputPath, ImagePath, CheckKodakRaw)
+{
+
+	ShowWarning = FALSE;
+	// Check the system setting if we are using Bibble
+	if ( <CheckKodakRaw> )
+	{
+		if ( GetWorkstationSettings( ~RawCamera~,~ConvertPath~, OutputPath, Enabled ) )
+		{
+			if ( !<Enabled> || IsNull( ~<OutputPath>~ ) )
+			{
+				if ( GetSystemSettings( ~RawCamera~,~ConvertPath~, OutputPath, Enabled ) )
+				{
+					if ( !<Enabled> || IsNull( ~<OutputPath>~ ) )
+					{
+						ShowWarning = TRUE;
+						errMsg = ~You must choose a destination folder when importing Raw Digital Camera images.  Unable to add:\n\n<ImagePath>\n\nImport will abort.\nProceed to Bibble Setup in order to set the output path.~;
+					}
+				}
+			}
+		}
+		else
+		{
+			if ( GetSystemSettings( ~RawCamera~,~ConvertPath~, OutputPath, Enabled ) )
+			{
+				if ( !<Enabled> || IsNull( ~<OutputPath>~ ) )
+				{
+					ShowWarning = TRUE;
+					errMsg = ~You must choose a destination folder when importing Raw Digital Camera images.  Unable to add:\n\n<ImagePath>\n\nImport will abort.\nProceed to Bibble Setup in order to set the output path.~;
+				}
+			}
+			else
+			{
+				ShowWarning = TRUE;
+				errMsg = ~You must choose a destination folder when importing Raw Digital Camera images.  Unable to add:\n\n<ImagePath>\n\nImport will abort.\nProceed to Bibble Setup in order to set the output path.~;		
+			}
+		}
+	}
+	else
+	{
+		if (!ChooseDestinationFolder(OutputPath))
+		{
+			ShowWarning = TRUE;
+			errMsg = ~You must choose a destination folder when importing Kodak Raw Digital Camera images. Unable to add:\n\n<ImagePath>\n\nImport will abort.~;
+		}
+	}
+	
+	if ( <ShowWarning> )
+	{
+		Warning( ~<errMsg>~ );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+/***************************************************************************************************/
+NUMERIC ChooseDestinationFolder(&OutputFolder)
+{
+	Title = Translate( ~Choose a destination for processed Kodak Raw Camera Images~ );
+	FileFilter = ~All Files|*.*||~;
+	StartingDirectory = ~<$App.ShareDirectory>~;
+
+	if ( FileDialog( DefaultDirectory,~<StartingDirectory>~,Title,~<title>~,PATH,Path,DefaultFile,~Choose an output folder~, OPEN ) )
+	{
+		OutputFolder = ~<$Str.$Path.Path>~;
+
+ 		// Make sure that the path is a UNC Path.
+		OutputFolder = MakePath( Type,UNC,~<OutputFolder>~);
+
+		if ( !Files( IsUNC,~<OutputFolder>~ ) && NetworkOperation() )
+		{
+			Msg = Translate( UIMessages,UnsharedFolder,~<OutputFolder>~ );
+
+			if ( MessageBox( ~<Msg>~,YESNO ) != YES )
+			{ 
+				return FALSE;
+			} else
+			{
+				OutputFolder = ~~;
+
+				// Recursively call this function until they say "No", or they choose a UNC path.
+				return ChooseDestinationFolder(OutputFolder);
+			}
+		}
+
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+/***************************************************************************************************/
+VOID FindRollFrame(GivenFrame, FrameLen, &ThisFrame, GivenRoll, &Image, &UseThisRoll)
+{
+	ImagePath = ~<$Con.Image[Text]>~;
+
+	// If it's numeric, make sure it's formatted and truncated. Otherwise, just let it pass.
+	// NOTE: Do this test based on <GivenFrame>, which would be the one originally specified in the 
+	// Import Images dialog. If we use <ThisFrame>, we'll get tripped up on files with numeric root 
+	// names, such as: '2454.DCR'
+	if (IsNumeric(~<GivenFrame>~))
+	{
+		ThisFrame = Format( ~<ThisFrame>~,~%0<FrameLen>ld~ );
+	} else
+	{
+		FileName = ~<$Str.$ImagePath.FileName>~;
+		ThisFrame = ~<GivenFrame>~ == ~~ ? ~<$Str.$ImagePath.FileName.WithOutExt>~ : ~<GivenFrame>~;
+	}
+
+	UseThisRoll = ~<GivenRoll>~ == ~~ ? ~<$Str.$ImagePath.Folder>~ : ~<GivenRoll>~;
+}
+
+
+
+/***************************************************************************************************/
+// This function processed the list of files dragged onto to the Import Images dialog box.
+// So as to not tie up the rest of the GUI, it runs on a thread.
+NUMERIC ProcessDraggedFiles( MakeWritable,FileListReference,OrderID,GivenRoll,GivenFrame,ProfileName,EnableProfile,CheckKodakRaw,UseEmbeddedProfile, CustomerID, OrderStatus)
+{
+	NumThumbnailAddsFailed = 0;
+
+	GenCon( DraggedFileList,Is,<FileListReference>,Temporary );
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,Translate(~Could not connect to the database. <theErr>~) );
+		return FALSE;
+	}
+
+	// Error out immediately if the Order ID is NULL
+	if ( IsNULL( ~<OrderID>~ ) )
+	{
+		Invoke( ShowWarning,Translate(~OrderID cannot be NULL~) );
+		return FALSE;
+	}
+
+	NumImages = DraggedFileList( ChildCount );
+	FrameLen = strlen( ~<GivenFrame>~ );
+
+	// Sanity check - Error out if a Frame # was given and is non-numeric when more than one image is being imported.
+	if (!IsNumeric(~<GivenFrame>~) && (<NumImages> > 1) && (<FrameLen> > 0))
+	{
+		Invoke( ShowWarning,Translate(~Frame cannot be non-numeric when multiple images are being imported~) );
+		return FALSE;
+	}
+
+	// Create the order if it does not already exist
+	if ( !dBase( RecordCountFor,~Select ID From Orders Where ID = '<OrderID>'~ ) )
+	{
+		ConfirmNewOrder = TRUE;
+		GetUserSettings(~ImportImages~, ~ConfirmNewOrder~, ConfirmNewOrder, Enabled);
+		if ( <ConfirmNewOrder> )
+		{
+			GenCon( MbInfo,New,DDCustomMessageBox );
+			MbInfo( SetValues,Title,~Import Images~,
+						Message,~The Order '<OrderID>' does not exist. \n\nDo you want to create it?~,
+						Button1,~OK~,
+						Button2,~Cancel~,
+						CheckBox,~Don't show this message again (always add the order without prompting)~,
+						SetWindowPos,1,X,-1,Y,-1,Width,400,Height,215 );
+			CustomMessageBox(MbInfo);
+			result = MbInfo(GetNumeric, ButtonPressed);
+			dontShowMessageAgain = MbInfo(GetNumeric, CheckBoxChecked);
+			if ( <dontShowMessageAgain> && <result> == 1 )
+			{
+				SetUserSettings( ~ImportImages~,~ConfirmNewOrder~,~0~,TRUE );
+			}
+
+			if ( <result> == 0 || <result> == 2 )
+			{
+				ImportImagesDlg( SetString,Translate( ~0 images were imported. Aborting Import~ ) ,Status,0 );
+				return FALSE;
+			}
+		}
+
+		// Don't try to create a NULL CustomerID!
+		if (!IsNull(~<CustomerID>~))
+		{
+			if ( !dBase( RecordCountFor,~Select ID From Customers Where ID = '<CustomerID>'~ ) )
+			{
+				okToCreateCustomer = TRUE;
+
+				ConfirmNewCustomer = TRUE;
+				GetUserSettings(~ImportImages~, ~ConfirmNewCustomer~, ConfirmNewCustomer, Enabled);
+				if ( <ConfirmNewCustomer> )
+				{
+					GenCon( MbInfo,New,DDCustomMessageBox );
+					MbInfo( SetValues,Title,~Import Images~,
+								Message,~The Customer '<CustomerID>' does not exist. \n\nDo you want to create it?~,
+								Button1,~OK~,
+								Button2,~Cancel~,
+								CheckBox,~Don't show this message again (always add the customer without prompting)~,
+								SetWindowPos,1,X,-1,Y,-1,Width,400,Height,215 );
+					CustomMessageBox(MbInfo);
+					result = MbInfo(GetNumeric, ButtonPressed);
+					dontShowMessageAgain = MbInfo(GetNumeric, CheckBoxChecked);
+					if ( <dontShowMessageAgain> && <result> == 1 )
+					{
+						SetUserSettings( ~ImportImages~,~ConfirmNewCustomer~,~0~,TRUE );
+					}
+
+					if ( <result> == 0 || <result> == 2 )
+					{
+						CustomerID = ~~;
+						okToCreateCustomer = FALSE;
+					}
+				}
+
+				if ( <okToCreateCustomer> )
+				{
+					if ( !dbase( CMD,~Insert Into Customers(ID) Values('<CustomerID>')~ ) )
+					{
+						dBase( GetErrorDescription,theErr );
+						Invoke( ShowWarning,Translate(~Could not add Customer <CustomerID>. <theErr>~) );
+						return FALSE;
+					}
+				}
+			}
+		}
+
+		Fields = ~ID,Status,Type,Priority,Owner,OrderDate,ShipDate, CustomerID~;
+
+		Values = ~'<OrderID>','Hold','Original',50,'<$App.UserName>',<$Date.DataBaseDate.SharedDateQuoted>,<$Date.DataBaseDate.SharedDateQuoted>, '<CustomerID>'~;
+
+		if ( !dbase( CMD,~Insert Into Orders(<Fields>) Values(<Values>)~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Invoke( ShowWarning,Translate(~Could not add Order <OrderID>. <theErr>~) );
+			return FALSE;
+		}
+	} else
+	{
+		// The order exists.
+		if (IsNull(~<$con.ImportImagesDlgData[CustomerID]>~))
+		{
+			// We do nothing if the Customer ID field is NULL.
+		} else
+		{
+			// If a Customer ID was specified, we need to check it against the existing CustomerID
+			Query = ~Select CustomerID From Orders Where ID = '<OrderID>'~;
+		
+			if ( !PGenConList( ListOfCustomers,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate(~Query Failed <Query>. <theErr>~) );
+				return FALSE;
+			}
+
+			if ( ListOfCustomers( GetFirst,CustomerIDList ) )
+			{
+				if ( SimilarStr(~<$pcon.CustomerIDList[CustomerID]>~,~<$con.ImportImagesDlgData[CustomerID]>~) )
+				{
+					// If the specified Customer ID matches the one already in the database, then do nothing
+				} else
+				{
+					if ( IsNULL(~<$pcon.CustomerIDList[CustomerID]>~) )
+					{
+						MessageString = ~Order '<OrderID>' does not have a Customer ID specified for it. \n\nDo you want to specify '<$con.ImportImagesDlgData[CustomerID]>' as the Customer ID? ~;
+					} else
+					{
+						MessageString = ~The Customer ID you specified '<$con.ImportImagesDlgData[CustomerID]>' is different from the current Customer ID for that order '<$pcon.CustomerIDList[CustomerID]>'. \n\nDo you want to change it? ~;
+					}
+					// Ask the user if they really meant to change the Customer ID
+					if ( MessageBox( Translate(~<MessageString>~),YESNO ) == YES )
+					{
+						// Make sure the Customer ID exists first!!
+						if ( !dBase( RecordCountFor,~Select ID From Customers Where ID = '<CustomerID>'~ ) )
+						{
+							Msg = Translate(~The Customer '<CustomerID>' does not exist. \n\nDo you want to create it?~ );
+
+							if ( MessageBox( ~<Msg>~,YESNO ) != YES )
+							{ 
+								CustomerID = ~~;
+							} else
+							{
+								if ( !dbase( CMD,~Insert Into Customers(ID) Values('<CustomerID>')~ ) )
+								{
+									dBase( GetErrorDescription,theErr );
+									Invoke( ShowWarning,Translate(~Could not add CustomerID <CustomerID>. <theErr>~) );
+									return FALSE;
+								}
+
+								// Change the Customer ID of the order.
+								if (!dbase(CMD,~Update Orders Set CustomerID = '<$con.ImportImagesDlgData[CustomerID]>' Where ID = '<OrderID>'~))
+								{
+									dBase( GetErrorDescription,theErr );
+									Invoke( ShowWarning,Translate(~Could not change CustomerID for Order <OrderID>. <theErr>~) );
+									dBase( LogActivity, Msg,~Unable to change the Customer ID to <$con.ImportImagesDlgData[CustomerID]> for Order <OrderID>.~,Type,Error );
+								}
+							}
+						} else
+						{
+							// Change the Customer ID of the order.
+							if (!dbase(CMD,~Update Orders Set CustomerID = '<$con.ImportImagesDlgData[CustomerID]>' Where ID = '<OrderID>'~))
+							{
+								dBase( GetErrorDescription,theErr );
+								Invoke( ShowWarning,Translate(~Could not change CustomerID for Order <OrderID>. <theErr>~) );
+								dBase( LogActivity, Msg,~Unable to change the Customer ID to <$con.ImportImagesDlgData[CustomerID]> for Order <OrderID>.~,Type,Error );						}
+							}
+					} else
+					{
+						// They said they don't want to change the Customer ID so we will
+						// update the Customers list and select the existing Customer ID, so
+						// that the user does not get confused, or asked the question again
+						// on subsequent imports into this order.
+
+						// I don't think this is needed anymore.  
+						// Invoke( UpdateCustomerID , ~<CustomerID>~);
+					}
+				}
+			}
+		}
+	}
+
+	OverwritesOkay = FALSE;
+	OKToFixPath = FALSE;
+	MakeDigitalOrder = FALSE;
+
+	Invoke( EnableStopButton );
+
+	WarnedDuplicateOrderRollFrame = FALSE;
+	OutputPath = ~~;
+
+	more = DraggedFileList( GetFirst,Image );
+	
+	// Just in case...
+	if (~<CheckKodakRaw>~ == ~~)
+	{
+		CheckKodakRaw = 1;
+	}
+
+	ThisFrame = ~<GivenFrame>~;
+
+	// This is the "Testing" loop, where we validate (and repair, if necessary) the list of files before 
+	// starting to actually import them.
+	while ( <more> && !<Stop> )
+	{
+		OrigCheckKodakRaw = <CheckKodakRaw>;
+		firstChar = ~~;
+		substr( ~<$con.Image[Text].filename>~, 0, 1, firstChar );
+
+		if ( SimilarStr(~<$con.Image[Text].filename>~,~thumbs.db~ ) ||
+			 SimilarStr( ~.~, ~<firstChar>~ ) || 
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~txt~ ) ||
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~ini~ ) ||
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~xml~ ) ||
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~csv~ ) ||
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~dat~ ) ||
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~mdb~ ) ||
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~info~ ))	// ignore thumbs.db
+		{
+			more = DraggedFileList( GetNext,Image );
+			continue;
+		}
+
+		FindRollFrame(~<GivenFrame>~, ~<FrameLen>~, ThisFrame, ~<GivenRoll>~, Image, UseThisRoll);
+
+		// NOTE: HERE STILL WANT TO PASS GivenFrame BECAUSE WE NEED TO KNOW THE *ORIGINAL* FRAME, IF IT WAS SPECIFIED
+		if (!CheckFileName( dBase, Image, ~<OrderID>~,~<UseThisRoll>~,~<GivenFrame>~,<MakeWritable>,OverwritesOkay, WarnedDuplicateOrderRollFrame, NewImagePath, ChangeFileName, ImageIsDigital, ~<CheckKodakRaw>~))
+		{
+			Invoke( ShowProgress, ~Import Failed~ );
+			Invoke( DisableStopButton );
+			return FALSE;
+		}
+
+		// If the image was a Kodak raw camera image, we need to make sure that we've got our
+		// output path figured out.
+		if (<ImageIsDigital>)
+		{
+			ImagePath = ~<$Con.Image[Text]>~;
+			// Figure out what the output folder is for the rendered images. If we can't decide on
+			// one, then we bail here. Only get the output path once per import operation.
+			if (~<OutputPath>~ == ~~)
+			{
+				if (!GetOutputPath(OutputPath, ~<ImagePath>~, <CheckKodakRaw>))
+				{
+					Invoke( ShowProgress, ~Import Failed~ );
+					Invoke( DisableStopButton );
+					return FALSE;
+				}
+			}
+		}
+
+		if (<ChangeFileName>)
+		{
+			// NOTE: HERE STILL WANT TO PASS GivenFrame BECAUSE WE NEED TO KNOW THE *ORIGINAL* FRAME, IF IT WAS SPECIFIED
+			if (!FixFileName( dBase, Image, ~<NewImagePath>~, ~<OrderID>~, ~<UseThisRoll>~, ~<GivenFrame>~, <OKToFixPath>) )
+			{
+				Invoke( ShowProgress, ~Import Failed~ );
+				Invoke( DisableStopButton );
+				return FALSE;
+			} else
+			{
+				Image(Set, ~Text~, ~<NewImagePath>~);	// Update the filename in the gencon so that when the list goes into the
+														// actual import loop, we remember the new filename!
+			}
+		}
+
+		// Bump a numeric Frame # only if the given frame was originally numeric
+		if (IsNumeric(~<GivenFrame>~))
+		{
+			++ThisFrame;
+		}
+		
+		// Set CheckKodakRaw back to the original value in case it was set to 0
+		// when a Kodak Legacy Raw Camera file was processed.
+		CheckKodakRaw = <OrigCheckKodakRaw>;
+		
+		more = DraggedFileList( GetNext,Image );
+	}
+
+	ThisFrame = ~<GivenFrame>~;
+
+	more = DraggedFileList( GetFirst,Image );
+
+	AddCount = 0;
+
+	// If we're Auto Queueing, then get the selected Setup from the Workstation Settings.
+	GetWorkStationSettings( ~DigitalCamera~,~AutoQueueOnImport~, AutoQueueOnImport, Enabled);
+	AutoImportSetup = ~~;
+	GetWorkStationSettings( ~DigitalCamera~,~AutoImportSetup~, AutoImportSetup, Enabled );
+
+	if (!IsNULL(~<AutoImportSetup>~))
+	{
+		// Now, for the setup, we need to get the file extension.
+
+		Query = ~SELECT FileExtension FROM DigitalCameraSetups WHERE Setup = '<AutoImportSetup>' ~;
+
+		if (!dBase(GetValuesFor, ~<Query>~, FileExtension) )
+		{
+			// Default to TIFF if the setup value is not found
+			FileExtension = ~.tif~;
+		}
+	} else
+	{
+		// Default to TIFF if there is no setup specified
+		FileExtension = ~.tif~;
+	}
+
+	while ( <more> && !<Stop> )
+	{
+		OrigCheckKodakRaw = <CheckKodakRaw>;
+	
+		// Make sure the first character is not .
+		firstChar = ~~;
+		substr( ~<$con.Image[Text].filename>~, 0, 1, firstChar );
+
+		if ( SimilarStr(~<$con.Image[Text].filename>~,~thumbs.db~ ) ||
+			 SimilarStr( ~.~, ~<firstChar>~ ) || 
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~txt~ ) ||
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~ini~ ) ||
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~xml~ ) ||
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~csv~ ) ||
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~dat~ ) ||
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~mdb~ ) ||
+			 SimilarStr( ~<$con.Image[Text].ext>~, ~info~ ))	// ignore thumbs.db
+		{
+			--NumImages;
+			log( Session,~Import Images: Ignoring <$con.Image[Text]>~ );
+			more = DraggedFileList( GetNext,Image );
+			continue;
+		}
+
+		FindRollFrame(~<GivenFrame>~, ~<FrameLen>~, ThisFrame, ~<GivenRoll>~, Image, UseThisRoll);
+
+		Invoke( ShowProgress,Translate( ~<$Con.Image[Text]>~ ) );
+
+// Based on system setting, check for DCR file for Digital Camera Import
+		// CheckForKodakRaw = 0 -> Use Legacy method for raw using PICIO
+		// CheckForKodakRaw = 1 -> Use PIE to do all conversions (Bibble as necessary)
+
+		ImageIsDigital = IsFileKodakRawOrUnsupported(Image, ~<CheckKodakRaw>~, UnsupportedLegacyImage, CameraModel, UnsupportedOther);
+		
+		if ( SimilarStr( ~<CameraModel>~, ~LRAW~ ) )
+		{
+			CheckKodakRaw = 0;
+		}
+		
+		if ( !<CheckKodakRaw> && ( SimilarStr( ~<CameraModel>~, ~Unknown~ ) || IsNull( ~<CameraModel>~ ) || SimilarStr( ~<CameraModel>~, ~LRAW~ ) ) )
+		{
+			ImagePath = ~<$Con.Image[Text]>~;
+			
+			// Check path and change if necessary only when Bibble is checked in the user interface and legacy files are imported.
+			if ( <OrigCheckKodakRaw> && !<CheckKodakRaw> && SimilarStr( ~<CameraModel>~, ~LRAW~ ) )
+			{
+				tempOutputPath = ~<OutputPath>\<OrderID>\<UseThisRoll>~;
+				// Create the folders as necessary.
+				if ( !Directory( Create, ~<tempOutputPath>~ ) )
+				{
+					err = GetLastErrorMsg();
+					Invoke( ShowWarning,Translate( ~Failed to create folder <tempOutputPath>.  Can't Continue.  <err>~ ) );
+					return FALSE;
+				}	
+			}
+			else
+			{
+				tempOutputPath = ~<OutputPath>~ ;
+			}
+
+			if ( !AddDigitalCameraThumbnail( dBase,~<ImagePath>~,~<tempOutputPath>~,~<OrderID>~,~<UseThisRoll>~,~<ThisFrame>~, ~<FileExtension>~) )
+			{
+				dBase( LogActivity, Msg,~Unable to import Kodak Raw image <ImagePath> as Order: <OrderID> Roll: <UseThisRoll> Frame: <ThisFrame>~,Type,Error );
+			}
+
+			// Check if we're supposed to be queueing these digital files for processing
+			if (Numeric(~<AutoQueueOnImport>~))
+			{
+				FileName = ~<$Str.$ImagePath.FileName>~;
+
+				QueueDigitalFile(dBase, ~<OrderID>~,~<UseThisRoll>~,~<ThisFrame>~, ~<ImagePath>~, ~<tempOutputPath>~, ~~, ~~, ~<AutoImportSetup>~, FALSE);
+			} else
+			{
+				// If this is the first one, then we need to make sure that the order status is being handled properly.
+				if (!<MakeDigitalOrder>)
+				{
+					MakeDigitalOrder = TRUE;
+
+					// Now we need to change the Order's CameraFileConversionStatus to "Needs Converting"
+					// ~None~=0, ~Needs Converting~=1, ~In Progress~=2, ~Complete~=3
+					if (!dbase(CMD,~Update Orders Set CameraFileConversionStatus = 1 Where ID = '<OrderID>'~))
+					{
+						dBase( GetErrorDescription,theErr );
+						Invoke( ShowWarning,Translate(~Could not add Order <OrderID>. <theErr>~) );
+						dBase( LogActivity, Msg,~Unable to change the order status of order <OrderID> to 'convert' in order to handle Kodak Raw camera files.~,Type,Error );
+					}
+				}
+			}
+		} 
+		else
+		{
+			// If it wasn't a Raw digital Camera file, then handle it the old way.
+			if (Numeric(~<UseEmbeddedProfile>~) && ContainsEmbeddedInputProfile(~<$Con.Image[Text]>~) )
+			{
+				if ( !AddThumbnail( dBase,~<$Con.Image[Text]>~,~<OrderID>~,~<UseThisRoll>~,~<ThisFrame>~,~~,~<EnableProfile>~, ~<MakeWritable>~, ~<CameraModel>~, ~<OutputPath>~ ) )
+				{
+					dBase( LogActivity, Msg,~Unable to import image <ImagePath> as Order: <OrderID> Roll: <UseThisRoll> Frame: <ThisFrame>~,Type,Error );
+					--AddCount;
+				}
+			} else
+			{
+				if ( !AddThumbnail( dBase,~<$Con.Image[Text]>~,~<OrderID>~,~<UseThisRoll>~,~<ThisFrame>~,~<ProfileName>~,~<EnableProfile>~, ~<MakeWritable>~, ~<CameraModel>~, ~<OutputPath>~ ) )
+				{
+					dBase( LogActivity, Msg,~Unable to import image <ImagePath> as Order: <OrderID> Roll: <UseThisRoll> Frame: <ThisFrame>~,Type,Error );
+					--AddCount;
+				}
+			}
+		}
+
+		// Bump a numeric Frame # only if the given frame was originally numeric
+		if (IsNumeric(~<GivenFrame>~))
+		{
+			++ThisFrame;
+		}
+	
+		++AddCount;
+		
+		// Set CheckKodaRaw back to original value in case it was changed for
+		// 1 image that was a Kodak Legacy Raw Camera file.
+		CheckKodakRaw = <OrigCheckKodakRaw>;
+
+		more = DraggedFileList( GetNext,Image );
+	}
+
+	// Now that we are done set the order status to the specified OrderStatus.
+	Query = ~Select * From Orders Where ID = '<OrderID>'~;
+	if ( PGenConList( List, Connect, GetRecordFor, ~<Query>~, Order ) )
+	{
+		if ( Order( Set, Status, ~<OrderStatus>~ ) )
+		{
+			List( Update );
+		}
+	}
+
+	if ( <Stop> )
+	{
+		Invoke( ShowProgress,Translate( ~You interrupted the process. Imported <AddCount> of <NumImages> images~ ) );
+	}
+	else
+	{
+		if (<NumThumbnailAddsFailed> != 0)
+		{
+			Invoke( ShowProgress,Translate( ~Added <AddCount> of <NumImages> images. Failed to add a thumbnail(s) to <NumThumbnailAddsFailed> image(s).~ ) );
+			Invoke( ShowPopupMessage, ~Failed to add a thumbnail(s) to <NumThumbnailAddsFailed> image(s). See the Session Log for more information~);
+		} else
+		{
+			Invoke( ShowProgress,Translate( ~Added <AddCount> of <NumImages> images~ ) );
+
+			if ( Document( Doc,FindByName,~Analyzer~ ) )
+			{
+				Actions = ACTION DOC ( ~Analyzer~ OpenOnce Analyzer "NotifyAnalyzerRefreshOrders(~<OrderID>~);" );
+				PerformActions( Actions );
+			}
+			else if ( Document( Doc,FindByName,~KPDAWAnalyzer~ ) )
+			{
+				Actions = ACTION DOC ( ~KPDAWAnalyzer~ OpenOnce KPDAWAnalyzer "NotifyAnalyzerRefreshOrders(~<OrderID>~);" );
+				PerformActions( Actions );
+			}
+		}
+	}
+
+	Invoke( DisableStopButton );
+
+	if ( <CloseAfterImport> )
+	{
+		Invoke( ForceCloseDialog );
+	}
+
+	return FALSE;
+}
+
+NUMERIC UpdateCustomerID (CustID)
+{	
+	if (IsNULL(~<CustID>~))
+	{
+		// If the Customer ID is NULL, then we just want to clear the field.
+		// Don't touch the dialog on a thread
+		ImportImagesDlgData( SetValues, CustomerID, ~~);
+		ImportImagesDlg( ComboBox, CustomerIDField, ResetContent);
+		ImportImagesDlg( ComboBox, CustomerIDField, SetSelectedIndex, -1);
+		ImportImagesDlgData( SetValues, CustomerID, ~~);
+	} 
+	else
+	{
+		Query = ~Select ID From Customers Where ID Like '<CustID>%' Order By ID~;
+
+		if ( !PGenConList( ListOfCustomerIDs,Connect,Cursor,Forward,Query,~<Query>~ ) )
+		{
+			OrderSelected();
+			ListOfCustomerIDs( GetErrorDescription,0,theErr );
+			return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		}
+
+		Count = ListOfCustomerIDs( NumEntries );
+
+		if ( <count> )
+		{
+			ListOfCustomerIDs( MakeStringList, CustomersList, ID);
+			ImportImagesDlg( SetControlFromStringList, CustomerIDField, CustomersList, Selection);
+			ImportImagesDlg( SelectString, ~CustomerIDField~, ~<CustID>~);
+			ImportImagesDlgData( SetValues, CustomerID, ~<CustID>~);
+		}
+	}
+
+	return TRUE;
+}
+
+
+/***************************************************************************************************/
+NUMERIC CheckFileName( &dBase, &Image, Order, Roll, WhichFrame, MakeWritable, &OverwritesOkay, &WarnedDuplicateOrderRollFrame, &NewImagePath, &ChangeFileName, &ImageIsDigital, CheckKodakRaw)
+{
+	ImagePath = ~<$con.Image[Text]>~;
+
+	ChangeFileName = FALSE;
+
+	// Don't try to dereference the filename if it's not SQLSafe! The script parser will choke on it.
+	if (SQLSafe(~<ImagePath>~))
+	{
+		Invoke( ShowProgress,Translate( ~Checking <ImagePath>~ ) );
+	} 
+
+	FileName = ~<$Str.$ImagePath.FileName>~;
+	FilePath = ~<$Str.$ImagePath.Path>~;
+	Frame = ~<WhichFrame>~ == ~~ ? ~<$Str.$FileName.WithOutExt>~ : ~<WhichFrame>~;
+
+	// Need to figure out if it's the filename or a foldername that needs fixing. 
+	//		If it's a folder, then you're out of luck. We're not going to fix that. 
+	//		If it's a filename, that we can fix it if they would like.
+	if ( !SQLSafe(~<FilePath>~) )
+	{
+		Invoke( ShowWarning, ~Can't handle a path with a ' or tilde in it.~ );
+		return FALSE;
+	}
+
+	if ( !PathSafe(~<FilePath>~) )
+	{
+		Invoke( ShowWarning,~Can't handle a path containing parenthesis.~ );
+		return FALSE;
+	}
+
+	if (AuditPathString(~<FilePath>~) )
+	{
+		Invoke( ShowWarning, ~Can't handle a path with a , " ^ & * = | < > or ? in it.~ );
+		return FALSE;
+	}
+
+	// You don't want to fix the filename, only later to tell the user that the file can't be imported
+	// for other reasons. Thus, we should "look ahead" by doing all of the sanity checks on the file's
+	// "new" name *before* we actually rename it. That'll avoid a lot of confusion.
+	if ( !SQLSafe(~<FileName>~) || !PathSafe(~<FileName>~) || (AuditPathString(~<FileName>~) != 0))
+	{
+		ChangeFileName = TRUE;
+		GetFixedFilename(Image, NewImagePath);
+	} else
+	{
+		// The old filename was fine, so keep it.
+		ChangeFileName = FALSE;
+		NewImagePath = ~<ImagePath>~;
+	}
+
+// NOTE: AT THIS POINT NewImagePath MUST CONTAIN THE NEW "FIXED" FILENAME //
+
+	// Make sure that the path is a UNC Path.
+	NewImagePath = MakePath( Type,UNC,~<NewImagePath>~);
+
+	if ( !Files( IsUNC,~<NewImagePath>~ ) && NetworkOperation() )
+	{
+		Msg = Translate( UIMessages,UnsharedFileOK,~<NewImagePath>~ );
+
+		MessageBox( ~<Msg>~);
+		return FALSE;
+	}
+
+	// Update roll & frame based on the (possibly) new ImagePath name
+	NewFileName = ~<$Str.$NewImagePath.FileName>~;
+	NewFileFrame = ~<WhichFrame>~ == ~~ ? ~<$Str.$NewFileName.WithOutExt>~ : ~<WhichFrame>~;
+	NewFileRoll = ~<Roll>~ == ~~ ? ~<$Str.$NewImagePath.Folder>~ : ~<Roll>~;
+
+	// Make sure that the values are within our size specs.
+	if ( strlen(~<NewFileFrame>~) > 31 )
+	{ 
+		Invoke( ShowWarning,Translate( ~The Frame (<NewFileFrame>) of <NewImagePath> is greater than 31 characters~ ) );
+		return FALSE;
+	} 
+
+	if ( strlen(~<NewFileRoll>~) > 31 )
+	{
+		Invoke( ShowWarning,Translate( ~The Roll (<NewFileRoll>) of <NewImagePath> is greater than 31 characters~ ) );
+		return FALSE;
+	}
+
+	// Test to see whether or not the file is a digital camera file.
+	// This function needs to get the *original* filename via the "Image" gencon
+	ImageIsDigital = FALSE;
+//debug(0);	
+	// if the system setting says to use legacy Digital camera importer
+	ImageIsDigital = IsFileKodakRawOrUnsupported(Image, ~<CheckKodakRaw>~, UnsupportedLegacyImage, CameraModel, UnsupportedOther);
+
+	if ( SimilarStr( ~<CameraModel>~, ~LRAW~ ) )
+	{
+		CheckKodakRaw = 0;
+	}
+	
+	// Only use this two errors below if using the legacy method and CheckKodakRaw = 0;
+	if ( !<CheckKodakRaw> || SimilarStr( ~<CameraModel>~, ~Unknown~ ) || IsNull( ~<CameraModel>~ ) || SimilarStr( ~<CameraModel>~, ~LRAW~ ) )
+	{
+		// if digital camera importer fails, use Bibble
+		if (<UnsupportedLegacyImage>)
+		{
+			MessageBox(~The file: '<$Con.Image[Text]>'\n\nis a from a Kodak <CameraModel> Camera which is not supported. These files must first be converted to a standard TIFF image using PhotoDesk before being imported.~);
+			Invoke( ShowProgress, ~Import Failed~ );
+			return FALSE;
+ 		}
+
+		// This catches files with a .DCR extension, but which are unsupported by the SDKs for whatever reason.
+		if (<UnsupportedOther>)
+		{
+			MessageBox(~The file: '<$Con.Image[Text]>' is not in a supported file format.~);
+			Invoke( ShowProgress, ~Import Failed~ );
+			return FALSE;
+ 		}
+	}
+	
+	// Check for the *fixed* filename.
+	if (!CheckFileStatus( dBase, ~<NewImagePath>~, ~<Order>~,~<NewFileRoll>~,~<NewFileFrame>~,<MakeWritable>,OverwritesOkay, <ImageIsDigital>, WarnedDuplicateOrderRollFrame, ~<ImagePath>~) )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+/************************************************************/
+NUMERIC CheckFileStatus( &dBase,ImagePath,Order,WhichRoll,WhichFrame,MakeWritable, &OverwritesOkay, ImageIsDigital, &WarnedDuplicateOrderRollFrame, OriginalImagePath)
+{	
+	// Now do sanity checks on the database tables to make sure we're not reassigning this image.
+
+	// If it's a raw digital camera file, we need to check the RawImages table. Otherwise we need to just
+	// check the Images table.
+	if (<ImageIsDigital>)
+	{
+		Query = ~Select OrderID,Roll,Frame From RawImages Where Path = '<ImagePath>'~;
+	} else
+	{
+		Query = ~Select OrderID,Roll,Frame From Images Where Path = '<ImagePath>'~;
+	}
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,Translate(~Query Failed <Query>. <theErr>~) );
+		return FALSE;
+	}
+
+	if ( List( GetFirst,Image ) )
+	{
+		if ( (SimilarStr(~<$pcon.Image[OrderID]>~,~<Order>~) && SimilarStr(~<$pcon.Image[Roll]>~,~<WhichRoll>~) && SimilarStr(~<$pcon.Image[Frame]>~,~<WhichFrame>~)) == FALSE )
+		{
+			if ( !<OverwritesOkay> )
+			{
+				TheMsg = Translate(~<ImagePath>\nis already in use on Order: <$pcon.Image[OrderID]>, Roll: <$pcon.Image[Roll]>, Frame: <$pcon.Image[Frame]>.\n\nIs it okay to re-assign images while importing?\n\nNOTE: Any Raw Image data stored from the previous import will be discarded.~);
+
+				answer = CustomMessageBox( Title,Translate(~Import Conflict for <Order>,<WhichRoll>,<WhichFrame>~),Message,~<TheMsg>~,
+											Button1,Translate(~Just This Image~),
+											Button2,Translate(~All Images~),
+											Button3,Translate(~No. Please Stop.~) );
+
+				if ( (<Answer> == 3) || (<Answer> == -1) )		// USER MADE A MISTAKE AND JUST WANTS OUT
+				{
+					return FALSE;
+				}
+				else if ( <Answer> == 2 )	// USER SELECTED ALL IMAGES
+				{
+					OverwritesOkay = TRUE;	// DON'T ASK AGAIN
+				}
+			}
+		}
+	}
+
+	// If the image is not digital, we do a check to see if it was previously imported as a Raw digital camera
+	// file. This would take care of the case where a legacy camera file is imported (with a .tif extension)
+	// first as a raw digital camera file, and then again without the "Check for Kodak Raw Files" checkbox checked.
+	// In the second case the image would be treated as a regular tiff, but since we see it was previously
+	// handled as a raw image file, we know that this must have been an error.
+	if (!<ImageIsDigital>)
+	{
+		Query = ~Select OrderID,Roll,Frame From RawImages Where Path = '<ImagePath>'~;
+
+		ForgetLocal(List);
+
+		if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Invoke( ShowWarning,Translate(~Query Failed <Query>. <theErr>~) );
+			return FALSE;
+		}
+
+		if ( List( GetFirst,Image ) )
+		{
+			Message = ~<ImagePath>\n\nwas previously imported as a raw digital camera image in Order: <$pcon.Image[OrderID]>, Roll: <$pcon.Image[Roll]>, Frame: <$pcon.Image[Frame]>.\n\nCan not continue import.~;
+			MessageBox(~<Message>~);
+			return FALSE;
+		}
+	}
+
+	// This is new feature. It will warn the user (only once per import, though!) if there are any conflicts
+	// with Order/Roll/Frame. We always check the Images table, and if it is a digital camera file, we check the
+	// RawImages table as well. 
+	if (!<WarnedDuplicateOrderRollFrame>)
+	{
+		// Always have to check Images, since import of both digital and non-digital images creates a record there.
+		Query = ~Select Path From Images Where OrderID = '<Order>' AND Roll = '<WhichRoll>' AND Frame = '<WhichFrame>' AND Path <> NULL~;
+		
+		ForgetLocal(List);
+
+		if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Invoke( ShowWarning,Translate(~Query Failed <Query>. <theErr>~) );
+			return FALSE;
+		}
+
+		if ( List( GetFirst,Image ) )
+		{
+			if ( MessageBox( ~There is already a record with the same order/roll/frame combination. Do you want to overwrite this and all other conflicting order/roll/frame records?~,YESNO ) != YES )
+			{
+				return FALSE;
+			} else
+			{
+				WarnedDuplicateOrderRollFrame = TRUE;
+			}
+		}
+
+		if (<ImageIsDigital> && !<WarnedDuplicateOrderRollFrame>)
+		{
+			Query = ~Select Path From RawImages Where OrderID = '<Order>' AND Roll = '<WhichRoll>' AND Frame = '<WhichFrame>' AND ImageType = 0~;
+
+			ForgetLocal(List);
+
+			if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate(~Query Failed <Query>. <theErr>~) );
+				return FALSE;
+			}
+
+			if ( List( GetFirst,Image ) )
+			{
+				if (!SimilarStr(~<ImagePath>~, ~<$pcon.Image[Path]>~))
+				{
+					if ( MessageBox( ~There is already a record with the same order/roll/frame combination. Do you want to overwrite this and all other conflicting order/roll/frame records?~,YESNO ) != YES )
+					{
+						return FALSE;
+					} else
+					{
+						WarnedDuplicateOrderRollFrame = TRUE;
+					}
+				}
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+/***************************************************************************************************/
+// This function removes the ' ~ ( and ) characters from the given pathname.
+// NOTE: This should only be done if the filename is what needs fixing, rather than a folder.
+VOID GetFixedFilename(&Image, &NewImagePath)
+{
+	ImagePath = ~<$con.Image[Text]>~;
+
+	if (!MakePathSafe(ImagePath))
+	{
+		Log( Session, ~MakePathSafe function failed!~ );
+	}
+
+	NewImagePath = ~<ImagePath>~;
+
+	return;
+}
+
+/***************************************************************************************************/
+// We only get here if we know the filename needs to be changed.
+NUMERIC FixFileName( &dBase, &Image, NewImagePath, Order, WhichRoll, WhichFrame, &OKToFixPath)
+{
+	NewFileName = ~<$Str.$NewImagePath.FileName>~;
+	Frame = ~<WhichFrame>~ == ~~ ? ~<$Str.$NewFileName.WithOutExt>~ : ~<WhichFrame>~;
+
+	// You don't want to fix the filename, only later to tell the user that the file can't be imported
+	// for other reasons. Thus, we should "look ahead" by doing all of the sanity checks on the file's
+	// "new" name *before* we actually rename it. That'll avoid a lot of confusion.
+	if ( !<OKToFixPath> )
+	{
+		GenCon( MbInfo,New,DDCustomMessageBox );
+
+		MbInfo( SetFormattedValueFromGenConText, Message, Image, ~The file: %s\ncan not be imported because its name contains one or more of the following characters:\n	tilde, comma, ampersand, ^ * = | < > ? ( ), double quote, or single quote.\n\nDo you want to rename the file and continue?~);
+		MbInfo( SetValues, Title, Translate(~Filename problem for Order: <Order> Roll: <WhichRoll> Frame: <Frame>~),
+									Button1,Translate(~Repair Just This Filename~),
+									Button2,Translate(~Repair All Filenames~),
+									Button3,Translate(~No. Please Stop.~));
+
+		result = CustomMessageBox(MbInfo);
+		answer = MbInfo(GetNumeric, ButtonPressed);
+
+		if ( <result> == 2 || <Answer> == 3 )		// USER MADE A MISTAKE AND JUST WANTS OUT, OR PRESSED "CANCEL"
+		{
+			Invoke( ShowWarning,Translate( ~0 images were imported. Please repair the filename problem and try again. Import Images will now abort.~ ) );
+			return FALSE;
+		}
+		else if ( <Answer> == 2 )	// USER SELECTED ALL IMAGES
+		{
+			OKToFixPath = TRUE;	// DON'T ASK AGAIN
+		}
+
+		// If we got here, the user wants us to fix the filename for them and move on.
+		// The file will need to be renamed.
+		// The filename will need to be changed in the GenCon list so that the import loop now grabs the file
+		// based on its' new filename.
+
+		if (!FixAndRename(Image, ~<NewImagePath>~))
+		{
+			Invoke( ShowWarning,Translate( ~Unable to rename file to <NewImagePath>. The import will now abort.~ ) );
+			return FALSE;
+		}
+	} else
+	{
+		// If we got here, then we've been told that it's OK to fix all filenames.
+		if (!FixAndRename(Image, ~<NewImagePath>~))
+		{
+			Invoke( ShowWarning,Translate( ~Unable to rename file to <NewImagePath>. The import will now abort.~ ) );
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+/***************************************************************************************************/
+NUMERIC	FixAndRename(&Image, NewImagePath)
+{
+	OldImagePath = ~<$con.Image[Text]>~;
+
+	if (!Files(RenameIndirect, OldImagePath, NewImagePath))
+	{
+		// Note: An error will be logged in the session log by RenameIndirect, so there's no need to log here.
+		return FALSE;
+	} else
+	{
+		Log( Session, ~Import Images successfully renamed invalid filename to <NewImagePath>~ );
+		return TRUE;
+	}
+}
+
+/***************************************************************************************************/
+NUMERIC IsFileKodakRawOrUnsupported(&Image, CheckKodakRaw, &UnsupportedLegacyImage, &CameraModel, &UnsupportedOther)
+{
+	// CheckKodak Raw = 0 -> Use PICIO and legacy method.
+	// CheckKodakRaw = 1 -> Use PIE to determine file type (using Bibble)
+	
+	UnsupportedLegacyImage = FALSE;
+	UnsupportedOther = FALSE;
+	
+	if ( <CheckKodakRaw> )
+	{
+		fileType = DetermineFileType( ~<$Con.Image[Text]>~ );
+		if ( SimilarStr( ~<fileType>~, ~Unknown~ ) )
+		{
+			CameraModel = ~Unknown~;
+			UnsupportedOther = TRUE;
+			return FALSE;
+		}
+		else if ( SimilarStr( ~<fileType>~, ~RAW~ ) )
+		{
+			CameraModel = ~<fileType>~;
+			UnsupportedOther = TRUE;
+			return TRUE;
+		}
+		else if ( SimilarStr( ~<fileType>~, ~LRAW~ ) )
+		{
+			// Legacy Kodak Camera File.  We need to handle
+			// this the old way as they are not supported by Bibble.
+			UnsupportedLegacyImage = FALSE;
+			CameraModel = ~<fileType>~;
+		
+			ImportDCObject(SetAttributeValue, ImportDCObject(KVTPICPROCSrcPicPathID), ~c:\~);
+			ImportDCObject( CloseFile );
+			
+			return TRUE;
+		}
+		else
+		{
+			CameraModel = ~<fileType>~;
+			UnsupportedLegacyImage = FALSE;
+			return FALSE;
+		}
+	}
+	else
+	{
+		// CheckKodakRaw has been redefined.  It now tells import whether or not to use the legacy
+		// PICIO way to check an image or to use Bibble.
+		
+		UnsupportedLegacyImage = FALSE;
+
+		ImagePath = ~<$Con.Image[Text]>~;
+
+		if (Upper(~<$Str.$ImagePath.ext>~) == ~DCR~)
+		{
+			// Make sure it's really supported!!
+			if (ImportDCObject(IsFileKodakRaw, ~<ImagePath>~))
+			{
+				UnsupportedOther = FALSE;
+				CameraModel = ~LRAW~;
+			} else
+			{
+				UnsupportedOther = TRUE;
+			}
+
+			ImportDCObject( CloseFile );
+
+			return TRUE;
+		} else
+		{
+			if (!Numeric(~<CheckKodakRaw>~))
+			{
+				// Tell us if it's a DCS or DCR image			
+				if (ImportDCObject(IsFileKodakRaw, ~<ImagePath>~))
+				{
+					bReturn = TRUE;
+				} 
+				else
+				{
+					bReturn = FALSE;
+				}
+
+				if (<bReturn>)
+				{
+					if (CameraModelSupported(CameraModel))
+					{
+						CameraModel = ~LRAW~;
+						UnsupportedLegacyImage = FALSE;
+					} 
+					else
+					{
+						UnsupportedLegacyImage = TRUE;
+					}
+				} 
+				else
+				{
+					CameraModel = DetermineFileType( ~<ImagePath>~ );
+					if ( SimilarStr( ~<CameraModel>~, ~Unknown~ ) || SimilarStr( ~<CameraModel>~, ~RAW~ ) )
+					{
+						UnsupportedLegacyImage = FALSE;
+						UnsupportedOther = TRUE;
+					}
+				}
+
+				ImportDCObject(SetAttributeValue, ImportDCObject(KVTPICPROCSrcPicPathID), ~c:\~);
+
+				ImportDCObject( CloseFile );
+
+				return (<bReturn>);
+
+			} 
+			else
+			{
+				return FALSE;
+			}
+		}
+
+	}
+
+	return FALSE;
+}
+
+/***************************************************************************************************/
+// THIS FUNCTION ASSUMES THAT EVERYTHING HAS BEEN SET UP CORRECTLY AHEAD OF TIME!!
+// - The file is selected
+// - The ImportDCObject has been created
+// - The file has been checked already to see that it's a DCS or DCR image using IsFileKodakRaw()
+NUMERIC CameraModelSupported(&CameraModel)
+{
+	if (!ImportDCObject(GetAttributeValue, ImportDCObject(KVTPICPROCSrcPicCameraModelID), LocalCameraModel))
+	{
+		Log( Session,~CameraModelSupported ERROR!:  <LocalCameraModel>~);
+		return FALSE;
+	}
+
+	CameraModel = ~<LocalCameraModel>~;
+
+	if (SimilarStr(~<CameraModel>~, ~DCS Pro 14N~) ||		// Pro 14N
+		SimilarStr(~<CameraModel>~, ~DCS Pro 14nx~) ||		// Pro 14Nx 
+		SimilarStr(~<CameraModel>~, ~DCS Pro SLR/n~) ||		// Pro SLR/n 
+		SimilarStr(~<CameraModel>~, ~DCS Pro SLR/c~) ||		// Pro SLR/c 
+		SimilarStr(~<CameraModel>~, ~DCS720X~) ||			// 7X series
+		SimilarStr(~<CameraModel>~, ~DCS760C~) ||
+		SimilarStr(~<CameraModel>~, ~ProBack~) ||
+		SimilarStr(~<CameraModel>~, ~ProBack645~) ||
+
+		SimilarStr(~<CameraModel>~, ~DCS620C~) ||			// 6X series
+		SimilarStr(~<CameraModel>~, ~DCS620X~) ||
+		SimilarStr(~<CameraModel>~, ~DCS660C~) ||
+		
+		SimilarStr(~<CameraModel>~, ~DCS520C~) ||			// 5X series
+		SimilarStr(~<CameraModel>~, ~DCS560C~) ||
+		
+		// 4X series is NOT supported!
+		SimilarStr(~<CameraModel>~, ~DCS315C~) ||
+		SimilarStr(~<CameraModel>~, ~DCS330C~) )			// 3X series
+		{
+			return TRUE;
+		} else
+		{
+			return FALSE;
+		}
+
+	return FALSE;
+}
+
+/********************************************************************************************/
+STR GetProfilePath( Name )
+{
+	Query = ~Select Path From Profiles Where Name = '<Name>'~;
+
+	if ( !PGenConList( ProfilesList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		ProfilesList( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Failed to query the Profiles table.  <theErr>.  <Query>~ ) ); 
+		return ~~;
+	}
+
+	if ( !ProfilesList( GetFirst,Profile ) )
+		{ return ~~; }
+
+	return ~<$pcon.Profile[Path]>~;
+}
+
+/********************************************************************************************/
+// NOTE: For Raw Digital Camera files imported, we are currently ignoring the Input Profile
+// selection. We do this because we don't really want the user to assign non-default input
+// profiles to the digital camera files.
+NUMERIC AddDigitalCameraThumbNail( &dBase,ImagePath,OutputPath,Order,Roll,WhichFrame, FileExtension)
+{
+	FileName = ~<$Str.$ImagePath.FileName>~;
+	Frame = ~<WhichFrame>~;
+	ColorType = 0;
+
+	if (~<Frame>~ == ~~)
+	{
+		Invoke( ShowWarning,~Frame ended up NULL!~ );
+		Log( Session, ~The Frame was NULL for order: <Order> Roll: <Roll> Image: <ImagePath>~);
+		return FALSE;
+	}
+
+	ImportImagesDlg( SetString,Translate( ~Adding <ImagePath>~ ) ,Status,0 );
+
+	size = ~<$SystemSettings.Thumbnail[Size]>~;
+	compressionQuality = ~<$SystemSettings.Thumbnail[Quality]>~;
+
+	size = IsNULL( ~<size>~ ) ? ~500~ : ~<size>~;
+	compressionQuality = IsNULL( ~<compressionQuality>~ ) ? ~100~ : ~<compressionQuality>~;
+
+	FileType=~~; xRes = yRes = 0; PreviewWidth = PreviewLength = 0;
+
+	//GetPIEImageInfo( ~<ImagePath>~, MaxWidth, xRes, MaxHeight, yRes );
+
+	FinalOutputPath = ~<OutputPath>~ + ~\~ + ~<$Str.$ImagePath.FileName.WithOutExt>~ + ~<FileExtension>~;
+
+
+	// BY THIS POINT, WE ALREADY KNOW THAT THE USER WANTS TO OVERWRITE THE IMAGE IF IT EXISTS IN OTHER ORDERS //
+
+	// If the order/roll/frame combination already exists in the Images table, we need to:
+	//	1. NULL the ICCProfile
+	//	2. Set the ImageSource to DCR
+	//	3. Update the Sharpen field with the Delta Sharpening value provided.
+	//	4. Set the width, length, preview width/length, and reprocess flags
+	if ( dBase( RecordCountFor,~Select Path From Images Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~ ) )
+	{
+		NullCmd = ~Update Images Set Width=<xRes>, Length=<yRes>, PreviewWidth=0, PreviewLength=0, Reprocess=1, Path = '<FinalOutputPath>', ICCProfile = NULL, ImageSource = 'DCR', Sharpen='<$con.ImportImagesDlgData[SharpenDelta]>' Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		if ( !dbase( CMD,~<NullCmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			Invoke( ShowWarning,Translate( ~Database update failed. <NullCmd>. <theErr>~ ) );
+			return FALSE;
+		}
+
+		Log( Session,Translate(~Import Images: Path for OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>' changed to NULL~) );
+
+		// If it existed in the Images table, then it might have been queued in DCQueue as well.
+		DequeueCmd = ~Delete From DCQueue Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>' AND Priority <> 'RESERVED'~;
+		if ( !dbase( CMD,~<DequeueCmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			Invoke( ShowWarning,Translate( ~Database update failed. <DequeueCmd>. <theErr>~ ) );
+			return FALSE;
+		}
+
+		// If it existed in the Images table, then it might have image properties associated with it as well.
+		PropertiesCmd = ~Delete From DCImageProperties Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		if ( !dbase( CMD,~<PropertiesCmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			Invoke( ShowWarning,Translate( ~Database update failed. <PropertiesCmd>. <theErr>~ ) );
+			return FALSE;
+		}
+	} else
+	{
+		ImportImagesDlgData( GetValues,LutName,LutName );
+		LutIndex = GetLutIndex( ~<LutName>~ );
+
+		// This order/roll/frame combo is new to the Images table, so make sure that the sharpening and image source fields are filled in.
+		Fields = ~OrderID,Roll,Frame,ImageType,Path,Category,Sequence,Gamma,Width,Length,Filetype,PreviewWidth,PreviewLength,CropX,CropY,CropWidth,CropLength,Inspect,ImageSource,Sharpen,Reprocess,Reconverting,AutoBalance,LutIndex~;
+		Values = ~'<Order>','<Roll>','<Frame>',0,'<FinalOutputPath>','All',<Sequence++>,1.0,<xRes>,<yRes>,'<Filetype>',<PreviewWidth>,<PreviewLength>,50.0,50.0,100.0,100.0,1,'DCR',<$con.ImportImagesDlgData[SharpenDelta]>, 1,1,1,<LutIndex>~;
+
+		InsertCmd = ~Insert Into Images(<Fields>) Values(<Values>)~;
+
+		if ( !dbase( CMD,~<InsertCmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			Invoke( ShowWarning,Translate( ~Database update failed. <InsertCmd>. <theErr>~ ) );
+			return FALSE;
+		}
+	}
+
+	// Now test to see if this file already exists anywhere in the RawImages table.
+	Query = ~Select OrderID,Roll,Frame from RawImages Where Path = '<ImagePath>'~;
+	if ( dBase( GetValuesFor,~<Query>~,Order2,Roll2,Frame2 ) )
+	{
+		// If the order/roll/frame it exists in is the same as the order/roll/frame that we're specifying...
+		if ( SimilarStr(~<Order>~,~<Order2>~) && SimilarStr(~<Roll>~,~<Roll2>~) && SimilarStr(~<Frame>~,~<Frame2>~) )
+		{
+			// ...then make sure the Processed flag is cleared & NULL the profile (we never specify one via Import Images)!
+			Cmd = ~Update RawImages Set Processed = 0, OutputPath='<OutputPath>', ICCProfile = NULL Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+			if ( !dbase( CMD,~<Cmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <Cmd>. <theErr>~ ) );
+				return FALSE;
+			}
+
+			// Just make sure that the Images table record is updated as appropriate. We could get here and not do it
+			// previously under some circumstances.
+			Cmd = ~Update Images Set Width=<xRes>, Length=<yRes>, PreviewWidth=0, PreviewLength=0, Reprocess=1, Reconverting=1, Path='<FinalOutputPath>', ImageSource = 'DCR', Sharpen='<$con.ImportImagesDlgData[SharpenDelta]>' Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+			if ( !dbase( CMD,~<Cmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <Cmd>. <theErr>~ ) );
+				return FALSE;
+			}
+
+			Log( Session,Translate(~Import Images: Path for OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>' already exists with image <ImagePath>~) );
+			return TRUE;	// We're done, since the RawImages and Images tables have been updated as appropriate.
+		}
+		else	// The path exists in a different order/roll/frame.
+		{
+			// Null the Path field and set Processed = 1 in the RawImages table so it doesn't show up.
+			NullCmd = ~Update RawImages Set Path = NULL, Processed = 1 Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+			if ( !dbase( CMD,~<NullCmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <NullCmd>. <theErr>~ ) );
+				return FALSE;
+			}
+			Log( Session,Translate(~Import Images: Path for OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>' in RawImages changed to NULL~) );
+
+			// Null the Path and ImageSource fields in the Images table, since if we're reassigning the image, we want to "forget"
+			// about any images which were already processed from the original DCR
+			Cmd = ~Update Images Set FileType=NULL, Reprocess=0, Reconverting=0, Width=0, Length=0, PreviewWidth=0, PreviewLength=0, Path=NULL, ImageSource=NULL Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+			if ( !dbase( CMD,~<Cmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <Cmd>. <theErr>~ ) );
+				return FALSE;
+			}
+			
+			// If it existed in the Images table, then it might have been queued in DCQueue as well.
+			DequeueCmd = ~Delete From DCQueue Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>' AND Priority <> 'RESERVED'~;
+			if ( !dbase( CMD,~<DequeueCmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <DequeueCmd>. <theErr>~ ) );
+				return FALSE;
+			}
+
+			// If it existed in the Images table, then it might have been in the RawImages table as well.
+			RawImagesCmd = ~Delete From RawImages Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+			dbase( CMD,~<RawImagesCmd>~ );
+
+			// If it existed in the Images table, then it might have image properties associated with it as well.
+			PropertiesCmd = ~Delete From DCImageProperties Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+			if ( !dbase( CMD,~<PropertiesCmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <PropertiesCmd>. <theErr>~ ) );
+				return FALSE;
+			}
+		}
+	}
+
+	// Does the order/roll/frame combo already exist in the RawImages table?
+	if ( dBase( RecordCountFor,~Select Path From RawImages Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~ ) )
+	{
+		// Set the path, Clear the Processed flag is cleared & NULL the profile (we never specify one via Import Images)!
+		Cmd = ~Update RawImages Set Path='<ImagePath>', Processed = 0, OutputPath='<OutputPath>', ICCProfile = NULL Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+		if ( !dbase( CMD,~<Cmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			Invoke( ShowWarning,Translate( ~Database update failed. <Cmd>. <theErr>~ ) );
+			return FALSE;
+		}
+
+		Log( Session,Translate(~Import Images: Path for OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>' set to <ImagePath>~) );
+
+		return TRUE;
+	}
+
+	// If we got all the way to here, then the order/roll/frame record is new to the RawImages table, so we can just insert a new one!
+	Fields	= ~OrderID,Roll,Frame,OutputPath,Path~;
+	Values	= ~'<Order>','<Roll>','<Frame>','<OutputPath>','<ImagePath>'~;
+
+	InsertCmd	= ~Insert Into RawImages(<Fields>) Values(<Values>)~;
+
+	if ( !dbase( CMD,~<InsertCmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,Translate( ~Database update failed. <InsertCmd>. <theErr>~ ) );
+		return FALSE;
+	}
+
+	Log( Session,Translate(~Import Images: Imported Digital Camera File <ImagePath> for OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~) );
+
+	return TRUE;
+}
+
+/***************************************************************************************************/
+NUMERIC AddThumbNail( &dBase,ImagePath,Order,Roll,WhichFrame,ProfileName,EnableProfile, MakeWritable, CameraModel, OutputPath )
+{
+
+	FileName	= ~<$Str.$ImagePath.FileName>~;
+	Frame		= ~<WhichFrame>~;
+	ColorType	= 0;
+	OpRestrictions = 0 ;
+	Orientation	= 0;
+
+	if (~<Frame>~ == ~~)
+	{
+		Invoke( ShowWarning,~Frame ended up NULL!~ );
+		Log( Session, ~The Frame was NULL for order: <Order> Roll: <Roll> Image: <ImagePath>~);
+		return FALSE;
+	}
+
+	ImportImagesDlg( SetString,Translate( ~Adding <ImagePath>~ ) ,Status,0 );
+
+	size = ~<$SystemSettings.Thumbnail[Size]>~;
+	compressionQuality = ~<$SystemSettings.Thumbnail[Quality]>~;
+
+	size = IsNULL( ~<size>~ ) ? ~500~ : ~<size>~;
+	compressionQuality = IsNULL( ~<compressionQuality>~ ) ? ~100~ : ~<compressionQuality>~;
+
+	FileType=~~; 
+	xRes = yRes = 0; 
+	PreviewWidth = PreviewLength = 0;
+
+	ImageSource = ~~;
+
+	if (ImportDCObject(IsFileERI, ~<ImagePath>~))
+	{
+		ImageSource = ~ERI~;
+	}
+	else
+	{
+		ImageSource = ~<CameraModel>~;
+	}
+
+	// If this is a raw file, using the Bibble workflow, don't try to add a thumbnail, instead setup the file
+	// for processing.
+	
+	if ( SimilarStr( ~<CameraModel>~, ~Raw~ ) )
+	{
+		// Get the Bibble Setup Data, we passed in OutputPath		
+		Enabled = FALSE;
+		if ( GetWorkstationSettings( ~RawCamera~,~FileType~, FileType, Enabled ) )
+		{
+			if ( !<Enabled> || IsNull( ~<FileType>~ ) )
+			{
+				if ( GetSystemSettings( ~RawCamera~,~FileType~, FileType, Enabled ) )
+				{
+					if ( !<Enabled> || IsNull( ~<FileType>~ ) )
+					{
+						FileType = ~TIFF~;
+					}
+				}
+				else
+				{
+					FileType = ~TIFF~;
+				}
+			}
+		}
+		else
+		{
+			if ( GetSystemSettings( ~RawCamera~,~FileType~, FileType, Enabled ) )
+			{
+				if ( !<Enabled> || IsNull( ~<FileType>~ ) )
+				{
+					FileType = ~TIFF~;
+				}
+			}
+			else
+			{
+				FileType = ~TIFF~;
+			}
+		}
+		
+		Enabled = FALSE;
+		if ( GetWorkstationSettings( ~RawCamera~,~JPEGQuality~, JPEGQuality, Enabled ) )
+		{
+			if ( !<Enabled> || IsNull( ~<JPEGQuality>~ ) )
+			{
+				if ( GetSystemSettings( ~RawCamera~,~JPEGQuality~, JPEGQuality, Enabled ) )
+				{
+					if ( !<Enabled> || IsNull( ~<JPEGQuality>~ ) )
+					{
+						JPEGQuality = 100;
+					}
+				}
+				else
+				{
+					JPEGQuality = 100;
+				}
+			}
+		}
+		else
+		{
+			if ( GetSystemSettings( ~RawCamera~,~JPEGQuality~, JPEGQuality, Enabled ) )
+			{
+				if ( !<Enabled> || IsNull( ~<JPEGQuality>~ ) )
+				{
+					JPEGQuality = 100;
+				}
+			}
+			else
+			{
+				JPEGQuality = 100;
+			}
+		}
+
+		OutputPath = ~<OutputPath>\<Order>\<Roll>~;
+
+		// Create the folders as necessary.
+		if ( !Directory( Create, ~<OutputPath>~ ) )
+		{
+			err = GetLastErrorMsg();
+			Invoke( ShowWarning,Translate( ~Failed to create folder <OutputPath>.  Can't Continue.  <err>~ ) );
+			return FALSE;
+		}	
+		
+		if ( SimilarStr( ~<FileType>~, ~JPEG~ ) || SimilarStr( ~<FileType>~, ~EXIF~ ) )
+		{
+			tempOutputPath = ~<OutputPath>\<$str.$ImagePath.FileName.WithoutExt>.JPG~;
+		}
+		else
+		{
+			tempOutputPath = ~<OutputPath>\<$str.$ImagePath.FileName.WithoutExt>.TIF~;
+		}
+		
+		// Check if the raw file would be overwritten and prevent it.
+		if ( SimilarStr( ~<ImagePath>~, ~<tempOutputPath>~ ) )
+		{
+			Invoke( ShowWarning, Translate( ~The image path specified is the same as the output path.\n\nRaw File: <ImagePath>\nOutput Path: <tempOutputPath>\n\nImage import cannot continue because the raw file would be overwritten.~ ) );
+			return FALSE;
+		}
+		
+		if ( 0 )
+		{
+			Invoke( ShowProgress,Translate( ~Converting raw camera file: <ImagePath> ...~ ) );	
+			result = ProcessRawFile( ~<ImagePath>~, ~<OutputPath>~, ~<FileType>~, <JPEGQuality> );
+		}
+		else
+		{
+			Invoke( ShowProgress,Translate( ~Submitted Raw: <ImagePath> ...~ ) );
+			result = QueueRawFile( ~<ImagePath>~, ~<tempOutputPath>~, ~<FileType>~, <JPEGQuality>, 50 );
+		}
+		
+		if ( <result> )
+		{
+			OutputPath = ~<tempOutputPath>~;
+		}
+		
+		result = AddImageToRawImages( dBase,~<ImagePath>~,~<OutputPath>~,~<Order>~,~<Roll>~,~<WhichFrame>~ );
+		
+		// The new image has already been added to the raw images table, now add the rename the
+		// OutputPath to the InputPath for the Path in the images table.
+		ImagePath = ~<OutputPath>~;
+
+	}
+	else
+	{
+		if ( <MakeWritable> )
+		{
+			if ( !Files( Chmod,~<ImagePath>~,ReadWrite ) )
+			{
+				err = GetLastErrorMsg();
+				Invoke( ShowWarning,Translate( ~Failed to make <ImagePath> Writable.  Can't Continue.  <err>~ ) );
+				return FALSE;
+			}
+		}
+		
+		result = AddThumbNailToImage( ~<ImagePath>~,<size>,<compressionQuality>,
+										FileType,xRes,yRes,PreviewWidth,PreviewLength,
+										NULL,ColorType,1, OpRestrictions, Orientation );
+
+		Orientation = Numeric(~<$SystemSettings.HonorImageOrientation[PIE]>~) ? ~<Orientation>~ : ~0~ ;
+
+	}
+
+	if ( !<result> )
+	{
+		++NumThumbnailAddsFailed;
+		PreviewWidth = PreviewLength = 0;
+		Log( Session,~Import Images: <ImagePath> is not an image or we could not add a thumbnail to it~ );
+	}
+	else if ( <result> == -1 )
+	{ 
+		++NumThumbnailAddsFailed;
+		Log( Session,~Import Images: Can't add thumbnail image to <ImagePath>~ );
+	}
+	else if ( <result> < 0 )
+	{ 
+		++NumThumbnailAddsFailed;
+		Log( Session,~Import Images: Error adding thumbnail image to <ImagePath>. Error = <result>~ );
+	}
+
+	// DOES THIS IMAGE PATH ALREADY EXIST IN THE DATABASE?
+	Query = ~Select OrderID,Roll,Frame from Images Where Path = '<ImagePath>'~;
+
+	if ( dBase( GetValuesFor,~<Query>~,Order2,Roll2,Frame2 ) )  
+	{
+		// If yes, and it exists on the same order/roll/frame, then we just update the ICCProfile, Delta Sharpening and ImageSource
+		// PreviewWidth, PreviewLength
+		if ( SimilarStr(~<Order>~,~<Order2>~) && SimilarStr(~<Roll>~,~<Roll2>~) && SimilarStr(~<Frame>~,~<Frame2>~) )
+		{
+			// The checkbox is checked
+			if ( <EnableProfile> )
+			{
+				if ( IsNULL(~<ProfileName>~) )
+				{
+					if ( SimilarStr( ~<CameraModel>~, ~Raw~ ) )
+					{
+						UpdateCmd = ~Update Images Set Reprocess=0, Reconverting=0, ICCProfile = NULL, Sharpen=<$con.ImportImagesDlgData[SharpenDelta]>, ImageSource='<ImageSource>', PreviewWidth=<PreviewWidth>, PreviewLength=<PreviewLength> Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+					}
+					else
+					{
+						UpdateCmd = ~Update Images Set Reprocess=0, Reconverting=0, ICCProfile = NULL, Sharpen=<$con.ImportImagesDlgData[SharpenDelta]>, ImageSource='<ImageSource>', PreviewWidth=<PreviewWidth>, PreviewLength=<PreviewLength>, ColorType=<ColorType> Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+					}
+				}
+				else
+				{
+					if ( SimilarStr( ~<CameraModel>~, ~Raw~ ) )
+					{
+						UpdateCmd = ~Update Images Set Reprocess=0, Reconverting=0, ICCProfile = 'srgb', Sharpen=<$con.ImportImagesDlgData[SharpenDelta]>, ImageSource='<ImageSource>', PreviewWidth=<PreviewWidth>, PreviewLength=<PreviewLength> Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+					}
+					else
+					{
+						UpdateCmd = ~Update Images Set Reprocess=0, Reconverting=0, ICCProfile = '<ProfileName>', Sharpen=<$con.ImportImagesDlgData[SharpenDelta]>, ImageSource='<ImageSource>', PreviewWidth=<PreviewWidth>, PreviewLength=<PreviewLength>, ColorType=<ColorType> Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+					}
+				}
+			} else
+			{
+				if ( SimilarStr( ~<CameraModel>~, ~Raw~ ) )
+				{
+					UpdateCmd = ~Update Images Set Reprocess=0, Reconverting=0, ICCProfile = NULL, Sharpen=<$con.ImportImagesDlgData[SharpenDelta]>, ImageSource='<ImageSource>', PreviewWidth=<PreviewWidth>, PreviewLength=<PreviewLength> Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+				}
+				else
+				{
+					UpdateCmd = ~Update Images Set Reprocess=0, Reconverting=0, ICCProfile = NULL, Sharpen=<$con.ImportImagesDlgData[SharpenDelta]>, ImageSource='<ImageSource>', PreviewWidth=<PreviewWidth>, PreviewLength=<PreviewLength>, ColorType=<ColorType> Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+				}
+			}
+
+			if ( !dbase( CMD,~<UpdateCmd>~ ) )	// UPDATE THE PROFILE, IF NECESSARY
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <UpdateCmd>. <theErr>~ ) );
+				return FALSE;
+			}
+			
+			Log( Session,Translate(~Import Images: Path for OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>' already exists with image <ImagePath>~) );
+
+			// Clear the processed flag, if the record exists in the RawImages table.
+			ClearProcessedCmd = ~Update RawImages Set Processed = 1 Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+			dbase( CMD,~<ClearProcessedCmd>~ );	// Don't care if this fails!
+
+			return TRUE;	// THE PATH ALREADY EXISTS ON THE CORRECT ORDER,ROLL,FRAME
+		}
+		else	// THE PATH EXISTS ON ANOTHER ORDER,ROLL,FRAME SO NULL IT OUT.  CAN'T HAVE SAME IMAGE IN TWO RECORDS!
+		{
+			NullCmd = ~Update Images Set FileType=NULL, Reprocess=0, Reconverting=0, Width=0, Length=0, PreviewWidth=0, PreviewLength=0, Path = NULL, ImageSource = NULL Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+
+			if ( !dbase( CMD,~<NullCmd>~ ) )	// CHANGE ITS PATH TO NULL CAUSE WE CAN'T HAVE THE SAME IMAGE ON TWO DIFFERENT RECORDS
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <NullCmd>. <theErr>~ ) );
+				return FALSE;
+			}
+
+			// If it existed in the Images table, then it might have been in the RawImages table as well.
+			RawImagesCmd = ~Delete From RawImages Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+			dbase( CMD,~<RawImagesCmd>~ );
+
+			Log( Session,Translate(~Import Images: Path for OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>' changed from <ImagePath> to NULL~) );
+		}
+	}
+
+	// DOES THIS ORDER,ROLL,FRAME COMBINATION ALREADY EXIST? IF SO, JUST UPDATE THE PATH & PROFILE, PreviewWidth & PreviewLength FIELDS
+	if ( dBase( RecordCountFor,~Select Path From Images Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~ ) )
+	{
+		if ( !SimilarStr( ~<Path>~,~<ImagePath>~ ) )	// A NEW IMAGE FOR THE SAME ORDERID,ROLL,FRAME?
+		{
+			// At the very least, we're going to NULL the field from the old record
+			UpdateProfile = ~, ICCProfile = NULL~;
+
+			// The checkbox is checked
+			if ( <EnableProfile> )
+			{
+				if ( SimilarStr( ~<CameraModel>~, ~Raw~ ) )
+				{
+					UpdateProfile = ~ ,ICCProfile = 'srgb'~;
+				}
+				else
+				{
+					if ( IsNULL(~<ProfileName>~) )
+					{
+						UpdateProfile = ~, ICCProfile = NULL~;
+					}
+					else
+					{
+						UpdateProfile = ~ ,ICCProfile = '<ProfileName>'~;
+					}
+				}
+			}
+
+			Cmd = ~Update Images Set Path = '<ImagePath>' <UpdateProfile>, Sharpen=<$con.ImportImagesDlgData[SharpenDelta]>, ImageSource='<ImageSource>', PreviewWidth=<PreviewWidth>, PreviewLength=<PreviewLength>, ColorType=<ColorType>, Width=<xRes>, Length=<yRes>, Filetype='<Filetype>' Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+			if ( !dbase( CMD,~<Cmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <Cmd>. <theErr>~ ) );
+				return FALSE;
+			}
+
+			Log( Session,Translate(~Import Images: Path for OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>' set to <ImagePath>~) );
+		}
+
+		// Clear the processed flag, if the record exists in the RawImages table.
+		ClearProcessedCmd = ~Update RawImages Set Processed = 1 Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		dbase( CMD,~<ClearProcessedCmd>~ );	// Don't care if this fails!
+
+		return TRUE;
+	}
+	// THE ORDER,ROLL,FRAME IS NEW SO WE CAN JUST INSERT A NEW RECORD
+
+	ProfileFields = ~~;
+	ProfileValues = ~~;
+
+	if ( SimilarStr( ~<CameraModel>~, ~Raw~ ) )
+	{
+		ProfileValues = ~ ,'srgb'~;
+		ProfileFields = ~ ,ICCProfile~;
+	}
+	else
+	{
+		// color type values : 1= color, 2 = grayscale, 3 = black & white with spot color, 4 = sepia, 5= sepia with spot color
+		ProfileValues = (IsNULL(~<ProfileName>~) || !<EnableProfile>) ? ~~ : ~ ,'<ProfileName>'~;
+		ProfileFields = (IsNULL(~<ProfileName>~) || !<EnableProfile>) ? ~~ : ~ ,ICCProfile~;
+	}
+
+	ImportImagesDlgData( GetValues,LutName,LutName );
+	LutIndex = GetLutIndex( ~<LutName>~ );
+
+	Fields		= ~OrderID,Roll,Frame,ImageType,Path,Category,Sequence,Gamma,Width,Length,Filetype,PreviewWidth,PreviewLength,CropX,CropY,CropWidth,CropLength,Inspect<ProfileFields>,Sharpen, ImageSource, AutoBalance,ColorType,OpRestrictions,RotateFromDisk,LutIndex~;
+	Values = ~'<Order>','<Roll>','<Frame>',0,'<ImagePath>','All',<Sequence++>,1.0,<xRes>,<yRes>,'<Filetype>',<PreviewWidth>,<PreviewLength>,50.0,50.0,100.0,100.0,1<ProfileValues>,<$con.ImportImagesDlgData[SharpenDelta]>, '<ImageSource>', 1,<ColorType>,<OpRestrictions>,<Orientation>,<LutIndex>~;
+
+	InsertCmd	= ~Insert Into Images(<Fields>) Values(<Values>)~;
+
+	if ( !dbase( CMD,~<InsertCmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,Translate( ~Database update failed. <InsertCmd>. <theErr>~ ) );
+		return FALSE;
+	}
+
+	// Clear the processed flag, if the record exists in the RawImages table.
+	ClearProcessedCmd = ~Update RawImages Set Processed = 1 Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+	dbase( CMD,~<ClearProcessedCmd>~ );	// Don't care if this fails!
+
+	Log( Session,Translate(~Import Images: Imported <ImagePath> for OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~) );
+
+	return TRUE;
+}
+
+NUMERIC AddImageToRawImages( &dBase,ImagePath,OutputPath,Order,Roll,Frame )
+{
+
+// Now test to see if this file already exists anywhere in the RawImages table.
+	Query = ~Select OrderID,Roll,Frame from RawImages Where Path = '<ImagePath>'~;
+	xRes = 0;
+	yRes = 0; 
+
+	if ( dBase( GetValuesFor,~<Query>~,Order2,Roll2,Frame2 ) )
+	{
+		// If the order/roll/frame it exists in is the same as the order/roll/frame that we're specifying...
+		if ( SimilarStr(~<Order>~,~<Order2>~) && SimilarStr(~<Roll>~,~<Roll2>~) && SimilarStr(~<Frame>~,~<Frame2>~) )
+		{
+			// ...then make sure the Processed flag is cleared & NULL the profile (we never specify one via Import Images)!
+			Cmd = ~Update RawImages Set Processed = 0, OutputPath='<OutputPath>', ICCProfile = NULL Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+			if ( !dbase( CMD,~<Cmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <Cmd>. <theErr>~ ) );
+				return FALSE;
+			}
+
+			// Just make sure that the Images table record is updated as appropriate. We could get here and not do it
+			// previously under some circumstances.
+			Cmd = ~Update Images Set Width=<xRes>, Length=<yRes>, PreviewWidth=0, PreviewLength=0, Reprocess=1, Reconverting=1, Path='<FinalOutputPath>', ImageSource = 'DCR', Sharpen='<$con.ImportImagesDlgData[SharpenDelta]>' Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+			if ( !dbase( CMD,~<Cmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <Cmd>. <theErr>~ ) );
+				return FALSE;
+			}
+
+			Log( Session,Translate(~Import Images: Path for OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>' already exists with image <ImagePath>~) );
+			return TRUE;	// We're done, since the RawImages and Images tables have been updated as appropriate.
+		}
+		else	// The path exists in a different order/roll/frame.
+		{
+			// Null the Path field and set Processed = 1 in the RawImages table so it doesn't show up.
+			NullCmd = ~Update RawImages Set Path = NULL, Processed = 1 Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+			if ( !dbase( CMD,~<NullCmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <NullCmd>. <theErr>~ ) );
+				return FALSE;
+			}
+			Log( Session,Translate(~Import Images: Path for OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>' in RawImages changed to NULL~) );
+
+			// Null the Path and ImageSource fields in the Images table, since if we're reassigning the image, we want to "forget"
+			// about any images which were already processed from the original DCR
+			Cmd = ~Update Images Set FileType=NULL, Reprocess=0, Reconverting=0, Width=0, Length=0, PreviewWidth=0, PreviewLength=0, Path=NULL, ImageSource=NULL Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+			if ( !dbase( CMD,~<Cmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <Cmd>. <theErr>~ ) );
+				return FALSE;
+			}
+			
+			// If it existed in the Images table, then it might have been queued in DCQueue as well.
+			DequeueCmd = ~Delete From DCQueue Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>' AND Priority <> 'RESERVED'~;
+			if ( !dbase( CMD,~<DequeueCmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <DequeueCmd>. <theErr>~ ) );
+				return FALSE;
+			}
+
+			// If it existed in the Images table, then it might have been in the RawImages table as well.
+			RawImagesCmd = ~Delete From RawImages Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+			dbase( CMD,~<RawImagesCmd>~ );
+
+			// If it existed in the Images table, then it might have image properties associated with it as well.
+			PropertiesCmd = ~Delete From DCImageProperties Where OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>'~;
+			if ( !dbase( CMD,~<PropertiesCmd>~ ) )
+			{
+				dbase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,Translate( ~Database update failed. <PropertiesCmd>. <theErr>~ ) );
+				return FALSE;
+			}
+		}
+	}
+
+	// Does the order/roll/frame combo already exist in the RawImages table?
+	if ( dBase( RecordCountFor,~Select Path From RawImages Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~ ) )
+	{
+		// Set the path, Clear the Processed flag is cleared & NULL the profile (we never specify one via Import Images)!
+		Cmd = ~Update RawImages Set Path='<ImagePath>', Processed = 0, OutputPath='<OutputPath>', ICCProfile = NULL Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+
+		if ( !dbase( CMD,~<Cmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			Invoke( ShowWarning,Translate( ~Database update failed. <Cmd>. <theErr>~ ) );
+			return FALSE;
+		}
+
+		Log( Session,Translate(~Import Images: Path for OrderID = '<Order2>' AND Roll = '<Roll2>' AND Frame = '<Frame2>' set to <ImagePath>~) );
+
+		return TRUE;
+
+	}
+	
+	// If we got all the way to here, then the order/roll/frame record is new to the RawImages table, so we can just insert a new one!
+	Fields	= ~OrderID,Roll,Frame,OutputPath,Path,ImageType~;
+	Values	= ~'<Order>','<Roll>','<Frame>','<OutputPath>','<ImagePath>',4~;
+
+	InsertCmd	= ~Insert Into RawImages(<Fields>) Values(<Values>)~;
+
+	if ( !dbase( CMD,~<InsertCmd>~ ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,Translate( ~Database update failed. <InsertCmd>. <theErr>~ ) );
+		return FALSE;
+	}
+
+	return TRUE;
+
+}
+
+NUMERIC UpdateLutComboBox()
+{
+	StringList( LutsList,New,NoDuplicateValues,InAlphaOrder );
+
+	if ( GetLutList( LutsList ) )
+	{
+		StringList(	LutsList, DeleteString, ~0~);
+		ImportImagesDlg( SetControlFromStringList,LutComboBox,LutsList,Selection );
+	}
+
+	if ( GetSystemSettings(~Images~, ~LutIndex~, LutIndex, Enabled ) )
+	{
+		if ( !IsNULL( ~<LutIndex>~ ) && <Enabled> )
+		{
+			LutName = GetLutName( ~<LutIndex>~ );
+			ImportImagesDlg( ComboBox,LutComboBox,SelectString,~<LutName>~,-1 );
+		}
+	}
+
+	return TRUE;
+}
+
+/**************************************************************************************************/
+// If this is standalone KPDAW, then DigitalAnalyzer will be TRUE, otherwise, it won't be defined.
+if ( !Defined(DigitalAnalyzer) )
+{
+	DP2 = TRUE;
+} else
+{
+	DP2 = FALSE;
+}
+
+/***************************************************************************************************/
+NUMERIC Init( OrderID, IsDigital, CloseAfterImport )
+{
+	if (~<CloseAfterImport>~ == ~~)
+	{
+		CloseAfterImport = 0;
+	}
+
+	Global( CloseAfterImport );
+
+	if ( aThread( IsActive ) )
+	{
+		return Warning( Translate(~You are still importing image files. ~) );
+	}
+
+	if ( !Defined( ImportImagesDlg ) )
+	{
+		DefineDialog( ~<OrderID>~ );
+
+		RefreshProfilesComboBox();
+		LoadStatusComboBox( TRUE );
+
+		if ( ~<IsDigital>~ != ~~ )
+		{
+			ImportImagesDlg(SetCheck, TRUE, CheckDigitalCheckBox);
+			
+			// MPL
+			ImportImagesDlg(SetCheck, TRUE, UseBibbleRadioButton);
+			ImportImagesDlg(SetCheck, FALSE, UseDCRLegacyRadioButton);
+
+			SetupEmbeddedProfileControls(FALSE);
+			ImportImagesDlg(SetCheck, FALSE, EnableProfileCheckBox);
+			ImportImagesDlg(EnableControls, FALSE, ProfileComboBox);
+		} 
+		else
+		{
+			ImportImagesDlg(SetCheck, FALSE, CheckDigitalCheckBox);
+			
+			// MPL
+			ImportImagesDlg(SetCheck, TRUE, UseBibbleRadioButton);
+			ImportImagesDlg(SetCheck, FALSE, UseDCRLegacyRadioButton);
+
+			ImportImagesDlg(SetCheck, TRUE, EnableProfileCheckBox);
+			ImportImagesDlg(EnableControls, TRUE, ProfileComboBox);
+
+			SetupEmbeddedProfileControls(TRUE);
+
+			// Get the current Default Input Profile
+			app( Application );
+			ProfileName = ~none~;
+			
+			if ( !Application(GetDefaultInputProfileName,ProfileName) )
+			{
+				ImportImagesDlg(SelectString, ProfileComboBox, ~srgb~);
+			} else
+			{
+				if (SimilarStr(~<ProfileName>~, ~~))
+				{
+					ImportImagesDlg(SelectString, ProfileComboBox, ~srgb~);
+				} else
+				{
+					ImportImagesDlg(SelectString, ProfileComboBox, ~<ProfileName>~);
+				}
+			}
+		}
+
+		UpdateSetupsList();
+		UpdateLutComboBox();
+		OnLoadSetupButton(FALSE);
+	}
+
+	if ( ~<OrderID>~ != ~~ )
+	{
+		ImportImagesDlg( SetStrings,OrderID,~<OrderID>~ );
+
+		if ( ADO( dbase,connect,GetValuesFor,~Select CustomerID From Orders Where ID = '<OrderID>'~, CustomerID ) )
+		{
+			ImportImagesDlg( SetStrings,CustomerID,~<CustomerID>~ );
+
+			LoadCustomerSettings();
+		}
+	}
+
+	return TRUE;
+}
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\ImportImagesDoc.txt~ ); 
+

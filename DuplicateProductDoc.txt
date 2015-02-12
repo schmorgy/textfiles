@@ -1,0 +1,592 @@
+Tree( Location,~[STRINGS]~,Name,CategoryChoices,PluckAndFree );
+
+StringList: Name ~CategoryChoices~
+	Fields: String  ~Default~
+Hang:	CategoryChoices	~[STRINGS]~ ;
+
+NUMERIC DoCancelButton()
+{
+	dlg( End );
+	Exit();
+}
+IncludeClass(BookProduct);
+
+NUMERIC CalcNextSequenceForCategory( &Connection,Table,CategoryField,NewCategory,SequenceField )
+{
+	if ( !Connection( CMD,~Select MAX(<SequenceField>) From <Table> Where <CategoryField> = '<NewCategory>'~,MaxSequence ) )
+	{
+		NextSequence = -1;
+	}
+	else
+	{
+		NextSequence = ~<$rs.MaxSequence[#0]>~ == ~~ ? ~-1~ : ~<$rs.MaxSequence[#0]>~;
+	}
+
+	return $NextSequence + 1;
+}
+
+
+NUMERIC AddANewProduct( &connection,ID,Name,Category,ProductType,LayoutPath,PreviewPath,Package,Multiple,Style,StyleType,Book,DeviceType)
+{
+	Book = Numeric(~<Book>~);
+	connection( CMD,~Delete From Products Where ID = '<ID>'~ );
+
+	NextSequence = CalcNextSequenceForCategory( connection,Products,Category,~<Category>~,Sequence );
+
+	UpdateCmd = ~INSERT INTO  Products(ID,LayoutName,Category,Sequence,ProductType,Package,Multiple,ProductLayoutPath,PreviewPath,Style,StyleType,Book,DeviceType)
+								Values('<ID>','<Name>','<Category>',<NextSequence>,'<ProductType>',<Package>,<Multiple>,'<LayoutPath>','<PreviewPath>',<Style>,<StyleType>,<Book>,'<DeviceType>')~;
+
+	if ( !connection( CMD,~<UpdateCmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database update failed <UpdateCmd>. <theErr>~ ) );
+	}
+
+	
+	return TRUE;
+}
+	
+NUMERIC DuplicateThePackage(&Connection,OldID,NewID)
+{	
+	Query = ~Select * from Packages Where PackageID='<OldID>'~;
+	
+	if  ( !PGenConList(List,Connection,Connection,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Database Query Failed.  <Query>. <theErr>~ ) );
+	}
+		
+	Connection( Cmd,~Delete From Packages Where PackageID='<NewID>'~ );
+	
+	while ( List( GetNext,Item ) )
+	{		
+		Fields = ~PackageID,Sequence,ProductID,Quantity,TargetNode~;
+		Values = ~'<NewID>',<$pcon.Item[Sequence]>,'<$pcon.Item[ProductID]>',<$pcon.Item[Quantity]>,<$pcon.Item[TargetNode]>~;
+		Cmd = ~Insert Into Packages(<Fields>) Values(<Values>)~;
+		
+		if ( !Connection( Cmd,~<Cmd>~ ) )
+		{
+			Cmd( GetErrorDescription,0,theErr );
+			return Warning( Translate( ~Database Update Failed.  <Cmd>.  <theErr>~ ) );
+		}
+	}
+	
+	return TRUE;
+}
+
+
+STR MakeUniqueProductID( &connection,ID )
+{
+	num = 1;
+
+	while ( TRUE )
+	{
+		NewID = ~<++num>.<ID>~;
+
+		Query = ~Select ID From Products Where ID = '<NewID>'~;
+
+		if ( !connection( GetValuesFor,~<Query>~,Temp ) )
+		{
+			return ~<NewID>~; 
+		}
+	}
+}
+
+
+STR MakePreviewPathFromPath( Path,CreateDirectory )
+{
+	if ( $CreateDirectory )
+	{ 
+		if ( !Directory( Create,~<$str.$Path.Path>\Preview~ ) )
+		{
+			Warning( ~Could not Create Directory: <$str.$Path.Path>\Preview.  <$Func.GetLastErrorMsg()>~ );
+		}
+	 }
+
+	AbsolutePath = ~<$str.$Path.Path>\Preview\<$str.$Path.FileName>.jpg~;
+
+	return ~<AbsolutePath>~;
+}
+
+
+NUMERIC DuplicateButton()
+{
+	dlg( GetInput,GetStrings,NewProductID,ID,NewDescription,Description,Category,Category );
+
+	if ( IsNull(~<NewProductID>~) || IsNull(~<NewDescription>~) || IsNull(~<Category>~) )
+	{
+		return Warning( Translate( ~You must enter values for Product ID, Description, and Category~ ) );
+	}
+
+	TheDescription = ~~;
+
+	if ( FindProductDescription( ~<NewProductID>~,TheDescription ) )
+	{
+		return Warning( Translate( ~Product <NewProductID> already exists~ ) );	
+	}
+
+	Query = ~Select * From Products Where ID = '<ProductID>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Lock,ReadOnly,Query,~<Query>~ ) )
+		{ return Warning( ~Error checking for orders that are using the Product where <Key>~ ); }
+
+	if ( !List( GetFirst,Product ) )
+	{	
+		return Warning( Translate( ~Could not find product <ProductID>~ ) );
+	}
+	aID = ~<$pcon.Product[ID]>~;
+	aLayoutName = ~<$pcon.Product[LayoutName]>~;
+	aCategory = ~<$pcon.Product[Category]>~;
+	aSequence = ~<$pcon.Product[Sequence]>~;
+	aProductGroup = ~<$pcon.Product[ProductGroup]>~;
+	aCustomerID = ~<$pcon.Product[CustomerID]>~;
+	aProductType = ~<$pcon.Product[ProductType]>~;
+	aPackage = ~<$pcon.Product[Package]>~;
+	aMultiple = ~<$pcon.Product[Multiple]>~;
+	aStyle = ~<$pcon.Product[Style]>~;
+	aStyleType = ~<$pcon.Product[StyleType]>~;
+	aProductLayoutPath = ~<$pcon.Product[ProductLayoutPath]>~;
+	aPreviewPath = ~<$pcon.Product[PreviewPath]>~;
+
+	List( GetConnection,dBase );
+
+	if ( DuplicateLayout( dBase,Product,~<NewProductID>~,~<NewDescription>~,~<Category>~,~<aPackage>~ ) )
+	{
+		NotifyAffectedDocuments( ProductLayoutPath,~~ );
+		return DoCancelButton();
+	}
+
+	return FALSE;
+}
+
+
+
+NUMERIC DuplicateMultipleLayouts( &dBase,&Product,ID,Description,Category )
+{
+	if ( IsNull( ~<Description>~ ) )
+	{
+		Description = ~<ID>~;
+	}
+
+	LayoutDirectory = ~<$pcon.Product[ProductLayoutPath]>~;
+
+	NewLayoutDirectory = ~<$Str.$LayoutDirectory.Path>\<ID>~;
+
+	NewPreviewPath = ~~;
+
+	if ( !IsNull( ~<$pcon.Product[PreviewPath]>~ ) )
+	{
+		NewPreviewPath = MakePreviewPathFromPath( ~<NewLayoutDirectory>\<$pcon.Product[PreviewPath].FileName>~,TRUE );
+	}
+
+	if ( !Directory( Create,~<NewLayoutDirectory>~ ) )
+	{
+		Warning( ~Could not Create Directory: <NewLayoutDirectory>.  <$Func.GetLastErrorMsg()>~ );
+	}
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~<LayoutDirectory>\<*.*>~ );	
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,LayoutPath );
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+			continue;
+				
+		LayoutFile = ~<$str.$LayoutPath.FileName>~;
+		
+		NewLayoutPath = ~<NewLayoutDirectory>\<LayoutFile>~;
+
+		if !( Files( Copy,~<LayoutPath>~,~<NewLayoutPath>~ ) )
+		{ 
+			return Warning( Translate( ~Could not copy '<LayoutPath>' to '<NewLayoutPath>'.   <$Func.GetLastErrorMsg()>~ ) );
+		}
+	}
+
+	// THERE IS ONLY ONE PRODUCT ID DESPITE THE FACT THERE ARE MULTIPLE LAYOUTS
+
+	if ( !IsNull( ~<$pcon.Product[PreviewPath]>~ ) )
+	{
+		if ( !Files( Copy,~<$pcon.Product[PreviewPath]>~,~<NewPreviewPath>~ ) )
+		{
+			Warning( ~Could not copy <$pcon.Product[PreviewPath]> to <NewPreviewPath>.  <$Func.GetLastErrorMsg()>~ );
+		}
+	}
+	
+	success = AddANewProduct( dBase,~<ID>~,~<Description>~,~<Category>~,~<$pcon.Product[ProductType]>~,~<NewLayoutDirectory>~,~<NewPreviewPath>~,0,1,0,0,0,~~ );
+
+	if (<success>)
+	{	success = DuplicateCompositeNodes(dBase,~<$pcon.Product[ID]>~,~<ID>~);	}
+
+	return <success>;
+}
+
+
+// Duplicates the CompositeNode records for Multiple types of Products
+NUMERIC DuplicateCompositeNodes(&dBase,FromProductID,ID)
+{
+	Query = ~Select * from CompositeNodes where ProductID = '<FromProductID>'~;
+	if ( !PGenConList( List,Connection, dBase,Cursor,Forward,Lock,ReadOnly,Query,~<Query>~ ) )
+		{ return Warning( ~Error getting list of CompositeNodes for <FromProductID>~ ); }
+
+	count = List( NumEntries );
+	if (<count> == 0)  // no records - all composites should have min of 2 (Background,Countable Default)
+	{	return TRUE;	}
+
+
+	more = List(GetFirst, Record);
+	While ( <more> )
+	{
+		UpdateCmd = ~INSERT INTO CompositeNodes(ProductID,NodeName,NodeType,Countable)
+								Values('<ID>','<$pcon.Record[NodeName]>','<$pcon.Record[NodeType]>',<$pcon.Record[Countable]>)~;
+
+		if ( !dBase( CMD,~<UpdateCmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate( ~Database update failed <UpdateCmd>. <theErr>~ ) );
+		}
+	
+		more = List(GetNext, Record);
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC DuplicateLayout( &dBase,&Product,ID,Description,Category,Package )
+{
+	if ( ~<Description>~ == ~~ )
+	{
+		Description = ~<ID>~;
+	}
+
+	// IF THIS IS A DIRECTORY OF MULTIPLE LAYOUTS, THEN WE DUPLICATE THEM ALL
+
+	if ( Files( DirectoryExists,~<$pcon.Product[ProductLayoutPath]>~ ) )	// MULTIPLE LAYOUTS?
+	{
+		if ( MessageBox( Translate( ~Product <$pcon.Product[ID]> is a collection of multiple layouts.  Do you wish to duplicate all of the layouts?~ ),YESNO ) != YES )
+			{ return FALSE; }
+
+		return DuplicateMultipleLayouts( dBase,Product,~<ID>~,~<Description>~,~<Category>~ );
+	}
+
+	LayoutPath = ~<$pcon.Product[ProductLayoutPath]>~;
+	LayoutFile = ~<$pcon.Product[ProductLayoutPath].FileName>~;
+	Style = ~<$pcon.Product[Style]>~;
+	StyleType = ~<$pcon.Product[StyleType]>~;
+	Book = ~<$pcon.Product[Book].numeric>~;
+	DeviceType = ~<$pcon.Product[DeviceType]>~;
+
+// This is how to get the extension.  Should we always force .txt?	 Paul Forleo 7/12/02
+///	Extension =  ~<$pcon.Product[ProductLayoutPath].ext>~;
+	NewLayoutFile = ~<LayoutPath>~ == ~~ ? ~~ : ~<ID>~;
+	NewLayoutPath = ~<LayoutPath>~ == ~~ ? ~~ : ~<$str.$LayoutPath.Path>\<ID>.txt~;
+	NewPreviewPath = ~~;
+
+	if ( ~<LayoutPath>~ != ~~ )
+	{
+		if !( Files( Copy,~<LayoutPath>~,~<NewLayoutPath>~ ) )
+		{ 
+			return Warning( Translate( ~Could not copy '<LayoutPath>' to '<NewLayoutPath>'~ ) );
+		}
+
+		NewPreviewPath = MakePreviewPathFromPath( ~<NewLayoutPath>~,FALSE );
+
+		Files( Copy,~<$pcon.Product[PreviewPath]>~,~<NewPreviewPath>~ );
+	}
+	else if ( <Package> )
+	{
+		if ( <Book> )
+		{
+			BookProduct(New,srcBookProduct,<$pcon.Product[ID]>);
+			BookProduct(New,dstBookProduct);
+			returnResult = dstBookProduct.Duplicate(srcBookProduct,~<ID>~,~<Description>~,~<Category>~);
+			if (<returnResult> <= 0)
+			{
+				dstBookProduct.Get(fErrMsg,theErr);
+				Warning(~<theErr>~);
+			}
+			return <returnResult>;
+		}
+		else
+		{
+			NewPreviewPath = ~<$App.ShareDirectory>\Images\PackageIcon~;
+		}
+	}
+
+	retval = AddANewProduct( dBase,~<ID>~,~<Description>~,~<Category>~,~<$pcon.Product[ProductType]>~,~<NewLayoutPath>~,~<NewPreviewPath>~,<Package>,0 ,<Style>,<StyleType>,<book>,~<DeviceType>~);
+
+	if ( <retval> )
+	{	
+		retval = DuplicateThePackage(dBase,~<$pcon.Product[ID]>~,~<ID>~);
+	}
+	
+	return <retval>;
+}
+
+NUMERIC DuplicateBookProduct(&dbase,DeviceType,OrigProductID,NewProductID)
+{
+	OkToProceed =  SimilarStr(~<DeviceType>~,~NexPress~) || SimilarStr(~<DeviceType>~,~C8000/Creo~);
+	ReturnOnFailure(!<OkToProceed>);
+	Query = ~Select * from BookProductsFor<DeviceType> where ProductID = '<OrigProductID>'~;
+
+	if ( !PGenConList( List,Connection, dBase,Cursor,Forward,Lock,ReadOnly,SetMaxRecords,1,SetCacheSize,1,Query,~<Query>~ ) )
+		{ return Warning( ~Error getting list of BookProductsFor<DeviceType> for <OrigProductID>~ ); }
+
+	count = List( NumEntries );
+	if (<count> == 0)  
+		{	return TRUE;}
+
+	Index = 0;
+	Fields = ~ProductID~;
+	while ( List( FieldInfo,<++Index>,Name,FieldName,Length,FieldLength,Type,FieldType ) )
+	{
+		Fields = ~<Fields>,<FieldName>~;
+	}
+
+	if ( !PGenConList( List1,Connection, dBase,Cursor,Forward,Lock,ReadOnly,Query,~<Query>~ ) )
+		{ return Warning( ~Error getting list of BookProductsFor<DeviceType> for <OrigProductID>~ ); }
+
+	more = List1(GetFirst, Record1);
+	While ( <more> )
+	{
+		Values = ~~;
+		FieldCount = 0;
+		Index = 0;
+		FieldValues = ~'<NewProductID>'~;
+		while ( List( FieldInfo,<++Index>,Name,FieldName,Length,FieldLength,Type,FieldType ) )
+		{
+			Record1(GetValue,~<FieldName>~,FieldValue);
+			FieldValues = ~<FieldValues>,'<FieldValue>'~;
+		}
+	
+		UpdateCmd = ~INSERT INTO BookProductsFor<DeviceType> (<Fields>) Values( <FieldValues>)~;
+
+		if ( !dBase( CMD,~<UpdateCmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate( ~Database update failed <UpdateCmd>. <theErr>~ ) );
+		}
+	
+		more = List1(GetNext, Record1);
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC DefineDialog( ID,Description,Left,Top,Category )
+{
+	if ( !DictionaryExists(DuplicateProductDictionary) )
+	{
+		Dictionary: DuplicateProductDictionary
+			Fields: Name	ID				type text
+			Fields: Name	Description		type text
+			Fields: Name	Category		type text
+	}
+
+	Define:	DialogData Using DuplicateProductDictionary
+		Fields:	ID				~~
+		Fields:	Description		~~
+		Fields: Category		~~ ;
+
+	DialogWidth = 300;
+	PromptX		= 10;	PromptY		= 10;	PromptWidth	= 90;	PromptHeight = 20;
+	ValueWidth	= 150;
+
+	vGap = 1;			hGap = 5;
+
+	ButtonWidth	= 90;	ButtonHeight	= 20;
+
+	Left = Defined(Left) ? ~<Left>~ : ~100~;
+	Top = Defined(Top) ? ~<Top>~ : ~400~;
+
+	Define: DuplicateProductDialog Using DDWinDef
+		Fields:	POSITION				<Left>, <Top>, $DialogWidth, 300
+				TITLE					~Duplicate a Product~
+				TYPENAME				~Dialog~ 
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "T_DuplicateProduct.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: OldIDPrompt Using DDWinCtrlDef AsSymbol OldIDPrompt
+				Fields:	POSITION		$PromptX $PromptY $PromptWidth $PromptHeight
+						TEXT			Translate( ~Product ID~ )
+						TYPENAME		StaticText ;
+
+			Define: OldIDField Using DDWinCtrlDef AsSymbol OldIDField
+				Fields:	TEXT			Translate( ~<ID>~ )
+						POSITION		(OldIDPrompt(GetRight,Position) + $hGap) OldIDPrompt(GetTop,Position) $ValueWidth $PromptHeight
+						TYPENAME		StaticText ;
+
+			Define: OldDescPrompt Using DDWinCtrlDef AsSymbol OldDescPrompt
+				Fields:	POSITION		$PromptX (OldIDPrompt(GetBottom,Position) + $vGap) $PromptWidth $PromptHeight
+						TEXT			Translate( ~Description~ )
+						TYPENAME		StaticText ;
+
+			Define: OldDescField Using DDWinCtrlDef AsSymbol OldDescField
+				Fields:	TEXT			Translate( ~<Description>~ )
+						POSITION		(OldDescPrompt(GetRight,Position) + $hGap) OldDescPrompt(GetTop,Position) $ValueWidth $PromptHeight
+						TYPENAME		StaticText ;
+
+			Define: IDPrompt Using DDWinCtrlDef AsSymbol IDPrompt
+				Fields:	POSITION		$PromptX (OldDescPrompt(GetBottom,Position) + $vGap) $PromptWidth $PromptHeight
+						TEXT			Translate( ~New Product ID~ )
+						TYPENAME		StaticText ;
+
+			Define: IDField Using DDWinCtrlDef AsSymbol IDField
+				Fields:	DACTIONSTEXT	ACTIONS ( Save )
+						GENCONFIELD		ID
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						DActionsText	ACTION EXEC ( OnProductIDCharTyped() )
+						POSITION		(IDPrompt(GetRight,Position) + $hGap) IDPrompt(GetTop,Position) $ValueWidth $PromptHeight
+						TEXT			~~
+						TOOLTIP			Translate( ~Type the product ID you want to call the duplicate product~ )
+						TypeName		MaskedEditText
+						Mask			~<$[DATABASE FieldTypes].ProductID[Mask]>~
+						AllowedChars	~<$[DATABASE FieldTypes].ProductID[AllowedChars]>~
+						DisallowedChars	~<$[DATABASE FieldTypes].ProductID[DisallowedChars]>~
+						PromptChar		~<$[DATABASE FieldTypes].ProductID[PromptChar]>~ ;
+
+			Define: DescPrompt Using DDWinCtrlDef AsSymbol DescPrompt
+				Fields:	POSITION		$PromptX (IDPrompt(GetBottom,Position) + $vGap) $PromptWidth $PromptHeight
+						TEXT			~Description~
+						TYPENAME		StaticText ;
+
+			Define: DescField Using DDWinCtrlDef AsSymbol DescField
+				Fields:	DACTIONSTEXT	ACTIONS ( Save )
+						GENCONFIELD		Description
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						POSITION		(DescPrompt(GetRight,Position) + $hGap) 
+										DescPrompt(GetY,Position)  $ValueWidth $PromptHeight
+						TEXT			~~
+						TOOLTIP			Translate( ~Type the description (product name field in the products table~ )
+						TypeName		MaskedEditText
+						Mask			~<$[DATABASE FieldTypes].ProductName[Mask]>~
+						AllowedChars	~<$[DATABASE FieldTypes].ProductName[AllowedChars]>~
+						DisallowedChars	~<$[DATABASE FieldTypes].ProductName[DisallowedChars]>~
+						PromptChar		~<$[DATABASE FieldTypes].ProductName[PromptChar]>~	;
+
+			Define: CategoryPrompt Using DDWinCtrlDef AsSymbol CategoryPrompt
+				Fields:	POSITION		$PromptX (DescPrompt(GetBottom,Position) + $vGap) $PromptWidth $PromptHeight
+						TEXT			Translate( ~Category~ )
+						TYPENAME		StaticText ;
+
+			Query = ~Select Distinct Category From Products Order By Category~;
+
+			Define: CategoryNameComboBox Using DDWinCtrlDef AsSymbol CategoryNameComboBox
+				Fields: TypeName		ComboBox  
+						Position		(CategoryPrompt(GetRight,Position) + $hGap),CategoryPrompt(GetTop,Position),$ValueWidth, 200
+						IActionsText	~[UpdateStringList(CategoryChoices "<Query>" Category THIS "Category" -1) GetList(CategoryChoices) Get]~
+						GenConName		THIS
+						Mask			~<$[DATABASE FieldTypes].ProductName[Mask]>~
+						AllowedChars	~<$[DATABASE FieldTypes].ProductName[AllowedChars]>~
+						DisallowedChars	~<$[DATABASE FieldTypes].ProductName[DisallowedChars]>~
+						PromptChar		~<$[DATABASE FieldTypes].ProductName[PromptChar]>~		
+						GenConField		Category;
+
+			DialogWidth = CategoryNameComboBox(GetRight,Position) + $PromptX;
+
+			Define: DuplicateButton Using DDWinCtrlDef AsSymbol DuplicateButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION CALL ( DuplicateButton() )
+						POSITION		($DialogWidth/2) - ($ButtonWidth) - $hGap,
+										CategoryPrompt(GetBottom,Position) + ($vGap * 8)+5, $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Duplicate~ )
+						TOOLTIP			Translate( ~Duplicate the product using the new information~ )
+						TYPENAME		BUTTON
+
+			Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( DoCancelButton() )
+						POSITION		DuplicateButton(GetRight,Position) + $hGap,
+										DuplicateButton(GetTop,Position), $ButtonWidth, $ButtonHeight
+						TEXT			Translate( ~Cancel~ )
+						TOOLTIP			Translate( ~Exit without duplicating~ )
+						TYPENAME		BUTTON
+		}
+
+	// TRY TO POSITION THIS WINDOW NEXT TO THE WINDOW ACTIVE WINDOW
+
+	x = 100; y = 100;
+
+	if ( 0 )
+	{
+		if ( GenCon( CallersWindow,GetWindow,~~ ) )
+		{
+			CallersWindow( GetWindowPosition,Left,Top,Right,Bottom );
+			x = <Left> - <DialogWidth> - 5;
+			y = <Top>;
+		}
+	}
+
+
+	DialogHeight = DuplicateButton(GetBottom,Position) + $PromptY + 40;
+	DuplicateProductDialog( Set,Position,~<Left> <Top>  <DialogWidth>  <DialogHeight>~ );
+	DialogData( Set,Category,~<Category>~ );
+	GenDlg( dlg,Definition,DuplicateProductDialog,Data,DialogData,Document,$Doc.This,New,Temporary );
+	Global( dlg,DialogData );
+
+	return TRUE;
+}
+
+OldProductID = ~~;
+VOID OnProductIDCharTyped()
+{
+	dlg( GetControlValue,IDField,ProductID);
+	dlg( GetControlValue,DescField,ProductName);
+	if (~<ProductName>~ == ~<OldProductID>~)
+	{
+		dlg( SetControlValue,DescField, ~<ProductID>~);
+	} 
+	OldProductID = ~<ProductID>~;
+	
+}
+
+NUMERIC FindProductDescription( ProductID,&Description )
+{
+	Query = ~Select * From Products Where ID = '<ProductID>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Lock,ReadOnly,Query,~<Query>~ ) )
+		{ return Warning( ~Error checking for orders that are using the Product where <Key>~ ); }
+
+	if ( !List( GetFirst,Product ) )
+	{	
+		return FALSE;
+	}
+
+	Description = ~<$pcon.Product[LayoutName]>~;
+
+	return TRUE;
+}
+
+
+VOID Init( ProductID,Top,Left ,Category)
+{
+	Description = ~~;
+	
+
+
+	if ( !FindProductDescription( ~<ProductID>~,Description ) )
+	{
+		Warning( Translate( ~Could not find product <ProductID>~ ) );
+		Exit();
+	}
+
+	Global( ProductID,Description );
+
+	DefineDialog( ~<ProductID>~,~<Description>~,~<Top>~,~<Left>~,~<Category>~ );
+
+	Sleep(100);
+}

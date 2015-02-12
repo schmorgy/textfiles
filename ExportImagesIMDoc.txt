@@ -1,0 +1,282 @@
+Include: ~GetFullLayout~;
+Include: ~FormattingRoutines~;
+Include: ~UtilityRoutines~;
+IncludeClass( BaseOrderItem );
+IncludeClass(BaseHTML);
+
+Macros: ~Macros.txt~;
+
+CDPathSequence = 0;
+OrderID = ~~;
+OrderItemID = 1;
+OrderItemSequence = 1;
+PrinterName = ~IM_DiskPrinter~;
+IM_Media = 0;
+IM_MediaStr = ~~;
+IM_Type = ~IMA~;
+IM_Quantity = 1;
+
+PreviewPath = ~<$App.Directory>\Scripts\HTMLPages\Kexdss\Images\ImageMastering.png~;
+
+NUMERIC ShowWarning( Msg )
+{
+	return Warning( ~<Msg>~ );
+}
+
+
+NUMERIC ExportFilesFromList( ListAddr )				// RUNS ON A THREAD
+{
+	StringList( PathList,Is,<ListAddr>,Temporary );	// LIST OF IMAGE FILES TO EXPORT
+	
+	return ExportFiles( PathList );
+}
+	
+NUMERIC ExportFiles( &PathList )					// Callable direct
+{
+	ResetIncrementingSequence();
+
+	count = 0;
+	
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~Failed to connect to the database.  <theErr>~ );
+		Invoke( ShowWarning,TR( Composition, DBConnectFailed , <theErr>);
+		return FALSE;
+	}
+
+	ListIndex = -1;
+
+	More = PathList( GetFirstString,SelectedImagePath );
+
+	Entries = PathList( Count );
+
+	FileNameSequence = 0;
+
+	RImageJobID = ~~;
+	
+	BasePath = ~~;
+	Flatten = 0;
+
+	PackageID = GetUniquePackageID(dBase, ~<OrderID>~);
+	
+	while ( <More>  )	// NOW TAKE CARE OF EACH OF THE INDIVIDUAL IMAGES
+	{
+		LastEntry = <++count> == <Entries>;
+		
+		DeleteAfterRImage =	1;
+
+		QueueJobFor( dBase,~<SelectedImagePath>~,<Flatten>,~<PackageID>~,<DeleteAfterRImage>,~<OrderID>~ );
+
+		++OrderItemSequence;
+		++OrderItemID;
+
+		More = PathList( GetNextString,SelectedImagePath );
+	}
+	
+	return TRUE;
+}
+
+STR GetUniquePackageID(&dbase,OrderID)	
+{
+	NextPKGID = 0;
+
+	if ( dbase( connection,dbase,CMD,~Select MAX(PackageID) From OrderItems Where OrderID = '<OrderID>'~,MaxGroupID ) )
+	{ 
+		NextPKGID = ~<$rs.MaxGroupID[#0]>~ == ~~ ? ~0~ : ~<$rs.MaxGroupID[#0]>~; 
+	}
+
+	return ~<++NextPKGID>~;
+}
+
+NUMERIC  AddOrderItemToDataBase(&dBase,OrderID,JobPath,ItemType,PackageID)
+{
+	Debug(1);
+	nextOrderItem=BaseOrderItem::CalcNext( dbase,~<OrderID>~,ID );
+	newSequence=BaseOrderItem::CalcNext( dbase,~<OrderID>~,Sequence );
+
+	Parameters = ~ID,OrderID,ProductID,Quantity,Sequence,Type,JobPath,PackageID,Printable,PrinterName,PreviewPath~;
+
+	Values = ~<nextOrderItem>,'<OrderID>','<IM_Type>',<IM_Quantity>,<newSequence>,'<ItemType>','<JobPath>', '<PackageID>','0','<PrinterName>','<PreviewPath>'~;
+	
+	theSQL = ~Insert Into OrderItems (<Parameters>) Values (<Values>)~;
+	if ( !dBase( CMD,~<theSQL>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session, ~Query failed. <theSQL>. Error: <theErr>~ );
+		Invoke(ShowWarning, Translate(DBMessages,CmdFailed,~<theSQL>~,~<theErr>~) );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+NUMERIC QueueJobFor( &dBase,Image,Flatten,PackageID,DeleteAfterRImage,AppOrderID )
+{
+	if ( IsNull( ~<Image>~ ) )
+	{
+		Log( Session, ~Unable to create CD/DVD. No images found.~ );
+		Invoke( ShowWarning, TR( Composition, NoImagesFoundIM ) );
+		return FALSE;
+	}
+
+	NextOrderItem=BaseOrderItem::CalcNext( dbase,~<OrderID>~,ID );
+	
+	JobPath = CreateJobPath( ~<OrderID>~, ~<NextOrderItem>~ );
+
+	if ( IsNull( ~<JobPath>~ ) )
+	{
+		Log( Session, ~Couldn't create a unique job path when creating CD/DVD~ );
+		Invoke( ShowWarning, TR( Composition, NoJobPathIM );
+		return FALSE;
+	}
+
+	if ( !CreateAJob( ~<JobPath>~,~<Image>~,<DeleteAfterRImage>,~<AppOrderID>~ ) )
+	{
+		return FALSE;
+	}
+	
+	AddOrderItemToDataBase(dBase,~<OrderID>~,~<JobPath>~,~<IM_MediaStr>~,~<PackageID>~);
+
+	return TRUE;
+}
+
+
+VOID ResetIncrementingSequence()
+{
+	FileNameSequence = CDPathSequence = 0;
+}
+
+NUMERIC CreateAJob( JobPath,ImagePath,DeleteAfterRImage,AppOrderID )
+{
+	//Job file to store image data for later use when creating CD/DVD
+	
+	if ( !File( Job,Open,~<JobPath>~,Create,Write ) )	// CREATE AND OPEN THE JOB
+	{
+		Log( Session, ~Could not create the job file <JobPath>~ );
+		Invoke( ShowWarning, TR( Composition, UnableToCreateJobFileIM  );
+		return FALSE;
+	}
+
+	if ( !File( Job, UnicodeOutput ) )	// Unicode for Japanese text is necessary
+	{
+		return FALSE;
+	}
+
+	Job( ~FileType: Job ;~ );
+
+	Job( CRLF,WRITELINE,~UnitOfMeasure: Inches;~ );
+	
+    Job( CRLF,WRITELINE,~Main:~ );
+
+	Job( CRLF,WRITELINE,~IL: 1~ );
+	Job( ~	IFile: |<ImagePath>|;~ );
+
+	Job( Close );
+
+	return TRUE;
+}
+
+STR CreateJobPath( OrderID,Item )
+{
+	JobPath = ~<$App.ShareDirectory>\OrderJobs\<OrderID>~;
+	JobName = ~Job_<OrderID>_<Item>~;
+
+	Directory( Create,~<JobPath>~ );
+
+	return ~<JobPath>\<JobName>~;
+}
+
+
+NUMERIC	LoadOrderImagesFromWindow()
+{
+	ReturnOnFailure( Defined( OrderImagesView ) );	// are we importing from an open window?
+
+	if ( !OrderImagesView( GetSelected,SelectedOrdersImages ) )
+	{
+		ForgetGlobal( OrderImagesView );
+		return FALSE;
+	}
+	
+	//create image list
+	if ( !StringList( PathList, New ) )
+	{
+		Log( Session, ~LoadOrderImagesFromWindow: Could not create image list.~ );
+		Invoke( ShowWarning, TR( Composition, UnableToCreateImageList )  );
+		return FALSE;
+	}
+	
+	while ( SelectedOrdersImages(GetNext,Image) )
+	{
+		ImageFile = ~<$con.Image[Path]>~ ;
+		PathList( AddString, ~<ImageFile>~);
+	}
+	
+	//deselect images after In UI after we've built the list
+	OrderImagesView( SelectAll,FALSE );
+	
+	PathList( Permanent );	// WILL BE DELETED BY THE THREAD
+
+	aThread( New,ExportFilesFromList,PathList(GetObject) );
+	
+	return TRUE;
+}
+
+VOID DefineMessages()
+{
+	BaseHtml::DefineMessages();
+	LoadTranslationFile( Composition,Composition,Composition );
+}
+
+VOID ProcessIM( OrdID, Quantity, SelectedMedia )
+{
+	DefineMessages();
+
+	IM_Quantity = <Quantity>;
+	
+	OrderID = ~<OrdID>~;
+	IM_MediaStr = ~<SelectedMedia>~;
+	
+	if ( SimilarStr( ~<SelectedMedia>~, ~CD~ ) )
+	{
+		IM_Media = 0; //CD
+	}
+	else if ( SimilarStr( ~<SelectedMedia>~, ~DVD~ ) )
+	{
+		IM_Media = 1; //dvd
+	}
+
+	if ( !Defined( OrderID ) )  
+	{
+		Log( Session, ~Unable to process CD/DVD. Order not defined.~);
+		Invoke( ShowWarning, TR( Composition, UnableToProcessIMOrder ) );
+		return;
+	}
+	
+	if ( aThread( IsActive ) )
+	{
+		 Log( Session, ~Unable to create CD/DVD. Busy with previous job.~);
+		 ShowWarning( TR( Composition, UnableToCreateIMItems ) );
+		 return;
+	}
+
+	ReturnOnFailure( GenCon( OrderImagesView,FindActiveImageThumbnailView ) );	
+	
+	Global( OrderImagesView );
+
+	if (!LoadOrderImagesFromWindow() )
+	{
+		Log( Session, ~Unable to load images to create CD/DVD.~);
+		Invoke( ShowWarning, TR( Composition, UnableToLoadImagesIMOrder ) );
+	}
+}
+
+
+Thread( aThread);	// ADD THE PARAMETER DEBUG TO RUN AS A SUBROUTINE RATHER THAN A THREAD FOR SOURCE DEBUGGING
+
+
+
+
+
+
+

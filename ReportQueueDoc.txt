@@ -1,0 +1,88 @@
+Include: ~FormattingRoutines~;
+
+IncludeClass( BaseGrid );
+
+VOID	Queue::Queue()						// CONSTRUCTOR
+{
+	TableName = ~ReportQueue~;
+	DocumentQuery = ~Select * from <TableName> Order By SubmitDate,Computer,Instance~;
+	Title = ~Report Queue~;
+	WindowTop = 50;
+	WindowWidth = 90;
+	WindowHeight = 25;
+	HelpPage = ~ReportQueue.htm~;
+	SplitterRows = ~2 7 93~;
+}
+
+STR		Queue::GetKey( &Item )					// PRIMARY KEY FOR THE TABLE
+{
+	return ~Computer = '<$con.Item[Computer]>' AND Instance = '<$con.Item[Instance]>' AND SubmitDate = '<$con.Item[SubmitDate]>'~;
+}
+
+NUMERIC Queue::ChangeRecordAudits( &Changed )		// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[SubmitDate]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  SubmitDate cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[Instance]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  Instance cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[Computer]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  Computer cannot be blank.~ ) ); }
+
+	return TRUE;
+}
+
+NUMERIC Queue::OnDuplicateRecord(&NewRow )
+{ 
+	Sleep( Rand( Min,100,Max,200 ) );	// SO WE WILL NEVER GET A DUPLICATE KEY (DateTime is in the primary key)
+
+	return OnAddRecord( NewRow );
+}
+
+VOID	Queue::StartPrinting()
+{
+	Actions = ACTION DOC ( IEPrintDoc "StartPrintingNow();" );
+	PerformActions( Actions );
+}
+
+NUMERIC Queue::OnChangeComplete( &Changed,&Original,ChangedRow,IsNewRow )
+{
+	Action = STR ( <This>.StartPrinting() );
+	QueueContentsAfter( Action,10000 );	// GIVE TIME FOR JET TO FLUSH IT
+	return TRUE;
+}
+
+
+NUMERIC Queue::OnAddRecord( &NewRow )
+{
+	NewRow( Set,Computer,~<$App.ComputerName>~ );
+	NewRow( Set,Instance,~<$App.Instance>~ );
+	NewRow( Set,SubmitDate,~<$Date.SortableDateTime>~ );
+	
+	return TRUE;
+}
+
+VOID	Queue::AllowRowResizing()
+{
+	DataView( AllowRowColResizing,TRUE );
+}
+
+NUMERIC Init()
+{
+	if ( Defined( Grid ) )
+	{
+		Grid.ReOpen();
+		return TRUE;
+	}
+	else
+	{
+		Class( Queue,Extends,BaseGrid );
+
+		Queue( New,Grid );
+		Grid.DefineWindow();
+		Grid.Init();
+		Grid.AllowRowResizing();
+		return Global( Grid );
+	}
+}

@@ -1,0 +1,1028 @@
+
+Include: ~UtilityRoutines.txt~;
+
+VOID RefreshDoc()
+{
+	KillTimer( 1 );
+	RefreshListView( TRUE );
+}
+
+
+VOID DelayedRefreshDoc()
+{
+	SetTimer( 1,2000,~RefreshDoc()~ );
+}
+
+
+
+ChangeCount = 0;
+
+VOID DataHasChanged()
+{
+	JobQueuesDataWindow( StatusBar,Text,Translate( UIMessages,ChangesMade,<++ChangeCount>,~the Job Queue~  ) );
+}
+
+
+NUMERIC RefreshListView( Requery )
+{
+	if ( !JobQueuesDataWindow(GetWindowAddress) )
+		{ return FALSE; }
+
+	if ( JobQueuesDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	Count = List( NumEntries );
+	
+	JobQueuesDataWindow( StatusBar,Text,Translate( ~Refreshing~ ) );
+	JobQueuesDataWindow( RefreshWindow );
+	JobQueuesDataWindow( StatusBar,Text,~<Count> Records~ );
+
+	ChangeCount = 0;
+
+	return TRUE;
+}
+
+
+VOID TimedRefresh()
+{
+	RefreshDoc();
+	SetTimer( 0,60 * 1000 );
+}
+
+
+VOID ActivateTimedRefreshes( IntervalInSeconds )
+{
+	Timer0_Action = STR ( TimedRefresh(); );	// WHERE TO GO WHEN TIMER0 TRIPS
+
+	Global( Timer0_Action );
+
+	SetTimer( 0,IntervalInSeconds * 1000 );	 
+}
+
+
+STR GetKey( &Entry )
+{
+	return ~JobID = '<$con.Entry[JobID]>'~;
+}
+
+
+
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !JobQueuesDataView( GetChangedRow,ChangedQueueEntry,OrigQueueEntry,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate( ~There was no changed row.~ ) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedQueueEntry[JobID]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Job ID cannot be blank.~ ) ); }
+
+	Key = STR ( JobID = '<$con.OrigQueueEntry[JobID]>' );
+	
+	Query = ~Select * From JobQueue Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <Query>. <theErr>~ ) );
+	}
+
+	if ( !List( UpdateFrom,ChangedQueueEntry,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate( ~Could not update Job Queue record where <Key>. <theErr>~ ) );
+	}
+
+	JobQueuesDataView( CommitChanges );
+
+	if ( ~<$con.OrigQueueEntry[PrintStatus]>~ != ~<$con.ChangedQueueEntry[PrintStatus]>~ )
+	{
+		List( GetConnection,dbase );
+
+		dbase( LogActivity,Type,Info,Msg,~JobQueue Status changed from <$con.OrigQueueEntry[PrintStatus]> to <$con.ChangedQueueEntry[PrintStatus]> for Job <$con.OrigQueueEntry[JobID]> in Batch <$con.ChangedQueueEntry[Batchid]>~ );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !JobQueuesDataView( GetSelectedRows,QueueEntryToDelete ) )		
+		{ return Warning( Translate( ~There were no jobs selected to delete~ ) ); }
+
+	count = QueueEntryToDelete( ChildCount );
+
+	if ( MessageBox( ~Are you sure you want to delete the selected <count> Jobs from Queue?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	WaitCursor( Begin );
+	
+	nDeleted = -1;
+	
+	Log( Session,~deleting~ );
+	
+	while ( QueueEntryToDelete( GetNext,QueueEntry ) )
+	{
+		Key = GetKey(QueueEntry);
+
+		Cmd = ~Delete From JobQueue Where <Key>~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate( ~Database update failed: <Cmd>. <theErr>~ ) );
+			break;
+		}
+		
+		if ( ~<$con.QueueEntry[JobPath]>~ != ~~ )
+		{
+			if ( (<++nDeleted> % 10) == 0 )
+			{
+				StatusBarText( Translate( ~Deleted <nDeleted> of <count>~  ) );
+				MessagePump();
+			}
+
+			if ( !Files( Delete,~<$con.QueueEntry[JobPath]>~ ) )
+			{
+				Log( Session,~Could not delete <$con.QueueEntry[JobPath]>.  <$Func.GetLastErrorMsg()>~ );
+			}
+			else
+			{
+				//Log( Session,~User <$App.UserName> Deleted <$con.QueueEntry[JobPath]> and Job Record Where <Key> and BatchID = '<$con.QueueEntry[BatchID]>'~ );
+			}
+		}
+
+		RowsToDelete( AddString,QueueEntryToDelete(GetCurrentPosition) );
+	}
+	
+	Log( Session,~refreshing~ );
+	
+	StatusBarText( Translate( ~Refreshing view after deleting <nDeleted> jobs~  ) );
+
+	JobQueuesDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	StatusBarText( Translate( ~Deleted <nDeleted> jobs~  ) );
+	
+	Log( Session,~done~ );
+
+	return WaitCursor( End );
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	RowBeingAdded = JobQueuesDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate( ~You are too low on memory to add any more rows~ ) ); }
+
+	JobQueuesDataView( SetActiveCell,<RowBeingAdded>,QueueName );
+
+	return TRUE;
+}
+
+
+NUMERIC OpenAJob( JobPath )
+{
+	if ( ~<JobPath>~ == ~~ )
+		{ return FALSE; }
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == JobView || ~<ViewType>~ == ImageView )
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<JobPath>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+		}
+	}
+
+	if ( ~<JobPath>~ == ~~ )
+		{ return FALSE; }
+
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+		{ return Warning( ~Could not create document info for <JobPath>~ ); }
+
+	Info( SetValues,OrderID,~~,OrderItemID,~1~ );
+
+	if (!Document( aJob,Open,~<JobPath>~,Job,~~,Info ) )
+		{ return Warning( ~Could not open <JobPath>~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC OnChangePriorityButton()
+{
+	ControlView( GetControlValue,NewPriorityfield,NewPriority );
+	
+	if ( IsNull(~<NewPriority>~) )
+	{
+		return Warning( ~You must enter a priority~ );
+	}
+
+	return SetPrintPriority( Numeric(~<NewPriority>~) );
+}
+
+
+NUMERIC SetPrintPriority( NewPriority )
+{
+	if ( JobQueuesDataView( PendingChanges ) )
+		{ return Warning( Translate( ~You must save or discard your pending changes first~ ) ); }
+
+	if ( !JobQueuesDataView( GetSelectedRows,SelectedJobs ) )		
+		{ return Warning( Translate( ~There were no jobs selected~ ) ); }
+
+	if ( SelectedJobs( ChildCount ) == 0 )
+		{ return Warning( Translate( ~There were no jobs selected~ ) ); }
+
+	if ( !Ado( dbase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	ReturnOnFailure( IsSafeToChange( dbase,SelectedJobs ) );
+
+	if ( !dbase( BeginTransaction ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not start a transaction. <theErr>~ ) );
+	}
+
+	WaitCursor( Begin );
+
+	SelectedJobs( SetCurrentPosition,-1 );
+
+	while ( SelectedJobs( GetNext,SelectedJob ) )
+	{
+		if ( ~<$Con.SelectedJob[JobID]>~ != ~~ ) 
+		{
+			cmd = ~Update JobQueue Set Priority = <NewPriority> Where JobID = '<$Con.SelectedJob[JobID]>'~;
+
+			if ( !dBase( Cmd,~<cmd>~ ) )
+			{
+				LoseChanges();
+				dBase( GetErrorDescription,theErr,RollBackTransaction );
+				WaitCursor( End );
+				return Warning( Translate( ~Could execute command <cmd>. <theErr>~ ) );
+			}
+
+			JobQueuesDataView( SetCellValueByColName, SelectedJob(GetRow),~Priority~,~<NewPriority>~,FALSE );
+		}
+	}
+
+	if ( !dbase( CommitTransaction ) )
+	{
+		LoseChanges();
+		dBase( GetErrorDescription,theErr,RollBackTransaction );
+		WaitCursor( End );
+		return Warning( Translate( ~Could not commit transaction. <theErr>~ ) );
+	}
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC SetPrintStatus( NewStatus )
+{
+	if ( JobQueuesDataView( PendingChanges ) )
+		{ return Warning( Translate( ~You must save or discard your pending changes first~ ) ); }
+
+	if ( !JobQueuesDataView( GetSelectedRows,SelectedJobs ) )		
+		{ return Warning( Translate( ~There were no jobs selected~ ) ); }
+
+	if ( SelectedJobs( ChildCount ) == 0 )
+		{ return Warning( Translate( ~There were no jobs selected~ ) ); }
+
+	if ( !Ado( dbase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	ReturnOnFailure( IsSafeToChange( dbase,SelectedJobs ) );
+
+	if ( !dbase( BeginTransaction ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not start a transaction. <theErr>~ ) );
+	}
+
+	WaitCursor( Begin );
+
+	SelectedJobs( SetCurrentPosition,-1 );
+
+	while ( SelectedJobs( GetNext,SelectedJob ) )
+	{
+		if ( ~<$Con.SelectedJob[JobID]>~ != ~~ ) 
+		{
+			cmd = ~Update JobQueue Set PrintStatus = <NewStatus> Where JobID = '<$Con.SelectedJob[JobID]>'~;
+
+			if ( !dBase( Cmd,~<cmd>~ ) )
+			{
+				LoseChanges();
+				dBase( GetErrorDescription,theErr,RollBackTransaction );
+				WaitCursor( End );
+				return Warning( Translate( ~Could execute command <cmd>. <theErr>~ ) );
+			}
+
+			JobQueuesDataView( SetCellValueByColName, SelectedJob(GetRow),~PrintStatus~,~<NewStatus>~,FALSE );
+		}
+	}
+
+	if ( !dbase( CommitTransaction ) )
+	{
+		LoseChanges();
+		dBase( GetErrorDescription,theErr,RollBackTransaction );
+		WaitCursor( End );
+		return Warning( Translate( ~Could not commit transaction. <theErr>~ ) );
+	}
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC OnSetStatusButton()
+{
+	GenCon( ListMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+	GenCon( SetStatusHold,New,DDMenuItemDef,SetValues,Text,~Hold~,IDText,~ID~ );
+	theAction = ACTION EXEC ( SetPrintStatus(0); );
+	SetStatusHold( SetValuesFrom,ActionsText,theAction );
+
+	ListMenu( InsertBack,SetStatusHold );
+
+	GenCon( SetStatusReady,New,DDMenuItemDef,SetValues,Text,~Ready~,IDText,~ID~ );
+	theAction = ACTION EXEC ( SetPrintStatus(1); );
+	SetStatusReady( SetValuesFrom,ActionsText,theAction );
+
+	ListMenu( InsertBack,SetStatusReady );
+
+	JobQueuesDataView( DisplayMenu,ListMenu,SetStatusButton(GetLeft,Position),SetStatusButton(GetTop,Position) );
+
+	return TRUE;
+}
+
+
+NUMERIC DisplayQueues()
+{
+	if ( !JobQueuesDataView( GetSelectedRows,SelectedJobs ) )		
+		{ return Warning( Translate( ~There were jobs selected~ ) ); }
+
+	if ( JobQueuesDataView( PendingChanges ) )
+		{ return Warning( Translate( ~You must save or discard your pending changes first~ ) ); }
+
+	Query = ~SELECT QueueName,PrinterModel From QueueDefinition  Order by PrinterModel,QueueName~ ;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,SetMaxRecords,1000,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the QueueDefinition table: <Query>. <theErr>~ );
+	}
+
+	Count = List( NumEntries );
+
+	if ( !<Count> )
+	{
+		return Warning( ~There are no queues defined in your system~ );
+	}
+
+	GenCon( ListMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+	QueueNameCount = 0;
+	PrinterModelCount = 0;
+	LastPrinterModel = ~~;
+	NumInList = 0;
+
+	while ( List( GetNext,Item ) )
+	{
+		GenCon( QueueName<++QueueNameCount>,New,DDMenuItemDef,SetValues,Text,~<$pcon.Item[QueueName]>~,IDText,~ID~ );
+		theAction = ACTION EXEC ( ChangeQueue(~<$pcon.Item[QueueName]>~); );
+		QueueName<QueueNameCount>( SetValuesFrom,ActionsText,theAction );
+		
+		if ( SimilarStr( ~<$pcon.Item[PrinterModel]>~,~<LastPrinterModel>~ ) )
+		{
+			PrinterModel<PrinterModelCount>( InsertBack,QueueName<QueueNameCount> );
+			++NumInList;
+		}
+		else	// we are switching printer models
+		{
+			GenCon( PrinterModel<++PrinterModelCount>,New,DDMenuItemDef,SetValues,
+					Text,		~Queues for Printer Model: <$pcon.Item[PrinterModel]>~,
+					IDText,		~ID~ );
+
+			PrinterModel<PrinterModelCount>( InsertBack,QueueName<QueueNameCount> );
+
+			ListMenu( InsertBack,PrinterModel<PrinterModelCount> );
+
+			LastPrinterModel = ~<$pcon.Item[PrinterModel]>~;
+
+			NumInList = 0;
+		}
+	}
+
+	JobQueuesDataView( DisplayMenu,ListMenu,ChangeQueueButton(GetLeft,Position),ChangeQueueButton(GetTop,Position) );
+
+	return TRUE;
+}
+
+NUMERIC IsSafeToChange( &connection,&SelectedJobs )
+{
+	StringList( BatchIDS,new,NoDuplicateValues );
+
+	SelectedJobs( SetCurrentPosition,-1 );
+
+	while ( SelectedJobs( GetNext,SelectedJob ) )
+	{
+		BatchIDS( AddString,~<$con.SelectedJob[BatchID]>~ );
+	}
+
+	Count = BatchIDS(count);
+
+	if ( <Count> > 30 )
+	{
+		return Warning( ~You have selected more than 30 batches of work.  Select less and try again.~ );
+	}
+
+	ValidStatus = ~0,1,4,6,7~;	// Hold,Ready,Complete,Error,Cancelled
+
+	BatchIDS( MakeSQLList,BatchIDList,TRUE );
+
+	Query = ~Select count(*) from JobQueue Where BatchID in (<BatchIDList>) AND PrintStatus not in (<ValidStatus>)~;
+	
+	ActiveJobs = connection( RecordCountFor,~<Query>~ );
+
+	if ( <ActiveJobs> > 0 )
+	{
+		return MessageBox( ~There are <ActiveJobs> job(s) in your selected list that are already being processed by a Render Engine.  Making this change could cause errors in the Render Engine.  Are you sure you really want to make the change?~,YESNO ) == YES;
+	}
+
+	return TRUE;
+}
+
+NUMERIC ChangeQueue(QueueName)
+{
+	if ( JobQueuesDataView( PendingChanges ) )
+		{ return Warning( Translate( ~You must save or discard your pending changes first~ ) ); }
+
+	if ( IsNull(~<QueueName>~) )
+		{ return Warning( Translate( ~You must choose a queue to put the selected jobs in~ ) ); }
+
+	if ( !JobQueuesDataView( GetSelectedRows,SelectedJobs ) )		
+		{ return Warning( Translate( ~There were no jobs selected~ ) ); }
+
+	count = SelectedJobs( ChildCount );
+
+	if ( !<count> )
+		{ return Warning( Translate( ~There were no jobs selected~ ) ); }
+
+	WarningMsg = ~It is your responsibily to ensure that queue '<QueueName>' is capable of printing these jobs.  ~;
+	ReturnOnFailure( MessageBox( ~<WarningMsg> Are you sure you want to set the <count> selected job(s) to printer queue <QueueName>?~,YESNO ) == YES );
+
+	if ( !Ado( dbase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	ReturnOnFailure( IsSafeToChange( dbase,SelectedJobs ) );
+
+	if ( !dbase( BeginTransaction ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not start a transaction. <theErr>~ ) );
+	}
+
+	WaitCursor( Begin );
+
+	SelectedJobs( SetCurrentPosition,-1 );
+
+	while ( SelectedJobs( GetNext,SelectedJob ) )
+	{
+		if ( ~<$Con.SelectedJob[JobID]>~ != ~~ ) 
+		{
+			cmd = ~Update JobQueue Set QueueName = '<QueueName>' Where JobID = '<$Con.SelectedJob[JobID]>'~;
+
+			if ( !dBase( Cmd,~<cmd>~ ) )
+			{
+				LoseChanges();
+				dBase( GetErrorDescription,theErr,RollBackTransaction );
+				WaitCursor( End );
+				return Warning( Translate( ~Could execute command <cmd>. <theErr>~ ) );
+			}
+
+			JobQueuesDataView( SetCellValueByColName, SelectedJob(GetRow),~QueueName~,~<QueueName>~,FALSE );
+		}
+	}
+
+	if ( !dbase( CommitTransaction ) )
+	{
+		LoseChanges();
+		dBase( GetErrorDescription,theErr,RollBackTransaction );
+		WaitCursor( End );
+		return Warning( Translate( ~Could not commit transaction. <theErr>~ ) );
+	}
+
+	SaveAllChanges();
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC SetPrintStatus( NewStatus )
+{
+	if ( JobQueuesDataView( PendingChanges ) )
+		{ return Warning( Translate( ~You must save or discard your pending changes first~ ) ); }
+
+	if ( !JobQueuesDataView( GetSelectedRows,SelectedJobs ) )		
+		{ return Warning( Translate( ~There were no jobs selected~ ) ); }
+
+	if ( SelectedJobs( ChildCount ) == 0 )
+		{ return Warning( Translate( ~There were no jobs selected~ ) ); }
+
+	if ( !Ado( dbase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	ReturnOnFailure( IsSafeToChange( dbase,SelectedJobs ) );
+
+	if ( !dbase( BeginTransaction ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not start a transaction. <theErr>~ ) );
+	}
+
+	WaitCursor( Begin );
+
+	SelectedJobs( SetCurrentPosition,-1 );
+
+	while ( SelectedJobs( GetNext,SelectedJob ) )
+	{
+		if ( ~<$Con.SelectedJob[JobID]>~ != ~~ ) 
+		{
+			cmd = ~Update JobQueue Set PrintStatus = <NewStatus> Where JobID = '<$Con.SelectedJob[JobID]>'~;
+
+			if ( !dBase( Cmd,~<cmd>~ ) )
+			{
+				LoseChanges();
+				dBase( GetErrorDescription,theErr,RollBackTransaction );
+				WaitCursor( End );
+				return Warning( Translate( ~Could execute command <cmd>. <theErr>~ ) );
+			}
+
+			JobQueuesDataView( SetCellValueByColName, SelectedJob(GetRow),~PrintStatus~,~<NewStatus>~,FALSE );
+		}
+	}
+
+	if ( !dbase( CommitTransaction ) )
+	{
+		LoseChanges();
+		dBase( GetErrorDescription,theErr,RollBackTransaction );
+		WaitCursor( End );
+		return Warning( Translate( ~Could not commit transaction. <theErr>~ ) );
+	}
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC SelectEntireBatch()
+{
+	if ( !JobQueuesDataView( GetSelectedRows,SelectedJobs ) )		
+		{ return Warning( Translate( ~There were no jobs selected~ ) ); }
+
+	if ( SelectedJobs( ChildCount ) == 0 )
+		{ return Warning( Translate( ~There were no jobs selected~ ) ); }
+
+	SelectedJobs( GetFirst,SelectedJob );
+
+	JobQueuesDataView( SetSelected,WhereAttrEquals,BatchID,~<$con.SelectedJob[BatchID]>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OpenJobs()
+{
+	if ( !JobQueuesDataView( GetSelectedRows,SelectedJobs ) )		
+		{ return Warning( Translate( ~There were no rows selected~ ) ); }
+
+	while ( SelectedJobs( GetNext,SelectedJob ) )
+	{
+		if ( ~<$Con.SelectedJob[JobPath]>~ == ~~ ) 
+		{
+			Warning( Translate( ~There is no job to open~ ));
+		}
+		else
+		{
+			OpenAJob( ~<$Con.SelectedJob[JobPath]>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CloseAllJobs()
+{
+	JobQueuesDataWindow( StatusBar,Text,Translate( ~Closing all open Jobs~ ) );
+
+	Count = Index = 0;
+
+	app( ThisApp,MessagePump,3 );
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( Window( GETNEXT,aView ) )
+		{
+			aView( GET,ViewType,ViewType );
+
+			if ( ~<ViewType>~ == ~JobView~ )
+			{
+				aView( GetDocumentPath,DocumentPath );
+				Window( CloseWindow );
+				ThisApp( MessagePump,5 );
+				++Count;
+				Index = 0;
+			}
+		}
+	}
+
+	ThisApp( MessagePump,0 );
+
+	return JobQueuesDataWindow( StatusBar,Text,Translate( ~<Count> jobs closed~ ) );
+}
+
+
+
+NUMERIC ViewAsText()
+{
+	if ( !JobQueuesDataView( GetSelected,ItemsToView ) )
+		{ return Warning( Translate( ~There are no jobs selected to view as text~ ) ); }
+
+	Count = ItemsToView( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( ~There are no jobs selected to view as text~ ) ); }
+
+	Program = ~<$Sys.Directory>\Notepad.exe~;
+
+	if ( !Files( FileExists,~<Program>~ ) )
+	{
+		return Warning( Translate( ~Could not find NotePad.exe at <Program>~ ) );
+	}
+
+	while ( ItemsToView(GetNext,Item) )
+	{
+		if ( !ViewFileInNotepad( ~<$con.Item[JobPath]>~ ) )
+		{
+			GetLastError( ErrorString,theErr );
+			return Warning( Translate( ~Could not open <$con.Item[JobPath]>. <theErr>~ ) );
+		}
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC RightClickInListView(AsOptions,KeyString)
+{
+	SomethingSelected = F;
+
+	if ( JobQueuesDataView( GetSelectedRows,SelectedJobs ) )
+	{
+		SomethingSelected = SelectedJobs( ChildCount ) ? T : F;
+	}
+
+	GenCon( JobQueuesListViewMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+	GenCon( OpenJobs,New,DDMenuItemDef,AddTo,JobQueuesListViewMenu,SetValues,
+			Text,		Translate( ~&Open~ ),
+			IDText,		~ID~,
+			IsEnabled,	$SomethingSelected,
+			ActionsText, ACTION Exec ( OpenJobs(); ) );
+
+	GenCon( CloseAllJobs,New,DDMenuItemDef,AddTo,JobQueuesListViewMenu,SetValues,
+			Text,		Translate( ~Close All Jobs~ ),
+			IDText,		~ID~,
+			ActionsText, ACTION Exec ( CloseAllJobs() ) );
+
+	GenCon( SelectEntireBatch,New,DDMenuItemDef,AddTo,JobQueuesListViewMenu,SetValues,
+			Text,		Translate( ~Select Entire Batch~ ),
+			IDText,		~ID~,
+			ActionsText, ACTION Exec ( SelectEntireBatch() ) );
+
+	GenCon( NULL1,New,DDMenuItemDef,AddTo,JobQueuesListViewMenu,SetValues,
+			Text,		~~,
+			IDText,		~NULL~ );
+
+	GenCon( SaveAllChanges,New,DDMenuItemDef,AddTo,JobQueuesListViewMenu,SetValues,
+			Text,		Translate( ~&Save Changes~ ),
+			IDText,		~ID~,
+			IsEnabled,	$SomethingSelected,
+			ActionsText, ACTION Exec ( SaveAllChanges() ) );
+
+	GenCon( ForgetAllChanges,New,DDMenuItemDef,AddTo,JobQueuesListViewMenu,SetValues,
+			Text,		Translate( ~&Cancel Changes~ ),
+			IDText,		~ID~,
+			IsEnabled,	$SomethingSelected,
+			ActionsText,  ACTION Exec ( RollBackAllChanges() ) );
+
+	GenCon( DeleteRecord,New,DDMenuItemDef,AddTo,JobQueuesListViewMenu,SetValues,
+			Text,		Translate( ~&Delete~ ),
+			IDText,		~ID~,
+			IsEnabled,	$SomethingSelected,
+			ActionsText,  ACTION Exec ( DeleteRecord(); ) );
+
+	GenCon( Refresh,New,DDMenuItemDef,AddTo,JobQueuesListViewMenu,SetValues,
+			Text,		Translate( ~&Refresh (F5)~ ),
+			IDText,		~ID~,
+			ActionsText,  ACTION Exec ( RefreshListView(TRUE); ) );
+
+	GenCon( NULL2,New,DDMenuItemDef,AddTo,JobQueuesListViewMenu,SetValues,
+			Text,		~~,
+			IDText,		~NULL~ );
+
+	GenCon( SetStatusHold,New,DDMenuItemDef,AddTo,JobQueuesListViewMenu,SetValues,
+			Text,		Translate( ~Set Status To Hold~ ),
+			IDText,		~ID~,
+			ActionsText, ACTION Exec ( SetPrintStatus( 0 ) ) );
+
+	GenCon( SetStatusReady,New,DDMenuItemDef,AddTo,JobQueuesListViewMenu,SetValues,
+			Text,		Translate( ~Set Status To Ready~ ),
+			IDText,		~ID~,
+			ActionsText , ACTION Exec ( SetPrintStatus( 1 ) ) );
+
+	GenCon( NULL3,New,DDMenuItemDef,AddTo,JobQueuesListViewMenu,SetValues,
+			Text,		~~,
+			IDText,		~NULL~ );
+
+	GenCon( ViewAsText,New,DDMenuItemDef,AddTo,JobQueuesListViewMenu,SetValues,
+			Text,		Translate( ~View As &Text~ ),
+			IDText,		~ID~,
+			IsEnabled,	$SomethingSelected,
+			ActionsText, ACTION Exec ( ViewAsText(); ) );
+
+	if ( ~<KeyString>~ != ~~ )
+	{
+		if ( JobQueuesDataView( PerformMenuAction,JobQueuesListViewMenu,~<KeyString>~ ) )
+		{
+			return TRUE;
+		}
+	}
+
+	if ( <AsOptions> )
+	{
+		JobQueuesDataView( DisplayMenu,JobQueuesListViewMenu,0,0 );
+	}
+	else
+	{
+		JobQueuesDataView( DisplayMenu,JobQueuesListViewMenu );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseJobQueuesDataView()
+{
+	if ( JobQueuesDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	JobQueuesDataWindow( ForceCloseWindow );
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( JobQueuesDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !JobQueuesDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	LoseChanges();
+
+	return TRUE;
+}
+
+VOID LoseChanges()
+{
+	while ( JobQueuesDataView( PendingChanges ) )
+	{
+		JobQueuesDataView( RollBackChanges );
+	}
+}
+
+
+NUMERIC AllOptions()
+{
+	return RightClickInListView(TRUE);
+}
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+
+	if ( <key> == 0x74 )	// F5
+		{ return RefreshDoc(TRUE); }
+
+	RightClickInListView(FALSE,~<KeyString>~);
+}
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+NUMERIC Init( WhichJobQueues,DocumentQuery )
+{
+	JobQueuesDataWindow( Set,Title,~<WhichJobQueues>~ == ~~ ? ~Job Queue Data~ : ~Job Queue Data - <WhichJobQueues>~ );
+
+	OrderBy = ~QueueName,PrintStatus,Priority DESC,SubmitDate,BatchID,OrderSequence,OrderID,OrderItemSequence~;
+
+	DocumentQuery = ~<DocumentQuery> Order By <OrderBy>~;
+
+	Global( WhichJobQueues,DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+			{ Error( ~Failed to query the JobQueues table~ ); }
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !JobQueuesDataWindow( CreateWindow,~Job Queue~ ) )
+			{ Error( ~Failed to create the window~ ); }
+
+		return TRUE;
+	}
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+
+
+if ( !GenCon( JobQueueTableDefinition,GetFrom,JobQueue,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The JobQueue Table is not properly defined~ ); }
+	
+Include: ~FileBrowseButtonsInGridView~;
+Include: ~DefineStdGridButtons~;
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+Define: JobQueuesDataWindow Using DDWinDef
+	Fields:		Title					~Job Queue~
+				Position				0 30 90 35
+				IsPositionPercent		T
+				EnableStatusBar			T
+				TypeName				SplitterWnd
+				SplitterRows			~2 10 90~
+				SplitterColumns			1
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							RefreshActionsText		ACTION Exec ( RefreshDoc() )
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "JobQueueData.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons(JobQueue) + 10;
+
+					Define: ChangeQueueButton Using DDWinCtrlDef AsSymbol ChangeQueueButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( DisplayQueues() )
+								Position        $position + $hGap , $vGap, 85, $ButtonHeight
+								TEXT			Translate( ~Change Queue~ )
+								TOOLTIP			Translate( ~Assign the selected jobs to a new printer queue~ )
+								TYPENAME		BUTTON;
+
+
+					Define: SetStatusButton Using DDWinCtrlDef AsSymbol SetStatusButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( OnSetStatusButton() )
+								Position        ChangeQueueButton(GetRight,Position) + $hGap , ChangeQueueButton(GetTop,Position), 85, $ButtonHeight
+								TEXT			Translate( ~Change Status~ )
+								TOOLTIP			Translate( ~Assign a new status to the selected jobs~ )
+								TYPENAME		BUTTON;
+								
+								
+					Define: ChangePriorityButton Using DDWinCtrlDef AsSymbol ChangePriorityButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( OnChangePriorityButton() )
+								Position        SetStatusButton(GetRight,Position) + $hGap , SetStatusButton(GetTop,Position), 85, $ButtonHeight
+								TEXT			Translate( ~Change Priority~ )
+								TOOLTIP			Translate( ~Assign a new priority to the selected jobs~ )
+								TYPENAME		BUTTON;
+								
+					Define: NewPriorityfield	Using DDWinCtrlDef AsSymbol NewPriorityfield
+						Fields: TypeName		MaskedEditText
+								Position        ChangePriorityButton(GetRight,Position)+$hGap,ChangePriorityButton(GetTop,Position) 25 $ButtonHeight  
+								GenConName      THIS
+								Mask			~##~   
+								Tooltip			Translate( ~Enter a new priority~ ) ;
+
+
+						position = ChangePriorityButton(GetRight,Position) + $hGap;
+				}
+
+				
+		Define: JobQueuesDataView Using DDViewDef AsSymbol JobQueuesDataView
+			Fields:	ViewType				ListView
+					GridControlTypes		JobQueueTableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView(FALSE) )
+					RefreshActionsText		ACTION Exec ( RefreshDoc() )
+					DoubleClickActionsText	ACTION Exec ( OpenJobs() )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					CloseActionsText		ACTION Call ( OnCloseJobQueuesDataView() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "JobQueueData.htm" )
+					ButtonClickActionsText	ACTION Exec ( OnButtonClick(JobQueuesDataView,Translate( ~Find the desired job file ...~ ),~<$App.ShareDirectory>\JobQueueFiles~) )
+	}
+	
+
+//Init( ~All~,~Select * From JobQueue~ );
+

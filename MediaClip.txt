@@ -1,0 +1,1687 @@
+//
+// Import Media clip Dialog
+//
+// This panel provides Media clip import support. This was based on the stock Import
+// cmds dialog.
+//
+// $Id: MediaClip.txt,v 1.8 2013/03/14 10:44:23 davef Exp $
+
+// Version 17th Dec 12  Initial version.
+// Version 20th Dec 12  Added check for existing orders.
+//                      Reduce the width of dialog text boxes to avoid truncation.
+//                      Made Roll unique by adding the media directory.
+// Version  7th Jan 13  Add support for Phase 3 to add flattened images and order items.
+// Version 25th Jan 13  Updated for revised MediaClip phase 3.
+// Version  1st Feb 13  Added support for phase 3 output sub directories.
+// Version  6th Feb 13  Modified to cure DP2 V15 issues with loading .bmp file and
+//                      parsing of XML.
+//                      Also removed extra scans for images on Phase 3 import.
+// Version 12th Mar 13  Added support for zip files.
+Version = ~??~;
+if (RunningVersion( 8.0 ))
+{
+    Version = ~8.0~;
+}
+
+if (RunningVersion( 15.0 ))
+{
+    Version = ~15.0~;
+}
+
+ImportVersion = ~Version 12th Mar 2013 (DP2 Version <Version>)~;
+
+// Include commands for image and order items.
+Include: Cmds;
+
+MaxFileName = 31; // Dont know why but the frame is limited to 31 elsewhere in DP2
+ConversionPending    = 1; // Used for marking new orders as queued. See conversionStation.txt for the other side.
+ConversionCompleted  = 10;
+
+count = 0;
+
+// The sub directory under which the phase 3 images will be copied into the work order.
+Phase3Dir = ~Phase3~;
+
+//------------------------------------------------------------------------------
+// UnZipImportFile
+//
+// This function unzips the supplied file into the given target directory.
+//
+// params ZipPath    - The source Zip file.
+//        OutputPath - the output Path.
+//
+// Return TRUE on success ir FALSE on failure.
+//
+//------------------------------------------------------------------------------
+NUMERIC UnZipImportFile(ZipPath, OutputPath)
+{
+    // Create the unzip object.
+    if ( !UnZip( oUnzip ) )
+    {
+        Log( Session, ~UnZipFile failed to create Object !!!!!~ );
+        return FALSE;
+    }
+
+    // Unzip the file to the path supplied and apply flags to overwrite,
+    // reduce Zip dialogs and ensure directory names are preserved.
+    oUnzip( Operation,Extract,
+            Path,~<ZipPath>~,Directory,~<OutputPath>\~,Files,~*.*~,
+            Recurse,OverWrite,
+            QuietFlag, TRUE,
+            NoDirNames, FALSE );
+
+    if ( !oUnzip(UnZip))
+    {
+        oUnzip(GetErrorDescription,err);
+        Log( Session, ~UnZipImportFile failed on <ZipPath>,<err> !!!!!~ );
+        return FALSE;
+    }
+    Log( Session, ~UnZipImportFile OK for <ZipPath>~ );
+    return TRUE;
+}
+
+//------------------------------------------------------------------------------
+// UpdateMediaClipFile
+//
+// This function copies the source to destination file changing all occurrences
+// of {userFiles} to the OrderPath supplied appended with CC and the mediaclip images
+// directory. The CC subdir is the path used for rendering the colour corrected images.
+//
+// As part of this process any images are added for conversion
+//
+// In addition the thumbs directory is removed from the path.
+//
+// params InputPath  - The source XML file.
+//        OutputPath - the output XML file.
+//        OrderPath  - The order path
+//        mediaDir   - The mediaclip directory being processed.
+//
+//------------------------------------------------------------------------------
+NUMERIC UpdateMediaClipFile( InputPath, OutputPath, OrderPath, mediaDir )
+{
+    // The OrderPath needs the \ switched to /. No real explanation as to why given this
+    // is inconsistent with other paths in the file.
+    OrderPath = String( Replace,~<OrderPath>~,~\~,~/~ );
+
+    if ( !File( Input, Open, ~<InputPath>~, Read, Text ) ) 
+    {
+        Warning( Translate( ~Could not open <InputPath>~ ) );
+        return FALSE;
+    }
+
+    if ( !File( Output,Open,~<OutputPath>~,Create,Write ) )
+    {
+        Warning( ~Failed to create <OutputPath>~ );
+        return FALSE; 
+    }
+
+    SearchString1 = ~/thumb/~;
+    ReplaceString1 = ~/~;
+
+    SearchString2 = ~{userFiles}~;
+    ReplaceString2 = ~<OrderPath>/CC/<mediaDir>/images~;
+
+    while ( Input( ReadString, Buffer ) ) 
+    {
+        OnContentsOf( Buffer,Replace,SearchString1,ReplaceString1 );
+        OnContentsOf( Buffer,Replace,SearchString2,ReplaceString2 );    
+
+        Output( ~<$str.$Buffer.QuoteSafe>~ );
+    }
+
+    return TRUE;
+}
+
+VOID ReOpen()
+{
+}
+
+//------------------------------------------------------------------------------
+// AddOrder
+//
+// Creates the order in DP2.
+//
+// params OrderID  - 
+//        CustomerID - 
+//        ImagesOrderID  - 
+//        BatchID   - 
+//        BatchSeq
+//        Status
+//        Type
+//        OrderDate
+//        ShipDate
+//        Priority
+//        Description
+//        Owner
+//
+//------------------------------------------------------------------------------
+NUMERIC AddOrder( OrderID,CustomerID,ImagesOrderID,BatchID,BatchSeq,Status,Type,OrderDate,ShipDate,Priority,Description,Owner )
+{
+    Query = ~Select * From Orders Where ID = '<OrderID>'~;
+
+    if ( !PGenConList( List,Connection,database,Cursor,Keyset,Query,~<Query>~ ) )
+    {
+        List( GetErrorDescription,0,theErr );
+        Log( Session, ~<theErr>~);
+        return FALSE;
+    }
+
+    if ( !List( GetFirst,Record ) )
+    {
+        List( AddNew,Record );
+
+        Record( Set,ID,~<OrderID>~ );
+        Record( Set,OrderDate,~<$Date.date>~ );
+        Record( Set,ShipDate,~<$Date.Date>~ );
+    }
+
+    if ( ~<CustomerID>~ != ~~ )                { Record( Set,CustomerID,~<CustomerID>~ ); }
+    if ( ~<ImagesOrderID>~ != ~~ )            { Record( Set,ImagesOrderID,~<ImagesOrderID>~ ); }
+    if ( ~<BatchID>~ != ~~ )                { Record( Set,BatchID,~<BatchID>~ ); }
+    if ( ~<BatchSeq>~ != ~~ )                { Record( Set,BatchSeq,~<BatchSeq>~ ); }
+    if ( ~<Status>~ != ~~ )                    { Record( Set,Status,~<Status>~ ); }
+    if ( ~<Type>~ != ~~ )                    { Record( Set,Type,~<Type>~ ); }
+    if ( ~<OrderDate>~ != ~~ )                { Record( Set,OrderDate,~<OrderDate>~ ); }
+    if ( ~<ShipDate>~ != ~~ )                { Record( Set,ShipDate,~<ShipDate>~ ); }
+    if ( ~<Priority>~ != ~~ )                { Record( Set,Priority,~<Priority>~ ); }
+    if ( ~<Description>~ != ~~ )            { Record( Set,Description,~<Description>~ ); }
+    if ( ~<Owner>~ != ~~ )                    { Record( Set,Owner,~<Owner>~ ); }
+
+    if ( !IsNull(~<ImagesOrderID>~) )
+    {
+        Cmd = ~Select ShootDescID,ShootDescType From Orders Where ID = '<ImagesOrderID>'~;
+        if ( database(GetValuesFor,~<Cmd>~,ShootDescID,ShootType) )
+        {
+            if ( !IsNull(~<ShootDescID>~) )
+            {
+                Record( Set,ShootDescID,~<ShootDescID>~ );
+                Record( Set,ShootDescType,~<ShootType>~ );
+            }
+        }
+    }
+
+    if ( !List( Update ) )
+    {
+        List( GetErrorDescription,0,theErr );
+                Log( Session, ~<theErr>~);
+        return FALSE;
+    }
+
+    Log( Session, ~AddOrder <OrderID>~);
+    return TRUE;
+}
+
+//------------------------------------------------------------------------------
+// OnMediaClipButton
+//
+// This function opens the MediaClip directory when the Media Clip Icon is pressed.
+// If there is now valid directory an empty explorer window is opened
+//
+//------------------------------------------------------------------------------
+NUMERIC OnMediaClipButton()
+{
+    // By default open an explorer window for the entire PC
+    Actions = ACTION DOC ( Explorer Open ExplorerDoc "Init(~Explore~,~~);" );
+
+    if ( !IsNULL( ~<MediaClipSearchDirectory>~ ) )
+    {
+        // We have a storage directory and it exists so change the Action to open it up
+        Actions = ACTION DOC ( Explorer Open ExplorerDoc "Init(~Explore~,~<MediaClipSearchDirectory>~);" );
+    }
+
+    return PerformActions( Actions );
+}
+
+//------------------------------------------------------------------------------
+// DefineDialog
+//
+// This defined the shape and contents of the Media Clip dialog.
+//
+//------------------------------------------------------------------------------
+VOID DefineDialog()
+{
+    if ( !DictionaryExists(DDDataLoaderDialogData) )
+    {
+        Dictionary: DDDataLoaderDialogData
+            Fields: Name    ~Directory~        type text
+            Fields: Name    FileName        type text
+            Fields: Name    Status            type text
+            Fields: Name    ExecutableData    type text
+            Fields: Name    MediaClipAutoStart        type long
+    }
+
+    Left = 5; Top = 5;        hGap = 5; vGap = 5;
+    TextHeight = 20;        TextWidth = 110;  
+    ButtonHeight = 20;        ButtonWidth = 90;
+    StaticTextWidth = 60;    StaticTextHeight = 20;
+    EditTextWidth = 200;    EditTextHeight = 20;
+    ComboBoxWidth = 200;    ComboBoxHeight = 120;
+    x = $Left;                y = $Top;
+    PathWidth = 400;        DialogWidth = (($ButtonWidth + $hGap) * 5) + $hGap * 2;
+
+    Define: DlgData Using DDDataLoaderDialogData
+        Fields: ExecutableData TRUE;
+
+    Define: DataLoaderDlgDefinition Using DDWinDef
+            Fields: Position        180 50 $DialogWidth 600
+                    Title            ~Process Importing Mediaclip Orders~
+                    TypeName        ~Dialog~
+                    WantsMinimizeBox TRUE
+                    HACTIONSTEXT    ACTION SHOWHELPPAGE ( KPISHelpFile "mediaclip.htm" )
+                    OACTIONSTEXT    ACTION EXEC ( CloseDialog() )
+
+    Contains: InListOrder
+    {
+        Define: DirectoryPrompt Using DDWinCtrlDef AsSymbol DirectoryPrompt 
+
+            Fields: TypeName        StaticText
+                    RightJustified    TRUE
+                    Text            Translate( ~Directory~ )
+                    Position        $x,$y,<StaticTextWidth>,<StaticTextHeight> ;
+
+       Define: DirectoryField Using DDWinCtrlDef AsSymbol DirectoryField         
+            Fields: TypeName        EditText
+                    Position        DirectoryPrompt(GetRight,Position) + $hGap
+                                    DirectoryPrompt(GetTop,Position) -2 
+                                    $PathWidth $EditTextHeight         
+                    GenConName        THIS
+                    GenConField        ~Directory~
+                    IActionsText    ACTIONS ( Get )
+                    DActionsText    ACTION Exec ( EnableButtons() )
+                    OActionsText    ACTIONS ( Save )
+                    Tooltip            Translate( ~Enter the path to watch for data files~ ) ;
+
+        Define: InBrowseButton Using DDWinCtrlDef AsSymbol InBrowseButton 
+            Fields: TypeName        Button
+                    Text            Translate( ~?~ )
+                    Position        DirectoryField(GetRight,Position) + $hGap,DirectoryPrompt(GetTop,Position),20,20
+                    DActionsText    ACTION EXEC  ( OnBrowseDirectoryButton() ) 
+                    IsTabStop        1
+                    Tooltip            Translate( ~Find the directory~ );
+
+        DialogWidth = InBrowseButton( GetRight,Position) + $hGap * 4;
+
+        Define: ExplorerButton Using DDWinCtrlDef AsSymbol ExplorerButton 
+                Fields: TypeName        Button
+                        Text            Translate( ~Explorer~ )
+                        Position        $hGap*3,DirectoryPrompt(GetBottom,Position)+$vGap*3, 150, 87
+                        DActionsText    ACTION EXEC ( OnMediaClipButton() ) 
+                        IsEnabled       T
+                        ImageFile       ~<$App.Directory>\mediaclip.tif~
+                        Tooltip         Translate( ~Open an Explorer Window or if it exists the Import Directory~ );
+
+       Define: ProgressBox Using DDWinCtrlDef AsSymbol ProgressBox
+            Fields:    TYPENAME        Progress
+                    POSITION        $x DirectoryPrompt(GetBottom,Position) + <vGap> $DialogWidth-15 6
+                    ISSMOOTH        1;
+
+        Define: GoButton Using DDWinCtrlDef AsSymbol GoButton 
+            Fields: TypeName        DefaultButton
+                    Text            Translate( ~Start~ )
+                    Position        $DialogWidth/2-$ButtonWidth+$hGap*2,ProgressBox(GetBottom,Position) + $vGap*2,$ButtonWidth, $ButtonHeight 
+                    DActionsText    ACTION EXEC  ( OnGoButton() ) 
+                    IsTabStop        1
+                    IsEnabled        F
+                    Tooltip            Translate( ~Import from the Input File~ )  ;
+        Define: StopButton Using DDWinCtrlDef AsSymbol StopButton 
+            Fields: TypeName        Button
+                    Text            Translate( ~Stop~ )
+                    Position        GoButton(GetRight,Position)+$hGap,GoButton(GetTop,Position),$ButtonWidth, $ButtonHeight 
+                    DActionsText    ACTION EXEC  ( OnStopButton() ) 
+                    IsTabStop        1
+                    IsEnabled        F
+                    Tooltip            Translate( ~Stop Watching~ )  ;
+
+        Define: AutoStartButton Using DDWinCtrlDef AsSymbol AutoStartButton 
+            Fields: TypeName        CheckBox
+                    GenConName        THIS
+                    GenConField        ~MediaClipAutoStart~
+                    Text            Translate( ~Auto Start~ )
+                    Position        StopButton(GetRight,Position)+$hGap*3,GoButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+                    DActionsText    ACTION EXEC  ( OnAutoStartBox() ) 
+                    Tooltip            Translate( ~Specify whether to automatically start importing orders when the application starts up~ )  ;
+
+        Define: FileName Using DDWinCtrlDef AsSymbol FileName 
+            Fields: TypeName        StaticText
+                    Position        ExplorerButton(GetRight,Position)+$hGap,GoButton(GetBottom,Position) + $vGap,$DialogWidth - (($hGap * 2) + 160),<StaticTextHeight>*2 
+                    GenConName        THIS
+                    GenConField        ~FileName~
+
+       Define: Status Using DDWinCtrlDef AsSymbol Status 
+            Fields: TypeName        StaticText
+                    Position        ExplorerButton(GetRight,Position)+$hGap,FileName(GetBottom,Position) + 1,$DialogWidth - (($hGap * 2) + 160) ,<StaticTextHeight>*3 
+                    GenConName        THIS
+                    GenConField        ~Status~
+    };
+
+    DialogHeight = Status(GetBottom,Position) + $vGap + 20;
+
+    LeftPosition = App( thisApp,MainWindow,GetClientWidth ) - $DialogWidth - 7;
+    TopPosition = App( thisApp,MainWindow,GetClientHeight ) - $DialogHeight - 52;
+
+
+    DataLoaderDlgDefinition( Set,Position,~<LeftPosition> <TopPosition> <DialogWidth> <DialogHeight>~ );
+
+    GenDlg( dlg,Definition,DataLoaderDlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    Global( dlg,DataLoaderDlgDefinition,DlgData );
+}
+
+NUMERIC OnAutoStartBox()
+{
+    dlg( GetInput );
+
+    SetWorkStationSettings( ~<$Job.Name>~,MediaClipAutoStart,~<$con.dlgData[MediaClipAutoStart]>~,TRUE );
+
+    return TRUE;
+}
+
+
+// HANDLE MESSAGES POSTED FROM THE CMDS SCRIPT
+
+NUMERIC UserWarning( msg )                    { return Warning( ~<msg>~ ); }
+NUMERIC UserStateMessage( msg )               { return dlg( SetStrings,Status,~<$Date.Time>  <msg>~ ); }
+VOID    SetupImportProgressBar( Min,Max,Step )    { dlg( ProgressBar,ProgressBox,SetRange,<Min>,<Max>,SetStep,<Step> ); }
+VOID    StepImportProgressBar()                    { dlg( ProgressBar,ProgressBox,Stepit); }
+VOID    ProgressBarPosition(pos)            { dlg( ProgressBar,ProgressBox,SetPos,<pos> ); }
+
+NUMERIC ExecutingFile( msg )
+{
+    return dlg( SetString,~<$Date.Time>  <msg>~ ,FileName,0 );
+}
+
+
+VOID OnBrowseDirectoryButton()
+{
+    Title = Translate( ~Select the directory to watch~ );
+
+    if ( GetFolder( ~<Title>~,~~,Path ) )
+    {
+        dlg( SetString,~<Path>~,Directory,0 );
+    }
+    
+    EnableButtons();                    
+}
+
+
+NUMERIC EnableButtons()
+{
+    dlg( GetInput );
+
+    CanGo = !IsNull(~<$con.dlgdata[Directory]>~) && !<Running> ;
+
+    dlg( EnableControls,<Running>,StopButton );
+    dlg( EnableControls,<CanGo>,GoButton );
+
+    return TRUE;
+}
+
+
+Running = FALSE;
+Quitting = FALSE;
+
+
+VOID CloseDialog()
+{
+    dlg( GetInput );
+
+    SetWorkStationSettings( ~<$Job.Name>~,MediaClipSearchDirectory,~<$con.dlgData[Directory]>~,TRUE );
+
+    Quitting = TRUE;
+
+    if ( <Running> )
+    {
+        OnStopButton();
+    }
+    else
+    {
+        dlg( END );
+        Exit();
+    }
+}
+
+
+NUMERIC OnGoButton()
+{
+    dlg( GetInput );
+
+    if ( IsNULL(~<$con.dlgdata[Directory]>~) )
+    {
+        Invoke( UserWarning,Translate( ~Select a directory to import from~ ) );
+        return FALSE;
+    }
+
+    if ( !Directory( Create,~<$con.dlgdata[Directory]>~ ) )
+    {
+        Invoke( UserWarning,Translate( ~Could not create <$con.dlgdata[Directory]>~ ) );
+        return FALSE;
+    }
+
+    aThread( New,ProcessThread,~<$con.dlgdata[Directory]>~ );
+
+    ForgetGlobal( DirChange );
+
+    ChangeNotification( DirChange,Add,~<$con.dlgdata[Directory]>~,FALSE,ChangeFileName );
+
+    DirChange( OnChangeRoutine,~OnDirectoryChange~,Watch );
+
+    Global( DirChange );
+
+    return TRUE;
+}
+
+
+NUMERIC OnStopButton()
+{
+    ForgetGlobal( DirChange );
+
+    Running = FALSE;
+
+    if ( aThread( IsActive ) )
+    {
+        aThread( TerminateSleep );
+    }
+
+    return UserStateMessage( Translate( ~Stopping~ ) );
+}
+
+
+NUMERIC ProcessThread( Path )
+{
+    Running = TRUE;
+
+    Invoke( UserStateMessage,Translate( ~Started~ ) );
+
+    Invoke( EnableButtons );
+
+    while ( <Running> )
+    {
+        Invoke( SetupImportProgressBar,0,1,1 );
+
+        Invoke( ProgressBarPosition,0 );
+
+        if ( !ProcessOrders( ~<Path>~,~MC*~ ) )
+            break;
+
+        if ( IsMainThread() )    // JUST FOR TESTING WITHOUT THREADS
+        {
+            Running = FALSE;
+        }
+        else
+        {
+            Sleep( 10000 );        // May break out of here on a directory change
+            Sleep( 20 );        // Wait a little longer to let things settle down
+        }
+    }
+
+    Invoke( OnStopButton );
+
+    Invoke( EnableButtons );
+
+    Invoke( UserStateMessage,Translate( ~Stopped~ ) );
+
+    if ( <Quitting> )
+    {
+        Invoke( CloseDialog );
+    }
+
+    return TRUE;
+}
+
+VOID OnDirectoryChange( Which )
+{
+    if ( aThread( IsActive ) )
+    {
+        aThread( TerminateSleep );
+    }
+}
+
+NUMERIC FindNextFile( path,search,&count,&FilePath )
+{
+    MoreFiles = findfile( aDirectoryEntry,Find,~<path>\<search>~ );
+
+    while ( $Morefiles )
+    {
+        Morefiles = aDirectoryEntry( Next );
+
+        aDirectoryEntry( Get,Path,FilePath );
+            
+        if ( aDirectoryEntry( Dots ) || aDirectoryEntry( IsDirectory ) )
+            continue;
+            
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+NUMERIC FindEarliestDirectory( search,path,&FilePath )
+{
+    MoreFiles = findfile( aDirectoryEntry,Find,~<path>\<search>~ );
+
+    while ( $Morefiles )
+    {
+        Morefiles = aDirectoryEntry( Next );
+
+        aDirectoryEntry( Get,Path,FilePath );
+        Invoke( ExecutingFile,Translate( ~Dirs found <FilePath>~ ) ); 
+        if (aDirectoryEntry( IsDirectory ) )
+        {
+            return TRUE;
+        }
+    }
+
+    Invoke( ExecutingFile,Translate( ~No orders pending. Waiting.....~ ) );
+
+    return FALSE;
+}
+
+//------------------------------------------------------------------------------
+// ProcessOrders
+//
+// This function searches for directories starting with the SearchCriteria.
+// Depending on the XML file located in the directory a phase 1 or phase 3 
+// import will be performed. Where .Zip files are found these are extracted into
+// the hotfolder for completion.
+//
+// Phase 1 contains only images, Phase 3 contains flattened images and order items. 
+//
+// params SearchDir - The directory to monitor.
+//        SearchCriteria - the file search to use, ie MC*
+//
+// Returns
+//        TRUE for a success or FALSE on error.
+//
+//------------------------------------------------------------------------------
+NUMERIC ProcessOrders( SearchDir, SearchCriteria )
+{
+    while ( TRUE )
+    {
+        FilePath = ~~;
+
+        //--------------------------------------------------------------
+        // Extract ZIP files found in the search directory
+        //--------------------------------------------------------------
+        Invoke( ExecutingFile,Translate( ~Searching <SearchDir> For Zipped Orders starting <SearchCriteria>~ ) );
+
+        while ( FindEarliestFile( ~<SearchDir>\*.zip~,ZIPFilePath,CreationTime )  )
+        {
+             // Check its complete by trying to change to Read Write
+             if ( !Files( ChMod,~<ZIPFilePath>~,ReadWrite ) )
+             {
+                 Log( Session,~MediaClip Import: <ZIPFilePath> Cannot change to Read/Write, skipping~ );
+                 continue;
+             }
+
+             // Unzip the file
+             if (UnZipImportFile(~<ZIPFilePath>~, ~<SearchDir>~ ))
+             {
+                 Log( Session,~MediaClip Import: <ZIPFilePath> Unzipped OK~ );
+
+                 // Move the zip file into the Complete directory.
+                 Directory( Create,~<SearchDir>\Complete~ );
+
+                 if ( !Files( RenameUnique, ~<SearchDir>\<$str.$ZIPFilePath.FileName>~, ~<SearchDir>\Complete\<$str.$ZIPFilePath.FileName>~ ) )
+                 {
+                     Invoke( OnStopButton );
+                     return Invoke( UserWarning, Translate( ~<SearchDir>\<$str.$ZIPFilePath.FileName> can't be renamed~ ) );
+                 }
+             }
+             else
+             {
+                 Log( Session,~MediaClip Import: <ZIPFilePath> Unzip Failed~ );
+
+                 // Move the Error'ed zip into the Errors directory.
+                 Directory( Create,~<SearchDir>\Errors~ );
+
+                 if ( !Files( RenameUnique, ~<SearchDir>\<$str.$ZIPFilePath.FileName>~, ~<SearchDir>\Errors\<$str.$ZIPFilePath.FileName>~ ) )
+                 {
+                     Invoke( OnStopButton );
+                     return Invoke( UserWarning, Translate( ~<SearchDir>\<$str.$ZIPFilePath.FileName> can't be renamed~ ) );
+                 }
+
+                 Invoke( ExecutingFile,Translate( ~Completed <ZIPFilePath> With Error~ ) );
+             }
+        }
+
+        Invoke( ExecutingFile,Translate( ~Searching <SearchDir> For Orders starting <SearchCriteria>~ ) );
+
+        if ( !FindEarliestDirectory( ~<SearchCriteria>~,~<SearchDir>~,FilePath )  )
+        {
+            Invoke( UserStateMessage,Translate( ~Orders Complete <count>~ ) );
+            break;
+        }        
+
+        if ( !Files( ChMod,~<FilePath>~,ReadWrite ) )
+        {
+            Invoke( OnStopButton );
+            return Invoke( UserWarning, Translate( ~<FilePath> can't be deleted so it can't be executed.~ ) );
+        }
+
+        Log( Session,~MediaClip Import: <FilePath>~ );
+
+        Invoke( UserStateMessage,Translate( ~Processing Order <$str.$FilePath.FileName>~ ) );
+
+        // We have a valid order directory, now locate the order XML file indicating Phase 1
+        // or assume phase 3 from its abscence and an existing order directory from phase 1.
+        Phase = 1;
+        if ( !FindEarliestFile( ~<SearchDir>\<$str.$FilePath.FileName>\*.xml~,XMLFilePath,CreationTime )  )
+        {
+            Phase = 3;
+        }
+
+        Invoke( ExecutingFile,Translate( ~Orders Complete <++count>~ ) );
+
+        // Process the order depending on the phase.
+        if (<Phase> == 1)
+        {
+            result = ProcessPhase1XMLFile( ~<XMLFilePath>~ );
+        }
+
+        if (<Phase> == 3)
+        {
+            result = ProcessPhase3( ~<SearchDir>\<$str.$FilePath.FileName>~ );
+
+            // Replace the XMLFilePath incase of error so the message displayed makes sense.
+            XMLFilePath = ~<$str.$FilePath.FileName>~;
+        }
+
+        // Depending on the result of the import move the directory.
+        // Phase 3 orders are duplicate directories from phase 1 but the Rename handles
+        // this by appending .<n>       
+        if (<result>) 
+        {
+            // Move the complete order into the Complete directory.
+            Directory( Create,~<SearchDir>\Complete~ );
+
+            if ( !Files( RenameUnique, ~<SearchDir>\<$str.$FilePath.FileName>~, ~<SearchDir>\Complete\<$str.$FilePath.FileName>~ ) )
+            {
+                Invoke( OnStopButton );
+                return Invoke( UserWarning, Translate( ~<SearchDir>\<$str.$FilePath.FileName> can't be renamed~ ) );
+            }
+        }
+        else
+        {
+            // Move the Error'ed order into the Errors directory.
+            Directory( Create,~<SearchDir>\Errors~ );
+        
+            if ( !Files( RenameUnique, ~<SearchDir>\<$str.$FilePath.FileName>~, ~<SearchDir>\Errors\<$str.$FilePath.FileName>~ ) )
+            {
+                Invoke( OnStopButton );
+                return Invoke( UserWarning, Translate( ~<SearchDir>\<$str.$FilePath.FileName> can't be renamed~ ) );
+            }
+
+            Invoke( ExecutingFile,Translate( ~Completed <XMLFilePath> With Error~ ) );
+
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+// FUNCTION: CreateImportImage()
+//
+// This function adds the supplied image to the temp image queue. It also stores the original 
+// Filename incase we attempt to change it again.
+//
+NUMERIC CreateImportImage( OrderID, Roll, Frame, Path, OriginalPath, colourmode )
+{
+    OriginalPath = String( RemoveCharFromString,~'~,~<OriginalPath>~ );
+    Path = String( RemoveCharFromString,~'~,~<Path>~ );
+    Roll = String( RemoveCharFromString,~'~,~<Roll>~ );
+    Roll = String( RemoveCharFromString,~:~,~<Roll>~ );
+
+    Log( Session,~"%%%%%% Calling Import to '<OrderID>' of Roll '<Roll>', Frame '<Frame>'~); 
+    Log( Session,~"%%%%%%                    Path '<Path>'~); 
+    Log( Session,~"%%%%%%                    OriginalPath '<OriginalPath>'~); 
+
+    // Truncate the Roll if its > MaxFileName to avoid failing to store it.
+    RollLength         = strlen(~<Roll>~);
+    if ( $RollLength > <MaxFileName> )
+    {
+         substr(~<Roll>~, 0, <MaxFileName>, Roll);
+    }
+
+    // Since we didnt copy these in we need to do the same for the frame.
+    FrameLength         = strlen(~<Frame>~);
+    if ( $FrameLength > <MaxFileName> )
+    {
+         substr(~<Frame>~, 0, <MaxFileName>, Frame);
+    }
+
+
+    cmd = ~INSERT INTO ImportImagesTemp (OrderID, Roll, Frame, Path, OriginalPath, colourmode) VALUES ('<OrderID>', '<Roll>', '<Frame>', '<Path>', '<OriginalPath>', '<colourmode>')~;
+
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Log( Session,~"%%%%%% FAILED to add new image to ImportImagesTemp for OrderID <OrderID> See Session Log for more details.~); 
+        return FALSE;
+    }
+    return TRUE;
+}
+
+NUMERIC ImportImages( &TheNodeList, OrderID, OrderPath, mediaDir )
+{
+    i = -1;
+
+    NumNodes = TheNodeList( GetLength );
+
+
+    while ( <++i> < <NumNodes> )
+    {
+        TheNodeList( GetNodeByIndex,ANode,<i> );
+
+        ANode( GetNodeName,TheNodeName );
+
+        ANode( GetNodeText,TheText );
+
+        if ( ANode( GetAttributeNode,~fileName~,NameAttribute ) )
+        {
+            NameAttribute( GetNodeValue, fileName);
+
+            // If this is not a filename with userFile then continue.
+            if (IsNull( String( StringInString, ~{userFiles}~, ~<fileName>~ )))
+            {
+                continue;
+            }
+
+            fileName = String( Replace,~<fileName>~,~/~,~\~ );
+            fileName = String( Replace,~<fileName>~,~{userFiles}~,~<OrderPath>\<mediaDir>\images~ );
+            fileName = String( Replace,~<fileName>~,~\thumb\~,~\~ );
+
+            // Now add the image to the order. This initiates adding a thumbnail.
+            SubDir             = ~<$Str.$fileName.Folder>~;
+            Frame              = ~<$Str.$fileName.FileName>~;
+            FileNameNoExt      = ~<$Str.$fileName.WithOutExt>~;
+
+            Log( Session,~%%%% Add Image <$Str.$fileName.FileName> to OrderID <OrderID>~ );
+            Log( Session,~%%%% SubDir <SubDir>~ );
+            Log( Session,~%%%% Frame <Frame>~ );
+            Log( Session,~%%%% FileNameNoExt <FileNameNoExt>~ );
+
+            // Add the image to our list 
+            if (!CreateImportImage( <OrderID>, ~<mediaDir><SubDir>~, ~<Frame>~, ~<fileName>~, ~<fileName>~, ~~))
+            {
+                Log( Session,~Failed to CreateImportImage().~);
+            }
+
+            StepImportProgressBar();
+        }
+    }
+
+    return TRUE;
+}
+
+//------------------------------------------------------------------------------
+// AddFlatImages
+//
+// This function adds all images located in the path provided to the order.
+//
+// params OrderID     - the order ID
+//        OrderPath   - the path
+//
+// Returns
+//        TRUE for a success or FALSE on error.
+//
+//------------------------------------------------------------------------------
+NUMERIC AddFlatImages( OrderID, OrderPath )
+{
+    i = -1;
+
+    Log( Session, ~MediaClip: AddFlatImages OrderPath = <OrderPath>~ );
+
+    MoreFiles = findfile( aDirectoryEntry,Find,~<OrderPath>\*~ );
+
+    while ( $Morefiles )
+    {
+        Morefiles = aDirectoryEntry( Next );
+
+        if ( aDirectoryEntry( Dots ) )
+                continue;
+       
+        if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+        { 
+            // process the directory 
+            aDirectoryEntry( Get,Filename,Filename );
+            if ( aDirectoryEntry( Dots ) )
+            {
+                Morefiles = aDirectoryEntry( Next );
+                continue;
+            }
+
+            Log( Session, ~Dir Filename <Filename> add...~);
+            AddFlatImages( ~<OrderID>~, ~<OrderPath>\<Filename>~ );
+            continue;
+        }
+
+        aDirectoryEntry( Get,Filename,Filename ); 
+
+        // Now add the image to the order. This initiates adding a thumbnail.
+        SubDir             = ~<$Str.$OrderPath.FileName>~;
+        Frame              = ~<$Str.$Filename.FileName>~;
+        FileNameNoExt      = ~<$Str.$Filename.WithOutExt>~;
+
+        Log( Session,~%%%% Add Image <OrderPath>\<Filename> to OrderID <OrderID>~ );
+        Log( Session,~%%%% SubDir <SubDir>~ );
+        Log( Session,~%%%% Frame <Frame>~ );
+        Log( Session,~%%%% FileNameNoExt <FileNameNoExt>~ );
+
+        if (!AddImage( ~<OrderID>~, ~<SubDir>~, ~<Frame>~, ~<OrderPath>\<Filename>~, ~srgb~ ))
+        {
+            Log( Session, ~MediaClip: AddImage FAILED !!!!!!!!!!!!~ );
+            MarkOrderFailed(~<OrderID>~, ~Failed Adding Images~);
+            return FALSE;
+        }
+
+        StepImportProgressBar();
+    }
+
+    return TRUE;
+}
+
+//------------------------------------------------------------------------------
+// GetLayoutForPage
+//
+// This function converts a MediaClip product ID and page to a layout using the
+// MediaClipMap table.
+//
+// params ItemList - The database object detailing the product map.
+//        Page     - the page number
+//        Layout   - the layout when found.
+//
+// Returns
+//        TRUE for a success or FALSE on error.
+//
+//------------------------------------------------------------------------------
+NUMERIC GetLayoutForPage( &ItemList, Page, &Layout )
+{
+    more = ItemList( GetFirst, Item );
+
+    while ( <more> )
+    {
+        pageStart      = MakeNumber(~<$pcon.Item[pageStart]>~);
+        pageEnd        = MakeNumber(~<$pcon.Item[pageEnd]>~);
+        Page           = MakeNumber(~<Page>~);
+        LayoutID       = ~<$pcon.Item[LayoutID]>~;
+
+        // This handles single pages where no end has been defined.
+        if ((<pageStart> == <Page>) ||
+            (<pageEnd> == <Page>))
+        {
+            Layout = ~<LayoutID>~;
+            return TRUE;
+        }
+
+        // This handled pages within a range.
+        if ((<Page> >= <pageStart>) &&
+            (<Page> <= <pageEnd>))
+        {
+            Layout = ~<LayoutID>~;
+            return TRUE;
+        }
+
+        more = ItemList( GetNext, Item);
+    }
+
+    return FALSE;
+}
+
+//------------------------------------------------------------------------------
+// GetJobdir
+//
+// This function looks for a job directory in the supplied path. Where found this
+// is returned.
+//
+// params jobdir - where to return the job directory
+//        Path   - the path to check. 
+//
+// Returns
+//        TRUE for subdir appended or FALSE where no subdir is found.
+//
+//------------------------------------------------------------------------------
+NUMERIC GetJobDir( &jobdir, Path )
+{
+    MoreFiles = findfile( aDirectoryEntry,Find,~<Path>\*~ );
+
+    while ( $Morefiles )
+    {
+        Morefiles = aDirectoryEntry( Next );
+
+        if ( aDirectoryEntry( Dots ) )
+                continue;
+
+        if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+        {  
+            // Append the directory name
+            aDirectoryEntry( Get,Filename,Filename );
+
+            jobdir = ~<Filename>~;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+//------------------------------------------------------------------------------
+// CreateOrderItemsForMCProduct
+//
+// This function adds order items based on the media clip product.
+//
+// params OrderID   - The order being processed.
+//        ProductID - The Media Clip product used to deduce the order items.
+//        Quantity  - How many of this product to be printed.
+//        output    - the path to the rendered pages to be printed. 
+//
+// Returns
+//        TRUE for a success or FALSE on error.
+//
+//------------------------------------------------------------------------------
+NUMERIC CreateOrderItemsForMCProduct( OrderID, MCProductID, Quantity, output)
+{
+    // List the files in the output directory creating one product per page
+    Log( Session, ~CreateOrderItemsForMCProduct: searching <output>....~ );
+
+    // Get the database object containing the Product Map for the product.
+    // This done once per product rather than once per page.
+    Query = ~Select * FROM MediaClipMap Where MediaClipID = '<MCProductID>'~;
+
+    if ( !PGenConList( ItemList,Connect,Cursor,Forward, Query,~<Query>~ ) )
+    {
+        Log (Session, ~CreateOrderItemsForMCProduct found no map details for <MCProductID> in table MediaClipMap~);
+
+        return FALSE;
+    } 
+
+    MoreFiles = findfile( aDirectoryEntry,Find,~<output>\*.jpg~ );
+
+    while ( $Morefiles )
+    {
+        Morefiles = aDirectoryEntry( Next );
+
+        aDirectoryEntry( Get,Path,aPath );
+        aDirectoryEntry( Get,Filename,jpegname );
+                
+        if ( aDirectoryEntry( Dots ) )
+                continue;
+              
+        Page = ~<$Str.$jpegname.WithOutExt>~;
+        Layout = ~~;
+  
+        if (GetLayoutForPage( ItemList, ~<Page>~, Layout))
+        {
+            Log( Session,~%%%% CreateOrderItemsForMCProduct <Page> = Layout <Layout>~ );
+
+            Invoke( UserStateMessage,Translate( ~Adding <MCProductID> [Page <Page>]...~ ) );
+
+            ItemID = CalcNextForOrderItem( database,~<OrderID>~,ID ); 
+
+            // Go ahead and add the item
+            if (!CreateOrderItemAndJob( ~<OrderID>~, ~<ItemID>~, ~~, ~<Layout>~, ~<Quantity>~, 
+                                    Image, ~<aPath>~
+                                        ))
+            {
+                Log( Session, ~MediaClip:************* ProcessOrderItems failed calling CreateOrderItemAndJob()....~ );
+                Log( Session, ~MediaClip:************* OrderID   - <OrderID>~);
+                Log( Session, ~MediaClip:************* ProductID - <Layout>~);
+                Log( Session, ~MediaClip:************* Path      - <aPath>~);
+                MarkOrderFailed(~<OrderID>~, ~Failed Adding order items~);
+                return Warning( Translate(~Order <OrderID> failed calling CreateOrderItemAndJob(). Check the logfile.~) );
+            }
+
+            Log( Session, ~MediaClip:************* OrderID       - <OrderID>~);
+            Log( Session, ~MediaClip:************* Page          - <Page>~);
+            Log( Session, ~MediaClip:************* MCProductID   - <MCProductID>~);
+            Log( Session, ~MediaClip:************* Layout        - <Layout>~);
+
+            Log( Session, ~MediaClip: Added <Layout> for page <Page>~ );
+
+            StepImportProgressBar();
+        }
+        else
+        {
+            Log( Session, ~MediaClip: Missing layout for <MCProductID> page <Page> in table MediaClipMap !!!!!~ );
+
+            return FALSE;
+        }
+    }
+    return TRUE; 
+}
+
+//------------------------------------------------------------------------------
+// AddOrderItems
+//
+// This function adds order items based on the product nodes in the provided node list.
+//
+// In addition batch cards are added on product change.
+//
+// params TheNodeList - The xml node list
+//        OrderID     - the order ID
+//        OrderPath   - the path
+//
+// Returns
+//        TRUE for a success or FALSE on error.
+//
+//------------------------------------------------------------------------------
+NUMERIC AddOrderItems( &TheNodeList, OrderID, OrderPath )
+{
+    i = -1;
+
+    NumNodes = TheNodeList( GetLength );
+    LastProductID = ~~;
+    LastRoll      = ~~;
+    LastQueueName = ~~;
+    ProductID = ~~;
+    Quantity = 0;
+    output = ~~;
+
+    Log( Session,~"%%%%%% AddOrderItems found <NumNodes> in the provided node list.~); 
+
+    while ( <++i> < <NumNodes> )
+    {
+        TheNodeList( GetNodeByIndex,ANode,<i> );
+
+        ANode( GetChildNodes,ChildNodeList );
+
+        NumChildNodes = ChildNodeList( GetLength );
+        Log( Session,~"%%%%%% AddOrderItems found <NumChildNodes> in node <i>.~); 
+
+        j = -1;
+
+        while ( <++j> < <NumChildNodes> )
+        {
+            ChildNodeList( GetNodeByIndex,CNode,$j );
+
+            CNode( GetNodeName,TheNodeName );
+
+            if (~<TheNodeName>~ == ~Name~)
+            {
+                CNode( GetNodeText,ProductID );
+            }
+            else if (~<TheNodeName>~ == ~Qty~)
+            {
+                CNode( GetNodeText,Quantity );
+            } 
+            else if (~<TheNodeName>~ == ~output~)
+            {
+                CNode( GetNodeText,output );
+
+                // reverse any slashes
+                output = String( Replace,~<output>~,~/~,~\~ );
+            }
+        }
+        Log( Session,~"%%%%%% AddOrderItems node <i> productID = <ProductID>, Qty = <Quantity>, Output = <output>.~); 
+
+        // The output directory is not the final directory for jobs, there is a 
+        // another subdir added at render time.
+        jobdir = ~~;
+        GetJobDir(jobdir, ~<OrderPath>\<Phase3Dir>\<output>~);
+
+        // Given the Mediaclip product, qty and directory then add the items.
+        if (!CreateOrderItemsForMCProduct( ~<OrderID>~, ~<ProductID>~, ~<Quantity>~, ~<OrderPath>\<Phase3Dir>\<output>\<jobdir>~))
+        {
+            return FALSE;
+        }
+    }
+
+    // No Index or Batch cards are required as yet.
+
+    return TRUE;
+}
+
+// FUNCTION: ConnectToDatabase()
+//
+// This function connects to DP2 own database
+NUMERIC ConnectToDatabase()
+{
+    connected = ADO( database,Connect );
+    if ( !<connected> ) 
+    {
+        Log( Session, ~ImportCmdsDoc: Could not connect to database~ );
+        return FALSE;
+    }
+    Global( database );
+    return TRUE;
+}
+
+// FUNCTION: QueueOrderToConvert()
+//
+// This function adds a entry to the Conversion table. This is monitored 
+// by workstations that are configured to perform sRGB conversion. It is 
+// then upto them to add the images and order items once the conversion has
+// completed successfully.
+NUMERIC QueueOrderToConvert(OrderID, WorkOrderDirectory, renderpath )
+{
+    //Debug(1);
+    phase2 = FALSE;
+
+    // Assume correction for now.
+    Correct = 1;
+
+    if (!GetWorkStationSettings( ~jobimport~ ,StorageRoot,StorageRoot,Enabled ))
+    {
+        Log( Session, ~StorageRoot Setting Unconfigured!!!!!!~);
+        Invoke( ShowWarning, ~Failed to read the StorageRoot from Settings. Try again.
+Or report to your administrator.~ );
+        return FALSE;
+    }
+
+    // Check if this work order is queued already from phase 1
+    Query = ~Select ConversionStatus from Conversion where OrderID='<OrderID>'~;
+
+    if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+    {
+        Log( Session,~MediaClip:********* QueueOrderToConvert Failed to Query Conversion list ~);
+        return FALSE;
+    }
+
+    ConversionCount = List( NumEntries );
+
+    if (<ConversionCount> > 0)
+    {
+        if (!ADO(database,Connect,GetValuesFor,~<Query>~, Status))
+        {
+            Log( Session,~%%%% Failed to Query Conversion list ~);
+        }
+
+        if (<Status> == <ConversionCompleted>)
+        {
+            Log( Session,~%%%% This Work Order is already Converted ~);
+        }
+        else
+        {
+            if (<Status> == <ConversionPending>)
+            {
+                Log( Session,~%%%% This Work Order is already awaiting Conversion~);
+            }
+            else
+            {
+                Log( Session,~%%%% This Work Order is already getting processed~);
+            }
+        }
+
+        Log( Session, ~MediaClip:********* QueueOrderToConvert Order <OrderID> is in "<Status>" State~ );
+ 
+        phase2 = TRUE;
+    }
+
+    ImageCount     = database( RecordCountFor,~Select Frame from ImportImagesTemp where OrderID = '<OrderID>'~ );
+
+    // Add the order to the queue or change the status.
+    if (!<phase2>)
+    {
+        cmd = ~INSERT INTO Conversion (OrderID, ConversionStatus, ImagesToProcess, Priority, ImportWorkStation, ImportUser, ColourCorrect, IndexCards, BravoCDProfile, ROESProxies, Path, renderpath ) VALUES ('<OrderID>', '<ConversionPending>', '<ImageCount>','71', '<$App.ComputerName>','<$App.UserName>','<Correct>','0','','', '<WorkOrderDirectory>', '<renderpath>')~;
+    }
+    else
+    {
+        cmd = ~update Conversion set ConversionStatus='<ConversionPending>', ImagesToProcess='<ImageCount>', ProcessingWorkStation = '', ImportWorkStation='<$App.ComputerName>', ImportUser='<$App.UserName>', ColourCorrect='<Correct>', Path='<WorkOrderDirectory>', renderpath='<renderpath>' where (OrderID='<OrderID>') ~;
+    }
+
+    if ( !database( CMD, ~<cmd>~ ) )
+    {
+        Log( Session, ~MediaClip:********* QueueOrderToConvert Database command failed ~ );
+        return FALSE;
+    }
+
+    if (!<phase2>)
+    {
+       database( LogActivity, Msg, ~XML Order <OrderID> Phase 1 Queued for conversion~, Type, Info );
+    }
+    else
+    {
+       database( LogActivity, Msg, ~XML Order <OrderID> Phase 2 Queued for conversion~, Type, Info );
+    }
+
+    return TRUE; 
+}
+
+//------------------------------------------------------------------------------
+// CopyOrderToRepository
+//
+// This function recursively copies all files from source to target directories.
+//
+// Params Source - the source order directory
+//        Target - the target path.
+//
+//------------------------------------------------------------------------------
+NUMERIC CopyOrderToRepository( Source, Target )
+{
+    Log( Session, ~MediaClip: ****** copying <Source> to <Target>~ );
+
+    Invoke( UserStateMessage,Translate( ~Copying to repository...~ ) );
+
+    if (!GetWorkStationSettings( ~JobImport~ ,StorageRoot,StorageRoot,Enabled ))
+    {
+        Log( Session, ~StorageRoot Setting Unconfigured!!!!!!~);
+        Invoke( ShowWarning, ~Failed to read the StorageRoot from Settings. Try again.
+Or report to your administrator.~ );
+        return FALSE;
+    }
+
+    // Work out where we should be copying files to based on the date.
+    StorageDirectory   = ~<StorageRoot>\DFV_<$Date.ShortMonthName>_<$Date.YearWithOutCentury>\sRGB~;
+
+    // Create the months Directory if its not already there.
+    if ( !Files( DirectoryExists, ~<StorageDirectory>~) )
+    {
+        Directory( Create, ~<StorageDirectory>~ );
+        Log( Session, ~Directory = <StorageDirectory> does not exist, making directory now~ );
+    }
+
+    // Now make the work order directory
+    if ( !Files( DirectoryExists, ~<Target>~) )
+    {
+        Directory( Create, ~<Target>~);
+        Log( Session, ~Directory = <Target> does not exist, making directory now~ );
+    } 
+
+    // Check that the target directory now exists and exit if its not there.
+    if ( !Files( DirectoryExists, ~<Target>~) )
+    {
+        Warning(~Unable to create the Work Order Directory <Target>. Contact the IT Department!~);
+        Log( Session, ~Unable to create the Work Order Directory <Target>!~);
+        Invoke( ~StartProgress~,0 );
+        return FALSE;
+    } 
+
+    MoreFiles = findfile( aDirectoryEntry,Find,~<Source>\*~ );
+
+    while ( $Morefiles )
+    {
+        Morefiles = aDirectoryEntry( Next );
+        aDirectoryEntry( Get,Path,aPath );
+                
+        if ( aDirectoryEntry( Dots ) )
+        {
+            continue;
+        }
+                
+        if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+        {  
+            // Copy the directory 
+            aDirectoryEntry( Get,Filename,Filename );
+            if ( aDirectoryEntry( Dots ) )
+            {
+                Morefiles = aDirectoryEntry( Next );
+                continue;
+            }
+
+            Log( Session, ~Dir Filename <Filename> copy...~);
+            CopyOrderToRepository(~<Source>\<Filename>~, ~<Target>\<Filename>~);
+            continue;
+        }
+
+        aDirectoryEntry( Get,Filename,Filename );
+        Log( Session, ~Filename <Filename> copy...~);
+        if ( Files( Copy, ~<Source>\<Filename>~, ~<Target>\<Filename>~ ) )
+        {
+            Log( Session, ~Filename <Filename> copied~);
+        }
+    }
+    return TRUE;
+}
+
+//------------------------------------------------------------------------------
+// ProcessMedia
+//
+// This function takes the provided directory and calls the update function to 
+// recreate a MediaClip XML ready to give back to MediaClip.
+// Second it opens the media directory XML file, selects all nodes and queues
+// the images to be added to the order.
+//
+// params mediaDir - The mediaclip sub directory to process. 
+//        WorkOrderDirectory - the order work directory.
+//        OrderID - the order ID.
+//
+//------------------------------------------------------------------------------
+NUMERIC ProcessMedia(mediaDir, WorkOrderDirectory, OrderID)
+{
+    Log( Session, ~ProcessMedia <mediaDir>...~);
+
+    // Ensure there is an XML directory ready in which to create the modified 
+    // MediaClip file.
+    Directory( Create,~<WorkOrderDirectory>\XML~ );
+
+    // Create the new xml with the UserFiles updated and thumbs removed.
+    // This is used once rendering is complete to trigger MediaClip.
+    UpdateMediaClipFile(~<WorkOrderDirectory>\<mediaDir>\<mediaDir>.xml~, 
+                        ~<WorkOrderDirectory>\XML\<mediaDir>.xml~,
+                        ~<WorkOrderDirectory>~,
+                        ~<mediaDir>~);
+
+    // Use the xml file to add the images to the conversion table
+    xml( parser );
+
+    // load the xml from the provided mediaclip directory.
+    if (!parser( load,~<WorkOrderDirectory>\<mediaDir>\<mediaDir>.xml~ ))
+    {
+        Log( Session,~"%%%%%% ProcessMedia failed to load <WorkOrderDirectory>\<mediaDir>\<mediaDir>.xml!!~); 
+        return FALSE;
+    }
+
+    // Import the images
+    Parser( SelectNodes,TheNodeList,~//*~ );
+
+    ImportImages(TheNodeList, ~<OrderID>~, ~<WorkOrderDirectory>~, ~<mediaDir>~);
+
+    return TRUE;
+}
+
+//------------------------------------------------------------------------------
+// ImportMediaClipImages
+//
+// This function parses each mediaclip XML files adding images to the conversion
+// table. As part of this process the XML is updated to replace {userFiles} with
+// the jukebox path of the colour corrected rendered images.  ie CC\images\
+//
+// params WorkOrderDirectory - the order work directory.
+//        OrderID - the order ID.
+//------------------------------------------------------------------------------
+NUMERIC ImportMediaClipImages ( WorkOrderDirectory, OrderID )
+{
+    Invoke( UserStateMessage,Translate( ~Importing Images...~ ) );
+
+    MoreFiles = findfile( aDirectoryEntry,Find,~<WorkOrderDirectory>\mediaclip*~ );
+
+    while ( $Morefiles )
+    {
+        Morefiles = aDirectoryEntry( Next );
+
+        aDirectoryEntry( Get,Path,aPath );
+                
+        if ( aDirectoryEntry( Dots ) )
+                continue;
+                
+        if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+        {  
+            // Process the xml file in this directory 
+            aDirectoryEntry( Get,Filename,Filename );
+            ProcessMedia(~<Filename>~, ~<WorkOrderDirectory>~, ~<OrderID>~ ); 
+            continue;
+        }
+    }
+
+    return TRUE;
+}
+
+//------------------------------------------------------------------------------
+// AddMediaClipOrderItems
+//
+// This function parses each mediaclip XML files adding the order Items directly to
+// the order.
+// The items to add are deducted from the product ID contained in the XML, The list
+// of flat images and the MediaClipMap table. The table defines what layouts to use
+// for each page indicated by the image filename, 1.jpg, 2.jpg etc.
+//
+// params WorkOrderDirectory - the order work directory.
+//        OrderID - the order ID.
+//------------------------------------------------------------------------------
+NUMERIC AddMediaClipOrderItems ( WorkOrderDirectory, OrderID )
+{
+    Log( Session,~"%%%%%% AddMediaClipOrderItems <WorkOrderDirectory>~); 
+
+    Invoke( UserStateMessage,Translate( ~Adding Order Items...~ ) );
+
+    MoreFiles = findfile( aDirectoryEntry,Find,~<WorkOrderDirectory>\*.xml~ );
+
+    while ( $Morefiles )
+    {
+        Morefiles = aDirectoryEntry( Next );
+
+        aDirectoryEntry( Get,Path,aPath );
+                
+        if ( aDirectoryEntry( Dots ) )
+                continue;
+               
+        xml( parser );
+
+        if (!parser( load,~<aPath>~ ))
+        {
+            Log( Session,~"%%%%%% AddMediaClipOrderItems failed to load <aPath>!!~); 
+            return FALSE;
+        }
+
+        // Import the images
+        Parser( SelectNodes,TheNodeList,~//order/orderbody/product~ );
+ 
+        if (!AddOrderItems(TheNodeList, ~<OrderID>~, ~<WorkOrderDirectory>~))
+        {
+            return FALSE;
+        }
+        break;
+    }
+
+    return TRUE;
+}
+
+//------------------------------------------------------------------------------
+// ProcessPhase1XMLFile
+//
+// This function opens the Phase 1 XML file provided and extracts the required order 
+// details and initiates the import.
+//
+// params Path - The xml files path to be processed..
+//------------------------------------------------------------------------------
+NUMERIC ProcessPhase1XMLFile( Path )
+{
+    WorkOrderDirectory = ~~;
+    OrderID=~~;
+    AcctID=~~;
+
+    ConnectToDatabase();
+
+    Invoke( ProgressBarPosition,0 );
+
+    Log( Session,~"%%%%%% ProcessPhase1XMLFile loading <Path>~); 
+
+    xml( parser );
+
+    if (!parser( load,~<Path>~ ))
+    {
+        Log( Session,~"%%%%%% ProcessPhase1XMLFile failed to load <Path>!!~); 
+        return FALSE;
+    }
+
+    // Extract the useful bits, the order and account id
+    if (Parser( SelectSingleNode,TheNode,~//order/orderheader/OrderNo~ ))
+    {
+        TheNode( GetNodeText,OrderID );
+    }
+
+    if (Parser( SelectSingleNode,TheNode,~//order/orderheader/UserId~ ))
+    {
+        TheNode( GetNodeText, AcctID );
+    }
+
+    // Check we have the required details
+    if ((~<OrderID>~ == ~~) || (~<AcctID>~ == ~~))
+    {
+        Log( Session,~"%%%%%% Missing MediaClip XML import details.~); 
+        ADO( db,Connect,LogActivity,Type,Info,Msg,~Media Clip Import : failed <Path>~ );
+        Invoke( UserStateMessage,Translate( ~Completed <$str.$Path.FileName> With Error~ ) );
+        return FALSE;
+    }
+
+    // Work out the target path of where the order is to be copied.
+    if (!GetWorkStationSettings( ~JobImport~ ,StorageRoot,StorageRoot,Enabled ))
+    {
+        Log( Session, ~StorageRoot Setting Unconfigured!!!!!!~);
+        Invoke( ShowWarning, ~Failed to read the StorageRoot from Settings. 
+Report to your administrator.~ );
+        return FALSE;
+    }
+
+    WorkOrderDirectory = ~<StorageRoot>\DFV_<$Date.ShortMonthName>_<$Date.YearWithOutCentury>\sRGB\<OrderID>~;
+
+    // If the order directory already exists then warn the user and abort rather than overwriting.
+    if ( Files( DirectoryExists, ~<WorkOrderDirectory>~) )
+    {
+        Log( Session, ~Directory = <WorkOrderDirectory> already exists, aborting !~ );
+        Invoke( UserWarning,Translate( ~<OrderID> already exists! Order moved to Error directory~ ) );
+        return FALSE;
+    }
+
+    Log( Session,~"%%%%%% XML OrderID <OrderID> AcctID <AcctID> ~); 
+    Log( Session,~"%%%%%% WorkOrderDirectory  = '<WorkOrderDirectory>'~);
+
+    // Create the order
+    AddOrder( ~<OrderID>~,~<AcctID>~, ~~, ~~, ~~, ~Import~ );
+
+    // Copy everything below the work order onto storage1
+    if (!CopyOrderToRepository( ~<$con.dlgdata[Directory]>\<$Str.$Path.Folder>~, ~<WorkOrderDirectory>~ ))
+    {
+        Log( Session,~"%%%%%% MediaClip import failed.~); 
+        ADO( db,Connect,LogActivity,Type,Info,Msg,~Media Clip Import : failed <Path>~ );
+        Invoke( UserStateMessage,Translate( ~Completed <$str.$Path.FileName> With Error~ ) );
+        return FALSE;
+    }
+
+    // Import the images from each sub XML files. As part of the import the XML files
+    // will be updated to reflect the new path.
+    ImportMediaClipImages(~<WorkOrderDirectory>~, ~<OrderID>~);
+
+    // Set the entry in the conversion table.
+    // Note the renderpath is set to the CC directory in the workorder.
+    if (QueueOrderToConvert(~<OrderID>~, ~<WorkOrderDirectory>~, ~<WorkOrderDirectory>\CC~))
+    {
+        Log( Session,~"%%%%%% OrderID <OrderID> Queued for conversion.~); 
+    }
+    else
+    {
+        Log( Session,~"%%%%%% OrderID <OrderID> Failed to Queue for conversion~);
+        ADO( db,Connect,LogActivity,Type,Info,Msg,~XML Import Commands: Failed to Queue <Path>~ );
+        Invoke( UserStateMessage,Translate( ~Completed XML <$str.$Path.FileName> With Error~ ) );
+        return FALSE;
+    }
+
+    ADO( db,Connect,LogActivity,Type,Info,Msg,~MediaClip Import: Completed <Path>~ );
+
+    return TRUE;
+}
+
+//------------------------------------------------------------------------------
+// ProcessPhase3
+//
+// This function opens the original order XML file and calculates the required
+// order details and initiates the import.
+//
+// params Path - The phase3 order directory to be processed.
+//------------------------------------------------------------------------------
+NUMERIC ProcessPhase3( Path )
+{
+    WorkOrderDirectory = ~~;
+    OrderID=~~;
+    AcctID=~~;
+
+    ConnectToDatabase();
+
+    Invoke( ProgressBarPosition,0 );
+
+    Log( Session,~"%%%%%% ProcessPhase3 loading <Path>~); 
+
+    // Get the OrderID from the directory name since there is no XML
+    // to read.
+    OrderID = ~<$str.$Path.FileName>~;
+
+    // Work out the target path of where the order is to be copied.
+    if (!GetWorkStationSettings( ~JobImport~ ,StorageRoot,StorageRoot,Enabled ))
+    {
+        Log( Session, ~StorageRoot Setting Unconfigured!!!!!!~);
+        Invoke( ShowWarning, ~Failed to read the StorageRoot from Settings. 
+Report to your administrator.~ );
+        return FALSE;
+    }
+
+    WorkOrderDirectory = ~<StorageRoot>\DFV_<$Date.ShortMonthName>_<$Date.YearWithOutCentury>\sRGB\<OrderID>~;
+
+    // If the order directory does not already exists then warn the user and abort.
+    if ( !Files( DirectoryExists, ~<WorkOrderDirectory>~) )
+    {
+        Log( Session, ~Directory = <StorageDirectory> from Phase 1 does not exists, aborting !~ );
+        Invoke( UserWarning,Translate( ~<OrderID> does not exists! Order moved to Error directory~ ) );
+        return FALSE;
+    }
+
+    Log( Session,~"%%%%%% Phase 3 OrderID <OrderID> ~); 
+    Log( Session,~"%%%%%% WorkOrderDirectory  = '<WorkOrderDirectory>'~);
+
+    // Copy everything below the work order onto storage1.
+    // This will be the flattened images in each of the product sub directories.
+    if (!Files(DirectoryExists, ~<WorkOrderDirectory>\<Phase3Dir>~) )
+    {
+        Directory( Create, ~<WorkOrderDirectory>\<Phase3Dir>~);
+        Log( Session, ~Phase 3 Directory does not exist, making directory now <WorkOrderDirectory>\<Phase3Dir>~ );
+    } 
+    if (!CopyOrderToRepository( ~<$con.dlgdata[Directory]>\<OrderID>~, ~<WorkOrderDirectory>\<Phase3Dir>~ ))
+    {
+        Log( Session,~"%%%%%% MediaClip Phase 3 import failed.~); 
+        ADO( db,Connect,LogActivity,Type,Info,Msg,~Media Clip Import : failed <Path>~ );
+        Invoke( UserStateMessage,Translate( ~Completed <Path> With Error~ ) );
+        return FALSE;
+    }
+
+    // Import the images from each sub directory. These can be added
+    // directly to the order since they have already been colour corrected in Phase 1.
+    if (!AddFlatImages( ~<OrderID>~, ~<WorkOrderDirectory>\<Phase3Dir>~ ))
+    {
+        return FALSE;
+    }
+
+    // Now add the order items, also directly...... 
+    if (!AddMediaClipOrderItems(~<WorkOrderDirectory>~, ~<OrderID>~))
+    {
+        return FALSE;
+    }
+
+    // Update the thumbs....
+    MaintainOrderItems( ~<OrderID>~, TRUE );
+
+    // Set the order status to Print
+    if ( !ADO( dBase,Connect,Cmd,~Update Orders Set Status='Print' Where ID = '<OrderID>'~ ) )
+    {
+        dBase( GetErrorDescription,theErr );
+        Log( Session,~ProcessOrderItems: **** Failed to set order <OrderID> to status of Print, <theErr>~ ) ;
+    } 
+    else
+    {
+        Log( Session,~ProcessOrderItems: **** Set order <OrderID> to status of Print~ ) ;
+    }
+    ADO( db,Connect,LogActivity,Type,Info,Msg,~MediaClip Import Phase 3: Completed <Path>~ );
+
+    return TRUE;
+}
+
+VOID MinimizeDialog()
+{
+    DataLoaderDlgDefinition(Show,MINIMIZE);
+    LeftPosition = App( thisApp,MainWindow,GetClientWidth ) - 160;
+    TopPosition = App( thisApp,MainWindow,GetClientHeight ) - 5;
+
+    dlg( SetWindowPosition,<LeftPosition>,<TopPosition> );
+}
+
+Log(Session, ~*************************************************************************~);
+Log(Session, ~Import MediaClip Dialog Opened (<ImportVersion>)~);
+Log(Session, ~*************************************************************************~);
+
+Thread( aThread );
+
+DefineDialog();
+
+if ( GetWorkStationSettings( ~<$Job.Name>~,MediaClipSearchDirectory,MediaClipSearchDirectory,Enabled ) )
+{
+    dlg( SetString,~<MediaClipSearchDirectory>~ ,Directory,0 ); 
+}
+
+if ( GetWorkStationSettings( ~<$Job.Name>~,MediaClipAutoStart,MediaClipAutoStart,Enabled ) )
+{
+    dlg( SetString,~<MediaClipAutoStart>~ ,MediaClipAutoStart,0 ); 
+
+    if ( <MediaClipAutoStart> && <Enabled> )
+    {
+        OnGoButton();
+    }
+}
+
+Debug( SetDontDebugThis,TRUE );

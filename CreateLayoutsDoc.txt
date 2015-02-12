@@ -1,0 +1,990 @@
+
+Tab = chr(9);
+
+NUMERIC WriteHeader( &Layout )
+{
+	Layout( ~FileType: Layout;~ );
+	Layout( ~Macros:   |Macros.txt|;~ );
+	Layout( ~UnitOfMeasure: Inches;~ );
+	Layout( ~ ~ );
+
+	return TRUE;
+
+}
+
+
+NUMERIC WriteParameters( &List,&Layout )
+{
+	Layout( ~ ~ );
+	Layout( ~BeginInclude();~ );
+
+	While ( List( GetNext,Parameter ) )
+	{
+		Layout( ~<$pcon.Parameter[Attr]> = <$pcon.Parameter[Val]>;~ );
+	}
+
+	Layout( ~EndInclude();~ );
+	Layout( ~ ~ );
+
+	return TRUE;
+}
+
+
+NUMERIC WriteMain( &GridPositionList,&Layout )
+{
+	Layout( ~ ~ );
+	Layout( ~Main:~ );
+
+	GridPositionList(Filter,~Name='Main'~ );
+
+	if ( !GridPositionList( GetFirst,Node ) )
+	{
+		Layout( ~  IWidth: 10~ );
+		Layout( ~  IHeight: 8~ );
+		Layout( ~  IColor: 0,255,255,255;~ );
+	}
+	else
+	{
+		Layout( ~  IWidth: <$pcon.Node[IW]>~ );
+		Layout( ~  IHeight: <$pcon.Node[IH]>~ );
+		Layout( ~  IColor: 0,255,255,255;~ );
+		
+	}
+
+	if ( !IsNull( ~<$pcon.Node[Name]>~ ) )
+	{
+		Layout( ~   NodeName: |<$pcon.Node[Name]>|~ );
+	}
+
+	Layout( ~ ~ );
+
+	GridPositionList( ClearFilter );
+
+	return TRUE;
+}
+
+NUMERIC WriteDefault( &GridPositionList,&Layout )
+{
+	GridPositionList(Filter,~Name='Default'~ );
+
+	if ( GridPositionList( GetFirst,Node ) )
+	{
+		Layout( ~ ~ );
+		Layout( ~Default:~ );
+		Node( Get,Attributes,Attributes );
+		Layout( WriteContentsOf,Attributes );
+		Layout( ~ ~ );
+	}
+
+	GridPositionList( ClearFilter );
+
+	return TRUE;
+}
+
+
+NUMERIC WriteNode( &Node,&Layout )
+{
+	if ( SimilarStr( ~<$pcon.Node[Name]>~,~Default~,~Main~ ) )
+	{
+		return FALSE;
+	}
+
+	X = ~<$pcon.Node[IX]>~; Y = ~<$pcon.Node[IY]>~; W = ~<$pcon.Node[IW]>~; H = ~<$pcon.Node[IH]>~;
+	
+	if ( IsNull(~<X>~) || IsNull(~<Y>~) || IsNull(~<W>~) || IsNull(~<H>~) )
+	{
+		return TRUE;
+	}
+
+	NodeType = Node( GetNumeric,Countable ) ? ~CL~ : ~IL~;
+	Layout( ~ ~ );
+	Layout( ~<NodeType>: <$pcon.Node[Node]>~ );
+
+	Layout( ~   ILocation: <X>,<Y>,<W>,<H>;~ );
+
+	if ( MakeNumber( ~<$pcon.Node[Rotation]>~ ) )
+	{
+		Layout( ~   IRotation: <$pcon.Node[Rotation]>;~ );
+	}
+
+	X = ~<$pcon.Node[TX]>~; Y = ~<$pcon.Node[TY]>~; W = ~<$pcon.Node[TW]>~; H = ~<$pcon.Node[TL]>~;
+
+	if ( IsNull(~<X>~) || IsNull(~<Y>~) || IsNull(~<W>~) || IsNull(~<H>~) )
+	{
+		Layout( ~ ~ );
+		return TRUE;
+	}
+
+	Len = ~<$pcon.Node[TL]>~;
+
+	Layout( ~   TLocation: <X>,<Y>,<W>,<H>;~ );
+
+	if ( ~<$pcon.Node[Use]>~ != ~~ )
+	{
+		WriteUseAttributes( ~<$pcon.Node[Use]>~,UseList,Layout );
+	}
+
+	Node( Get,Attributes,Attributes );
+	Layout( WriteContentsOf,Attributes );
+
+	Layout( ~ ~ );
+
+	return TRUE;
+}
+
+
+NUMERIC WriteUseAttributes( UseIds,&UseList,&Layout )
+{
+	Count = GetTokens(~<UseIds>~,~,~,U1,U2,U3,U4,U5,U6,U7,U8,U9,U10 );
+
+	Index = 0;
+
+	while ( <++Index> <= <Count> )
+	{
+		if ( !UseList( Filter,~ID = '<U<Index>>'~ ) )
+			continue;
+
+		if ( !UseList( GetFirst,UseData ) )
+			continue;
+
+		Layout( ~  # From <U<Index>>~ );
+		UseData( Get,Keywords,Keywords );
+		Layout( WriteContentsOf,Keywords );
+	}
+
+	UseList( ClearFilter );
+
+	return TRUE;
+}
+
+
+NUMERIC CreateLayout( Which,NumImages,Directory )
+{
+	theLayout = ~<Directory>\Layout<NumImages>.txt~;
+
+	if ( !file( Layout,Open,~<theLayout>~,Create,Write ) )	
+	{
+		return Warning( Translate( ~Could not create <theLayout>~ ) );
+	}
+
+	dlg( SetStatus,0,~Creating <theLayout>~ );
+
+	Query = ~Select * From GridPosition Where ID = '<Which>' and Images = <NumImages> Order By Node~;
+
+	if ( !PGenConList( GridPosition,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		GridParameters( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	GridPosition( GetConnection,dBase );
+
+	Query = ~Select * From Use~;
+
+	if ( !PGenConList( UseList,Connection,dBase,Cursor,Static,Query,~<Query>~ ) )
+	{
+		// GridParameters( GetErrorDescription,0,theErr );
+		// return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	Query = ~Select * From Grid Where ID = '<Which>' And Images = <NumImages>~;
+
+	if ( !PGenConList( ParametersList,Connection,dBase,Cursor,Static,Query,~<Query>~ ) )
+	{
+		ParametersList( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+
+	WriteHeader( Layout );
+
+	WriteParameters( ParametersList,Layout );
+
+	WriteMain( GridPosition,Layout );
+
+	WriteDefault( GridPosition,Layout );
+
+	more = GridPosition( GetFirst,Node );
+
+	while ( <more> )
+	{
+		WriteNode( Node,Layout );
+		
+		more = GridPosition( GetNext,Node );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnCreateButton()
+{
+	dlg( GetInput,GetStrings,ID,ID,Images,Images,Directory,Directory );
+
+	if ( IsNULL(~<ID>~) )
+	{ 
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	if ( IsNULL(~<Images>~) )
+	{ 
+		return Warning( Translate( ~Select the number of images in the <ID> layout~ ) );
+	}
+
+	if ( IsNULL(~<Directory>~) )
+	{ 
+		return Warning( Translate( ~Select the destination directory for the layouts first~ ) );
+	}
+
+	WaitCursor( Begin );
+
+	CreateLayout( ~<ID>~,~<Images>~,~<Directory>~ );
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC OnCreateAllButton()
+{
+	dlg( GetInput,GetStrings,ID,ID,Directory,Directory );
+
+	if ( IsNULL(~<ID>~) )
+	{ 
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	if ( IsNULL(~<Directory>~) )
+	{ 
+		return Warning( Translate( ~Select the destination directory for the layouts first~ ) );
+	}
+
+	if ( IsNULL(~<Directory>~) )
+	{ 
+		return Warning( Translate( ~Select the destination directory for the layouts first~ ) );
+	}
+
+
+	Query = ~Select Distinct Images From Grid Where ID = '<ID>' Order By Images~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the Grid table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		return Warning( Translate( ~There are no layouts defined~ ) );
+	}
+
+	WaitCursor( Begin );
+
+	count = 0;
+
+	while ( List( GetNext,Record ) )
+	{
+		CreateLayout( ~<ID>~,~<$pcon.Record[Images]>~,~<Directory>~ );
+
+		++count;
+	}
+
+	dlg( SetStatus,0,~Created <count> layouts~ ) ;
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+STR GetDefaultDirectory( ID )
+{
+	return  ~<$App.ShareDirectory>\Layouts\GridLayouts\<ID>~;
+}
+
+
+VOID OnFindDirectoryButton()
+{
+	dlg( GetInput,GetStrings,ID,ID );
+
+	if ( IsNULL(~<ID>~) )
+	{ 
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	Title = Translate( ~Select a directory to store the layouts in~ );
+
+	DefaultDirectory = GetDefaultDirectory( ~<ID>~ );
+
+	if ( !Directory( Create,~<DefaultDirectory>~ ) )
+	{
+		return Warning( ~Failed to create Directory <DefaultDirectory>~ );
+	}
+
+	if ( FileDialog( DefaultFile,Translate(~In This Directory~),DefaultDirectory,~<DefaultDirectory>~,
+						Title,~<Title>~,PATH,theFile,SAVE ) )	
+	{
+		
+		dlg( SetString,~<$Str.$theFile.Path>~ ,Directory,0 );	
+	}									
+}
+
+
+NUMERIC OnOpenALayoutButton()
+{
+	dlg( GetInput,GetStrings,ID,ID,Images,Images,Directory,Directory );
+
+	if ( IsNULL(~<ID>~) )
+	{ 
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	if ( IsNULL(~<Images>~) )
+	{ 
+		return Warning( Translate( ~Select the number of images in the <ID> layout~ ) );
+	}
+
+	LayoutPath = ~<Directory>\Layout.<Images>~;
+
+	return OpenALayout( ~<LayoutPath>~,~<ID>~,~Layout.<Images>~ );
+}
+
+
+NUMERIC OpenALayout( LayoutPath,ProductID,LayoutName )
+{
+	if ( ~<LayoutPath>~ == ~~ )
+		{ return FALSE; }
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == LayoutView )
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<LayoutPath>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+		}
+	}
+
+	if (!GenCon( Info,New,DDDocumentInfo ) )
+	{ 
+		return Warning( ~Could not create document info for <LayoutPath>~ );
+	}
+
+	Info( SetValues,ProductID,~<ProductID>~,LayoutName,~<LayoutName>~ );
+
+	if (!Document( aLayout,Open,~<LayoutPath>~,Layout,~~,Info ) )
+	{ 
+		return Warning( ~Could not open <LayoutPath>~ );
+	}
+
+	return TRUE;
+}
+
+
+Stop = FALSE;
+
+NUMERIC HandleDrop()
+{
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+	{ 
+		return FALSE;
+	}
+
+	dlg( EnableControls,TRUE,StopButton );
+	
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );	// REMOVE THE DRAG INFO FROM THE TREE
+
+	ExternalDrop(DragDropInfo);	
+	
+	return TRUE;
+}
+
+Thread( aThread,Debug ); // USED TO PROCESS DRAGGED FILES
+
+
+NUMERIC ExternalDrop( &DragDropInfo )
+{
+	if ( aThread( IsActive ) )
+	{
+		return Warning( Translate(~You are still processing files~) );
+	}
+
+	if ( !DragDropInfo( GetCopyOfDraggedFiles,DraggedFileList ) )
+	{ 
+		return Warning( Translate(~There were no files in the object you dragged~) );
+	}
+
+	count = DraggedFileList( ChildCount );
+		
+	if ( $count <= 0 )
+	{ 
+		return Warning( ~There were no files in the object you dragged~; )
+	}
+
+	Stop = FALSE;
+
+	aThread( New,ProcessDraggedFiles,DraggedFileList(Permanent,GetObject) );
+
+	return TRUE;
+}
+
+
+NUMERIC ProcessDraggedFiles( FileListReference )
+{
+	GenCon( DraggedFileList,Is,<FileListReference>,Temporary );
+
+	more = DraggedFileList( GetFirst,LayoutPath );
+
+	while ( <more> && !<Stop> )
+	{
+		Path = ~<$Con.LayoutPath[Text]>~;
+
+		dlg( SetStatus,0,~<Path>~ );
+
+		if ( !ParseGridDefinition( ~<Path>~ ) )
+			break;
+
+		more = DraggedFileList( GetNext,LayoutPath );
+	}
+
+	dlg( EnableControls,FALSE,StopButton );
+
+	return 0;
+}
+
+
+NUMERIC ParseGridaGridLayout( Path )
+{
+	WaitCursor( Begin );
+
+	if ( !Document( aLayout,ParseFile,~<Path>~ ) )
+	{
+		Warning( ~An error occured while parsing the job at <Path>~ );
+		WaitCursor( End );
+		return FALSE;
+	}
+
+	Index = 0;
+
+	if ( !aLayout( GetRenderList,<Index++>,theRenderList ) )
+	{ 
+		WaitCursor( End );
+		return Warning( ~There was no render list for <Path>~ );
+	}
+
+	more = RenderList( GetFirstImageNode,TheNode );
+
+	Debug( 1 );
+
+	while ( <more> )
+	{
+		Debug( 1 );
+		more = RenderList( GetNextImageNode,TheNode );
+	}
+
+
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+SetState = ~First~;
+IncludeState = ~~;
+
+// PARSE A KPIS GRID LAYOUT DEFINITION FILE
+
+NUMERIC ParseGridDefinition( Path )
+{
+	WaitCursor( Begin );
+
+	if ( !File( fp,OPEN,~<Path>~,Read,Text ) ) 
+	{
+		WaitCursor( End );
+		return Warning( Translate( ~Could not open <Path>~ ) );
+	}
+
+	
+
+	while ( fp( ReadString,Buffer ) ) 
+	{
+		if ( NumTokens = GetTokens( ~<Buffer>~,~ <Tab>~ ) )
+		{
+			SwitchOn( ~<Token1>~,~Set~,~Handle<SetState>Set(Buffer);~,
+								 ~DL~,~HandleDL(Buffer);~,
+								 ~Reset~,~HandleReset(Buffer);~,
+								 ~Include~,~Handle<IncludeState>Include(Buffer);~,
+								 ~AddToEachLayoutUntil~,~HandleAddToEachLayout();~,
+								 ~END~,~HandleEndAddToEachLayout();~,
+								 ~SetQuote~,~HandleSetQuote(Token2);~  );
+		}
+	}
+
+	fp( Close );
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+// HANDLE VARIOUS KEYWORDS FROM A KPIS GRID LAYOUT GENERATION FILE
+
+KPISQuoteChar = ~|~;
+TheLayoutDirect = ~~;
+
+VOID HandleSetQuote( &QuoteChar )
+{
+	KPISQuoteChar = ~<QuoteChar>~;
+	Log( Session,~KPIS Quote is <QuoteChar>~ );
+}
+
+VOID HandleFirstSet( &Buffer )
+{
+	NumTokens = GetTokens( ~<Buffer>~,~<KPISQuoteChar>~ );
+
+	TheLayoutDirect = ~<Token2>~;
+
+	SetState = ~~;
+}
+
+VOID HandleSet( &Buffer )
+{
+	NumTokens = GetTokens( ~<Buffer>~,~<KPISQuoteChar>~,WhichRow,PatternString );
+
+	GetTokens( ~<WhichRow>~,~ <Tab>~,TheSetKeyWord,TheVariable );
+
+	Row_<TheVariable> = String( Replace,~<PatternString>~,~<KPISQuoteChar>~,~~ );
+
+	Global( Row_<TheVariable> ); 
+}
+
+
+
+VOID HandleDL( &Buffer )
+{
+	NumTokens = GetTokens( ~<Buffer>~,~<KPISQuoteChar>~,TheDL,TheFile,TheRows );
+
+	LayoutNumber = ~<$str.$TheFile.ext>~;
+
+	NumberOfRows = GetTokens( ~<TheRows>~,~ <Tab>~ );
+
+	ThisRow = 0;
+
+	Log( Session,~For Layout <LayoutNumber>~ );
+
+	while ( <++ThisRow> <= <NumberOfRows> )
+	{
+		TheRow = ~<Row_<Token<ThisRow>>>~;
+		Log( Session,~   <TheRow>~ );
+	}
+
+	x = 1;	
+}
+
+VOID HandleInclude( &Buffer )
+{
+	Log( Session,~Handle <Buffer>~ );
+}
+
+VOID HandleReset( &Buffer )
+{
+	Log( Session,~Handle <Buffer>~ );
+}
+
+VOID HandleAddToEachLayout()
+{
+	IncludeState = ~AddToEachLayout~;
+}
+
+VOID HandleAddToEachLayoutInclude( &Buffer )
+{
+	Log( Session,~Handle <Buffer>~ );
+}
+
+VOID HandleEndAddToEachLayout()
+{
+	IncludeState = ~~;
+}
+
+// END OF - HANDLE VARIOUS KEYWORDS FROM A KPIS GRID LAYOUT GENERATION FILE
+
+
+SetState = ~First~;
+IncludeState = ~~;
+
+// PARSE A KPIS GRID LAYOUT FILE
+
+NUMERIC ParseGridLayout( Path )
+{
+	WaitCursor( Begin );
+
+	if ( !File( fp,OPEN,~<Path>~,Read,Text ) ) 
+	{
+		WaitCursor( End );
+		return Warning( Translate( ~Could not open <Path>~ ) );
+	}
+
+	while ( fp( ReadString,Buffer ) ) 
+	{
+		if ( NumTokens = GetTokens( ~<Buffer>~,~ <Tab>~ ) )
+		{
+			if ( substr( ~<Token1>~,0,1 ) == ~#~ )	// Ignore comments
+				continue;
+
+			SwitchOn( ~<Token1>~,
+						~Set:~,~Handle<SetState>Set(Buffer);~,
+						~Eval:~,~HandleDL(Buffer);~		 
+					);
+		}
+	}
+
+	fp( Close );
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC OnStopButton()
+{
+	return TRUE;
+}
+
+NUMERIC OnChangeLayoutName()
+{
+	dlg( GetInput,GetStrings,ID,ID );
+
+	if ( !IsNULL(~<ID>~) )
+	{ 
+		dlg( SetStrings,Directory,GetDefaultDirectory( ~<ID>~ ) );
+	}
+
+	return TRUE;
+}
+
+NUMERIC OnPopulateLayoutsComboBox()
+{
+	Query = ~Select Distinct ID From Grid Order By ID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the Grid table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		return TRUE;
+	}
+
+	List( MakeStringList,IDList,ID );
+
+	return dlg( SetControlFromStringList,NameComboBox,IDList );
+}
+
+NUMERIC OnPopulateImagesComboBox()
+{
+	dlg( GetInput,GetStrings,ID,ID );
+
+	if ( IsNULL(~<ID>~) )
+	{ 
+		return TRUE;
+	}
+
+	Query = ~Select Distinct Images From Grid Where ID = '<ID>' Order By Images~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the Grid table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		return TRUE;
+	}
+
+	List( MakeStringList,ImagesList,Images );
+
+	dlg( SetControlFromStringList,ImagesComboBox,ImagesList );
+
+	OnChangeLayoutName();
+
+	return TRUE;
+}
+
+
+NUMERIC OnChangeLayoutImages()
+{
+	return TRUE;
+}
+
+
+NUMERIC OnParametersButton()
+{
+	dlg( GetInput,GetStrings,ID,ID );
+
+	if ( IsNULL(~<ID>~) )
+	{ 
+		return TRUE;
+	}
+	path = ~<$App.directory>\TextFiles\GridDoc.txt~;
+
+	Query = ~Select * From Grid Where ID = '<ID>'~;
+
+	Actions = ACTION DOC ( ~Grid~ OpenOnce "<path>" "Init( ~<ID>~,~<Query>~);" );
+
+	return PerformActions( Actions );
+}
+
+
+NUMERIC OnPositionsButton()
+{
+	dlg( GetInput,GetStrings,ID,ID,Images,Images );
+
+	if ( IsNULL(~<ID>~) )
+	{ 
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	if ( IsNULL(~<Images>~) )
+	{ 
+		return Warning( Translate( ~Select the number of images in the <ID> layout~ ) );
+	}
+
+	Query = ~Select * From GridPosition Where ID = '<ID>' AND Images = <Images> Order By Node~;
+
+	path = ~<$App.directory>\TextFiles\GridPosition.txt~;
+
+	Actions = ACTIONS ( Doc( ~GridPatterns~ OpenOnce "<path>" "Init( ~<ID>,<Images>~,~<Query>~);" ) );
+
+	return PerformActions( Actions );
+}
+
+
+NUMERIC OnPatternsButton()
+{
+	dlg( GetInput,GetStrings,ID,ID,Images,Images );
+
+	if ( IsNULL(~<ID>~) )
+	{ 
+		return Warning( Translate( ~Select an ID first~ ) );
+	}
+
+	if ( IsNULL(~<Images>~) )
+	{ 
+		return Warning( Translate( ~Select the number of images in the <ID> layout~ ) );
+	}
+
+	Query = ~Select * From GridPattern Where ID = '<ID>' AND Images = <Images> Order By row,col~;
+
+	path = ~<$App.directory>\TextFiles\GridPatternDoc.txt~;
+
+	Actions = ACTIONS ( Doc( ~GridPatterns~ OpenOnce "<path>" "Init( ~<ID>,<Images>~,~<Query>~);" ) );
+
+	return PerformActions( Actions );
+}
+
+
+VOID CloseDialog()
+{
+    dlg( END );
+    Exit();
+}
+
+		
+VOID DefineDialog()
+{
+	if ( !DataDict( TheDictionary,Get,DDCreateLayouts ) )
+	{
+		Dictionary: DDCreateLayouts;
+			Fields: Name ID			Type Text
+			Fields: Name Images		Type long
+			Fields: Name Directory	Type Text
+
+		StringList: Name CreateLayoutsList
+		Hang:	CreateLayoutsList	~[STRINGS]~ ;
+
+		StringList: Name CreateLayoutsImagesList
+		Hang:	CreateLayoutsImagesList	~[STRINGS]~ ;
+	}
+
+	Define: DlgData Using DDCreateLayouts ;
+	Global( DlgData );
+
+    Left = 5; Top = 5;		hGap = 5; vGap = 2;
+    TextHeight = 20;        TextWidth = 110;  
+	ButtonHeight = 20;		ButtonWidth = 70;
+	StaticTextWidth = 50;	StaticTextHeight = 20;
+    EditTextWidth = 350;	EditTextHeight = 20;
+    ComboBoxWidth = 100;	ComboBoxHeight = 120;
+	x = $Left;				y = $Top;
+
+    Define: DlgDefinition Using DDWinDef
+            Fields: Position		180 50 $DialogWidth $DialogHeight
+                    Title			Translate( ~Create Layouts~ )
+                    TypeName		~Dialog~
+					StatusBar		~1 100~
+					WantsMinimizeBox TRUE
+					HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "CreateLayouts.htm" ) 
+					DropActionsText	ACTION EXEC ( HandleDrop() )
+                    OACTIONSTEXT	ACTION EXEC ( CloseDialog() ) ;
+
+    Contains: InListOrder
+    {
+	    Define: IDPrompt Using DDWinCtrlDef AsSymbol IDPrompt 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Layout~ )
+					RightJustified	TRUE
+                    Position		$X,$Y,$StaticTextWidth,$StaticTextHeight ;
+
+		Query = ~Select Distinct ID From Grid Order By ID~;
+
+		Define: NameComboBox Using DDWinCtrlDef AsSymbol NameComboBox 
+			Fields: TypeName        ComboBox  
+					Position		IDPrompt(GetRight,Position) + $hGap,IDPrompt(GetTop,Position),<ComboBoxWidth>,200
+					IActionsText	ACTIONS ( GetList(CreateLayoutsList) Get )
+					DropDownActionsText ACTION EXEC ( OnPopulateLayoutsComboBox()  )
+					DActionsText	ACTION EXEC ( OnChangeLayoutName() )
+					OActionsText	ACTIONS ( Save )
+					GenConName		THIS
+					GenConField		~ID~
+					Tooltip			~Select from a list of layouts~;
+
+	    Define: ImagesPrompt Using DDWinCtrlDef AsSymbol ImagesPrompt 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Images~ )
+					RightJustified	TRUE
+					Position		NameComboBox(GetRight,Position) + $hGap*3,NameComboBox(GetTop,Position),<StaticTextWidth>,$StaticTextHeight
+
+		Define: ImagesComboBox Using DDWinCtrlDef AsSymbol ImagesComboBox 
+			Fields: TypeName        ComboBox  
+					Position		ImagesPrompt(GetRight,Position) + $hGap,ImagesPrompt(GetTop,Position),<ComboBoxWidth>,200
+					IActionsText	ACTIONS ( GetList(CreateLayoutsImagesList) Get )
+					DropDownActionsText ACTION EXEC ( OnPopulateImagesComboBox()  )
+					DActionsText	ACTION EXEC ( OnChangeLayoutImages() )
+					OActionsText	ACTIONS ( Save )
+					GenConName		THIS
+					GenConField		~Images~
+					Tooltip			~Select the number of images in the layout~;
+
+		Define: OpenLayoutButton Using DDWinCtrlDef AsSymbol OpenLayoutButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Open~ )
+					Position		ImagesComboBox(GetRight,Position) + $hGap,ImagesComboBox(Gettop,Position),$ButtonWidth,$ButtonHeight
+                    DActionsText	ACTION EXEC ( OnOpenALayoutButton() ) 
+                    Tooltip			Translate( ~~ );
+
+		Define: DirectoryPrompt Using DDWinCtrlDef AsSymbol DirectoryPrompt
+			Fields:	TypeName		StaticText
+					Text			Translate( ~Directory~ )
+					RightJustified	TRUE
+					Position		IDPrompt(GetLeft,Position),IDPrompt(GetBottom,Position) + $vGap,$StaticTextWidth, $StaticTextHeight
+
+		Define: DirectoryField Using DDWinCtrlDef AsSymbol DirectoryField
+			Fields:	TypeName		EditText
+					GenConName		This
+					GenConField		~Directory~
+					IActionsText	ACTIONS ( Get )
+					OActionsText	ACTIONS ( Save )
+					Position		DirectoryPrompt(GetRight,Position) + $hGap,DirectoryPrompt(GetTop,Position),$EditTextWidth, $EditTextHeight
+
+		Define: BrowseDirectoryButton Using DDWinCtrlDef AsSymbol BrowseDirectoryButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~?~ )
+					Position		DirectoryField(GetRight,Position) + $hGap,DirectoryField(Gettop,Position),20,$ButtonHeight
+                    DActionsText	ACTION EXEC ( OnFindDirectoryButton() ) 
+                    Tooltip			Translate( ~Browse for the directory to save the layouts to~ );
+
+		DialogWidth = BrowseDirectoryButton(GetRight,Position) + $hGap * 2;
+
+		Define: ParametersButton Using DDWinCtrlDef AsSymbol ParametersButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Parameters~ )
+					Position		IDPrompt(GetLeft,Position),DirectoryPrompt(GetBottom,Position) + $vgap*5,$ButtonWidth,$ButtonHeight
+                    DActionsText	ACTION EXEC ( OnParametersButton() ) 
+                    Tooltip			Translate( ~View and edit the parameters for this group of layouts~ );
+
+		Define: PatternsButton Using DDWinCtrlDef AsSymbol PatternsButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Pattern~ )
+					Position		ParametersButton(GetRight,Position) + $hGap,ParametersButton(Gettop,Position),$ButtonWidth,$ButtonHeight
+                    DActionsText	ACTION EXEC ( OnPatternsButton() ) 
+                    Tooltip			Translate( ~View and edit the grid pattern for the selected layout~ );
+
+		Define: PositionsButton Using DDWinCtrlDef AsSymbol PositionsButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Positions~ )
+					Position		PatternsButton(GetRight,Position) + $hGap,PatternsButton(Gettop,Position),$ButtonWidth,$ButtonHeight
+                    DActionsText	ACTION EXEC ( OnPositionsButton() ) 
+                    Tooltip			Translate( ~View and edit the node positions for the selected layout~ );
+
+		Define: CreateButton Using DDWinCtrlDef AsSymbol CreateButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Create~ )
+					Position		PositionsButton(GetRight,Position) + $hGap,PositionsButton(Gettop,Position),$ButtonWidth,$ButtonHeight
+                    DActionsText	ACTION EXEC ( OnCreateButton() ) 
+                    Tooltip			Translate( ~Create the layout for the selected number of images~ );
+
+		Define: CreateAllButton Using DDWinCtrlDef AsSymbol CreateAllButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Create All~ )
+					Position		CreateButton(GetRight,Position) + $hGap,CreateButton(Gettop,Position),$ButtonWidth,$ButtonHeight
+                    DActionsText	ACTION EXEC ( OnCreateAllButton() ) 
+                    Tooltip			Translate( ~Create all the layouts for this ID~ );
+
+		Define:DragArea Using DDWinCtrlDef AsSymbol DragArea 
+            Fields: TypeName	GroupBox
+					Text		~Drag KPIS Grid Layouts Here to Import~
+					Tooltip		~Drag layouts you wish to import~
+					Position	$X ParametersButton(GetBottom,Position) + $vGap * 5 
+								CreateAllButton(GetRight,Position) - IDPrompt(GetLeft,Position) 72;
+
+		
+
+		Define: StopButton Using DDWinCtrlDef AsSymbol StopButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Stop~ )
+					Position		$DialogWidth/2 - ($ButtonWidth/2),DragArea(GetBottom,Position) + $vgap*3,$ButtonWidth, $ButtonHeight
+                    DActionsText	ACTION EXEC ( OnStopButton() ) 
+					IsEnabled		F
+                    Tooltip			Translate( ~Stop Importing~ );
+
+	    };
+
+	DialogHeight = StopButton(GetBottom,Position) + $vGap + 25;
+
+    DlgDefinition( Set,Position,~180 180 <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,DlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    Global( dlg,DlgData );
+}
+
+VOID Init()
+{
+	DefineDialog();
+
+	OnPopulateLayoutsComboBox();
+
+	OnPopulateImagesComboBox();
+}
+
+Init();
+
+
+
+

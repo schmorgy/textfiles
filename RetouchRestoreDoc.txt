@@ -1,0 +1,160 @@
+
+IncludeClass( KarsDialog );
+
+VOID RestoreDlg::RestoreDlg()					// CONSTRUCTOR
+{
+	KarsType = ~Restore~;
+	NextProcess = ~Restored~;
+	BeginState = ~QueuedFor<KarsType>~;
+	InProcessState = ~In<KarsType>~;
+	CompleteState = ~<NextProcess>~;
+	Key = ~RestoreOriginal = 1 AND (RetouchState = 'Complete' OR RetouchState = 'QueuedForRestore') AND OverwriteOriginal = 0~;
+	//HelpPage = ~Kars<KartType>.htm~;
+	Left = 515;
+	GoButtonToolTip = Translate( ~Run the background Retouch <KarsType> process.~ );
+	Title = Translate( ~Restoring Original Images~ );
+	Fields1 = ~*~;
+	Query = ~SELECT <Fields1> FROM <MasterTable> WHERE <Key> ORDER BY <Sort>~;
+}
+
+
+NUMERIC RestoreDlg::SetupOperation()
+{
+	result = KarsDialog::SetupOperation();
+
+	if ( <result> == <ERROR_ON_SETUP> )
+	{
+		return ExitOnError();
+	}
+
+	if ( <result> == <WAIT_ON_SETUP> )
+	{
+		return TRUE;
+	}
+	
+	<KarsType>PreprocessData( SetValues,CompleteNotification,~<THIS>.OnComplete(%d,%ld);~ );
+
+	if ( !RunOperation( ~<Order>~,~<Roll>~,~<Frame>~ ) )
+	{
+		Actions = STR ( <THIS>.SetupOperation(); );
+		QueueContentsAfter( Actions,2000 );
+	}
+
+	return TRUE;
+}
+
+NUMERIC RestoreDlg::RunOperation( Order,Roll,Frame )
+{
+	if ( !Defined( Kpars ) )
+	{
+		KparsConnect( ~Batch~ );
+	}
+
+	if ( !Kpars( Initialize,<KarsType>PreprocessData ) )
+	{
+		ErrMsg = Translate( ~Unable to initialize the retouching software interface.~ );
+		fExitOnComplete = TRUE;
+		StatusBar( 0,~<ErrMsg>~ );
+		return Warning( Translate( ~<ErrMsg>~ ) );
+	}
+
+	GenCon( Control,IsCopyOf,<KarsType>PreprocessData,PERMANENT );
+	if ( !Kpars( ~Run<KarsType>~,Control ) )
+	{
+		ErrMsg = Translate( ~Unable to run the <KarsType> retouching software interface.~ );
+		dlg( SetStatus,0,~Unable to initialize the retouching software interface~ );
+		fExitOnComplete = TRUE;
+		StatusBar( 0,~<ErrMsg>~ );
+		return Warning( Translate( ~<ErrMsg>~ ) );
+	}
+	return TRUE;	
+}
+
+NUMERIC RestoreDlg::OnComplete( Status,ControlAddr )
+{
+	GenCon( ControlInfo, Is, <ControlAddr>, TEMPORARY );
+	ControlInfo( GetValues,OrderID,Order,Roll,Roll,Frame,Frame );
+
+	if ( <Status> )
+	{
+		txtMsg = ~Completed <KarsType> processing for <Order>,<Roll>,<Frame>.~;
+		dlg( SetControlValue,CurrentImageText,Translate( ~<txtMsg>~ ) );
+		RemakeItemsUsing(~<Order>~,~<Roll>~,~<Frame>~ );
+	}
+	else
+	{
+		txtMsg = ~<KarsType> Retouch processing failed for <Order>,<Roll>,<Frame>.~;
+		dlg( SetControlValue,CurrentImageText,Translate( ~<txtMsg>~ ) );
+		Log( Session, ~<txtMsg>~ );
+	}
+
+	StatusBar( 0,Translate( ~<KarsType> Complete~ ) );
+
+	Actions = STR ( <THIS>.SetupOperation(); );
+	QueueContentsAfter( Actions,200 );
+
+	return TRUE;
+}
+
+
+NUMERIC RestoreDlg::ExitOnError()
+{
+	ForgetPrivate( Kpars );
+	ForgetPrivate( <KarsType>PreprocessData );
+
+	dlg( End );
+	ForgetGlobal( <THIS> );
+
+	return FALSE;
+}
+
+
+VOID Init(StartNow)
+{
+	AutoStart = FALSE;
+	if ( DefinedAndNotNull( StartNow ) )
+	{
+		AutoStart = <StartNow>;
+	}
+	if ( !Defined( KarsRestore ) )
+	{
+		Class( RestoreDlg,Extends,KarsDialog,
+						Member,Order,Str,~~,
+						Member,Roll,Str,~~,
+						Member,Frame,Str,~~ );
+
+		RestoreDlg( New,KarsRestore );
+
+		KarsRestore.DefineDictionary();
+		KarsRestore.DefineDialog();
+		KarsRestore.InitDictionaryData();
+
+		Global( KarsRestore );
+		if ( <AutoStart> )
+		{
+			KarsRestore.OnGoButton();
+		}
+		return;
+	}
+
+	KarsRestore.ReOpen();
+	if ( <AutoStart> )
+	{
+		KarsRestore.Set( fExitOnEmptyQueue,FALSE );
+
+		if ( KarsRestore.GetStopPendingFlag() || KarsRestore.GetStoppedFlag() )
+		{
+			KarsRestore.DoStopButton();
+		}
+	}
+
+}
+
+VOID CancelAutoDialog()
+{
+	if ( Defined( KarsRestore ) )
+	{
+		KarsRestore.DoCancelButton( TRUE,TRUE );
+	}
+
+}

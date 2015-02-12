@@ -1,0 +1,448 @@
+
+VOID ReOpen()
+{
+	return Warning( Translate( ~Sorry..  You can't do that!~ ) );
+}
+
+
+VOID RefreshDoc()
+{
+	RefreshListView();
+}
+
+
+NUMERIC RefreshListView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,ConnectAccunet,Query,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );		
+		return Warning( ~Failed to load data from Accunet for <DocumentQuery>.  <theErr>~ ); 
+	}
+
+	Count = List( NumEntries );
+
+	SetDocumentData( List(GetObject) );
+	
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+	DataWindow( StatusBar,Text,~~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,ChangedItem,OrigItem,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no selected row.~ ); }
+
+	if ( !List( MakePrimaryKeyFrom,OrigItem,Key ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not make primary key for <Table>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,ChangedItem,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+		return Warning( Translate( ~Could not update BremsonCustomers record where <Key>. <theErr>~ ) );
+	}
+
+	DataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,ItemsToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	count = ItemsToDelete( ChildCount );
+
+	if ( MessageBox( ~Are you sure you want to delete the <count> selected items?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	StringList( RowsToDelete,New );
+
+	while ( ItemsToDelete( GetNext,Item ) )
+	{
+		if ( !List( MakePrimaryKeyFrom,Item,Key ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Could not make primary key for <Table>. <theErr>~ );
+		}
+
+		if ( !List( DeleteWhere,~<Key>~ ) )
+		{
+			dBase( GetErrorDescription,0,theErr );
+			Warning( ~Database update failed: <Cmd>  <theErr>~ );
+			break;
+		}
+
+		RowsToDelete( AddString,ItemsToDelete(GetCurrentPosition) );
+	}
+		
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+		
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	return TRUE;
+}
+
+NUMERIC AllOptions()
+{
+	return DataView( DisplayMenu,ListViewMenu,0,0  );
+}
+
+
+NUMERIC OpenSelected()
+{
+	SeeOrdersForCustomers();
+	return TRUE;
+}
+
+NUMERIC SeeOrdersForCustomers()
+{
+	if ( !DataView( GetSelectedRows,SelectedCustomers ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	count = 0;
+
+	while ( SelectedCustomers( GetNext,Customer ) )
+	{	
+		if ( <++count> > 1 )
+		{
+			Criteria = ~ <Criteria> OR CustomerID = '<$con.Customer[ID]>' ~;
+		}
+		else
+		{
+			Criteria = ~CustomerID = '<$con.Customer[ID]>'~;
+		}
+
+		if ( <count> >= 20 )		// BUILD UP A LIST OF UP TO 20 CUSTOMER ID'S
+		{
+			OrderQuery( ~<Criteria>~ );
+			count = 0;
+		}
+	}
+
+	if ( <count> )
+		{ OrderQuery( ~<Criteria>~ ); }
+	
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC OrderQuery( Criteria )
+{
+	Query = ~Select * From Orders Where <Criteria>~;
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTIONS ( Doc( ~BremsonOrders~ <OpenMethod> BremsonOrdersDoc "Init( ~<Criteria>~,~<Query>~);" ) );
+	return PerformActions( Actions );
+}
+
+
+
+
+NUMERIC MergeIntoDP2()
+{
+	if ( !DataView( GetSelectedRows,SelectedItems ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	count = SelectedItems( ChildCount );
+
+	if ( MessageBox( ~Are you sure you want to merge the <count> selected items into the DP2 database?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	while ( SelectedItems( GetNext,Item ) )
+	{
+		if ( !List( MakePrimaryKeyFrom,Item,Key ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Could not make primary key for <Table>. <theErr>~ );
+		}
+
+		Key = ~ID = '<$con.Item[ID]>'~;
+
+		Query = ~Select * From Customers Where <Key>~;
+
+		IsNewRow = !PGenConList( Customers,Connection,dBase,Cursor,Keyset,Lock,Optimistic,Query,~<Query>~ );
+
+		if ( !Customers( UpdateFrom,Item,~<Key>~,<IsNewRow> ) )
+		{
+			List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+			return Warning( Translate( ~Could not update BremsonCustomers record where <Key>. <theErr>~ ) );
+		}
+
+		StatusBarText( Translate( ~Merging Customer <$con.Item[ID]>~ ) );
+	}
+
+	StatusBarText( Translate( ~Merged <Count> Customers~ ) );
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	DataView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,ListViewMenu,~<KeyString>~ ) )
+	{
+		DataView( DisplayMenu,ListViewMenu,0,0  );
+	}
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new printers that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CheckAccunet()
+{
+	if ( !Accunet( accu,Initialize ) )
+	{
+		version = accu( Version );
+		return Warning( Translate( ~Accunet Interface Version <version> is not available~ ) );
+	}
+
+	if ( !Files( FileExists,~w:\AccunetProduction\Programs\OrderUtility.exe~ ) )
+	{
+		return Warning( Translate( ~Accunet Interface is not available~ ) );
+	}
+
+	return TRUE;
+}
+
+Table = Customers;
+
+FirstTime = TRUE;
+
+NUMERIC Init( Which,DocumentQuery )
+{
+	DataWindow( Set,Title,~Bremson <Table> Data - <Which>~ );
+
+	if ( !CheckAccunet() )
+	{
+		Exit();
+	}
+
+	Global( DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,ConnectAccunet,Query,~<DocumentQuery>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );		
+			return Warning( ~Failed to load data from Accunet for <DocumentQuery>.  <theErr>~ ); 
+		}
+
+		Count = List( NumEntries );
+
+		if ( ~<Table>~ != ~~ )
+		{
+			if ( GenCon( TableDefinition,GetFrom,<Table>,~[DATABASE BremsonTableDefinitions]~ ) )
+			{ 
+				Global( TableDefinition );
+				DataView( Set,GridControlTypes,TableDefinition( GetReferenceTo,Fields ) );
+			}
+		}
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !DataWindow( CreateWindow,~<Table>~ ) )
+		{ 
+			Error( ~Failed to create the window for <Table>~ ); 
+		}
+
+		Global( List,Title,Path,Table );
+
+		return DataWindow( StatusBar,Text,~<Count> Records from <Table>~ );
+	}
+
+	return RefreshListView();
+}
+
+
+
+Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&New~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	OpenRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Open~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SeeOrdersForCustomers(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(); )
+
+		Define:	NULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	MergeIntoDP2	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Merge Into DP2~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( MergeIntoDP2(); )			
+	}
+
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 90;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+Define: DataWindow Using DDWinDef
+	Fields:		Position				0 0 90 25
+				IsPositionPercent		T
+				EnableStatusBar			T
+				TypeName				SplitterWnd
+				SplitterRows			~2 1 90~
+				SplitterColumns			1
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "BremsonRecordset.htm" )
+			Contains:
+			{
+				position = DefineStdGridButtons(Record) + 10;
+			}
+
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					ViewDataType			Text
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord(); )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord(); )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView(); )
+					RefreshActionsText		ACTION Exec ( RefreshListView() )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+					DoubleClickActionsText  ACTION Exec ( SeeOrdersForCustomers(); )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "BremsonRecordset.htm" )
+					CloseActionsText		ACTION Call ( OnCloseDataView() ) ;
+	}
+	
+

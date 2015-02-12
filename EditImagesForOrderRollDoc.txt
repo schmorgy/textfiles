@@ -1,0 +1,1302 @@
+
+
+
+Define: ImageEditData Using DDImageEdit 
+	Fields:	orgD			64
+			orgGamma		1.0	;	// all other fields default to 0 or NULL
+
+if ( !Tree( Name,EditImagesRollList,Location,~[STRINGS]~,Exists ) )
+{
+	StringList: Name EditImagesRollList
+	Hang:	EditImagesRollList ~[STRINGS]~ ;
+}
+
+HelpPage = ~ImageEdit.htm~;
+
+hGap = 2; vGap = 1;
+PromptHeight = 20;		PromptWidth = 65;		ValueWidth = 30;
+ButtonWidth = 70;		ButtonHeight = 20;		SliderWidth = 190;
+LeftX = $hGap;			CurrentY = $vGap+2;		CurrentRight = 0;
+PlusMinusWidth = 18;	FieldWidth = <SliderWidth>;
+CheckBoxWidth = 90;		CheckBoxHeight = 15;
+UseColorTypeCheckBoxes = TRUE;
+
+NoColorTypesSelected = ~No Color Types Selected~;
+AllColorTypesSelected = ~All Color Types Selected~;
+
+VOID DefineImageEditLine( Type,Increment,Prompt,ToolTip,Something,DBField )
+{
+	Define: <Type>Prompt Using DDWinCtrlDef AsSymbol <Type>Prompt
+		Fields:	POSITION		$LeftX $CurrentY $PromptWidth $PromptHeight
+				TEXT			~<Prompt>~
+				TOOLTIP			~<ToolTip>~
+				Fields:			DACTIONSTEXT	ACTION EXEC ( IncrementValue(<Type>,KeyState(Shift) ? -<Increment> : <Increment>) )
+				TYPENAME		Button
+
+	Define: <Type>Field Using DDWinCtrlDef AsSymbol <Type>Field
+		Fields:	DACTIONSTEXT	ACTIONS ( Save Update(<Type>Slider) DialogTimer(0 1000) )
+				GENCONFIELD		~<Type>~
+				GENCONNAME		THIS
+				IACTIONSTEXT	ACTIONS ( Get )
+				OACTIONSTEXT	ACTIONS ( Save )
+				POSITION		(<Type>Prompt(GetRight,Position) + $hGap*2) $CurrentY+3 $ValueWidth $PromptHeight
+				TEXT			~~
+				TOOLTIP			~<ToolTip>~
+				TYPENAME		StaticText //MaskedEditText
+				Mask			(SimilarStr(~<Prompt>~,~Angle~,~Saturation~) || SimilarStr(~<Prompt>~,~Gamma~,~Saturation~)) ? ~######~ : ~####~
+				PromptChar		~ ~ 
+				AllowedChars	(SimilarStr(~<Prompt>~,~Angle~) || SimilarStr(~<Prompt>~,~Gamma~)) ? ~-.~ : ~-~
+				HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "<HelpPage>" )
+
+	Define: <Type>Slider Using DDWinCtrlDef AsSymbol <Type>Slider
+		Fields:	DACTIONSTEXT	ACTIONS ( Save Update(<Type>Field) DialogTimer(0 250) )
+				GENCONFIELD		~<Type>~
+				GENCONNAME		THIS
+				IACTIONSTEXT	~[Get]~
+				OACTIONSTEXT	~[Save]~
+				POSITION		(<Type>Field(GetRight,Position) + $hGap) $CurrentY $SliderWidth $PromptHeight
+				TOOLTIP			~<ToolTip>~
+				TYPENAME		~SLIDER~ 
+				UNITS			($Increment)
+
+	Define: <Type>ZeroButton Using DDWinCtrlDef AsSymbol <Type>ZeroButton
+		Fields:	DACTIONSTEXT	ACTION EXEC ( ZeroValue(<Type>) )
+				POSITION		(<Type>Slider(GetRight,Position) + $hGap) $CurrentY $PlusMinusWidth $PromptHeight
+				TOOLTIP			~Set the value to zero~
+				TYPENAME		~Button~ 
+				TEXT			~0~ ;
+
+	ZeroButtonLeft = <Type>ZeroButton(GetLeft,Position);
+	Global(ZeroButtonLeft);
+
+	Define: <Type>SetButton Using DDWinCtrlDef AsSymbol <Type>SetButton
+		Fields:	DACTIONSTEXT	ACTION EXEC ( OnSetButton(<Type>,<DBField>) )
+				POSITION		(<Type>ZeroButton(GetRight,Position) + $hGap) $CurrentY 25 $PromptHeight
+				TOOLTIP			~Set the value in the database.~
+				TYPENAME		~Button~ 
+				TEXT			~Set~;
+
+	CurrentY = <Type>SetButton(GetBottom,Position) + $vGap;
+	CurrentRight = <Type>SetButton(GetRight,Position) + $hGap * 4;
+}
+
+
+VOID DefineImageEditDialog()
+{
+	WaitCursor( Begin );
+
+	if ( KeyState( CONTROL ) )
+	{
+		UseColorTypeCheckBoxes = FALSE;
+	}
+
+	Define: ImageEditDialog Using DDWinDef
+		Fields:	POSITION			100, 100, 600, 600 
+				TITLE				~Adjust Images For Order Or Roll~
+				TYPENAME			~Dialog~ 
+				WantsMinimizeBox	TRUE
+				StatusBar			~2 10 90~
+				StealMultiply		TRUE
+				KEYBOARDACTIONSTEXT	ACTION EXEC ( OnKeyDown() )
+				OACTIONSTEXT		ACTION EXEC ( CloseImageEditDialog() )
+				HACTIONSTEXT		ACTION SHOWHELPPAGE ( KPISHelpFile "ImageEditOrderRoll.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			ButtonW = 40;
+
+			Define: OrderPrompt Using DDWinCtrlDef AsSymbol OrderPrompt
+				Fields:	POSITION		$LeftX $CurrentY $PromptWidth $PromptHeight
+						TEXT			~Order~
+						RIGHTJUSTIFIED	TRUE
+						TYPENAME		StaticText
+
+			Define: OrderField Using DDWinCtrlDef AsSymbol OrderField
+				Fields:	TYPENAME		MASKEDEDITTEXT
+						DACTIONSTEXT	ACTIONS ( Save )
+						GENCONFIELD		~OrderID~
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						POSITION		OrderPrompt(GetRight,Position) + $hGap OrderPrompt(GetTop,Position) $FieldWidth $PromptHeight
+						TEXT			~~
+						TOOLTIP			~Select the order you wish to modify~
+						Mask			~<$[DATABASE FieldTypes].OrderID[Mask]>~
+						PromptChar		~<$[DATABASE FieldTypes].OrderID[PromptChar]>~
+						AllowedChars	~<$[DATABASE FieldTypes].OrderID[AllowedChars]>~
+						DisallowedChars ~<$[DATABASE FieldTypes].OrderID[DisallowedChars]>~
+						WantReturnKey	~T~
+						ReturnKeyActionsText ACTION EXEC ( HandleOrderIDReturnKey() )
+
+		Define: ViewOrderImagesButton Using DDWinCtrlDef AsSymbol ViewOrderImagesButton
+				Fields:	DACTIONSTEXT	ACTION EXEC ( ViewOrderImagesButton() )
+						POSITION		OrderField(GetRight,Position) + $hGap OrderField(GetTop,Position),
+										$ButtonW, $ButtonHeight
+						TOOLTIP			~View the images for the selected order~
+						TYPENAME		~Button~ 
+						TEXT			~View~
+
+			Define: RollPrompt Using DDWinCtrlDef AsSymbol RollPrompt
+				Fields:	POSITION		OrderPrompt(GetLeft,Position) OrderPrompt(GetBottom,Position)+$vGap
+										$PromptWidth $PromptHeight
+						TEXT			~Roll~
+						RIGHTJUSTIFIED	TRUE
+						TYPENAME		StaticText
+
+			Define: RollField Using DDWinCtrlDef AsSymbol RollField 
+				Fields: TypeName		SComboBox  
+						Position		RollPrompt(GetRight,Position) + $hGap,RollPrompt(GetTop,Position),$FieldWidth $PromptHeight * 4
+						IActionsText	ACTIONS ( GetList(EditImagesRollList) Get )
+						OActionsText	ACTIONS ( Save )
+						DropDownActionsText ACTION CALL ( UpdateRollsCombo(FALSE)  )
+						DActionsText	ACTION EXEC ( OnRollCombo() )
+						GenConName       THIS
+						GenConField		~Roll~
+						IsTabStop		T
+						Tooltip         ~Select a roll~;
+
+			Define: ViewRollImagesButton Using DDWinCtrlDef AsSymbol ViewRollImagesButton
+				Fields:	DACTIONSTEXT	ACTION EXEC ( ViewRollImagesButton() )
+						POSITION		RollField(GetRight,Position) + $hGap RollField(GetTop,Position),
+										$ButtonW, $ButtonHeight
+						TOOLTIP			~View the images for the selected roll~
+						TYPENAME		~Button~ 
+						TEXT			~View~
+
+
+			Define: AllRollsBox Using DDWinCtrlDef AsSymbol AllRollsBox 
+				Fields: TypeName		CheckBox
+						Text			Translate( ~All Rolls~ )
+						GenConName		THIS
+						GenConField		~AllRolls~	
+						Position		RollField(GetLeft,Position),RollPrompt(GetBottom,Position)+$vGap, $FieldWidth,  <PromptHeight>
+						IActionsText	ACTIONS ( Get )
+						DActionsText	ACTIONS ( Save  ) 
+						OActionsText	ACTIONS ( Save )
+						Tooltip			Translate( ~If checked, updates will be applied to all rolls of the order~ );
+
+			Define: AdjustButton Using DDWinCtrlDef AsSymbol AdjustButton
+					Fields:	DACTIONSTEXT	ACTION EXEC ( OnAdjustButton() )
+							POSITION		10,10,$ButtonW, $ButtonHeight
+							TOOLTIP			~Adjust the currently selected Order and Roll or change the Order and Roll~
+							TYPENAME		~Button~ 
+							TEXT			~Adjust Selected Order Or Roll~;
+
+
+			ButtonW = 75;
+
+			CurrentY = AllRollsBox(GetBottom,Position) + ($ButtonHeight + $vGap) * 2 + 20 ;
+
+			DialogHeightWithoutAdjustButtons = <CurrentY>;
+
+			if ( <UseColorTypeCheckBoxes> )
+			{
+				Define: AllImagesBox Using DDWinCtrlDef AsSymbol AllImagesBox 
+					Fields: TypeName		CheckBox
+							Text			Translate( ~All Images~ )
+							Position		42, <CurrentY>+8, <CheckBoxWidth>, <CheckBoxHeight>
+							DActionsText    ~[Save "Exec(OnAllImagesBox())"]~
+							Tooltip			Translate( ~If checked, updates will be applied to all images~ );
+
+				Define: ColorImagesBox Using DDWinCtrlDef AsSymbol ColorImagesBox 
+					Fields: TypeName		CheckBox
+							Text			Translate( ~Color Images~ )
+							Position		AllImagesBox(GetLeft,Position), AllImagesBox(GetBottom,Position)+10, <CheckBoxWidth>, <CheckBoxHeight>
+							DActionsText    ~[Save "Exec(OnColorImagesBox())"]~
+							Tooltip			Translate( ~If checked, updates will be applied to images whose color type is set to Color~ );
+
+				Define: BWImagesBox Using DDWinCtrlDef AsSymbol BWImagesBox 
+					Fields: TypeName		CheckBox
+							Text			Translate( ~BW Images~ )
+							Position		AllImagesBox(GetLeft,Position), ColorImagesBox(GetBottom,Position)+4, <CheckBoxWidth>, <CheckBoxHeight>
+							DActionsText    ~[Save "Exec(OnBWImagesBox())"]~
+							Tooltip			Translate( ~If checked, updates will be applied to images whose color type is set to Black and White~ );
+
+				Define: BWImagesSpotColorBox Using DDWinCtrlDef AsSymbol BWImagesSpotColorBox 
+					Fields: TypeName		CheckBox
+							Text			Translate( ~BW Images With Spot Color~ )
+							Position		BWImagesBox(GetRight,Position) + 10, ColorImagesBox(GetBottom,Position)+4, <CheckBoxWidth>+70, <CheckBoxHeight>
+							DActionsText    ~[Save "Exec(OnBWImagesSpotColorBox())"]~
+							Tooltip			Translate( ~If checked, updates will be applied to images whose color type is set to Black and White with Spot Color~ );
+
+				Define: SepiaImagesBox Using DDWinCtrlDef AsSymbol SepiaImagesBox 
+					Fields: TypeName		CheckBox
+							Text			Translate( ~Sepia Images~ )
+							Position		AllImagesBox(GetLeft,Position), BWImagesBox(GetBottom,Position)+4, <CheckBoxWidth>, <CheckBoxHeight>
+							DActionsText    ~[Save "Exec(OnSepiaImagesBox())"]~
+							Tooltip			Translate( ~If checked, updates will be applied to images whose color type is set to Sepia~ );
+
+				Define: SepiaImagesSpotColorBox Using DDWinCtrlDef AsSymbol SepiaImagesSpotColorBox 
+					Fields: TypeName		CheckBox
+							Text			Translate( ~Sepia Images With Spot Color~ )
+							Position		SepiaImagesBox(GetRight,Position) + 10, BWImagesBox(GetBottom,Position)+4, <CheckBoxWidth>+70, <CheckBoxHeight>
+							DActionsText    ~[Save "Exec(OnSepiaImagesSpotColorBox())"]~
+							Tooltip			Translate( ~If checked, updates will be applied to images whose color type is set to Sepia with Spot Color~ );
+
+				Define: ApplyCorrectionsGroupBox Using DDWinCtrlDef AsSymbol ApplyCorrectionsGroupBox
+					Fields:	TypeName		GroupBox
+							Position		30, <CurrentY> - 10, 285, 105
+							Text			~Apply Corrections To:~;
+
+				CurrentY = ApplyCorrectionsGroupBox(GetBottom,Position) + 10 ;
+			}
+			else
+			{
+				Define: ApplyCorrectionsPrompt Using DDWinCtrlDef AsSymbol ApplyCorrectionsPrompt
+					Fields:	TypeName		StaticText
+							Text			~Apply Corrections To~
+							Position		10, <CurrentY> - 8, <PromptWidth> + 40, <PromptHeight>;
+
+				Define: ApplyCorrectionsComboBox Using DDWinCtrlDef AsSymbol ApplyCorrectionsComboBox
+					Fields:	TypeName		SComboBox
+							Position		ApplyCorrectionsPrompt(GetRight,Position)+$hGap,ApplyCorrectionsPrompt(GetTop,Position)-5,
+											<PromptWidth> * 3, <PromptHeight>*10
+							DActionsText	ACTIONS ( Save )
+							Tooltip			Translate( ~Updates will be applied to images whose color type matches the selected color type~ );
+
+				CurrentY = ApplyCorrectionsPrompt(GetBottom,Position) + 10 ;
+			}
+
+			DefineImageEditLine( cDensity,	1,	~&Density~,			~Make the image Lighter (Shift-d) or Darker (d)~,~CorrectionDensity~,~Brt~ );
+			DefineImageEditLine( cRed,		1,	~&Red~,				~Make the image more Cyan (Shift-r) or more Red (r)~,~CorrectionRed~,~Red~ );
+			DefineImageEditLine( cGreen,	1,	~&Green~,			~Make the image more Magenta (Shift-g) or more Green (g)~,~CorrectionGreen~,~Grn~ );
+			DefineImageEditLine( cBlue,		1,	~&Blue~,			~Make the image more Yellow (Shift-b) or more Blue (b)~,~CorrectionBlue~,~Blu~ );
+
+			CurrentY += $vGap + $vGap*2;
+
+			DefineImageEditLine( cContrast,	1,	~Con&trast~,		~Decrease (Shift-t) or increase (t) the Contrast of the image~,~CorrectionContrast~,~Con~ );
+			DefineImageEditLine( cGamma,	.05, ~Ga&mma~,			~Decrease (Shift-m) or increase (m) the Gamma of the image~,~CorrectionGamma~,~Gamma~ );
+			DefineImageEditLine( cSaturation,1,	~Sat&uration~,		~Decrease (Shift-u) or increase (u) the Saturation of the image~,~CorrectionSaturation~,~Saturation~ );
+
+			CurrentY += $vGap + $vGap;
+
+			DefineImageEditLine( cSharpen,	1,	~S&harpen~,		~Decrease (Shift-h) or increase (h) the Sharpening for this image~,~CorrectionSharpen~,~Sharpen~ );
+
+			CurrentY += $vGap * 5;
+
+			DefineImageEditLine( cArbitraryRotation,	.05,~&Angle~,~Decrease (Shift-a) or increase (a) the horizontal angle of the image~,~CorrectionRotation~,~ArbitraryRotation~ );
+
+			CurrentY += $vGap * 2;
+
+			Define: RotateCCWButton Using DDWinCtrlDef AsSymbol RotateCCWButton
+				Fields:	DACTIONSTEXT	ACTION EXEC ( IncrementRotateFromDisk(-90) )
+						POSITION		$LeftX $CurrentY
+										$PromptWidth/2, $ButtonHeight
+						TOOLTIP			~Rotate the image left by 90 degrees~
+						TYPENAME		~Button~ 
+						TEXT			~CC&W~
+						HACTIONSTEXT	ACTION SHOWHELPPAGE ( KPISHelpFile "<HelpPage>" ) ;
+
+			Define: RotateCWButton Using DDWinCtrlDef AsSymbol RotateCWButton
+				Fields:	DACTIONSTEXT	ACTION EXEC ( IncrementRotateFromDisk(90) )
+						POSITION		RotateCCWButton(GetRight,Position) + $hGap RotateCCWButton(GetTop,Position),
+										$PromptWidth/2, $ButtonHeight
+						TOOLTIP			~Rotate the image right by 90 degrees~
+						TYPENAME		~Button~ 
+						TEXT			~CW~
+
+			Define: RotateField Using DDWinCtrlDef AsSymbol RotateField
+				Fields:	DACTIONSTEXT	ACTIONS ( Save  )
+						GENCONFIELD		~cRotateFromDisk~
+						GENCONNAME		THIS
+						IACTIONSTEXT	ACTIONS ( Get )
+						OACTIONSTEXT	ACTIONS ( Save )
+						POSITION		(RotateCWButton(GetRight,Position) + $hGap*2) $CurrentY+3 $ValueWidth $PromptHeight
+						TEXT			~~
+						TOOLTIP			~Delta Rotation~
+						TYPENAME		StaticText ;
+
+			Define: ZeroRotationButton Using DDWinCtrlDef AsSymbol ZeroRotationButton
+				Fields:	DACTIONSTEXT	ACTION EXEC ( ZeroValue(cRotateFromDisk) )
+						POSITION		<ZeroButtonLeft> RotateCWButton(GetTop,Position) $PlusMinusWidth $PromptHeight
+						TOOLTIP			~Set the value to zero~
+						TYPENAME		~Button~ 
+						TEXT			~0~
+
+			Define: SetRotateButton Using DDWinCtrlDef AsSymbol SetRotateButton
+				Fields:	DACTIONSTEXT	ACTION EXEC ( OnSetButton(cRotateFromDisk,RotateFromDisk) )
+						POSITION		ZeroRotationButton(GetRight,Position) + $hGap ZeroRotationButton(GetTop,Position),
+										25, $ButtonHeight
+						TOOLTIP			~Set the value in the database.~
+						TYPENAME		~Button~ 
+						TEXT			~Set~;
+
+			CurrentY = RotateCWButton(GetBottom,Position) + $vGap*8;
+
+			DialogWidth = <CurrentRight> + $hGap * 1;
+
+			Middle = $DialogWidth/2 - 100;
+
+			AdjustButtonY = AllRollsBox(GetBottom,Position) + $vGap*5;
+
+			AdjustButton( Set,POSITION,~<Middle> <AdjustButtonY> 200  <ButtonHeight>~ );
+
+
+			Define: UpdateButton Using DDWinCtrlDef AsSymbol UpdateButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( AcceptImageEdits() )
+						POSITION		$DialogWidth/2 - ($ButtonW + $hGap)* 2 $CurrentY $ButtonW, $ButtonHeight
+						TEXT			~Update~
+						TOOLTIP			~Update every image in the order or selected roll by adding the above values to the current values in the database.~
+						TYPENAME		BUTTON;
+
+			Define: SetButton Using DDWinCtrlDef AsSymbol SetButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( SetImageEdits(TRUE) )
+						POSITION		(UpdateButton(GetRight,Position) + $hGap) ,$CurrentY, $ButtonW, $ButtonHeight
+						TEXT			~Set~
+						TOOLTIP			~Update every image in the order or selected roll by setting the stored values in the database to the above values.~
+						TYPENAME		BUTTON;
+
+			Define: ResetButton Using DDWinCtrlDef AsSymbol ResetButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ResetImageEdits() )
+						POSITION		(SetButton(GetRight,Position) + $hGap) ,$CurrentY, $ButtonW, $ButtonHeight
+						TEXT			~Reset~
+						TOOLTIP			~Forget all image edits for the order or selected roll. This sets every value to its nominal value.~
+						TYPENAME		BUTTON;
+
+			Define: RefreshButton Using DDWinCtrlDef AsSymbol RefreshButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( DelayedNotifyAffectedDocuments() )
+						POSITION		(ResetButton(GetRight,Position) + $hGap) ,$CurrentY, $ButtonW, $ButtonHeight
+						TEXT			~Refresh~
+						TOOLTIP			~Refresh other windows that contain images to see the effects of your changes.~
+						TYPENAME		BUTTON;
+
+			CurrentY = ResetButton( GetBottom,Position );
+
+			which = 0;
+			while ( <which> < 10 )
+			{
+				Define: Num<Which>Button Using DDWinCtrlDef AsSymbol Num<Which>Button 
+						Fields: TypeName		Button
+								Text			Translate( ~&<Which>~ )
+								DActionsText	ACTION EXEC ( OnNumber(<Which>) ) ;
+
+				++which;
+			}
+
+			Define: NumPeriodButton Using DDWinCtrlDef AsSymbol NumPeriodButton 
+				Fields: TypeName		Button
+						Text			Translate( ~&.~ )
+						DActionsText	ACTION EXEC ( OnNumber(~.~) ) ;
+
+			Define: MinusButton Using DDWinCtrlDef AsSymbol MinusButton 
+				Fields: TypeName		Button
+						Text			Translate( ~&-~ )
+						DActionsText	ACTION EXEC ( OnMinus() ) ;
+
+			Define: ForwardSlashButton Using DDWinCtrlDef AsSymbol ForwardSlashButton 
+				Fields: TypeName		Button
+						Text			Translate( ~&/~ )
+						DActionsText	ACTION EXEC ( IncrementValue(cRed,KeyState(Shift) ? -1 : 1) ) ;
+
+			Define: AsterickButton Using DDWinCtrlDef AsSymbol AsterickButton 
+				Fields: TypeName		Button
+						Text			Translate( ~&*~ )
+						DActionsText	ACTION EXEC ( IncrementValue(cGreen,KeyState(Shift) ? -1 : 1) ) ;
+
+			Define: PlusButton Using DDWinCtrlDef AsSymbol PlusButton 
+				Fields: TypeName		Button
+						Text			Translate( ~&+~ )
+						DActionsText	ACTION EXEC ( IncrementValue(cBlue,KeyState(Shift) ? -1 : 1) ) ;
+		}
+
+	CurrentY = <CurrentY> + 30;
+
+	x = (App( thisApp,MainWindow,GetClientWidth ) / 2) - $CurrentRight - 5;
+	y = (App( thisApp,MainWindow,GetClientHeight ) / 2) - $CurrentY - 22 + $vGap *3;
+	y = 5;
+	DialogHeight = <CurrentY> + 5;
+
+	ImageEditDialog( Set,Position,~<x> <y>  <DialogWidth>  <DialogHeightWithoutAdjustButtons>~ );
+	
+	Global( ImageEditDialog,DialogWidth,DialogHeight,DialogHeightWithoutAdjustButtons );
+
+	WaitCursor( End );
+}
+
+
+Adjusting = FALSE;
+
+NUMERIC OnAdjustButton()
+{
+	EditDialog( GetInput,GetStrings,OrderID,OrderID,Roll,Roll );
+
+	if ( IsNULL(~<OrderID>~) )
+	{ 
+		return Warning( Translate( ~You must select an order first~ ) );
+	}
+
+	if ( IsNULL(~<Roll>~) )
+	{ 
+		UpdateRollsCombo(TRUE);
+	}
+
+	EditDialog( SetControlFocus,UpdateButton );
+
+	Adjusting = !<Adjusting>;
+
+	if ( <Adjusting> )
+	{
+		EnableOrderFields = FALSE;
+		EditDialog( SetControlTitle,AdjustButton,~Change Order Or Roll~ );
+		EditDialog( SetWindowSize,<DialogWidth>,<DialogHeight> );
+	}
+	else
+	{
+		EnableOrderFields = TRUE;
+		EditDialog( SetControlTitle,AdjustButton,~Adjust Selected Order Or Roll~ );
+		EditDialog( SetWindowSize,<DialogWidth>,<DialogHeightWithoutAdjustButtons> );
+	}
+
+	EditDialog( EnableControls,<EnableOrderFields>,OrderField,RollField,AllRollsBox );
+
+
+	return TRUE;
+}
+
+
+
+NUMERIC ViewOrderImagesButton()
+{
+	EditDialog( GetInput,GetStrings,OrderID,OrderID );
+
+	if ( IsNULL(~<OrderID>~) )
+	{ 
+		return Warning( Translate( ~You must select an order first~ ) );
+	}
+
+	Query = ~Select * From Images Where OrderID = '<OrderID>' Order By OrderID,Roll,Frame~;
+
+	Actions = ACTION Doc ( ~OrderImages~ OpenOnce ImagesDoc "Init( ~<OrderID>~,!KeyState(CONTROL),~<Query>~,0 );" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC ViewRollImagesButton()
+{
+	EditDialog( GetInput,GetStrings,OrderID,OrderID,Roll,Roll );
+
+	if ( IsNULL(~<OrderID>~) )
+	{ 
+		return Warning( Translate( ~You must select an order first~ ) );
+	}
+
+	if ( IsNULL(~<Roll>~) )
+	{ 
+		return Warning( Translate( ~You must select a Roll first~ ) );
+	}
+
+	Query = ~Select * From Images Where OrderID = '<OrderID>' AND Roll = '<Roll>' Order By OrderID,Roll,Frame~;
+
+	Actions = ACTION Doc ( ~OrderImages~ OpenOnce ImagesDoc "Init( ~<OrderID>~,!KeyState(CONTROL),~<Query>~,0 );" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC HandleOrderIDReturnKey()
+{
+	return UpdateRollsCombo(TRUE);
+}
+
+
+NUMERIC OnRollCombo()
+{
+	return EditDialog( SetControlFocus,UpdateButton );
+}
+
+
+NUMERIC UpdateRollsCombo(wantSelection)
+{
+	EditDialog( GetInput,GetStrings,OrderID,OrderID );
+
+	if ( IsNULL(~<OrderID>~) )
+	{ 
+		return Warning( Translate( ~You must select an order first~ ) );
+	}
+
+	Query = ~Select Distinct Roll From Images Where OrderID = '<OrderID>' Order By Roll~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the Rolls table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		ForgetLocal( List );
+
+		Query = ~Select Distinct Roll From Rolls Where OrderID = '<OrderID>' Order By Roll~;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ 
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate( ~Failed to query the Rolls table.\n\n<Query>\n\n<theErr>~ ) ); 
+		}
+	}
+
+	List( MakeStringList,RollsList,Roll );
+
+	return EditDialog( SetControlFromStringList,RollField,RollsList,<wantSelection> ? ~Select~ : ~NoSelection~ );
+}
+
+
+CurrentNumber = ~~;
+
+NUMERIC OnNumber( Num )
+{
+	EditDialog( SetStatus,1,~~ );
+
+	if ( ~<Num>~ == ~.~ )
+	{
+		substr( ~<CurrentNumber>~,0,strlen(~<CurrentNumber>~)-1,NewNumber );
+		CurrentNumber = ~<NewNumber>~;
+		return EditDialog( SetStatus,0,~<CurrentNumber>~ );
+	}
+
+	CurrentNumber = ~<CurrentNumber><Num>~;
+
+	return EditDialog( SetStatus,0,~<CurrentNumber>~ );
+}
+
+
+NUMERIC OnMinus()
+{
+	if ( ~<CurrentNumber>~ != ~~ )
+	{
+		return IncrementValue( cBlue,Keystate( Shift ) ? -1 : 1 );
+	}
+
+	CurrentNumber = ~-~;
+
+	return EditDialog( SetStatus,0,~<CurrentNumber>~ );
+}
+
+
+VOID GrabTheFocus()
+{
+	EditDialog( SetWindowOrder,Top );
+}
+
+
+VOID IncrementRotateFromDisk( RotateFromDisk )
+{
+	RotateFromDisk = KeyState( SHIFT ) ? (0 - <RotateFromDisk>) : <RotateFromDisk>;
+
+	NewRotateFromDisk = $RotateFromDisk + EditDialog( GetValue,cRotateFromDisk );
+
+	while ( $NewRotateFromDisk >= 360 )
+		{ NewRotateFromDisk -= 360; }
+
+	while ( $NewRotateFromDisk < 0 )
+		{ NewRotateFromDisk += 360; }
+
+	ImageEditData( SetValue,cRotateFromDisk,$NewRotateFromDisk );
+	EditDialog( SetString,RotateFromDiskField,$NewRotateFromDisk );
+	EditDialog( Update );
+}
+
+
+VOID ZeroValue( which )
+{
+	EditDialog( SetString,~0~,<which> );
+}
+
+
+NUMERIC IncrementValue( which,amount )
+{
+	if ( ~<CurrentNumber>~ == ~~ )
+	{
+		CurrentNumber = ~1~;
+	}
+	else if ( ~<CurrentNumber>~ == ~-~ )
+	{
+		return EditDialog( SetStatus,1,~You are still entering a negative number~ );
+	}
+
+	CurrentValue = MakeNumber(EditDialog(GetValue,<which>)) + (<amount> * <CurrentNumber>);
+
+	if ( ~<CurrentNumber>~ == ~0~ )
+	{
+		CurrentValue = 0;
+	}
+
+	EditDialog( SetString,~<CurrentValue>~,<which> );
+	CurrentNumber = ~~;
+
+	EditDialog( SetStatus,0,~~ );
+
+	return TRUE;
+}
+
+
+NUMERIC AcceptImageEdits()
+{
+	EditDialog( GetInput,GetStrings,OrderID,OrderID,Roll,Roll,AllRolls,AllRolls );
+
+	if ( IsNULL(~<OrderID>~) )
+	{ 
+		return Warning( Translate( ~You must select an order first~ ) );
+	}
+
+	ColorType = GetColorTypeClause();
+	if ( SimilarStr( ~<ColorType>~,~<NoColorTypesSelected>~ ) )
+	{
+		return Warning( Translate( ~You must select one or more image color types to apply the corrections to.~ ) );
+	}
+
+	Fields = ~Brt=Brt+<$con.ImageEditData[cDensity]>,Red=Red+<$con.ImageEditData[cRed]>,
+				Grn=Grn+<$con.ImageEditData[cGreen]>,Blu=Blu+<$con.ImageEditData[cBlue]>,
+				Con=Con+<$con.ImageEditData[cContrast]>,Saturation=Saturation+<$con.ImageEditData[cSaturation]>,
+				Sharpen=Sharpen+<$con.ImageEditData[cSharpen]>,Gamma=Gamma+<$con.ImageEditData[cGamma]>,
+				RotateFromDisk=RotateFromDisk+<$con.ImageEditData[cRotateFromDisk]>,
+				ArbitraryRotation=ArbitraryRotation+<$con.ImageEditData[cArbitraryRotation]>,Changed=1~;
+
+	Cmd = ~Update Images Set <Fields> Where OrderID = '<OrderID>'~;
+
+	Explain = ~This will update every field in the database by adding the values you have selected to the values currently stored in the database.\n\n~;
+
+	if ( !<AllRolls> )
+	{
+		if ( IsNULL(~<Roll>~) )
+		{ 
+			return Warning( Translate( ~You must select a Roll first~ ) );
+		}
+
+		if ( MessageBox( ~<Explain> Are you sure you want to update every image for the selected color type(s) in Roll <Roll> of Order <OrderID>?~,YESNO ) != YES )
+			{ return FALSE; }
+
+		Cmd = ~<Cmd> AND Roll = '<Roll>'~;
+	}
+	else
+	{
+		if ( MessageBox( ~<Explain> Are you sure you want to update every image for the selected color type(s) in Order <OrderID>?~,YESNO ) != YES )
+			{ return FALSE; }
+	}
+
+	if ( !SimilarStr( ~<ColorType>~,~<AllColorTypesSelected>~ ) )
+	{
+		Cmd = ~<Cmd>~ + ~ And ( <ColorType> )~;
+	}
+
+	EditDialog( SetStatus,1,~Updating ....~ );
+
+	if !ADO( dbase,Connect,BeginTransaction,Cmd,~<Cmd>~ )
+	{
+		dBase( GetErrorDescription,theErr,RollBackTransaction );
+		return EditDialog( SetStatus,0,Translate( ~Cmd Failed.  <Cmd>.  <theErr>~ ) );
+	}
+
+	if !dbase( CommitTransaction )
+	{
+		dBase( GetErrorDescription,theErr );
+		return EditDialog( SetStatus,0,Translate( ~CommitTransaction Failed.  <Cmd>.  <theErr>~ ) );
+	}
+
+
+	ResetDeltas();
+
+	return EditDialog( SetStatus,1,~Updating Complete~ );
+}
+
+
+NUMERIC OnSetButton( Variable,DatabaseField )
+{
+	EditDialog( GetInput,GetStrings,OrderID,OrderID,Roll,Roll,AllRolls,AllRolls );
+
+	if ( IsNULL(~<OrderID>~) )
+	{ 
+		return Warning( Translate( ~You must select an order first~ ) );
+	}
+
+	Value = ~<$con.ImageEditData[<Variable>]>~;
+
+	if ( SimilarStr( ~<Variable>~,~cGamma~ ) )
+	{
+		Value = <Value> + 1;
+	}
+
+	ColorType = GetColorTypeClause();
+	if ( SimilarStr( ~<ColorType>~,~<NoColorTypesSelected>~ ) )
+	{
+		return Warning( Translate( ~You must select one or more image color types to apply the corrections to.~ ) );
+	}
+
+	Fields = ~<DatabaseField>=<Value>,Changed=1~;
+
+	Cmd = ~Update Images Set <Fields> Where OrderID = '<OrderID>'~;
+
+	Explain = ~This will set every field in the database to the values you have selected.\n\n~;
+
+	if ( !<AllRolls> )
+	{
+		if ( IsNULL(~<Roll>~) )
+		{ 
+			return Warning( Translate( ~You must select a Roll first~ ) );
+		}
+
+		if ( MessageBox( ~Are you sure you want to set <DatabaseField> to <Value> for every image with the selected color type(s) in Roll <Roll> of Order <OrderID>?~,YESNO ) != YES )
+			{ return FALSE; }
+
+		Cmd = ~<Cmd> AND Roll = '<Roll>'~;
+	}
+	else
+	{
+		if ( MessageBox( ~Are you sure you want to set <DatabaseField> to <Value> for every image with the selected color type(s) in Order <OrderID>?~,YESNO ) != YES )
+			{ return FALSE; }
+	}
+
+	if ( !SimilarStr( ~<ColorType>~,~<AllColorTypesSelected>~ ) )
+	{
+		Cmd = ~<Cmd>~ + ~ And ( <ColorType> )~;
+	}
+
+	EditDialog( SetStatus,1,~Updating ....~ );
+
+	if !ADO( dbase,Connect,BeginTransaction,Cmd,~<Cmd>~ )
+	{
+		dBase( GetErrorDescription,theErr,RollBackTransaction );
+		return EditDialog( SetStatus,0,Translate( ~Cmd Failed.  <Cmd>.  <theErr>~ ) );
+	}
+
+	if !dbase( CommitTransaction )
+	{
+		dBase( GetErrorDescription,theErr );
+		return EditDialog( SetStatus,0,Translate( ~CommitTransaction Failed.  <Cmd>.  <theErr>~ ) );
+	}
+
+	return EditDialog( SetStatus,1,~Updating Complete~ );
+}
+
+
+NUMERIC SetImageEdits()
+{
+	EditDialog( GetInput,GetStrings,OrderID,OrderID,Roll,Roll,AllRolls,AllRolls );
+
+	if ( IsNULL(~<OrderID>~) )
+	{ 
+		return Warning( Translate( ~You must select an order first~ ) );
+	}
+
+	ColorType = GetColorTypeClause();
+	if ( SimilarStr( ~<ColorType>~,~<NoColorTypesSelected>~ ) )
+	{
+		return Warning( Translate( ~You must select one or more image color types to apply the corrections to.~ ) );
+	}
+
+	Fields = ~~;
+	rotateValue = ImageEditData(GetNumeric, cRotateFromDisk);
+	if ( <rotateValue> != 0 )
+	{
+		if ( MessageBox( ~The crop values for the images will be reset because the rotate from\ndisk value is not zero.  If you have crop values on these images you\nwill need to redo the crop if you continue with this operation.  Are you\nsure you want to continue?~,YESNO ) != YES )
+		{
+			return FALSE;
+		}
+
+		Fields = ~Brt=<$con.ImageEditData[cDensity]>,Red=<$con.ImageEditData[cRed]>,
+					Grn=<$con.ImageEditData[cGreen]>,Blu=<$con.ImageEditData[cBlue]>,
+					Con=<$con.ImageEditData[cContrast]>,Saturation=<$con.ImageEditData[cSaturation]>,
+					Sharpen=<$con.ImageEditData[cSharpen]>,Gamma=<$con.ImageEditData[cGamma]>+1,
+					RotateFromDisk=<$con.ImageEditData[cRotateFromDisk]>,
+					ArbitraryRotation=<$con.ImageEditData[cArbitraryRotation]>,
+					CropX=50.0,
+					CropY=50.0,
+					CropWidth=100.0,
+					CropLength=100.0,Changed=1~;
+	}
+	else
+	{
+		Fields = ~Brt=<$con.ImageEditData[cDensity]>,Red=<$con.ImageEditData[cRed]>,
+					Grn=<$con.ImageEditData[cGreen]>,Blu=<$con.ImageEditData[cBlue]>,
+					Con=<$con.ImageEditData[cContrast]>,Saturation=<$con.ImageEditData[cSaturation]>,
+					Sharpen=<$con.ImageEditData[cSharpen]>,Gamma=<$con.ImageEditData[cGamma]>+1,
+					RotateFromDisk=<$con.ImageEditData[cRotateFromDisk]>,
+					ArbitraryRotation=<$con.ImageEditData[cArbitraryRotation]>,Changed=1~;
+	}
+
+	Cmd = ~Update Images Set <Fields> Where OrderID = '<OrderID>'~;
+
+	Explain = ~This will set every field to the values you have selected.\n\n~;
+
+	if ( !<AllRolls> )
+	{
+		if ( IsNULL(~<Roll>~) )
+		{ 
+			return Warning( Translate( ~You must select a Roll first~ ) );
+		}
+
+		if ( MessageBox( ~<Explain> Are you sure you want to update every image for the selected color type(s) in Roll <Roll> of Order <OrderID>?~,YESNO ) != YES )
+			{ return FALSE; }
+
+		Cmd = ~<Cmd> AND Roll = '<Roll>'~;
+	}
+	else
+	{
+		if ( MessageBox( ~<Explain> Are you sure you want to update every image for the selected color type(s) in all Rolls of Order <OrderID>?~,YESNO ) != YES )
+			{ return FALSE; }	
+	}
+
+	if ( !SimilarStr( ~<ColorType>~,~<AllColorTypesSelected>~ ) )
+	{
+		Cmd = ~<Cmd>~ + ~ And ( <ColorType> )~;
+	}
+
+	EditDialog( SetStatus,1,~Updating ....~ );
+
+	if !ADO( dbase,Connect,BeginTransaction,Cmd,~<Cmd>~ )
+	{
+		dBase( GetErrorDescription,theErr,RollBackTransaction );
+		return EditDialog( SetStatus,0,Translate( ~Cmd Failed.  <Cmd>.  <theErr>~ ) );
+	}
+
+	if !dbase( CommitTransaction )
+	{
+		dBase( GetErrorDescription,theErr );
+		return EditDialog( SetStatus,0,Translate( ~CommitTransaction Failed.  <Cmd>.  <theErr>~ ) );
+	}
+
+	return EditDialog( SetStatus,1,~Updating Complete~ );
+}
+
+
+
+VOID DelayedNotifyAffectedDocuments()
+{
+	KillTimer( 15 );
+	ImageCorrections( RequeryAll );
+	//ImageEditData( NotifyAffectedDocuments,~OrderID Roll Frame~ );
+	EditDialog( SetStatus,1,~Refreshing other windows~ );
+}
+
+
+VOID ResetDeltas()
+{
+	ImageEditData( SetValues,cDensity,0,cRed,0,cGreen,0,cBlue,0,cContrast,0,cGamma,0.0,cSaturation,0,cArbitraryRotation,0.0,cRotateFromDisk,0 );
+	ImageEditData( SetValues,cCropX,50,cCropY,50,cCropWidth,100,cCropLength,100 );
+	ImageEditData( SetValues,cSharpen,0 );
+	
+	EditDialog( Update );
+}
+
+
+NUMERIC ResetImageEdits()
+{
+	EditDialog( GetInput,GetStrings,OrderID,OrderID,Roll,Roll,AllRolls,AllRolls );
+
+	if ( IsNULL(~<OrderID>~) )
+	{ 
+		return Warning( Translate( ~You must select an order first~ ) );
+	}
+
+	ColorType = GetColorTypeClause();
+	if ( SimilarStr( ~<ColorType>~,~<NoColorTypesSelected>~ ) )
+	{
+		return Warning( Translate( ~You must select one or more image color types to apply the corrections to.~ ) );
+	}
+
+	Fields = ~Brt=0,Red=0,Grn=0,Blu=0,Con=0,Saturation=0,Sharpen=0,Gamma=1.0,RotateFromDisk = 0,ArbitraryRotation=0,Changed=1~;
+
+	Cmd = ~Update Images Set <Fields> Where OrderID = '<OrderID>'~;
+
+	if ( !<AllRolls> )
+	{
+		if ( IsNULL(~<Roll>~) )
+		{ 
+			return Warning( Translate( ~You must select a Roll first~ ) );
+		}
+
+		if ( MessageBox( ~Are you sure you want to forget all current and previous changes for every image with the selected color type(s) in Roll <Roll> of Order <OrderID>?~,YESNO ) != YES )
+			{ return FALSE; }
+
+		Cmd = ~<Cmd> AND Roll = '<Roll>'~;
+	}
+	else
+	{
+		if ( MessageBox( ~Are you sure you want to forget all current and previous changes for every image with the selected color type(s) in Order <OrderID>?~,YESNO ) != YES )
+			{ return FALSE; }
+	}
+
+	if ( !SimilarStr( ~<ColorType>~,~<AllColorTypesSelected>~ ) )
+	{
+		Cmd = ~<Cmd>~ + ~ And ( <ColorType> )~;
+	}
+
+	EditDialog( SetStatus,1,~Resetting ....~ );
+
+	if !ADO( dbase,Connect,BeginTransaction,Cmd,~<Cmd>~ )
+	{
+		dBase( GetErrorDescription,theErr,RollBackTransaction );
+		return EditDialog( SetStatus,0,Translate( ~Cmd Failed.  <Cmd>.  <theErr>~ ) );
+	}
+
+	if !dbase( CommitTransaction )
+	{
+		dBase( GetErrorDescription,theErr );
+		return EditDialog( SetStatus,0,Translate( ~CommitTransaction Failed.  <Cmd>.  <theErr>~ ) );
+	}
+
+	ResetDeltas();
+
+	return EditDialog( SetStatus,1,~Reset Complete~ );
+}
+
+
+// OnKeyDown is only executed when a control is not in focus to accept the keystroke.  In this case,
+// the dialog accepts the key and calls this routine. PDF 10/6/00
+NUMERIC ControlAction( which)
+{
+	return EditDialog( TriggerControlActions , <which>, DActionsText );
+}
+
+NUMERIC OnKeyDown()
+{
+	Key = EditDialog(GetLastKey, Keyname);
+
+	OnSimilarStr( ~<Keyname>~, 
+		~w~, ~ControlAction(RotateCCWButton)~, 
+		~-~, ~ControlAction(MinusButton)~,
+		~+~, ~ControlAction(PlusButton)~,
+		~*~, ~ControlAction(AsterickButton)~,
+		~.~, ~ControlAction(NumPeriodButton)~,
+		~1~, ~ControlAction(Num1Button)~,
+		~2~, ~ControlAction(Num2Button)~,
+		~3~, ~ControlAction(Num3Button)~,
+		~4~, ~ControlAction(Num4Button)~,
+		~5~, ~ControlAction(Num5Button)~,
+		~6~, ~ControlAction(Num6Button)~,
+		~7~, ~ControlAction(Num7Button)~,
+		~8~, ~ControlAction(Num8Button)~,
+		~9~, ~ControlAction(Num9Button)~,
+		~0~, ~ControlAction(Num0Button)~,
+		~d~, ~ControlAction(cDensityPrompt)~,
+		~r~, ~ControlAction(cRedPrompt)~,
+		~g~, ~ControlAction(cGreenPrompt)~,
+		~b~, ~ControlAction(cBluePrompt)~,
+		~t~, ~ControlAction(cContrastPrompt)~,
+		~m~, ~ControlAction(cGammaPrompt)~,
+		~u~, ~ControlAction(cSaturationPrompt)~,
+		~h~, ~ControlAction(cSharpenPrompt)~,
+		~a~, ~ControlAction(cArbitraryRotationPrompt)~,
+		~/~, ~ControlAction(ForwardSlashButton)~
+		);
+
+	return TRUE;
+}
+
+VOID SetImageColorTypeCheckBoxes()
+{
+	EditDialog( SetCheck,TRUE,AllImagesBox,ColorImagesBox,BWImagesBox,BWImagesSpotColorBox,
+			SepiaImagesBox,SepiaImagesSpotColorBox );
+}
+
+VOID SetImageColorTypeComboBox()
+{
+	StringList( ChoiceList,New,InListOrder,AddStrings,
+		~All Images~,~Color Images~,~BW Images~,~BW Images With Spot Color~,~Sepia Images~,~Sepia Images With Spot Color~ );
+
+	EditDialog( SetControlFromStringList,ApplyCorrectionsComboBox,ChoiceList,Selection );
+}
+
+VOID OnAllImagesBox()
+{
+	EditDialog( GetControlValue,AllImagesBox,AllImages);
+
+	if ( <AllImages> )
+	{
+		EditDialog( SetCheck,TRUE,ColorImagesBox,BWImagesBox,BWImagesSpotColorBox,
+			SepiaImagesBox,SepiaImagesSpotColorBox );
+	}
+	else
+	{
+		EditDialog( SetCheck,FALSE,ColorImagesBox,BWImagesBox,BWImagesSpotColorBox,
+			SepiaImagesBox,SepiaImagesSpotColorBox );
+	}
+}
+
+VOID OnColorImagesBox()
+{
+	EditDialog( GetControlValue,ColorImagesBox,ColorImages);
+
+	if ( <ColorImages> )
+	{
+		EditDialog( GetControlValue,BWImagesBox,BWImages);
+		EditDialog( GetControlValue,BWImagesSpotColorBox,BWImagesSpotColor);
+		EditDialog( GetControlValue,SepiaImagesBox,SepiaImages);
+		EditDialog( GetControlValue,SepiaImagesSpotColorBox,SepiaImagesSpotColor);
+
+		if ( <BWImages> && <BWImagesSpotColor> && <SepiaImages> && <SepiaImagesSpotColor> )
+		{
+			EditDialog( SetCheck,TRUE,AllImagesBox );
+		}
+	}
+	else
+	{
+		EditDialog( SetCheck,FALSE,AllImagesBox );
+	}
+}
+
+VOID OnBWImagesBox()
+{
+	EditDialog( GetControlValue,BWImagesBox,BWImages);
+
+	if ( <BWImages> )
+	{
+		EditDialog( GetControlValue,ColorImagesBox,ColorImages);
+		EditDialog( GetControlValue,BWImagesSpotColorBox,BWImagesSpotColor);
+		EditDialog( GetControlValue,SepiaImagesBox,SepiaImages);
+		EditDialog( GetControlValue,SepiaImagesSpotColorBox,SepiaImagesSpotColor);
+
+		if ( <ColorImages> && <BWImagesSpotColor> && <SepiaImages> && <SepiaImagesSpotColor> )
+		{
+			EditDialog( SetCheck,TRUE,AllImagesBox );
+		}
+	}
+	else
+	{
+		EditDialog( SetCheck,FALSE,AllImagesBox );
+	}
+}
+
+VOID OnBWImagesSpotColorBox()
+{
+	EditDialog( GetControlValue,BWImagesSpotColorBox,BWImagesSpotColor);
+
+	if ( <BWImagesSpotColor> )
+	{
+		EditDialog( GetControlValue,ColorImagesBox,ColorImages);
+		EditDialog( GetControlValue,BWImagesBox,BWImages);
+		EditDialog( GetControlValue,SepiaImagesBox,SepiaImages);
+		EditDialog( GetControlValue,SepiaImagesSpotColorBox,SepiaImagesSpotColor);
+
+		if ( <ColorImages> && <BWImages> && <SepiaImages> && <SepiaImagesSpotColor> )
+		{
+			EditDialog( SetCheck,TRUE,AllImagesBox );
+		}
+	}
+	else
+	{
+		EditDialog( SetCheck,FALSE,AllImagesBox );
+	}
+}
+
+VOID OnSepiaImagesBox()
+{
+	EditDialog( GetControlValue,SepiaImagesBox,SepiaImages);
+
+	if ( <SepiaImages> )
+	{
+		EditDialog( GetControlValue,ColorImagesBox,ColorImages);
+		EditDialog( GetControlValue,BWImagesBox,BWImages);
+		EditDialog( GetControlValue,BWImagesSpotColorBox,BWImagesSpotColor);
+		EditDialog( GetControlValue,SepiaImagesSpotColorBox,SepiaImagesSpotColor);
+
+		if ( <ColorImages> && <BWImages> && <BWImagesSpotColor> && <SepiaImagesSpotColor> )
+		{
+			EditDialog( SetCheck,TRUE,AllImagesBox );
+		}
+	}
+	else
+	{
+		EditDialog( SetCheck,FALSE,AllImagesBox );
+	}
+}
+
+VOID OnSepiaImagesSpotColorBox()
+{
+	EditDialog( GetControlValue,SepiaImagesSpotColorBox,SepiaImagesSpotColor);
+
+	if ( <SepiaImagesSpotColor> )
+	{
+		EditDialog( GetControlValue,ColorImagesBox,ColorImages);
+		EditDialog( GetControlValue,BWImagesBox,BWImages);
+		EditDialog( GetControlValue,BWImagesSpotColorBox,BWImagesSpotColor);
+		EditDialog( GetControlValue,SepiaImagesBox,SepiaImages);
+
+		if ( <ColorImages> && <BWImages> && <BWImagesSpotColor> && <SepiaImages> )
+		{
+			EditDialog( SetCheck,TRUE,AllImagesBox );
+		}
+	}
+	else
+	{
+		EditDialog( SetCheck,FALSE,AllImagesBox );
+	}
+}
+
+STR GetColorTypeClause( ColorType )
+{
+	ColorType = ~~;
+
+	AllImages = 0;
+	ColorImages = 0;
+	BWImages = 0;
+	BWImagesSpotColor = 0;
+	SepiaImages = 0;
+	SepiaImagesSpotColor = 0;
+
+	if ( <UseColorTypeCheckBoxes> )
+	{
+		EditDialog( GetControlValue,AllImagesBox,AllImages);
+		EditDialog( GetControlValue,ColorImagesBox,ColorImages);
+		EditDialog( GetControlValue,BWImagesBox,BWImages);
+		EditDialog( GetControlValue,BWImagesSpotColorBox,BWImagesSpotColor);
+		EditDialog( GetControlValue,SepiaImagesBox,SepiaImages);
+		EditDialog( GetControlValue,SepiaImagesSpotColorBox,SepiaImagesSpotColor);
+	}
+	else
+	{
+		EditDialog( GetControlValue,ApplyCorrectionsComboBox,ApplyCorrectionsColorType);
+		if ( SimilarStr( ~<ApplyCorrectionsColorType>~,~All Images~ ) )
+		{
+			AllImages = 1;
+		}
+		else if ( SimilarStr( ~<ApplyCorrectionsColorType>~,~Color Images~ ) )
+		{
+			ColorImages = 1;
+		}
+		else if ( SimilarStr( ~<ApplyCorrectionsColorType>~,~BW Images~ ) )
+		{
+			BWImages = 1;
+		}
+		else if ( SimilarStr( ~<ApplyCorrectionsColorType>~,~BW Images With Spot Color~ ) )
+		{
+			BWImagesSpotColor = 1;
+		}
+		else if ( SimilarStr( ~<ApplyCorrectionsColorType>~,~Sepia Images~ ) )
+		{
+			SepiaImages = 1;
+		}
+		else if ( SimilarStr( ~<ApplyCorrectionsColorType>~,~Sepia Images With Spot Color~ ) )
+		{
+			SepiaImagesSpotColor = 1;
+		}
+	}
+
+	if ( !<AllImages> && !<ColorImages> && !<BWImages> &&
+		 !<BWImagesSpotColor> && !<SepiaImages> && !<SepiaImagesSpotColor> )
+	{
+		return ~<NoColorTypesSelected>~;
+	}
+
+	if ( <AllImages> ||
+		 ( <ColorImages> && <BWImages> && <BWImagesSpotColor> && <SepiaImages> && <SepiaImagesSpotColor> ) )
+	{
+		return ~<AllColorTypesSelected>~;
+	}
+
+	FirstOne = TRUE;
+	if ( <ColorImages> )
+	{
+		ColorType = ~ColorType = 1~;
+		FirstOne = FALSE;
+	}
+
+	if ( <BWImages> )
+	{
+		if ( <FirstOne> )
+		{
+			ColorType = ~ColorType = 2~;
+			FirstOne = FALSE;
+		}
+		else
+		{
+			ColorType = ~<ColorType>~ + ~ Or ColorType = 2~;
+		}
+	}
+
+	if ( <BWImagesSpotColor> )
+	{
+		if ( <FirstOne> )
+		{
+			ColorType = ~ColorType = 3~;
+			FirstOne = FALSE;
+		}
+		else
+		{
+			ColorType = ~<ColorType>~ + ~ Or ColorType = 3~;
+		}
+	}
+
+	if ( <SepiaImages> )
+	{
+		if ( <FirstOne> )
+		{
+			ColorType = ~ColorType = 4~;
+			FirstOne = FALSE;
+		}
+		else
+		{
+			ColorType = ~<ColorType>~ + ~ Or ColorType = 4~;
+		}
+	}
+
+	if ( <SepiaImagesSpotColor> )
+	{
+		if ( <FirstOne> )
+		{
+			ColorType = ~ColorType = 5~;
+			FirstOne = FALSE;
+		}
+		else
+		{
+			ColorType = ~<ColorType>~ + ~ Or ColorType = 5~;
+		}
+	}
+
+	return ~<ColorType>~;
+}
+
+
+VOID CloseImageEditDialog()
+{
+	EditDialog( End );
+
+	Keyboard( UnHook,AllowNumlock );
+
+	Exit();
+}
+
+
+VOID EditImages()	// BRINGS UP THE DIALOG 
+{
+	if ((~<$App.Name>~ !=~DP1.exe~) && (!GetUserPermissions( ImageEditing ) ))
+	{
+		Warning( Translate( ~You don't have permission to edit images.  See your administrator~ ) );
+		Exit();
+	}
+
+	if ( !Defined(EditDialog) )
+	{
+		GenDlg( EditDialog,Definition,ImageEditDialog,Data,ImageEditData,Document,$Doc.This,New,Temporary );
+		Global( EditDialog );
+
+		if ( <UseColorTypeCheckBoxes> )
+		{
+            SetImageColorTypeCheckBoxes();
+		}
+		else
+		{
+            SetImageColorTypeComboBox();
+		}
+	}
+}
+
+VOID ReOpen()
+{
+	EditDialog( SetWindowOrder,Top,SetFocus );
+}
+
+
+DefineImageEditDialog();
+
+EditImages();
+
+Keyboard( Hook,NoNumlock,NumlockSubstitute,0x44 );
+
+
+
+
+

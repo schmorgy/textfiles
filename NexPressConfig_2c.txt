@@ -1,0 +1,229 @@
+// 
+
+ExecC() ;
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+
+
+// GLOBALS
+UGenCon	*gDataGC ;	//	DIALOG DATA
+UGenCon	*gDlgDef ;	//	DIALOG DEFINITION
+UGenDlg	*gDlg ;		//	THE ACTUAL DIALOG
+
+CIThread	*gThread ;		//	THE WORKING THREAD
+
+int	gClosed = FALSE ;		//	HAS THE DIALOG BEEN CLOSED ?
+
+int	gDebug = TRUE ;
+
+main()
+{
+	Debug(0) ;
+}
+
+SetDialogData(UGenCon *LocalGC, char *Dlg, UGenCon *DlgDef)
+{
+	Debug(0) ;
+	gDataGC	= LocalGC ;
+	gDlg	= Dlg ;
+	gDlgDef	= DlgDef ;
+
+}
+
+void Close()
+{
+
+	Debug(0) ;
+	if( gClosed ) { return ; }
+
+	HandleActions(_T("[Doc(OrderItemsDoc \"UpdateListOfTemplates();\")]"));
+
+	if( gDataGC )
+	{
+		UList	*theChildren = gDataGC->GetChildren() ;
+		if( theChildren )
+		{
+			//	THEN THE THREAD IS STILL RUNNING
+			if( gThread )
+			{
+				gThread->PostThreadMessage( WM_QUIT, 0L, 0L ) ;
+			}
+
+			long	StartTime = Clock() ;
+			long	EndTime = StartTime ;
+
+			while( theChildren )
+			{
+				Sleep(250) ;
+				EndTime = Clock() ;
+				if( EndTime - StartTime > 10000 )
+				{
+					break ;
+				}
+				theChildren = gDataGC->GetChildren() ;
+			}
+		}
+	}
+
+	CloseDialog(gDlg) ;
+	gClosed = TRUE ;
+	if( gDataGC ) { delete gDataGC ; }
+	gDataGC = NULL ;
+
+}
+
+void term()
+{
+	Debug(0) ;
+	Close() ;
+}
+
+
+
+
+			//	START-UP THREAD
+
+int	StartThread()
+{
+	TCHAR		 FileName[2048] ;
+	//TCHAR		*ExeDirectory = GetExeDirectory() ;
+
+	if( gDataGC->GetChildren())
+	{
+		//	THE THREAD IS ALREADY RUNNING
+		return( FALSE ) ;
+	}
+
+	TCHAR	*ShareDirectory = GetShareDirectory() ;
+	
+	sprintf( FileName, _T("%s\\TextFiles\\NexPressConfig_2c.txt"), ShareDirectory ) ;
+
+	//strcpy( FileName, _T("S:\\APPSV2\\Apps\\Exe\\TextFiles\\NexPressConfig_2c.txt") ) ;
+
+	CIThread	*theThread = new CIThread ;
+	int		Result = theThread->Setup(FileName, NULL, -2L, 2000L, gDataGC ) ;//timer every 2 sec
+	if( Result == FALSE )
+	{
+		delete theThread ;
+		return( FALSE ) ;
+	}
+
+	gThread = theThread ;
+
+	UGenCon *aGC = new UGenCon( GetDataDictionary( _T("DDLong"))) ;
+	if( aGC )
+	{
+		aGC->SetLongValue(_T("Long"), (long) theThread ) ;
+		gDataGC->AddChildBack(aGC) ;
+	}
+
+	//	PASS THE DIALOG GENCON
+	theThread->PostThreadMessage( 0x9000, 0L, (long) gDataGC ) ;
+
+	//	PASS THE DIALOG WINDOW
+	theThread->PostThreadMessage( 0x9001, 0L, (long) gDlg ) ;
+
+	//	START THE WORK
+	theThread->PostThreadMessage( 0x9002, 0L, 0L ) ;
+
+	return( TRUE ) ;
+}
+
+
+
+			//	THREADING CODE
+
+
+CIThread	*gThisThread ;
+int			WM_QUIT  = 0x0012 ;
+int			WM_TIMER = 0x0113 ;
+
+int			gWorkState = 0L ;		//	FOR FINITE STATE MACHINE
+
+int InitInstance(CIThread *ThisThread)
+{
+	//	START THE THREAD HERE !
+	gThisThread = ThisThread ;
+	return( TRUE ) ;
+}
+
+int OnIdle( long Count )
+{
+	printf( _T("%ld\n"), Count ) ;
+	return( Count ) ;
+}
+
+int ExitInstance()
+{
+	if( gDataGC )
+	{
+		gDataGC->SetLongValue(_T("ThreadExit"), WM_QUIT ) ;
+		UList	*theChildren = gDataGC->GetChildren() ;
+		if( theChildren )
+		{
+			gDataGC->SetChildren(NULL) ;
+			delete theChildren ;
+		}
+	}
+}
+
+int PreTranslateMessage( UGenCon *pMsg)
+{
+	long		Result = FALSE ;
+	long		Value ;
+
+	long		Message = pMsg->GetLongValue(_T("Message")) ;
+	long		wParam  = pMsg->GetLongValue(_T("wParam"))  ;
+	long		lParam  = pMsg->GetLongValue(_T("lParam"))  ;
+
+	TCHAR tmp[2048];
+
+	switch( Message )
+	{
+		case		WM_TIMER	:	//	HANDLE TIMER CODE
+			break ;
+
+		case		0x9000		:	//	SET DATA GENCON
+			gDataGC = lParam ;
+			break ;
+
+		case		0x9001		:	//	SET DIALOG GENCON
+			gDlg = lParam ;
+			break ;
+
+		case		0x9002		:	//	
+			break ;
+
+		case		0x9003		:	//	DO YOUR WORK
+			//call my funcs in _2.h
+			int sts = SendXML();
+			if(sts == 1)
+			{//sent xml request ok, so wait for reply
+				gThisThread->PostThreadMessage( 0x9004, 0L, 0L ) ; //wait for xml
+			}
+			break ;
+
+		case		0x9004		:	//	DO YOUR WORK etc.
+			int reply = WaitForXML();
+			int found = gDataGC->GetLongValue( _T("Found")) ;
+
+			if( found == FALSE)
+			{
+				Sleep(2000);
+				gThisThread->PostThreadMessage( 0x9004, 0L, 0L ) ; //look again for xml from NexPress
+			}
+			break ;
+
+		case		0x9005		:	//	DO YOUR WORK
+			break ;
+
+	}
+
+	return( wParam ) ;
+}
+
+#include "[S]\\TextFiles\\NexPressConfig_2h.txt"
+
+

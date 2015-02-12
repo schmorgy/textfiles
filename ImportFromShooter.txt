@@ -1,0 +1,1660 @@
+
+Include: ~UtilityRoutines~;
+Include: ~Utilities2~;
+
+VOID ReOpen()
+{
+}
+
+StringList( ImportedOrdersList,New,NoDuplicateValues );	// WILL HOLD THE LIST OF ORDERS THAT WERE PROCESSED
+
+Include: ~FormattingRoutines~;
+Include: ~UtilityRoutines~;
+
+
+ScanNone = 0; ScanAll = 1; ScanIfPackage = 2; ScanIfSpecificPackage = 3;
+
+
+Processing = FALSE;
+PunchNumber = 1;
+		
+// THE FOLLOWING ROUTINE RUNS ON A THREAD.  THEREFORE YOU CAN'T DO USER INTERFACE UPDATES DIRECTLY
+
+NUMERIC ImportFrom( Vendor,InPath,ImportPackages,ImportFrames,AllowDefaultOrder,AllowDefaultRoll,AllowDefaultFrame,UseFilenameForOrder )	
+{
+	Stopping = FALSE;
+
+	ResetRollSequence();
+	ResetOrderSequence();
+	BatchID = UniqueBatchID();
+
+	PunchNumber = 1;
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,~Error connecting to the shared database: <theErr>~ );
+		return FALSE;
+	}
+
+	Query = ~Select * From FilmTypes~;
+
+	if ( !PGenConList( FilmTypesList,Connection,dBase,Cursor,Static,Query,~<Query>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,~Error querying the Film Types <theErr>~ );
+		return FALSE;
+	}
+
+	if ( !File( DataFile,OPEN,~<InPath>~,READ ) )			
+	{ 
+		Invoke( ShowWarning,Translate(~Could not open <InPath>~) );
+		return FALSE;
+	}
+
+	//if ( !Datafile( Seek,-150,End ) )
+	//{
+	//	Invoke( ShowWarning,Translate(~Failed to seek to near the last record~) );
+	//	return FALSE;
+	//}
+
+	Log( Session,Translate(~ImportFromShooter: Processing <InPath>~) );
+
+	LastRecord = ~~;  TotalRecords = 0;
+
+	while ( Datafile( ReadString,PotentialLastRecord ) )
+	{
+		if ( strlen( ~<PotentialLastRecord>~ ) > 59 )
+		{
+			LastRecord = ~<PotentialLastRecord>~ ;
+			++TotalRecords;
+		}
+	}
+
+	if ( ~<LastRecord>~ == ~~ )
+	{
+		Invoke( ShowWarning,Translate(~Failed to find the last record in the file~) );
+		return FALSE;
+	}
+
+	if ( Datafile( Seek,0,Begin ) != 0 )
+	{
+		Invoke( ShowWarning,Translate(~Failed to seek to the start of the file~) );
+		return FALSE;
+	}
+
+	if ( !Datafile( ReadString,Record ) )
+	{
+		Invoke( ShowWarning,Translate(~No control record in <InPath>~) );
+		return FALSE;
+	}
+
+	if ( strlen( ~<Record>~ ) != 24 )
+	{
+		Invoke( ShowWarning,Translate(~Control record is invalid in <InPath>\n\n<Record>~) );
+		return FALSE;
+	}
+
+	DefaultOrderID = ~<$Str.$InPath.FileName.WithoutExt>~;
+
+	if ( IsNumeric( ~<DefaultOrderID>~ ) )
+	{
+		DefaultOrderID = Format( ~<DefaultOrderID>~,~%06ld~ );
+	}
+
+	DefaultRoll = ~000001~;
+
+	GenCon( ControlRecord,New,DDHicksShooterControl,SetRecord,~<Record>~ );
+
+	Invoke( ShowProgress,Translate( ~Reading control records ...~ ) );
+
+	GenCon( PackageList,New,DDLong );	// WILL HOLD THE LIST OF 99 PACKAGES
+
+	Invoke( ShowProgress,Translate( ~Reading package records ...~ ) );
+
+	count = 0;
+	while ( <++count> <= 99 )
+	{
+		if ( <Stopping> )
+		{
+			return FALSE;
+		}
+
+		if ( !Datafile( ReadString,Record ) )
+		{
+			Invoke( ShowWarning,Translate( ~File is corrupted.  Only found <count> Package records~ ) );
+			return FALSE;
+		}
+
+		if ( strlen( ~<Record>~ ) < 22 )
+		{
+			Invoke( ShowWarning,Translate(~Package record <count> is invalid in <InPath>\n\n<Record>~) );
+			return FALSE;
+		}
+
+		GenCon( PackageRecord<count>,New,DDShooterPackages,SetRecord,~<Record>~ );		
+		PackageList( InsertBack,PackageRecord<count> );
+		ForgetLocal( PackageRecord<count> );
+	}
+
+	GenCon( Rec,New,DDHicksShooterFrames );
+
+	PackagesCreated = FramesImported = RecordsRead = count = 0;
+
+	Invoke( ShowProgress,Translate( ~Processing Frames~ ) );
+
+	RecordsProcessed = 0;
+
+	while ( (<++count> <= 999) && !<Stopping> && Datafile( ReadString,Record ) )
+	{
+		++RecordsRead;
+
+		if ( strlen( ~<Record>~ ) < 62 )
+		{
+			reclen = strlen( ~<Record>~ );
+			Log( Session,Translate(~ImportFromShooter (<InPath>): Skipping record <count> because the length of the record is <reclen> which is less than 62. <Record>~) );
+			continue;
+		}
+
+		if ( (~<Record>~ == ~<LastRecord>~)  && (<TotalRecords> >= 998) )
+		{
+			Log( Session,Translate(~ImportFromShooter (<InPath>): Stopping at record <count> because it matches the null record.~) );
+			break;
+		}
+
+		++RecordsProcessed;
+
+		Rec( SetRecord,~<Record>~ );
+
+		if ( Rec(GetNumeric,Frame) == 0 )
+		{
+			if ( !<AllowDefaultFrame> )
+					continue;
+
+			Rec( Set,Frame,Format( <count>,~%03ld~ ) );
+		}
+		else
+		{
+			Rec( Set,Frame,Format( Rec(GetNumeric,Frame),~%03ld~ ) );
+		}
+
+		if ( <UseFilenameForOrder> )
+		{
+			Rec( Set,OrderID,~<DefaultOrderID>~ );
+		}
+		else if ( Rec(GetNumeric,OrderID) == 0 )
+		{
+			if ( !<AllowDefaultOrder> )
+				continue;
+
+			Rec( Set,OrderID,~<DefaultOrderID>~ );
+		}
+
+		if ( Rec(GetNumeric,Roll) == 0 )
+		{
+			if ( !<AllowDefaultRoll> )
+				continue;
+
+			Rec( Set,Roll,~<DefaultRoll>~ );
+		}
+
+		ImportedOrdersList( AddString,~<$con.Rec[OrderID]>~ );
+
+		if ( <ImportFrames> )
+		{
+			if ( !SaveFrameInfo( dBase,Rec,FilmTypesList,~<BatchID>~ ) )
+				break;
+
+			++FramesImported;
+		}
+	
+		if ( !<ImportPackages> )
+			continue;
+		
+		if ( !MakePackageProducts( dBase,Rec,PackageList ) )
+			break;
+
+		if ( !MakeAlaCarteProducts( dBase,Rec ) )
+			break;
+
+		++PackagesCreated;
+	}
+
+	FixupBatchID(dBase);
+
+	Log( Session,Translate(~ImportFromShooter: Finished   <InPath>.  Processed <RecordsProcessed> of <TotalRecords> Images~) );
+	Invoke( ShowCurrentFile,Translate( ~Last file was <InPath>.  Read <RecordsRead> frame records. Processed <FramesImported> frames.~ ) );
+
+	return TRUE;
+}
+
+
+LastRoll = ~~;
+LastRollSequence = 0;
+LastOrder = ~~;
+LastOrderSequence = 0;
+
+VOID ResetRollSequence()
+{
+	LastRoll = ~~;
+	LastRollSequence = 0;
+}
+
+VOID ResetOrderSequence()
+{
+	LastOrder = ~~;
+	LastOrderSequence = 0;
+}
+
+
+VOID FixupBatchID( &dBase ) // Clear the BatchID if there was only one Order and one Roll
+{
+	if ( (<LastOrderSequence> == 1) && (<LastRollSequence> == 1) && ~<LastOrder>~ != ~~ )
+	{
+		Cmd = ~Update Orders Set BatchID = '' Where ID = '<LastOrder>' ~;
+
+		dBase( Cmd,~<Cmd>~ );
+	}
+}
+
+
+NUMERIC SaveFrameInfo( &dBase,&Rec,&FilmTypesList,BatchID )
+{
+	NewOrder = FALSE;
+
+	if ( ~<$con.Rec[OrderID]>~ != ~<LastOrder>~ )
+	{
+		++LastOrderSequence;
+		LastOrder = ~<$con.Rec[OrderID]>~;
+		NewOrder = TRUE;
+		ResetRollSequence();  // TBD - Need to ask Cris about this!
+	}
+	
+	if ( <NewOrder> )
+	{
+		if ( !dBase( GetValuesFor,~Select ID From Orders Where ID = '<$con.Rec[OrderID]>'~ ) )
+		{
+			if ( doNewWay() && ShootDescExists( ~<OrderID>~,ShootType) )
+			{
+				Cmd = ~Insert Into Orders(ID,BatchID,BatchSeq,ShootDescID,ShootDescType,OrderDate,ShipDate,Priority) Values('<$con.Rec[OrderID]>','<BatchID>',<LastOrderSequence>,'<$con.Rec[OrderID]>','<ShootType>',<$Date.DataBaseDate.SharedDateQuoted>,<$Date.DataBaseDate.SharedDateQuoted>,50)~;
+			}
+			else
+			{
+				Cmd = ~Insert Into Orders(ID,BatchID,BatchSeq,OrderDate,ShipDate,Priority) Values('<$con.Rec[OrderID]>','<BatchID>',<LastOrderSequence>,<$Date.DataBaseDate.SharedDateQuoted>,<$Date.DataBaseDate.SharedDateQuoted>,50)~;
+			}
+
+			dBase( Cmd,~<Cmd>~ );
+		}
+	}
+
+	FilmType = ~~;  FilmCode = MakeNumber(~<$con.Rec[FilmTypeCode]>~);
+
+	if ( FilmTypesList( Filter,~ID=<FilmCode>~ ) )
+	{
+		if ( FilmTypesList( GetFirst,Item ) )
+		{
+			FilmType = ~<$pcon.Item[FilmType]>~;
+		}
+		else
+		{
+			Invoke( ShowWarning,~You have not setup the FilmTypes table for FilmCode <FilmCode>~ );
+			return FALSE;
+		}
+	}
+
+	NewRoll = FALSE;
+
+	if ( ~<$con.Rec[Roll]>~ != ~<LastRoll>~ )
+	{
+		++LastRollSequence;
+		LastRoll = ~<$con.Rec[Roll]>~;
+		NewRoll = TRUE;
+	}
+
+	if ( <NewRoll> )
+	{
+		if ( !dBase( GetValuesFor,~Select OrderID From Rolls Where OrderID = '<$con.Rec[OrderID]>' AND Roll = '<$con.Rec[Roll]>'~ ) )
+		{
+			Cmd = ~Delete From  Rolls Where OrderID = '<$con.Rec[OrderID]>' AND Roll = '<$con.Rec[Roll]>'~;
+
+			dBase( Cmd,~<Cmd>~ );
+
+			Cmd = ~Insert Into Rolls(OrderID,Roll,BatchSeq) Values('<$con.Rec[OrderID]>','<$con.Rec[Roll]>',<LastRollSequence>)~;
+
+			if ( !dBase( Cmd,~<Cmd>~ ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				Invoke( ShowWarning,~Error update the database. <Cmd>. <theErr>~ );
+				return FALSE;
+			}
+		}
+
+	}
+
+	Key = STR ( OrderID = '<$con.Rec[OrderID]>' AND Roll = '<$con.Rec[Roll]>' AND Frame = '<$con.Rec[Frame]>' );
+
+	if ( DlgData(GetNumeric,UsePunch) )
+	{
+		Rec( Set,Punch,<PunchNumber++> );
+	}
+	else
+	{
+		Rec( Set,Punch,Rec(GetNumeric,Frame) );
+	}
+
+	Rec( Set,FilmType,~<FilmType>~ );
+
+	NeedsScanned = FALSE;
+
+	if ( DlgData(GetNumeric,Scan) == <ScanAll> )
+	{
+		NeedsScanned = TRUE;
+	}
+	else if ( DlgData(GetNumeric,Scan) == <ScanIfPackage> )	
+	{
+		NeedsScanned =  Rec(GetNumeric,Package)  || Rec(GetNumeric,AlaCart1)    || Rec(GetNumeric,AlaCart2) || 
+						Rec(GetNumeric,AlaCart3) || Rec(GetNumeric,AlaCart4)    || Rec(GetNumeric,AlaCart5) ||
+						Rec(GetNumeric,AlaCart6) || Rec(GetNumeric,AlaCart7)    || Rec(GetNumeric,AlaCart8) ||
+						Rec(GetNumeric,AlaCart9) || Rec(GetNumeric,AlaCart10);
+	}
+	else if ( DlgData(GetNumeric,Scan) == <ScanIfSpecificPackage> )	
+	{
+		NeedsScanned =  !IsNull( String( StringInString,~<$con.Rec[Package]>~ , ~<$con.dlgData[ScannablePackages]>~ ) ) ||
+						!IsNull( String( StringInString,~<$con.Rec[AlaCart1]>~, ~<$con.dlgData[ScannablePackages]>~ ) ) ||
+						!IsNull( String( StringInString,~<$con.Rec[AlaCart2]>~, ~<$con.dlgData[ScannablePackages]>~ ) ) ||
+						!IsNull( String( StringInString,~<$con.Rec[AlaCart3]>~, ~<$con.dlgData[ScannablePackages]>~ ) ) ||
+						!IsNull( String( StringInString,~<$con.Rec[AlaCart4]>~, ~<$con.dlgData[ScannablePackages]>~ ) ) ||
+						!IsNull( String( StringInString,~<$con.Rec[AlaCart5]>~, ~<$con.dlgData[ScannablePackages]>~ ) ) ||
+						!IsNull( String( StringInString,~<$con.Rec[AlaCart6]>~, ~<$con.dlgData[ScannablePackages]>~ ) ) ||
+						!IsNull( String( StringInString,~<$con.Rec[AlaCart7]>~, ~<$con.dlgData[ScannablePackages]>~ ) ) ||
+						!IsNull( String( StringInString,~<$con.Rec[AlaCart8]>~, ~<$con.dlgData[ScannablePackages]>~ ) ) ||
+						!IsNull( String( StringInString,~<$con.Rec[AlaCart9]>~, ~<$con.dlgData[ScannablePackages]>~ ) ) ||
+						!IsNull( String( StringInString,~<$con.Rec[AlaCart10]>~,~<$con.dlgData[ScannablePackages]>~ ) );
+	}
+
+	if ( <NeedsScanned> )
+	{
+		Rec( Set,Scan,1 );
+	}
+
+	Rec( Set,LutIndex,0 );
+
+	if ( DlgData(GetNumeric,OnlyImportScanFrames) && !<NeedsScanned> )
+	{
+		return TRUE;
+	}
+
+	if ( !dBase( UpdateTableFrom,Images,Rec,~<Key>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Invoke( ShowWarning,~Error updating the Images table for <Key>. <theErr>~ );
+		return FALSE;
+	}
+
+	Invoke( ShowProgress,Translate( ~Loaded OrderID = '<$con.Rec[OrderID]>', Roll = '<$con.Rec[Roll]>', Frame = '<$con.Rec[Frame]>'~ ) );
+
+	return TRUE;
+}
+
+
+// CONSTRUCT JOBS AND ORDERITEMS FOR THE PACKAGE THAT WAS REQUESTED
+
+NUMERIC MakePackageProducts( &dBase,&Rec,&PackageList )
+{
+	OrderID = ~<$con.Rec.[OrderID]>~;
+	Roll = ~<$con.Rec.[Roll]>~;
+	Frame = ~<$con.Rec.[Frame]>~;
+	Package = ~<$con.Rec.[Package]>~;
+
+	if ( Rec( GetNumeric,Package ) < 0 || Rec( GetNumeric,Package ) > 98 )
+	{
+		Invoke( ShowWarning,Translate( ~Invalid Package <Package>~ ) );
+		return FALSE;
+	}
+
+	if ( !PackageList( GetAt,<Package>,Package ) )
+	{
+		Invoke( ShowWarning,Translate( ~Could not find Package <Package>~ ) );
+		return FALSE;
+	}
+
+	Cnt = 0;
+	while ( <++Cnt> <= 5 )
+	{
+		if ( Package( GetNumeric,Size<Cnt> ) )
+		{
+			if ( !MakeProduct( dBase,~<ProductID>~,~<Qty>~,~<OrderID>~,~<Roll>~,~<Frame>~ ) )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	Cnt = 0;
+	while ( <++Cnt> <= 4 )
+	{
+		if ( Package( GetNumeric,Split<Cnt> ) )
+		{
+			// FOUND ONE WITH A QUANTITY
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC MakeProduct( &dBase,ProductID,Qty,OrderID,Roll,Frame )
+{
+	Query = ~Select * From Products Where ID = '<ProductID>'~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( GetFirst,Product ) )
+	{
+		return Warning( Translate( ~Could not find a product with ID = <ProductID>~ );
+	}
+
+	if ( Product( GetNumeric,Package ) )
+	{
+		return CreateOrderItemsForPackage( dBase,~<ProductID>~,~<OrderID>~ );
+	}
+
+}
+
+
+NUMERIC CreateJobFile( JobPath,LayoutPath,Image )
+{
+	return FALSE;
+}
+
+STR CreateJobForThisProduct( OrderID,Item,LayoutPath,OrderID,Roll,Frame )
+{
+	JobPath = CreateJobPath( ~<OrderID>~,~<Item>~ );
+
+	if ( !File( Job,Open,~<JobPath>~,Create,Write ) )	// CREATE AND OPEN THE JOB
+	{
+		Warning( ~Could not open the job file <theFile>~ );
+		return ~~;
+	}
+
+	//LOOKUPSOFF
+
+	Job( ~FileType: Job~ );
+	Job( ~Use: |<$Product.ProductLayoutPath[<ProductID>]>|~ );
+	Job( ~IL: $Job.IPrompt~ );
+	Job( ~	IFile: |<$Image.PathOfOrderRollFrame['2343','123','432']>|~ );
+	Job( Close );
+
+	//LOOKUPSON
+
+	ProductPreviewPath = MakePreviewPathFromPath( ~<LayoutPath>~,FALSE );
+
+	OrderItemPreviewPath = MakePreviewPathFromPath( ~<JobPath>~,TRUE );
+
+	Files( Delete,~<OrderItemPreviewPath>~ );
+
+	Files( Copy,~<ProductPreviewPath>~,~<OrderItemPreviewPath>~ );
+
+	Log( Session,~Created Job for Order <OrderID>, Item <Item>. Path is <JobPath>~ );
+
+	return ~<JobPath>~;
+}
+
+NUMERIC MakeAlaCarteProducts( &dBase,&Rec )
+{
+	Cnt = 0;
+
+	while ( <++Cnt> <= 10 )
+	{
+		if ( MakeNumber( ~<$con.Rec[<AlaCart<Cnt>>]>~ ) )
+		{
+			// FOUND ONE WITH A QUANTITY
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ShowWarning( Msg )
+{
+	dlgData( Set,Watch,False );
+	dlg( Update );
+	dlg( SetStatus,0,~Importing has been disabled~ );
+	return Warning( ~<Msg>\n\nImporting has been disabled.~ );
+}
+
+
+NUMERIC ShowProgress( Msg )
+{
+	return dlg( SetStatus,0,~<Msg>~ );
+}
+
+NUMERIC ShowCurrentFile( Msg )
+{
+	return dlg( SetString,~<Msg>~ ,CurrentFile,0 );
+}
+
+
+// THE DICTIONARIES SHOULD BE CREATED ONLY ONCE.  NOT FOR EVERY INSTANCE.
+
+if ( !DataDict( TheDictionary,Get,DDImportShooterData ) )
+{
+	Dictionary: DDImportShooterData
+		Fields:	Name InPath				Type Text
+		Fields:	Name Path				Type Text
+		Fields:	Name Unicode			Type long
+		Fields:	Name Status				Type Text
+		Fields:	Name Vendor				Type Text
+		Fields:	Name SizeDefinitions	Type Text
+		Fields: Name ImportPackages		Type long
+		Fields: Name ImportFrames		Type long
+		Fields: Name Watch				Type long
+		Fields:	Name SearchDirectory	Type Text
+		Fields: Name SearchCriteria		Type Text
+		Fields: Name CurrentFile		Type Text
+		Fields: Name AllowDefaultOrder	Type Long
+		Fields: Name UseFilenameForOrder Type Long
+		Fields: Name AllowDefaultRoll	Type Long
+		Fields: Name AllowDefaultFrame	Type Long
+		Fields: Name OnlyImportScanFrames Type Long
+		Fields: Name Scan				Type Long
+		Fields: Name UsePunch			Type Long
+		Fields: Name Progress			Type Long
+		Fields: Name ScannablePackages	Type text
+
+	Dictionary: DDHicksShooterControl
+		Fields: Name Version			Type CHAR	Length 4
+		Fields: Name PacerPeriod		Type CHAR	Length 2
+		Fields: Name PacerSize			Type CHAR	Length 2
+		Fields: Name SlateSize			Type CHAR	Length 2
+		Fields: Name Mode				Type CHAR	Length 2
+		Fields: Name JobNumber			Type CHAR	Length 6
+		Fields: Name ControlNum			Type CHAR	Length 6
+
+	Dictionary: DDShooterPackages
+		Fields: Name Size1				Type CHAR	Length 2
+		Fields: Name Size2				Type CHAR	Length 2
+		Fields: Name Size3				Type CHAR	Length 2
+		Fields: Name Size4				Type CHAR	Length 2
+		Fields: Name Size5				Type CHAR	Length 2
+		Fields: Name Size6				Type CHAR	Length 2
+		Fields: Name Split1				Type CHAR	Length 2
+		Fields: Name Split2				Type CHAR	Length 2
+		Fields: Name Split3				Type CHAR	Length 2
+		Fields: Name Split4				Type CHAR	Length 2
+		Fields: Name Split5				Type CHAR	Length 2
+
+	Dictionary: DDHicksShooterFrames
+		Fields: Name Package			Type CHAR	Length 2	// 00 - 99, BL
+		Fields: Name PrintCode			Type CHAR	Length 1	// N,P,R,T
+		Fields: Name ReprintCode		Type CHAR	Length 1	// D,Q,Y,C
+		Fields: Name cDen				Type CHAR	Length 2	// -9 to +9
+		Fields: Name yOffset			Type CHAR	Length 2	// -9 to +9
+		Fields: Name cRed				Type CHAR	Length 2	// -9 to +9
+		Fields: Name cGrn				Type CHAR	Length 2	// -9 to +9
+		Fields: Name cBlu				Type CHAR	Length 2	// -9 to +9
+		Fields: Name aDen				Type CHAR	Length 3	// 000 - 199
+		Fields: Name aRed				Type CHAR	Length 2	// 00 - 99
+		Fields: Name aGrn				Type CHAR	Length 2	// .
+		Fields: Name aBlu				Type CHAR	Length 2	// .
+		Fields: Name AlaCart1			Type CHAR	Length 2
+		Fields: Name AlaCart2			Type CHAR	Length 2
+		Fields: Name AlaCart3			Type CHAR	Length 2
+		Fields: Name AlaCart4			Type CHAR	Length 2
+		Fields: Name AlaCart5			Type CHAR	Length 2
+		Fields: Name AlaCart6			Type CHAR	Length 2
+		Fields: Name AlaCart7			Type CHAR	Length 2
+		Fields: Name AlaCart8			Type CHAR	Length 2
+		Fields: Name AlaCart9			Type CHAR	Length 2	// .
+		Fields: Name AlaCart10			Type CHAR	Length 2	// 00 - 99
+		Fields: Name OrderID			Type CHAR	Length 6	// 6 Digits
+		Fields: Name Roll				Type CHAR	Length 6	// 6 Digits
+		Fields: Name Frame				Type CHAR	Length 3	// 000 - 999
+		Fields: Name FilmTypeCode		Type CHAR	Length 1	// 1 - 6
+		Fields: Name Rotation			Type CHAR	Length 1	// ROTATION OF DECK/CROP    Y/N, 1-7, A-G
+		Fields: Name Description		Type CHAR	Length 30
+
+	// THE FOLLOWING IS NOT PART OF THE SHOOTER DISK FORMAT
+		Fields: Name Punch				Type Long;
+		Fields: Name Scan				Type Long;
+		Fields: Name FilmType			Type CHAR	Length 32;
+		Fields: Name LutIndex			Type Long;
+
+
+
+	StringList: Name ShooterUnitsList
+		Fields:	String	~Default~
+	Hang:	ShooterUnitsList	~[STRINGS]~ ;
+}
+
+	Left = 5; Top = 5;		hGap = 5; vGap = 5;
+    TextHeight = 20;        TextWidth = 110;  
+	ButtonHeight = 20;		ButtonWidth = 140;
+	StaticTextWidth = 80;	StaticTextHeight = 20;
+    EditTextWidth = 300;	EditTextHeight = 20;
+    ComboBoxWidth = 200;	ComboBoxHeight = 120;
+	x = $Left;				y = $Top;
+	PathWidth = 315;	
+
+
+VOID DefineDialog()
+{
+	Define: DlgData Using DDImportShooterData
+		Fields: ImportFrames	1
+				Watch			0
+				Scan			1
+				UsePunch		0
+				SearchDirectory	~<$App.Volume>\ShooterInputQueue~
+				SearchCriteria	~*.*~;
+
+    Define: ImportDlgDefinition Using DDWinDef
+            Fields: Position			180 50 600 600
+                    Title				~Import From Shooter Disk Files~
+                    TypeName			~Dialog~
+					WantsMinimizeBox	TRUE
+					StatusBar			~1 100~
+					DropActionsText		ACTION EXEC ( HandleDrop() )
+					HACTIONSTEXT		ACTION SHOWHELPPAGE ( KPISHelpFile "Shooter.htm" )
+                    OACTIONSTEXT		ACTION EXEC ( CloseDialog() ) ;
+
+    Contains: InListOrder
+    {
+		if ( 0 )
+		{
+			Define: VendorPrompt Using DDWinCtrlDef AsSymbol VendorPrompt 
+				Fields: TypeName		StaticText
+						Text			~Vendor~
+						RightJustified	TRUE
+						Position		$x,$y,$StaticTextWidth,$StaticTextHeight
+
+			Define: TablesComboBox Using DDWinCtrlDef AsSymbol TablesComboBox 
+				Fields: TypeName		SComboBox  
+						Position		VendorPrompt(GetRight,Position) + $hGap,VendorPrompt(GetTop,Position),<ComboBoxWidth>,<ComboBoxHeight> 
+						IActionsText    ACTIONS ( GetList(ShooterDiskVendors) Get )
+						DActionsText	ACTIONS ( Save )
+						OActionsText	ACTIONS ( Save )
+						GenConName      THIS
+						GenConField		~Vendor~
+						Tooltip         ~Shooter Disk have a couple of formats based on vendor~ ;
+		
+
+			Define: SizeDefinitionsPrompt Using DDWinCtrlDef AsSymbol SizeDefinitionsPrompt 
+				Fields: TypeName		StaticText
+						RightJustified	TRUE
+						Text			Translate( ~Package Definition~ )
+						Position		$x,VendorPrompt(GetBottom,Position) + $vGap,<StaticTextWidth>,<StaticTextHeight> ;
+						
+			Define: SizeDefinitionsComboBox Using DDWinCtrlDef AsSymbol SizeDefinitionsComboBox 
+				Fields: TypeName		SComboBox  
+						Position		SizeDefinitionsPrompt(GetRight,Position) + $hGap,SizeDefinitionsPrompt(GetTop,Position),<ComboBoxWidth> ,<ComboBoxHeight> 
+						DActionsText	ACTIONS ( Save )
+						OActionsText	ACTIONS ( Save )
+						IActionsText	ACTIONS ( UpdateList(ShooterUnitsList "Select ID From ShooterUnits Order By ID" ID) GetList(ShooterUnitsList) Get )
+						DropDownActionsText ACTIONS ( UpdateList(ShooterUnitsList "Select ID From ShooterUnits Order By ID" ID) GetList(ShooterUnitsList) Get )
+						GenConName      THIS
+						GenConField		~SizeDefinitions~
+						IsEnabled		F
+						Tooltip         ~Select the desired definition of shooter package numbers to DP2 products.  (Not available in this version)~ ;
+
+			Define: SizeDefinitionsBrowseButton Using DDWinCtrlDef AsSymbol SizeDefinitionsBrowseButton 
+				Fields: TypeName		Button
+						Text			Translate( ~?~ )
+						Position		SizeDefinitionsComboBox(GetRight,Position) + $hGap,
+										SizeDefinitionsComboBox(GetTop,Position),20,20
+						DActionsText	ACTION EXEC  ( OnBrowseSizeDefinitionsButton() ) 
+						IsTabStop		1
+						IsEnabled		F
+						Tooltip			Translate( ~Define which products are used to produce the shooter packages. (Not available in this version)~ );
+		}
+
+		Define: DirectoryPrompt Using DDWinCtrlDef AsSymbol DirectoryPrompt 
+            Fields: TypeName		StaticText
+					RightJustified	TRUE
+                    Text			Translate( ~Directory~ )
+					Position		$x,$y,$StaticTextWidth,$StaticTextHeight
+
+	   Define: DirectoryField Using DDWinCtrlDef AsSymbol DirectoryField         
+			Fields: TypeName		EditText
+					Position        DirectoryPrompt(GetRight,Position) + $hGap,DirectoryPrompt(GetTop,Position)-2 $PathWidth $EditTextHeight             
+					GenConName		THIS
+					GenConField		~SearchDirectory~
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save "Exec(EnableButtons();)" )
+					OActionsText    ACTIONS ( Save )
+					IsTabStop		1
+					Tooltip			Translate( ~Find a directory to watch for shooter files~ ) ;
+
+		Define: DirectoryBrowseButton Using DDWinCtrlDef AsSymbol DirectoryBrowseButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~?~ )
+                    Position		DirectoryField(GetRight,Position) + $hGap,
+									DirectoryField(GetTop,Position),20,20
+                    DActionsText	ACTION EXEC  ( OnBrowseDirectoryButton() ) 
+					IsEnabled		T
+                    Tooltip			Translate( ~Find the directory to watch for shooter disk files~ );
+
+		Define: DirectoryOpenButton Using DDWinCtrlDef AsSymbol DirectoryOpenButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Open~ )
+                    Position		DirectoryBrowseButton(GetRight,Position) + $hGap,
+									DirectoryBrowseButton(GetTop,Position),60,20
+                    DActionsText	ACTION EXEC  ( OpenSearchDirectory() ) 
+					IsEnabled		T
+                    Tooltip			Translate( ~Open the directory being watched for shooter disk files~ );
+
+		Define: InPathPrompt Using DDWinCtrlDef AsSymbol InPathPrompt 
+            Fields: TypeName		StaticText
+					RightJustified	TRUE
+                    Text			Translate( ~File To Queue~ )
+                    Position		$x,DirectoryPrompt(GetBottom,Position) + $vGap,<StaticTextWidth>,<StaticTextHeight> ;
+
+	   Define: InPathField Using DDWinCtrlDef AsSymbol InPathField         
+			Fields: TypeName		EditText
+					Position        InPathPrompt(GetRight,Position) + $hGap,InPathPrompt(GetTop,Position)-2 $PathWidth $EditTextHeight             
+					GenConName		THIS
+					GenConField		~InPath~
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTION Exec ( EnableButtons() )
+					OActionsText    ACTIONS ( Save )
+					IsTabStop		1
+					Tooltip			Translate( ~Enter the path of the shooter file you wish to queue for importing~ ) ;
+
+		Define: InBrowseButton Using DDWinCtrlDef AsSymbol InBrowseButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~?~ )
+                    Position		InPathField(GetRight,Position) + $hGap,InPathField(GetTop,Position),20,20
+                    DActionsText	ACTION EXEC  ( OnBrowseInputFileButton() ) 
+                    Tooltip			Translate( ~Find the shooter file you wish to queue for importing~ );
+
+		Define: ViewInFileButton Using DDWinCtrlDef AsSymbol ViewInFileButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~View File~ )
+                    Position		InBrowseButton(GetRight,Position) + 5,InBrowseButton(GetTop,Position),60, $ButtonHeight
+                    DActionsText	ACTION EXEC  ( OnViewButton() )
+                    Tooltip			Translate(~View the shooter file before queuing it for importing~);
+
+		Define: ImportButton Using DDWinCtrlDef AsSymbol ImportButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Queue File~ )
+                    Position		ViewInFileButton(GetRight,Position) + 5,ViewInFileButton(GetTop,Position),60, $ButtonHeight
+                    DActionsText	ACTION EXEC  ( OnImportButton() )
+					IsTabStop		1
+                    Tooltip			Translate(~Copy the specified file to the Search directory so that it can be imported~);
+
+		DialogWidth = ImportButton(GetRight,Position) + $hGap * 3;
+
+		Define: ImportPackagesBox Using DDWinCtrlDef AsSymbol ImportPackagesBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~Create Packages~ )
+                    Position		InPathField(GetLeft,Position),InPathField(GetBottom,Position) + $vGap,<StaticTextWidth>,20
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					GenConField		~ImportPackages~
+					IsEnabled		F
+                    Tooltip			Translate( ~Create order items from the package data. (This will be enabled in a future version)~ );
+
+		Define: ImportFramesBox Using DDWinCtrlDef AsSymbol ImportFramesBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~Import Frames~ )
+                    Position		InPathField(GetLeft,Position),ImportPackagesBox(GetBottom,Position),<StaticTextWidth>,20
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					GenConField		~ImportFrames~
+					IsTabStop		1
+                    Tooltip			Translate( ~Save Frame Info~ );
+
+
+		Define: SearchDirectoryBox Using DDWinCtrlDef AsSymbol SearchDirectoryBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~Search for Shooter Files To Import~ )
+                    Position		InPathField(GetLeft,Position),ImportFramesBox(GetBottom,Position)+$vGap*2,250,20
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save "Exec(StartProcessFiles())" )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					GenConField		~Watch~
+					FontWeight		600
+                    Tooltip			Translate( ~Enable or disable watching the specified directory for shooter files~ );
+
+		Define: StopButton Using DDWinCtrlDef AsSymbol StopButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Stop~ )
+                    Position		SearchDirectoryBox(GetRight,Position) + $hGap*3,SearchDirectoryBox(GetTop,Position),50, $ButtonHeight
+                    DActionsText	ACTION EXEC  ( StopSearching() ) 
+					IsTabStop		1
+					IsEnabled		F
+                    Tooltip			Translate( ~Stop importing data now~ )  ;
+
+		Define: ViewImportedOrdersButton Using DDWinCtrlDef AsSymbol ViewImportedOrdersButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~View Imported Orders~ )
+                    Position		StopButton(GetRight,Position) + $hGap*3,StopButton(GetTop,Position),$ButtonWidth, $ButtonHeight
+                    DActionsText	ACTION EXEC  ( OnViewImportedOrdersButton() ) 
+					IsTabStop		1
+					IsEnabled		F
+                    Tooltip			Translate( ~View Imported Orders~ )  ;
+
+		Define: EditFilmTypesButton Using DDWinCtrlDef AsSymbol EditFilmTypesButton 
+            Fields: TypeName		Button
+                    Text			Translate( ~Edit Film Types~ )
+                    Position		ViewImportedOrdersButton(GetLeft,Position),ViewImportedOrdersButton(GetBottom,Position)+$vGap,$ButtonWidth, $ButtonHeight
+                    DActionsText	ACTION EXEC  ( OnEditFilmTypesButton() ) 
+					IsTabStop		1
+                    Tooltip			Translate( ~Edit the cross reference between Lab Film Codes and DP2 film types~ )  ;
+
+		Define: DefaultOrderIDBox Using DDWinCtrlDef AsSymbol DefaultOrderIDBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~Use filename for orders of '000000'~ )
+                    Position		SearchDirectoryBox(GetLeft,Position),SearchDirectoryBox(GetBottom,Position),300,20
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save UncheckButton(FilenameForOrderIDBox) )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					GenConField		~AllowDefaultOrder~
+					IsTabStop		1
+                    Tooltip			Translate( ~If checked, then the file name is used for Orders of '000000'.  Otherwise the record is skipped.~ );
+
+		Define: FilenameForOrderIDBox Using DDWinCtrlDef AsSymbol FilenameForOrderIDBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~Always use the filename as the OrderID~ )
+                    Position		DefaultOrderIDBox(GetLeft,Position),DefaultOrderIDBox(GetBottom,Position),300,20
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save UncheckButton(DefaultOrderIDBox) )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					GenConField		~UseFilenameForOrder~
+					IsTabStop		1
+                    Tooltip			Translate( ~If checked, then the file name is used for all Orders.~ );
+
+		Define: DefaultRollBox Using DDWinCtrlDef AsSymbol DefaultRollBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~Use '000001' for rolls of '000000'~ )
+                    Position		FilenameForOrderIDBox(GetLeft,Position),FilenameForOrderIDBox(GetBottom,Position),300,20
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					GenConField		~AllowDefaultRoll~
+					IsTabStop		1
+                    Tooltip			Translate( ~If checked, then '000001' is used for rolls of '000000'.  Otherwise the record is skipped.~ );
+
+		Define: DefaultFrameBox Using DDWinCtrlDef AsSymbol DefaultFrameBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~Use incrementing frame number for frames of '000'~ )
+                    Position		DefaultRollBox(GetLeft,Position),DefaultRollBox(GetBottom,Position),300,20
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					GenConField		~AllowDefaultFrame~
+					IsTabStop		1
+                    Tooltip			Translate( ~If checked, then the frame number will be set to an incrementing number based on the record offset in the shooter file.  Otherwise the record is skipped.~ );
+
+		Define: UsePunchBox Using DDWinCtrlDef AsSymbol UsePunchBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~Use incrementing punch number~ )
+                    Position		DefaultFrameBox(GetLeft,Position),DefaultFrameBox(GetBottom,Position),300,20
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					GenConField		~UsePunch~
+					IsTabStop		1
+                    Tooltip			Translate( ~If checked, then the frame is set to the record offset (an incrementing number).  Otherwise the Punch Number is set to the Frame Number~ );
+
+		Define: OnlyImportScanBox Using DDWinCtrlDef AsSymbol OnlyImportScanBox 
+            Fields: TypeName		CheckBox
+                    Text			Translate( ~Only import frames needing scanning~ )
+                    Position		UsePunchBox(GetLeft,Position),UsePunchBox(GetBottom,Position),300,20
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					GenConField		~OnlyImportScanFrames~
+					IsTabStop		1
+                    Tooltip			Translate( ~If checked, then only frames that need scanning will be imported.~ )
+
+		Define: ScanningOptions Using DDWinCtrlDef AsSymbol ScanningOptions 
+            Fields: TypeName		StaticText
+                    Text			Translate( ~Scanning Options~ )
+					FontWeight		600
+                    Position		OnlyImportScanBox(GetLeft,Position),OnlyImportScanBox(GetBottom,Position)+10,300,20
+
+		Define: SetNoScanBox Using DDWinCtrlDef AsSymbol SetNoScanBox 
+            Fields: TypeName		RadioButton
+                    Text			Translate( ~Don't scan any of the frames~ )
+                    Position		ScanningOptions(GetLeft,Position)+15,ScanningOptions(GetBottom,Position),300,20
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( CheckButton(SetNoScanBox) UncheckButton(SetScanBox) UncheckButton(ScanSpecificPackagesBox) UncheckButton(ScanAnyPackagesBox) Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					GenConField		~Scan~
+					IsTabStop		1
+					RadioTrueValue	<ScanNone>
+                    Tooltip			Translate( ~All frames will be marked as not needing scanning~ );
+
+		Define: SetScanBox Using DDWinCtrlDef AsSymbol SetScanBox 
+            Fields: TypeName		RadioButton
+                    Text			Translate( ~Every frame needs to be scanned~ )
+                    Position		SetNoScanBox(GetLeft,Position),SetNoScanBox(GetBottom,Position),300,20
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( UncheckButton(SetNoScanBox) CheckButton(SetScanBox) UncheckButton(ScanSpecificPackagesBox) UncheckButton(ScanAnyPackagesBox) Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					GenConField		~Scan~
+					IsTabStop		1
+					RadioTrueValue	<ScanAll>
+                    Tooltip			Translate( ~All frames will be flagged as needing scanning~ );
+
+		Define: ScanAnyPackagesBox Using DDWinCtrlDef AsSymbol ScanAnyPackagesBox 
+            Fields: TypeName		RadioButton
+                    Text			Translate( ~Scan any frame that has a package or ala carte product~ )
+                    Position		SetScanBox(GetLeft,Position),SetScanBox(GetBottom,Position),350,20
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( UncheckButton(SetNoScanBox) CheckButton(ScanAnyPackagesBox) UncheckButton(ScanSpecificPackagesBox) UncheckButton(SetScanBox) Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					GenConField		~Scan~
+					IsTabStop		1
+					RadioTrueValue	<ScanIfPackage>
+                    Tooltip			Translate( ~Scan any frame that has a non-zero package code or ala carte code~ );
+
+		Define: ScanSpecificPackagesBox Using DDWinCtrlDef AsSymbol ScanSpecificPackagesBox 
+            Fields: TypeName		RadioButton
+                    Text			Translate( ~Scan only those frames that have package or ala carte codes listed below:~ )
+                    Position		ScanAnyPackagesBox(GetLeft,Position),ScanAnyPackagesBox(GetBottom,Position),375,20
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( UncheckButton(SetNoScanBox) CheckButton(ScanSpecificPackagesBox) UncheckButton(SetScanBox) UncheckButton(ScanAnyPackagesBox) Save )
+					OActionsText	ACTIONS ( Save )
+					GenConName      THIS
+					GenConField		~Scan~
+					IsTabStop		1
+					RadioTrueValue	<ScanIfSpecificPackage>
+                    Tooltip			Translate( ~If the package code or the ala carte code are in the following list, then the frame will be scanned~ );
+
+		Define: ScannablePackagesField Using DDWinCtrlDef AsSymbol ScannablePackagesField 
+            Fields: TypeName		MaskedEditText
+					Mask			~## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ## ##~
+                    Position		ScanSpecificPackagesBox(GetLeft,Position)+20,ScanSpecificPackagesBox(GetBottom,Position) + $vGap,400,<StaticTextHeight>
+					GenConName		THIS
+					GenConField		~ScannablePackages~
+					IActionsText	ACTIONS ( Get )
+					DActionsText	ACTIONS ( Save )
+					OActionsText	ACTIONS ( Save )
+					Tooltip			Translate( ~Enter package or ala carte codes that should be scanned~ )
+
+		Define: CurrentFileField Using DDWinCtrlDef AsSymbol CurrentFileField 
+            Fields: TypeName		StaticText
+                    Position		$x,ScannablePackagesField(GetBottom,Position) + $vGap,$DialogWidth - ($hGap * 2),<StaticTextHeight> * 2
+					GenConName		THIS
+					GenConField		~CurrentFile~
+    };
+
+	DialogHeight = CurrentFileField(GetBottom,Position) + $vGap + 30;
+
+    ImportDlgDefinition( Set,Position,~180 180 <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,ImportDlgDefinition,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+    Global( dlg,ImportDlgDefinition,DlgData );
+}
+
+
+NUMERIC EnableButtons()
+{
+	dlg( GetInput );
+	dlg( EnableControls,ImportedOrdersList(Num),ViewImportedOrdersButton);
+	dlg( EnableControls,~<$con.dlgData[InPath]>~ != ~~,ImportButton,ViewInFileButton);
+	dlg( EnableControls,~<$con.dlgData[SearchDirectory]>~ != ~~,SearchDirectoryBox);
+
+	return TRUE;
+}
+
+
+
+VOID EnableStopButton( value )
+{
+	dlg( EnableControls,<value>,StopButton);
+}
+
+
+NUMERIC OnTablesComboBox()
+{
+	return TRUE;
+}
+
+
+if ( !Tree( Name,ShooterDiskVendors,Location,~[STRINGS]~,Exists ) )
+{	
+	StringList:	Name ~ShooterDiskVendors~
+		Fields: String	~Hicks~
+	Hang:	ShooterDiskVendors	~[STRINGS]~
+}
+
+
+VOID OnBrowseInputFileButton()
+{
+	Title = Translate( ~Select the file you wish to import~ );
+
+	if ( FileDialog( Title,~<Title>~,PATH,theFile,Open ) )	// ASK THE USER TO FIND THE FILE(s)
+	{
+		dlg( SetString,~<theFile>~,InPath,0 );	
+	}
+
+	EnableButtons();					
+}
+
+
+NUMERIC OnBrowseDirectoryButton()
+{
+	StartingDirectory = ~<$App.Directory>~;
+
+	Title = Translate( ~Find the directory~ );
+
+	SubTitle = Translate( ~to search for Shooter files~ );
+
+	if ( GetFolder( ~<Title>~,~<SubTitle>~,Path ) )
+	{
+		dlg( SetString,~<Path>~,SearchDirectory,0 );
+	}
+
+	return TRUE;
+}
+
+
+VOID OnBrowseSizeDefinitionsButton()
+{
+	Query = ~Select * From ShooterUnits~;
+	Action = ACTION DOC ( ShooterUnitsDoc OpenOnce ShooterUnitsDoc "Init( Translate(~All~),~<Query>~ );" );
+	PerformActions( Action );
+}
+
+
+VOID OnBrowseButton()
+{
+	Title = Translate( ~Select a path to store the imported data~ );
+
+	if ( !FileDialog( Title,~<Title>~,PATH,theFile,SAVE ) )	// ASK THE USER TO FIND THE FILE
+		{ return; }
+		
+	dlg( SetString,~<theFile>~ ,Path,0 );										
+}
+
+
+NUMERIC OnEditFilmTypesButton()
+{
+	action = ACTION DOC ( AllFilmTypes OpenOnce FilmTypesDoc "Init();" );
+	return PerformActions( action );
+}
+
+
+
+NUMERIC OnViewImportedOrdersButton()
+{
+	if ( ImportedOrdersList(Empty) )
+	{
+		return Warning( Translate( ~No orders have been imported~ ) );
+	}
+
+	ImportedOrdersList( MakeSQlList,Orders,TRUE );
+	
+	return OrderQuery( ~<Orders>~,~Select * From Orders Where ID In (<Orders>) Order By ID~ );
+}
+
+
+NUMERIC OrderQuery( List,Query )
+{
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTIONS ( Doc( ~Orders~ <OpenMethod> OrdersDoc "Init( ~<List>~,~<Query>~);" ) );
+	return PerformActions( Actions );
+}
+
+
+StringList( ProductIDs,New );
+
+
+NUMERIC GetProductsIDs( PackageDef )
+{
+	ProductIDs( DeleteAll );
+
+	Query = ~Select * From ShooterUnits Where ID = '<PackageDef>'~;
+
+	if ( !PGenconList( UnitsList,Connection,dBase,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		UnitsList( GetErrorDescription,0,theErr );
+		return ( Warning,Translate(~Query Failed <Query>.  <theErr>~));
+	}
+
+	if ( !UnitsList( GetFirst,Unit ) )
+	{
+		return Warning( Translate(~Could not find Product IDs for Shooter Units of <PackageDef>~) );
+	}
+
+	ProductIDs( AddString,~<$pcon.Unit[Size1]>~ );
+	ProductIDs( AddString,~<$pcon.Unit[Size2]>~ );
+	ProductIDs( AddString,~<$pcon.Unit[Size3]>~ );
+	ProductIDs( AddString,~<$pcon.Unit[Size4]>~ );
+	ProductIDs( AddString,~<$pcon.Unit[Size5]>~ );
+	ProductIDs( AddString,~<$pcon.Unit[Size6]>~ );
+	ProductIDs( AddString,~<$pcon.Unit[Split1]>~ );
+	ProductIDs( AddString,~<$pcon.Unit[Split2]>~ );
+	ProductIDs( AddString,~<$pcon.Unit[Split3]>~ );
+	ProductIDs( AddString,~<$pcon.Unit[Split4]>~ );
+	ProductIDs( AddString,~<$pcon.Unit[Split5]>~ );
+
+	return TRUE;
+}
+
+
+Quitting =  FALSE;
+Stopping = FALSE;
+
+
+NUMERIC ViewFileInEditor( FilePath )
+{
+	return ViewFileInNotepad( ~<FilePath>~ );
+}
+
+
+NUMERIC OnViewButton()
+{
+	dlg( GetInput,GetStrings,InPath,InPath );
+
+	if ( ~<InPath>~ == ~~ )
+	{
+		return dlg( SetStatus,0,Translate( ~You have not specified an input File~ ) );
+	}
+	
+	return ViewFileInEditor( ~<InPath>~ );
+}
+
+
+NUMERIC HandleDrop()
+{
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+	{ 
+		return FALSE;
+	}
+	
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );	// REMOVE THE DRAG INFO FROM THE TREE
+
+	return ExternalDrop(DragDropInfo);		
+}
+
+
+NUMERIC ExternalDrop( &DragDropInfo )
+{
+	if ( !DragDropInfo( GetDraggedFiles,DraggedFileList ) )
+	{ 
+		return ~There were no files in the object you dragged~;
+	}
+
+	count = DraggedFileList( ChildCount );
+		
+	if ( $count <= 0 )
+		{ return ~There were no files in the object you dragged~; }
+
+	if ( <count> > 1 )
+	{
+		SortOrder = CustomMessageBox( Title,~Import Shooter Files~,Message,~Sort files by ...~,
+										Button1,~File Name~,
+										Button2,~Creation Date~,
+										Button3,~Cancel~ );
+		if ( <SortOrder> == 1 )
+		{
+			DraggedFileList( SortListBy,~Text~,~CreationTime~ );
+		}
+		else if ( <SortOrder> == 2 )
+		{
+			DraggedFileList( SortListBy,~CreationTime~,~Text~ );
+		}
+		else 
+		{
+			return FALSE;
+		}
+	}
+
+	more = DraggedFileList( GetFirst,FilePath );
+
+	while ( <more> )
+	{
+		Path = ~<$Con.FilePath[Text]>~;
+
+		QueueAFile( ~<Path>~,~<$con.dlgData[SearchDirectory]>~ );
+
+		more = DraggedFileList( GetNext,FilePath );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnImportButton()
+{
+	dlg( GetInput );
+
+	Path = ~<$con.dlgData[InPath]>~;
+
+	if ( IsNULL(~<Path>~) )
+	{
+		return Warning( Translate( ~You must specify a file to import first~ ) );
+	}
+
+	if ( IsNULL(~<$con.dlgData[SearchDirectory]>~) )
+	{
+		return Warning( Translate( ~You must specify a search directory first~ ) );
+	}
+
+	return QueueAFile( ~<Path>~,~<$con.dlgData[SearchDirectory]>~ );
+}
+
+
+NUMERIC QueueAFile( FromPath,ToDirectory )
+{
+	if ( IsNull( ~<ToDirectory>~  ) )
+	{
+		return Warning( Translate( ~You must specify a search directory first~ ) );
+	}
+
+	if ( !Directory( Create,~<ToDirectory>~ ) )
+	{
+		err = GetLastError( ErrorString,theErr );
+		Invoke( ShowWarning,Translate( ~Could not create\n\n<ToDirectory>\n\nError <err>. <theErr>~ ) );
+		return FALSE;
+	}
+
+	FileName = ~<$Str.$FromPath.FileName>~;
+
+	ToPath = ~<ToDirectory>\<FileName>~;
+
+	count = 0;
+
+	while ( TRUE )
+	{
+		if ( !Files( FileExists,~<ToPath>~ ) )
+		{
+			if ( !Files( Copy,~<FromPath>~,~<ToPath>~ ) )
+			{
+				err = GetLastError( ErrorString,theErr );
+				return ShowWarning( Translate( ~Could not copy\n\n<FromPath>\nto\n<ToPath>\n\n Error <err>. <theErr>~ ) );
+			}
+
+			if ( !Files( ChMod,~<ToPath>~,ReadWrite ) )
+			{
+				err = GetLastError( ErrorString,ErrMsg );
+				return ShowWarning( Translate( ~Could not make <ToPath> writeable\n\n Error <err>. <ErrMsg>~ ) );
+			}
+
+			if ( !Files( SetFileTimes,~<ToPath>~,Now,Now,Now ) )
+			{
+				theErr = GetLastErrorMsg();
+
+				return UserWarning( Translate( ~Failed to set the filetime on <ToPath>.\n\n<theErr>~ ) );
+			}
+
+			Invoke( ShowCurrentFile,Translate( ~Copied <FromPath> to <ToPath>~ ) );
+
+			return TRUE;
+		}
+
+		ToPath = ~<ToDirectory>\<FileName>.<++count>~;
+	}
+}
+
+
+
+NUMERIC CloseDialog()
+{
+	Invoke( ShowProgress,Translate( ~<$Date.Time>  Stopping ...~ ) );
+
+	StopSearching();
+
+	Quitting = TRUE;
+
+	while ( aThread( IsActive ) )
+	{
+		aThread( TerminateSleep );
+		Invoke( ShowProgress,Translate( ~<$Date.Time>  Stopping ...~ ) );
+		Sleep( 10 );
+	}
+
+	SetSettings();
+
+    dlg( END );
+	
+    Exit();
+}
+
+
+VOID StopSearching()
+{
+	Stopping = TRUE;
+
+	dlg( SetCheck,FALSE,SearchDirectoryBox );
+}
+
+
+NUMERIC OnWatch()
+{
+	if ( aThread( IsActive )  )
+	{
+		return FALSE;
+	}
+
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.dlgdata[SearchDirectory]>~ ) )
+	{
+		return FALSE;
+	}
+
+	if ( dlgdata(GetNumeric,Watch) )
+	{
+		if ( !Directory( Create,~<$con.dlgdata[SearchDirectory]>~ ) )
+		{
+			Invoke( ShowWarning,Translate( ~Could not create <$con.dlgdata[SearchDirectory]>~ ) );
+			return FALSE;
+		}
+
+		EnableButtons();
+
+		ProcessFiles( ~<$con.dlgdata[SearchDirectory]>~,~*.*~ );
+	}
+
+	EnableButtons();
+
+	return TRUE;
+}
+
+
+NUMERIC OpenSearchDirectory()
+{
+	dlg( GetInput );
+
+	if ( !IsNull( ~<$con.dlgdata[SearchDirectory]>~ ) )
+	{
+		return OpenExplorer( ~<$con.dlgdata[SearchDirectory]>~ );
+	}
+
+	return Warning( Translate( ~You must select a directory first~ ) );
+}
+
+
+NUMERIC StartProcessFiles()
+{
+	dlg( GetInput );
+
+	if ( dlgdata(GetNumeric,Watch) )
+	{
+		Invoke( ShowProgress,Translate( ~<$Date.Time>  Starting ...~ ) );
+
+		dlg( EnableControls,FALSE,DefaultOrderIDBox,DefaultRollBox,DefaultFrameBox,UsePunchBox,OnlyImportScanBox,SetNoScanBox,SetScanBox,ScanAnyPackagesBox,ScanSpecificPackagesBox,ScannablePackagesField,FilenameForOrderIDBox );
+
+		if ( !AThread( IsActive ) )
+		{
+			AThread( New,ProcessFiles );
+		}
+	}
+	else
+	{
+		Invoke( ShowProgress,Translate( ~<$Date.Time>  Stopping ...~ ) );
+
+		dlg( EnableControls,TRUE,DefaultOrderIDBox,DefaultRollBox,DefaultFrameBox,UsePunchBox,OnlyImportScanBox,SetNoScanBox,SetScanBox,ScanAnyPackagesBox,ScanSpecificPackagesBox,ScannablePackagesField,FilenameForOrderIDBox );
+
+		if ( aThread( IsActive ) )
+		{
+			aThread( TerminateSleep );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ProcessFiles()
+{
+	Debugging = !ThreadIs( TheThread );
+
+	while ( TRUE )
+	{
+		if ( <Quitting> )
+		{
+			return TRUE;
+		}
+
+		SearchDir = ~<$con.DlgData[SearchDirectory]>~;
+		SearchCriteria = ~<$con.DlgData[SearchCriteria]>~;
+
+		if ( IsNULL( ~<SearchDir>~ ) )
+		{
+			Invoke( ShowProgress,Translate( ~<$Date.Time>  No directory specified to search~ ) );
+
+			if ( <Debugging> )
+			{
+				Invoke( StopSearching );
+				return FALSE;
+			}
+
+			Sleep( <PollInterval> );
+			continue;
+		}
+
+		if ( !dlgdata(GetNumeric,Watch) )
+		{
+			if ( <Debugging> )
+			{
+				Invoke( StopSearching );
+				return FALSE;
+			}
+
+			Invoke( ShowProgress,Translate( ~<$Date.Time>  Searching is disabled~ ) );
+
+			Sleep( <PollInterval> );
+			continue;
+		}
+
+		if ( !Directory( Create,~<SearchDir>~ ) )
+		{
+			Invoke( ShowProgress,Translate( ~Could not create <SearchDir>~ ) );
+
+			Invoke( StopSearching );
+			return FALSE;
+		}
+
+		Invoke( ShowProgress,Translate( ~<$Date.Time>  Searching <SearchDir> For <SearchCriteria>~ ) );
+
+		count = 0;
+		FilePath = ~~;
+		ProcessedOne = FALSE;
+
+		if ( FindEarliestFile( ~<SearchDir>\<SearchCriteria>~,FilePath,CreationTime )  )
+		{
+			if ( !Files( ChMod,~<FilePath>~,ReadWrite ) )
+			{
+				QueueAFile( ~<FilePath>~,~<SearchDir>\Errors~ );
+				Files( Delete,~<FilePath>~ );
+				Invoke( ShowWarning,Translate( ~<FilePath> cannot be made writeable~ ) );
+				Invoke( StopSearching );
+				return FALSE;
+			}
+
+			Invoke( ShowCurrentFile,Translate( ~Importing from <FilePath>~ ) );
+
+			Vendor = ~<$con.DlgData[Vendor]>~;
+
+			Processing = TRUE;
+
+			Invoke( EnableStopButton,TRUE );
+
+			success = ImportFrom( ~<Vendor>~,~<FilePath>~,dlgData(GetNumeric,ImportPackages),dlgData(GetNumeric,ImportFrames),
+									~<$con.DlgData[AllowDefaultOrder]>~,~<$con.DlgData[AllowDefaultRoll]>~,~<$con.DlgData[AllowDefaultFrame]>~,~<$con.DlgData[UseFilenameForOrder]>~ ); 
+
+			Stopping = FALSE;
+
+			Invoke( EnableStopButton,FALSE );
+
+			Processing = FALSE;
+
+			Invoke( EnableButtons );
+
+			Invoke( ShowCurrentFile,Translate( ~~ ) );
+
+			if ( !<success> )
+			{ 
+				QueueAFile( ~<FilePath>~,~<SearchDir>\Errors~ );
+				Files( Delete,~<FilePath>~ );
+				Invoke( StopSearching );
+				return FALSE;
+			}
+
+			if ( !Files( Delete,~<FilePath>~ ) )
+			{
+				Invoke( ShowWarning,Translate( ~Failed to delete <FilePath>~ ) );
+				Invoke( StopSearching );
+				return FALSE;
+			}
+
+			ProcessedOne = TRUE;
+		}
+
+		if ( <Debugging> )
+		{
+			return TRUE;
+		}
+
+		if ( <Quitting> )
+		{
+			return TRUE;
+		}
+
+		if ( !<ProcessedOne> )
+		{
+			Sleep( <PollInterval> );
+		}
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC FindNextFile( path,search,&count,&FilePath )
+{
+	if ( IsNULL(~<path>~ ) )
+	{
+		return FALSE;
+	}
+
+	search = IsNULL(~<search>~) ? ~*.*~ : ~<search>~;
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~<path>\<search>~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,FilePath );
+			
+		if ( aDirectoryEntry( Dots ) || aDirectoryEntry( IsDirectory ) )
+			continue;
+			
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+PollInterval = 5000;
+
+DefineDialog();	
+
+dlg( ShowControls,FALSE,ImportFramesBox,SizeDefinitionsPrompt,SizeDefinitionsComboBox,SizeDefinitionsBrowseButton,ImportPackagesBox );
+
+Sleep( 50 );
+
+EnableButtons();
+
+Thread( aThread );	// ADD THE PARAMETER DEBUG TO RUN AS A SUBROUTINE RATHER THAN A THREAD FOR SOURCE DEBUGGING
+
+
+VOID SetSettings()
+{
+	dlg( GetInput );
+
+	SetWorkStationSettings( ~<$Job.Title>~,SearchDirectory,~<$con.dlgData[SearchDirectory]>~,TRUE );
+	SetWorkStationSettings( ~<$Job.Title>~,AllowDefaultOrder,~<$con.dlgData[AllowDefaultOrder]>~,TRUE );
+	SetWorkStationSettings( ~<$Job.Title>~,UseFilenameForOrder,~<$con.dlgData[UseFilenameForOrder]>~,TRUE );
+	SetWorkStationSettings( ~<$Job.Title>~,AllowDefaultRoll,~<$con.dlgData[AllowDefaultRoll]>~,TRUE );
+	SetWorkStationSettings( ~<$Job.Title>~,AllowDefaultFrame,~<$con.dlgData[AllowDefaultFrame]>~,TRUE );
+	SetWorkStationSettings( ~<$Job.Title>~,Scan,~<$con.dlgData[Scan]>~,TRUE );
+	SetWorkStationSettings( ~<$Job.Title>~,UsePunch,~<$con.dlgData[UsePunch]>~,TRUE );
+	SetWorkStationSettings( ~<$Job.Title>~,ScannablePackages,~<$con.dlgData[ScannablePackages]>~,TRUE );
+	SetWorkStationSettings( ~<$Job.Title>~,OnlyImportScanFrames,~<$con.dlgData[OnlyImportScanFrames]>~,TRUE );
+}
+
+
+VOID GetSettings()
+{
+	if ( GetWorkStationSettings( ~<$Job.Title>~,SearchDirectory,SearchDirectory,Enabled ) )
+	{
+		dlg( SetString,~<SearchDirectory>~ ,SearchDirectory,0 ); 
+	}
+
+	if ( GetWorkStationSettings( ~<$Job.Title>~,AllowDefaultOrder,AllowDefaultOrder,Enabled ) )
+	{
+		dlg( SetString,~<AllowDefaultOrder>~ ,AllowDefaultOrder,0 ); 
+	}
+
+	if ( GetWorkStationSettings( ~<$Job.Title>~,UseFilenameForOrder,UseFilenameForOrder,Enabled ) )
+	{
+		dlg( SetString,~<UseFilenameForOrder>~ ,UseFilenameForOrder,0 ); 
+	}
+
+	if ( GetWorkStationSettings( ~<$Job.Title>~,AllowDefaultRoll,AllowDefaultRoll,Enabled ) )
+	{
+		dlg( SetString,~<AllowDefaultRoll>~ ,AllowDefaultRoll,0 ); 
+	}
+
+	if ( GetWorkStationSettings( ~<$Job.Title>~,AllowDefaultFrame,AllowDefaultFrame,Enabled ) )
+	{
+		dlg( SetString,~<AllowDefaultFrame>~ ,AllowDefaultFrame,0 ); 
+	}
+
+	if ( GetWorkStationSettings( ~<$Job.Title>~,Scan,Scan,Enabled ) )
+	{
+		dlg( SetString,~<Scan>~ ,Scan,0 ); 
+	}
+
+	if ( GetWorkStationSettings( ~<$Job.Title>~,UsePunch,UsePunch,Enabled ) )
+	{
+		dlg( SetString,~<UsePunch>~ ,UsePunch,0 ); 
+	}
+
+	if ( GetWorkStationSettings( ~<$Job.Title>~,ScannablePackages,ScannablePackages,Enabled ) )
+	{
+		dlg( SetString,~<ScannablePackages>~ ,ScannablePackages,0 ); 
+	}
+
+	if ( GetWorkStationSettings( ~<$Job.Title>~,OnlyImportScanFrames,OnlyImportScanFrames,Enabled ) )
+	{
+		dlg( SetString,~<OnlyImportScanFrames>~ ,OnlyImportScanFrames,0 ); 
+	}
+
+	dlg( Update );
+}
+
+GetSettings();
+
+
+
+
+	

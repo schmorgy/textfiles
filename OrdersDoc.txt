@@ -1,0 +1,3707 @@
+// OrdersDoc.txt
+// Globals:  	WhichOrders - used for title purposes only
+//				DocumentQuery
+
+
+Define:	OrdersMessages Using DDSymbol
+	Fields:	Value	~These strings are Orders related strings used by the user interface.~
+	Contains:
+	{
+		Define: NoOrdersSelected	using DDText	Fields: Text ~There are no Orders selected~ 
+		Define: NoShootDesc			using DDText	Fields: Text ~There is no ShootDesc ID specified.~ 
+		Define: SettingSequence		using DDText	Fields: Text ~Order %1, Roll %2, Frame %3 is sequence %4~ 
+		Define: SetSequence			using DDText	Fields: Text ~Set SequenceID for %1 Frames on %2 Orders~
+		Define: AddCustomerRecord	using DDText	Fields: Text ~%1 is not an existing Customer ID.  Would you like to add a new customer with an ID of %1? ~ 
+		Define: EditCustomerRecord	using DDText	Fields: Text ~Customer %1 was added.  Would you like to edit the customer data? ~
+		Define: AddShootIdRecord	using DDText	Fields: Text ~%1 is not an existing ID in ShootDescription%2.  Would you like to add a new ShootDescription%2 with an ID of %1?~
+		Define: EditShootIdRecord	using DDText	Fields: Text ~ShootDescription%2 %1 was added.  Would you like to edit the ShootDescription%2 data? ~
+		Define: SetOrdersShootDescID using DDText	Fields: Text ~You cannot have the same ID for an Order and a Shoot Description record unless the Shoot Description record is referenced by the Order.\n\nThe Order '%1' will be modified to reference the ShootDescID '%1' for the ShootDescription%2 table.\n\nDo you wish to continue the update?~
+		Define: ChangeShootDescType	using DDText Fields: Text ~Shoot Description ID %1 already exists for table ShootDescription%2.\nOrder %3 will be changed to use ShootDescType %2?\n\nDo you wish to continue?~
+		Define: NeedMergeSubjectInfo using DDText	Fields: Text ~The SubjectInfo for Order '%1' will be moved to the ShootDesc ID '%2'.\n\nIf SubjectInfo already exists under the ShootDescID the data will be MERGED into the existing SubjectInfo.\nSubjectIDs which don't exist will simply be added.\nSubjectIDs which already exist will be added to the end of the table, and the SubjectIDs of the Images which point to these records will be changed to the new ID.\n\nDo you wish to continue?~
+		Define: NoAccessSubjectInfo	using DDText	Fields: Text ~By removing the ShootDescID, SubjectInfo records which were previously accessed by this order will no longer be available.\n\nDo you wish to continue with the update?~
+		Define: SetReOrdersShootToOrigOrders using DDText Fields: Text ~The Reorder %1 ShootDescID and ShootDescType must match that of the original order.\nThe ShootDescID and ShootDescType will be changed to match the Original Order.\n\nDo you wish to continue the update?~
+		Define: SettingColorType	using DDText	Fields: Text ~Order %1, Roll %2, Frame %3 is color type %4~ 
+		Define: SetColorType		using DDText	Fields: Text ~Set color type for %1 Frames on %2 Orders~
+	}
+
+Include: ~FormattingRoutines~;
+Include: ~Utilities2~;    // included for doNewWay(), & GetTypeListForShootDescID()
+
+VOID RefreshDoc()
+{
+	KillTimer( 1 );
+	RefreshListView( TRUE );
+}
+
+VOID DelayedRefreshDoc()
+{
+	SetTimer( 1,2000,~RefreshDoc()~ );
+}
+
+
+NUMERIC RefreshListView( Requery )
+{
+	if ( !OrdersDataWindow(GetWindowAddress) )
+		{ return FALSE; }
+
+	if ( OrdersDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(~Would you like to save your pending changes?~),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	Count = List( NumEntries );
+
+	IF 0
+	{
+		if ( <Count> > 300 )
+		{
+			if ( MessageBox( ~Your query:\n\n   <DocumentQuery>\n\nwill retrieve <Count> records\n\nAre you sure you want to continue?~,YESNO ) != YES )
+			{
+				return TRUE;
+			}
+		}
+	}
+
+	Count = List( NumEntries );
+	OrdersDataWindow( StatusBar,Text,Translate( ~Reading <Count> Orders~ ) );
+
+	//SetDocumentData( List(GetObject), TRUE );
+	SetDocumentData( List(GetObject) );
+	OrdersDataWindow( RefreshWindow );
+	ChangeCount = 0;
+
+	return TRUE;
+}
+
+
+NUMERIC HandleTextDrop( &SrcView,&DstView,DropLocation )
+{
+	if ( !SrcView( GETSELECTED,SelectedData ) )
+	{ 
+		GenCon( SelectedData,Is,SrcView(GetCopyOf) );
+	}
+
+	Count = SelectedData( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( Translate( ~There is no order data to paste~ ) ); }
+
+	WaitCursor( Begin );
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Error connecting to the shared database: <theErr>~ );
+	}
+
+	while ( SelectedData( GetNext,Item ) )
+	{
+		Key = ~ID = '<$con.Item[ID]>'~;
+
+		Query = ~Select * From Orders Where <Key>~;
+
+		if ( !PGenConList( List,Connection,dBase,Cursor,Keyset,Query,~<Query>~ ) )
+		{
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		}
+
+		IsNewRow = List( NumEntries ) == 0;
+
+		if ( !List( UpdateFrom,Item,~<Key>~,<IsNewRow> ) )
+		{
+			List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+			return Warning( Translate( ~Could not update Order record where <Key>. <theErr>~ ) );
+		}
+	}
+
+	DelayedRefreshDoc();
+
+	return TRUE;
+}
+
+
+NUMERIC HandleDrop()
+{
+	if ( !GenCon( DragDropInfo,GetDropInfo ) )
+		{ return FALSE; }
+	
+	Tree( Location,~[GenCons]~,Name,DragDropInfo,Pluck );			// REMOVE THE DRAG INFO FROM THE TREE
+
+	if ( !GenCon( SrcView,Is,~<$CON.DragDropInfo[SrcView]>~ ) )		// SEE IF THIS IS A DROP FROM OUTSIDE THE APPLICATION 
+		{ return ExternalDrop(DragDropInfo); }			
+
+	if ( !GenCon( DstView,Is,~<$CON.DragDropInfo[DstView]>~ ) ) 
+		{ return Warning( ~The Destination View is invalid~ ); }	
+		
+	if ( ~<$con.SrcView[ViewDataType]>~ == ~Text~ )		// IS THE ITEM A LIST OF GENCONS CONTAINING TEXT?
+		{ return HandleTextDrop( SrcView,DstView,~<$CON.DragDropInfo[DropLocation]>~ ); }
+
+	return Warning( Translate( ~You can't paste this type of data here~ ) );
+
+}
+
+
+VOID OrderProofed(ChangeCount)
+{
+	OrdersDataWindow( StatusBar,Text, Translate( ~<ChangeCount> Order(s) were processed for proofing~ ) );
+}
+
+
+ChangeCount = 0;
+
+VOID DataHasChanged( Changes )
+{
+	ChangeCount += 0<Changes>;
+	OrdersDataView( StatusBar,Text,Translate( UIMessages,ChangesMade,<ChangeCount>,~the Job Queue~  ) );
+}
+
+NUMERIC ExportToFile( Table )	// DON'T THINK THIS IS BEING USED
+{
+	if ( !OrdersDataView( GetSelected,ItemsToExport ) )		
+		{ return Warning( Translate(~There were no items selected to export~) ); }
+
+	if ( !ItemsToExport( ChildCount ) )
+		{ return Warning( Translate(~There were no items selected to export~) ); }
+
+	ItemsToExport( Hang,~[GenCons]~ );
+
+	Actions = ACTIONS ( Doc( ~Export~ Open ExportToFileDoc "Init(~ItemsToExport~,~<Table>~);" ) );
+
+	return PerformActions( Actions );
+}
+
+NUMERIC SeeJobsInQueue()
+{
+	if ( !OrdersDataView( GetSelected,SelectedOrders ) )
+	{
+		return Warning( Translate( ~There were no rows selected~ ) );
+	}
+
+	Count = SelectedOrders( ChildCount );
+
+	if ( !SelectedOrders( ChildCount ) )
+	{
+		return Warning( Translate( ~There were no rows selected~ ) );
+	}
+	if ( <Count> > 5 )
+	{
+		return Warning( Translate( ~You can't select more than 5 orders~ ) );
+	}
+	
+	if ( !SelectedOrders( MakeSQLList,List,TRUE,ID ) )
+	{	
+		return Warning( Translate( ~Error creating list of orders~ ) );
+	}
+
+	Query = STR ( Select * From JobQueue Where OrderID In (<List>) );
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTION Doc ( ~JobQueue~ <OpenMethod> JobQueueDoc "Init( Translate( ~Jobs For Orders <List>~ ),~<Query>~ );" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC ViewSubjectInfoData()	// NOT USED
+{
+	if ( !OrdersDataView( GetSelected,SelectedOrders ) )
+	{
+		return Warning( Translate( ~There were no rows selected~ ) );
+	}
+
+	Count = SelectedOrders( ChildCount );
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	if ( <Count> > 1 )
+	{
+		OpenMethod = Open;
+	}
+
+	while ( !SelectedOrders( GetNext,Order ) )
+	{
+		ImagesOrder = ~<$Con.Order[ImagesOrderID]>~ != ~~ ? ~<$Con.Order[ImagesOrderID]>~ : ~<OrderID>~;
+
+		Query = STR ( Select * From SubjectInfo Where OrderID = '<ImagesOrder>' Order By OrderID,SubjectID );
+
+		Actions = ACTION Doc ( ~SubjectInfo~ <OpenMethod> SubjectInfoDoc "Init( ~<OrderID>~,~<Query>~ );" );
+		PerformActions( Actions );
+
+		if ( <++WindowsOpened> > 5 )
+			break;
+	}
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+STR GetDirectoryFromUser( FileFilter )
+{
+	FileFilter = ~TIFF Files|*.tif;*.tiff|JPEG Files|*.jpg;*.jpeg|All Files|*.*||~;
+
+	if ( FileDialog( PATH,theFile,FILTER,~<FileFilter>~,OPEN ) )
+	{
+		return ~<theFile>~;
+	}
+
+	return ~~;
+}
+
+
+// Called from LoadImagesForOrder() 
+NUMERIC RecursiveImageLoadByOrderRollFrame( Order,Path,SearchCritera )
+{
+	MoreFiles = findfile( aDirectoryEntry,Find,~<Path>\<SearchCritera>~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,ImagePath );
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		{	
+			RecursiveImageLoadByOrderRollFrame( ~<Order>~,~<ImagePath>~,~<searchCritera>~ );
+			continue;
+		}
+
+		FileName = ~<$Str.$ImagePath.FileName>~;
+		Frame = ~<$Str.$FileName.WithOutExt>~;
+		Roll = ~<$Str.$ImagePath.Folder>~;
+
+		RemoveCmd = ~Delete From Images Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		RemoveCmd2 = ~Delete From SBAImages Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		RemoveCmd3 = ~Delete From ImageSorterSummary Where OrderID = '<Order>'~;
+		RemoveCmd4 = ~Delete From ImageCorrections Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		RemoveCmd5 = ~Delete From RetouchImages Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		RemoveCmd6 = ~Delete From DSBAImages Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		RemoveCmd7 = ~Delete From KparsData Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+		RemoveCmd8 = ~Delete From CompSbaData Where OrderID = '<Order>' AND Roll = '<Roll>' AND Frame = '<Frame>'~;
+//      if LoadIMageForOrder is ever called, need to handle retouch original images 
+
+		Fields		= ~OrderID,Roll,Frame,Path~;
+		Values		= ~'<Order>','<Roll>','<Frame>','<ImagePath>'~;	
+		InsertCmd	= ~Insert Into Images(<Fields>) Values(<Values>)~;
+
+		Log( Session,~<InsertCmd>~ );
+
+		Ado( dBase,Connect,CMD,~<RemoveCmd>~ );	// OKAY FOR THIS TO ERROR OUT
+		dBase( CMD,~<RemoveCmd2>~ );
+		dBase( CMD,~<RemoveCmd3>~ );
+		dBase( CMD,~<RemoveCmd4>~ );
+		dBase( CMD,~<RemoveCmd5>~ );
+		dBase( CMD,~<RemoveCmd6>~ );
+		dBase( CMD,~<RemoveCmd7>~ );
+		dBase( CMD,~<RemoveCmd8>~ );
+
+		if ( !dBase( CMD,~<InsertCmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Could not <cmd>. <theErr>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+// Not Called
+NUMERIC LoadImagesForOrder()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )
+		{ return Warning( Translate( ~There were no orders selected~ ) ); }
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		FullPath = GetDirectoryFromUser( ~TIFF Files|*.tif;*.tiff|JPEG Files|*.jpg;*.jpeg|All Files|*.*||~ );
+
+		if ( ~<FullPath>~ == ~~ )
+			break;
+
+		RollDirectory = ~<$Str.$FullPath.Path>~;
+		OrderDirectory = ~<$Str.$RollDirectory.Path>~;
+
+		RecursiveImageLoadByOrderRollFrame( ~<$con.Order[ID]>~,~<OrderDirectory>~,~*.*~ );
+		OrderImageQuery( ~<$con.Order[ID]>~,TRUE,~SELECT * From Images WHERE OrderID = '<$con.Order[ID]>' Order By OrderID,Roll,Frame~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RemoveImagesFromOrder( DeleteFile )
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )
+		{ return Warning( Translate( ~There were no orders selected~ ) ); }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		return Warning( Translate( ~Could not connect to the default database~ ) ); 
+	}
+
+	DeleteRawFile = FALSE;
+	DeleteKparsOriginals = FALSE;
+
+	if ( $DeleteFile )
+	{
+		if ( MessageBox( ~Are you sure you want to delete the selected images for this order?~,YESNO,DEFBUTTON2 ) != YES )
+			{ return FALSE; }
+
+		SelectedOrders( MakeSQLList,OrderList,TRUE,ID);
+		//Cmd = ~Select count(1) from RawImages where OrderID In (<OrderList>)~;
+		//dbase( GetValuesFor, ~<Cmd>~, numRecs);
+
+		numRecs = 1;
+
+		if (<numRecs> > 0)
+		{
+			if ( MessageBox( Translate(OrdersMessages,DeleteRawImagesToo),YESNO,DEFBUTTON2 ) == YES )
+				{ DeleteRawFile = TRUE; }
+
+			if ( MessageBox( Translate(OrdersMessages,DeleteKparsImagesToo),YESNO,DEFBUTTON2 ) == YES )
+				{ DeleteKparsOriginals = TRUE; }
+		}
+
+		if ( !SelectedOrders( RewindList ) )
+			{ return Warning( Translate( UIMessages,RewindViewListFailed ) ); }
+	}
+	else
+	{
+		if ( MessageBox( ~Are you sure you want to remove the selected images for this order?~,YESNO,DEFBUTTON2 ) != YES )
+			{ return FALSE; }
+	}
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		DeleteImagesForOrder( dBase, ~<$Con.Order[ID]>~,$DeleteFile,$DeleteRawFile,$DeleteKparsOriginals );
+	}
+
+	OrdersDataView( NotifyAffectedDocuments,Frame );
+
+	OrdersDataWindow( StatusBar,Text,Translate(~Image Deletion Complete~) );
+
+	return TRUE;
+}
+
+
+NUMERIC GetColorTypeForOrder()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )
+		{ return Warning( Translate( ~There were no orders selected~ ) ); }
+
+	Actions = 	ACTION DOC ( ~colortypeDialog~ OpenOnce colortypeDialog "Init();" );
+	PerformActions( Actions );
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+NUMERIC HeadAlignAndGroupBalance()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )
+		{ return Warning( Translate( ~There were no orders selected~ ) ); }
+		
+	if ( !SelectedOrders( GetFirst,Order ) )
+	{
+		return Warning( Translate( ~There were no orders selected~ ) );
+	}
+
+	action = ACTION DOC ( HeadAlign Open "<$App.HTMLPages>\HeadAlign\HeadAlign.kpl" "InitWithOrder(~<$con.Order[ID]>~);" );
+	return PerformActions( action );
+}
+
+NUMERIC OnManageImages()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )
+		{ return Warning( Translate( ~There were no orders selected~ ) ); }
+		
+		
+	ReturnOnFailure( SelectedOrders( MakeSQLList,List,TRUE,ID ) );
+		
+
+	action = ACTION DOC ( GreenScreenDoc Open "<$App.HTMLPages>\GreenScreen\GreenScreenDoc.txt" "InitWithOrders(~<List>~);" );
+	return PerformActions( action );
+}
+
+
+
+NUMERIC OrderQuery( &OrderIDsList,AsImages )
+{
+	// Create a temporary string list that will contain the order IDs that are found as
+	// a result of the parent order ID query.  These order IDs will be merged with the
+	// selected order IDs.
+	StringList( TempOrderIDsList,New,NoDuplicateValues );
+
+	InList = ~~;
+	count = 0;
+
+	// Build the list of orders that have any of the selected orders as their parent
+	// order ID.
+	result = OrderIDsList( GetFirstString, OrderID );
+	while ( <result> )
+	{
+		InList = ~<InList>~ == ~~ ? ~'<OrderID>'~ : ~<InList>,'<OrderID>'~;
+
+		if ( ++count >= 10 )		// BUILD UP A LIST OF UP TO 10 Order ID'S
+		{
+			ParentIDQuery = ~Select ID From Orders Where ParentOrderID In (<InList>) Order By ID~;
+			if ( PGenConList( ChildOrderIDsList,Connect,Cursor,Forward,QUERY,~<ParentIDQuery>~ ) )
+			{
+				while ( ChildOrderIDsList( GetNext, ChildOrder) )
+				{
+					TempOrderIDsList( AddString,~<$pcon.ChildOrder[ID]>~ );
+				}
+			}
+
+			InList = ~~;
+			count = 0;
+		}
+
+		result = OrderIDsList( GetNextString, OrderID );
+	}
+
+	if ( ~<InList>~ != ~~ )
+	{
+		ParentIDQuery = ~Select ID From Orders Where ParentOrderID In (<InList>) Order By ID~;
+		if ( PGenConList( ChildOrderIDsList,Connect,Cursor,Forward,QUERY,~<ParentIDQuery>~ ) )
+		{
+			while ( ChildOrderIDsList( GetNext, ChildOrder) )
+			{
+				TempOrderIDsList( AddString,~<$pcon.ChildOrder[ID]>~ );
+			}
+		}
+	}
+
+	// Merge the 2 lists.  Since we created order ID list with no duplicates allowed, we
+	// don't have to worry about an order showing up more than once in the list.
+	result = TempOrderIDsList( GetFirstString, OrderID );
+	while ( <result> )
+	{
+		OrderIDsList( AddString,~<OrderID>~ );
+
+		result = TempOrderIDsList( GetNextString, OrderID );
+	}
+
+	InList = ~~;
+	count = 0;
+	OpenWindows = 0;
+
+	// Iterate through the order ID list and open the window(s) with the order items for
+	// the orders.
+	result = OrderIDsList( GetFirstString, OrderID );
+	while ( <result> )
+	{
+		InList = ~<InList>~ == ~~ ? ~'<OrderID>'~ : ~<InList>,'<OrderID>'~;
+
+		if ( ++count >= 10 )		// BUILD UP A LIST OF UP TO 10 Order ID'S
+		{
+			OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+			if ( <OpenWindows> > 0 )
+			{
+				OpenMethod = Open;
+			}
+			// tested 3/1/07
+//			Query = ~SELECT OrderItems.*, Products.LayoutName FROM OrderItems, Products WHERE OrderID IN (<InList>) AND OrderItems.ProductID = Products.ID ORDER BY OrderID,OrderItems.Sequence,OrderItems.Subsequence~ ;
+			Query = ~Select OrderItems.*, Products.LayoutName From OrderItems  LEFT OUTER JOIN Products On OrderItems.ProductID = Products.ID Where OrderID In (<InList>) Order By OrderID,OrderItems.Sequence,OrderItems.Subsequence~ ;
+			Actions = ACTION Doc ( ~OrderItems~ <OpenMethod> OrderItemsDoc "Init( ~<InList>~,~<Query>~,<AsImages>,TRUE,TRUE );" );
+			PerformActions( Actions );
+
+			if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+			InList = ~~;
+			
+			count = 0;
+			++OpenWindows;
+		}
+
+		result = OrderIDsList( GetNextString, OrderID );
+	}
+
+	if ( ~<InList>~ != ~~ )
+	{
+		OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+		if ( <OpenWindows> > 0 )
+		{
+			OpenMethod = Open;
+		}
+		// tested 3/1/07
+//		Query = ~SELECT OrderItems.*, Products.LayoutName FROM OrderItems, Products WHERE OrderID IN (<InList>) AND OrderItems.ProductID = Products.ID ORDER BY OrderID,OrderItems.Sequence,OrderItems.Subsequence~ ;
+		Query = ~Select OrderItems.*, Products.LayoutName From OrderItems  LEFT OUTER JOIN Products On OrderItems.ProductID = Products.ID Where OrderID In (<InList>) Order By OrderID,OrderItems.Sequence,OrderItems.Subsequence~ ;
+		Actions = ACTION Doc ( ~OrderItems~ <OpenMethod> OrderItemsDoc "Init( ~<InList>~,~<Query>~,<AsImages>,TRUE,TRUE );" );
+		PerformActions( Actions );
+
+		if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SeeInfoForOrders()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	if ( !SaveAllChanges() )
+		{ return FALSE; }
+
+	Count = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		if (~<$Con.Order[ImagesOrderID]>~ != ~~)
+		{
+			OrderID = ~<$Con.Order[ImagesOrderID]>~;
+			Query = ~Select InfoType,ShootDescID from Orders where ID = '<OrderID>'~;
+			if (!ADO( dbase,Connect,GetValuesFor,~<Query>~,InfoType,ShootDescID ) )
+			{
+				dBase( GetErrorDescription,theErr );
+				return Warning( Translate(DBMessages,CmdFailed,~<Query>~,~<theErr>~) );
+			}
+		}
+		else
+		{
+			OrderID = ~<$Con.Order[ID]>~;
+			InfoType = ~<$Con.Order[InfoType]>~;
+			ShootDescID = ~<$Con.Order[ShootDescID]>~;
+		}
+
+		if ( doNewWay())
+		{
+			SubjectsOrderID = ~<ShootDescID>~ != ~~ ? ~<ShootDescID>~ : ~<OrderID>~;
+		}
+		else
+		{
+			SubjectsOrderID = ~<OrderID>~;
+		}
+		Query = ~SELECT * FROM SubjectInfo WHERE OrderID = '<SubjectsOrderID>' Order By OrderID,SubjectID~;
+
+		Actions = ACTIONS ( Doc( ~SubjectInfo~ Open SubjectInfoDoc "Init2( ~<SubjectsOrderID>~,~<InfoType>~,~<Query>~);" ) );
+
+		PerformActions( Actions );
+
+		if ( <++Count> >= 3 )
+		{
+			Warning( ~The subject information for three orders was displayed.  Select another three and try again if you would like to see more.~ );
+			break;
+		}
+	}
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC NavigateOrder()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+	{ 
+		return Warning( ~There were no orders selected~ );
+	}
+
+	if ( !SelectedOrders( GetFirst,Order ) )
+	{
+		return Warning( Translate( ~There were no orders selected~ ) );
+	}
+
+	OrderID = ~<$con.Order[ID]>~;
+
+	Action = ACTION DOC ( Navigator OpenOnce FrameSelectorDoc "HandleOrderIDReturnKey(~<OrderID>~);" );
+	PerformActions( Action );
+
+	Queue( ~OnCloseOrdersDataView()~ );
+
+	return TRUE;
+}
+
+
+NUMERIC SeeItemsForOrders( AsImages )
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	if ( !SaveAllChanges() )
+		{ return FALSE; }
+
+	// 09/01/99 DPT
+	// This would be one way of handling pending changes when the user attempts to
+	// perform an action in the order window.  I left this in here in case we want
+	// to use this in the future.
+	//if ( OrdersDataView( PendingChanges ) )
+	//{
+	//	if ( MessageBox( ~Changes must be saved before continuing.~,OKCANCEL ) == CANCEL )
+	//	{
+	//		return FALSE;
+	//	}
+	//	
+	//	if ( !SaveAllChanges() )
+	//	{
+	//		return FALSE;
+	//	}
+	//}
+
+	return QueryItemsForOrders( SelectedOrders,<AsImages> );
+}
+
+
+NUMERIC QueryItemsForOrders( &SelectedOrders,AsImages )
+{
+	// Create a string list of the selected order IDs to pass to OrderQuery.
+	StringList( OrderIDsList,New,NoDuplicateValues );
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		OrderIDsList( AddString,~<$con.Order[ID]>~ );
+	}
+
+	if ( OrderIDsList( NumEntries ) != 0 )
+	{
+		OrderQuery( OrderIDsList,~<AsImages>~ );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC SetSequenceforImages()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Could not connect to the shared database. <theErr>~ );
+	}
+
+	Count = SelectedOrders( ChildCount );
+
+	if ( !<Count>  )
+	{
+		return Warning( Translate( OrdersMessages,NoOrdersSelected) );
+	}
+
+	if ( MessageBox( ~Are you sure you want to set the SequenceID for the <Count> Order(s)? ~,YESNO ) != YES )
+		{ return FALSE; }
+
+	WaitCursor( Begin );
+
+	Frames = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{ 
+		Query = ~Select OrderID,Roll,Frame From Images Where OrderID = '<$con.Order[ID]>' Order By OrderID,Roll,Frame~;
+
+		if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+		{
+			WaitCursor( End );
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		}
+
+		Sequence = 0;
+
+		while ( List( GetNext,Image ) )
+		{
+			cmd = ~Update Images Set SequenceID = <++Sequence> Where OrderID = '<$pcon.Image[OrderID]>' And Roll = '<$pcon.Image[Roll]>' And Frame = '<$pcon.Image[Frame]>'~;
+
+			if ( !dBase( cmd,~<Cmd>~ ) )
+			{
+				WaitCursor( End );
+				dBase( GetErrorDescription,theErr );
+				return Warning( ~Could not update the SequenceID. <cmd>. <theErr>~ );
+			}
+
+			++Frames;
+
+			OrdersDataWindow( StatusBar,Text,Translate(OrdersMessages,SettingSequence,~<$pcon.Image[OrderID]>~,~<$pcon.Image[Roll]>~,~<$pcon.Image[Frame]>~,~<Sequence>~) );
+		}
+
+		ForgetLocal( List );
+	}
+
+	OrdersDataWindow( StatusBar,Text,Translate(OrdersMessages,SetSequence,~<Frames>~,~<Count>~) );
+
+	WaitCursor( End );
+
+	return TRUE;
+}
+
+
+NUMERIC ScanIntoSelectedOrder()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	if ( !SelectedOrders( GetFirst,Order ) )
+		{ return Warning( Translate( ~No Orders were selected~ ) ); }
+
+	if ( Numeric(~<$[Symbols].RunVersion[Value]>~) >= 2.1 )
+	{
+		Actions = ACTION Doc ( ~StartScanningDoc~ OpenOnce StartScanningDoc "Init(~<$con.Order[ID]>~);" );
+	}
+	else
+	{
+		Actions = ACTION Doc ( ~ScannerDoc~ OpenOnce ScannerDoc "OnChangeOrder(~Sizzle~,~<$con.Order[ID]>~);" );
+	}
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC ImportPDFIntoSelectedOrder()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	if ( !SelectedOrders( GetFirst,Order ) )
+		{ return Warning( Translate( ~No Orders were selected~ ) ); }
+
+	Action = STR ( ImportPDFDoc Open ImportPDFDoc "Init(~<$con.Order[ID]>~);" );
+	PerformDocActions( Action );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC ImportIntoSelectedOrder()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	if ( !SelectedOrders( GetFirst,Order ) )
+		{ return Warning( Translate( ~No Orders were selected~ ) ); }
+
+	Actions = ACTION Doc ( ~ImportImagesDoc~ OpenOnce ImportImagesDoc "Init(~<$con.Order[ID]>~);" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+NUMERIC ExportImages()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	if ( !SelectedOrders( GetFirst,Order ) )
+		{ return Warning( Translate( ~No Orders were selected~ ) ); }
+
+	Actions = ACTION Doc ( ~ExportImagesDoc~ OpenOnce ExportImagesDoc "Init(~<$con.Order[ID]>~);" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC SimpleOrdering()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	if ( !SelectedOrders( GetFirst,Order ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	OrderID = ~<$Con.Order[ID]>~;
+
+	ImagesOrder = ~<$Con.Order[ImagesOrderID]>~ != ~~ ? ~<$Con.Order[ImagesOrderID]>~ : ~<OrderID>~;
+
+	Actions = ACTION Doc ( ~SimpleOrderingDoc~ OpenOnce SimpleOrderingDoc "Init(~<OrderID>~,~<ImagesOrder>~);" );
+
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC CombinedScanQuery( List,AsImages )
+{
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Query = ~SELECT * FROM Images WHERE Width = 0 OR Length = 0 OR NeedScan <> 0 ORDER BY OrderID,Roll,Frame~ ;
+	Actions = ACTION Doc ( ~ImagesToScan~ <OpenMethod> ImagesDoc "Init( ~Images Needing Scanning~,<AsImages>,~<Query>~,0 );" );
+	PerformActions( Actions );
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+	return TRUE;
+}
+
+
+NUMERIC SeeImagesNeedingScanningForOrders( AsImages )
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	InList = ~~;		count = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		InList = ~<InList>~ == ~~ ? ~'<$con.Order[ID]>'~ : ~<InList>,'<$con.Order[ID]>'~;
+
+		if ( ++count >= 10 )		// BUILD UP A LIST OF UP TO 10 Order ID'S
+		{
+			CombinedScanQuery( ~<InList>~,~<AsImages>~ );
+			InList = ~~;		
+			count = 0;
+		}
+	}
+
+	if ( ~<InList>~ != ~~ )
+		{  CombinedScanQuery( ~<InList>~,~<AsImages>~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC CustomerExists( ID,&Name )
+{
+	Query = ~Select ID,NAME From Customers Where ID = '<ID>' OR AlternateID = '<ID>'~;
+
+	Success = Ado( dBase,Connect,GetValuesFor,~Select NAME From Customers Where ID = '<ID>' OR AlternateID = '<ID>'~,Name ) != FALSE;
+
+	return <Success>;
+}
+ 
+
+NUMERIC ShootDescExists( ID,Type,&IDsType )
+{
+	StringList(TypeList,New);
+	if ( GetTypeListForShootDescID(~<ID>~,TypeList,FALSE) )  // ShootDescription exists with same Id as Order
+	{
+		TypeList(GetStringAt,0,IDsType);   // Use first Type found
+		if (TypeList(NumEntries) > 1)
+		{
+		}
+		if (~<IDsType>~ == ~<Type>~)
+		{	return TRUE;	}
+
+	}
+	else
+	{	IDsType = ~<Type>~;	}
+
+	return FALSE;
+}
+ 
+
+NUMERIC ValidateCustomer( ID )
+{
+	if ( FALSE && ~<ID>~ == ~~ )
+	{ 
+		if ( MessageBox( ~Customer ID cannot be blank.  Would you like help finding one? ~,YESNO ) != YES )
+			{ return FALSE; }
+
+		OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+		action = ACTION DOC ( AllCustomers <OpenMethod> CustomersSearchDoc "Search();" );
+		PerformActions( action );
+
+		return FALSE;
+	}	
+
+	Name = ~~;
+
+	if ( ~<ID>~ == ~~ )
+		{ return TRUE; }
+
+	if ( CustomerExists( ~<ID>~,&Name ) )
+		{ return TRUE; }
+
+	if ( MessageBox( Translate(OrdersMessages,AddCustomerRecord,~<ID>~),YESNO ) == YES )
+	{ 
+		if ( !Ado( dBase,Connect,CMD,~Insert Into Customers(ID) Values('<ID>')~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Could not add a customer with ID of <ID>. <theErr>~ );
+		}
+
+		if ( MessageBox( Translate(OrdersMessages,EditCustomerRecord,~<ID>~),YESNO ) != YES )
+			{ return TRUE; }
+
+		Query = ~SELECT * FROM Customers WHERE ID = '<ID>'~;
+
+		Actions = ACTIONS ( Doc( ~Customers~ Open CustomersDoc "Init( ~<ID>~,~<Query>~);" ) );
+
+		return PerformActions( Actions );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ValidateShootDesc( &ChangedOrder,ChangedRow,ShootID,Type )
+{
+	if ( ~<$con.ChangedOrder[ImagesOrderID]>~ != ~~ )
+	{
+		Query = ~Select ShootDescID,ShootDescType From Orders Where ID = '<$con.ChangedOrder[ImagesOrderID]>'~;
+		if ( !Ado( dBase,Connect,GetValuesFor,~<Query>~,OrigShootDescID,OrigShootDescType) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		}
+		if ( (~<ShootID>~ != ~<OrigShootDescID>~) || (~<Type>~ != ~<OrigShootDescType>~) )
+		{
+			if (MessageBox( Translate(OrdersMessages,SetReOrdersShootToOrigOrders,~<$con.ChangedOrder[ID]>~),YESNO ) == YES )
+			{
+				ChangedOrder( SetValues,ShootDescID,~<OrigShootDescID>~,ShootDescType,~<OrigShootDescType>~);
+				OrdersDataView( SetCellValue, <ChangedRow>, ~ShootDescID~,~<OrigShootDescID>~ );
+				OrdersDataView( SetCellValue, <ChangedRow>, ~ShootDescType~,~<OrigShootDescType>~ );
+			}
+			else
+			{	return FALSE;	}
+		}
+		return TRUE;
+	}
+
+	if ( ~<ShootID>~ == ~~ )
+		{ return HandleShootDescExists(ChangedOrder,<ChangedRow>); }
+
+	if ( ShootDescExists( ~<ShootID>~,~<Type>~,IDsType) )
+		{ return TRUE; }
+
+	if ( ~<Type>~ != ~<IDsType>~ )  // Shoot exists, but for different table
+	{
+		if (MessageBox( Translate(OrdersMessages,ChangeShootDescType,~<ShootID>~,~<IDsType>~,~<$con.ChangedOrder[ID]>~),YESNO ) == YES )
+		{
+			ChangedOrder( SetValues,ShootDescType,~<IDsType>~);
+			OrdersDataView( SetCellValue, <ChangedRow>, ~ShootDescType~,~<IDsType>~ );
+			return TRUE;
+		}
+		else
+		{	return FALSE;	}
+	}
+
+	// Shoot doesn't exist
+	if ( MessageBox( Translate(OrdersMessages,AddShootIdRecord,~<ShootID>~,~<Type>~),YESNO ) == YES )
+	{ 
+		if ( !Ado( dBase,Connect,CMD,~Insert Into ShootDescription<Type>(ID) Values('<ShootID>')~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Could not add a ShootDescription with ID of <ShootID>. <theErr>~ );
+		}
+
+		if ( MessageBox( Translate(OrdersMessages,EditShootIdRecord,~<ShootID>~,~<Type>~),YESNO ) != YES )
+			{ return TRUE; }
+
+		Query = ~SELECT * FROM ShootDescription WHERE ID = '<ShootID>'~;
+
+		Actions = ACTIONS ( Doc( ~ShootDescription~ Open ShootDescriptionDoc "Init( ~<ShootID>~,~<Query>~,~<Type>~);" ) );
+
+		return PerformActions( Actions );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !OrdersDataView( GetChangedRow,ChangedOrder,OrigOrder,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedOrder[ID]>~ == ~~ )
+		{ return Warning( Translate( ~Unable to save pending changes.  Order ID cannot be blank.~ ) ); }
+
+	if ( !ValidateCustomer( ~<$con.ChangedOrder[CustomerID]>~ ) )
+	{ 
+		return FALSE; 
+	}
+
+	if ( !ValidateShootDesc( ChangedOrder,<ChangedRow>,~<$con.ChangedOrder[ShootDescID]>~,~<$con.ChangedOrder[ShootDescType]>~ ) )
+	{ 
+		return FALSE; 
+	}
+
+	Key = STR ( ID = '<$con.OrigOrder[ID]>' );
+	Query = ~Select * From Orders Where <Key>~;
+
+	if ( <IsNewRow> )
+	{
+		if (!AddNew( ChangedOrder,OrigOrder,Query,Key ))
+			{ return FALSE; }
+	}
+	else
+	{
+		if (!UpdateExisting( ChangedOrder,OrigOrder,Query,Key ))
+			{ return FALSE; }
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC HandleShootDescExists( &ChangedOrder,ChangedRow )
+{
+	if ( doNewWay() )
+	{
+		Id = ~<$con.ChangedOrder[Id]>~;
+
+		StringList(TypeList,New);
+		if ( GetTypeListForShootDescID(~<Id>~,TypeList,FALSE) )  // ShootDescription exists with same Id as Order
+		{
+			TypeList(GetStringAt,0,ShootType);  // Use first Type found
+
+			if (MessageBox( Translate(OrdersMessages,SetOrdersShootDescID,~<Id>~,~<ShootType>~),YESNO ) == YES )
+			{
+				ChangedOrder( SetValues,ShootDescID,~<Id>~,ShootDescType,~<ShootType>~);
+				OrdersDataView( SetCellValue, <ChangedRow>, ~ShootDescID~,~<Id>~ );
+				OrdersDataView( SetCellValue, <ChangedRow>, ~ShootDescType~,~<ShootType>~ );
+			}
+			else
+			{	return FALSE;	}
+		}
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC AddNew( &ChangedOrder,&OrigOrder,&Query,&Key )
+{
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( !List( UpdateFrom,ChangedOrder,~<Key>~,TRUE ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( ~Could not update Order record where <Key>. <theErr>~ );
+	}
+
+	OrdersDataView( CommitChanges );
+
+	//List( GetConnection,DBase );
+	//DBase( LogActivity,Msg,~Added Order <Key>~ );
+
+	return TRUE;
+}
+
+Include: ~MergeSubjectInfo~;
+
+NUMERIC UpdateExisting( &ChangedOrder,&OrigOrder,&Query,&Key )
+{
+	// If the Order ID hasn't changed, we only need to do an update of the
+	// fields that have changed in the Orders table.
+	// If the Order ID has changed, we will insert a new row into the Orders
+	// table using the existing Order data along with the new Order id.  Then
+	// we can update all of the entries in the order, order items, order images,
+	// and subject info tables that refer to this Order ID. Finally, we can remove
+	// the old Order record from the Orders table. Since this is all done within
+	// a transaction, it will all be transparent to the user.  Things need to
+	// be handled this way because of the foreign key constraints placed on the
+	// Order ID.
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,BeginTransaction,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+	List( GetConnection,dBase );
+
+
+	if ( ~<$con.OrigOrder[ID]>~ == ~<$con.ChangedOrder[ID]>~ )
+	{
+		if ( (doNewWay()) && (~<$con.ChangedOrder[ImagesOrderID]>~ == ~~) && ((~<$con.OrigOrder[ShootDescID]>~ == ~~) && (~<$con.ChangedOrder[ShootDescID]>~ != ~~)) &&
+			  (~<$con.OrigOrder[ID]>~ != ~<$con.ChangedOrder[ShootDescID]>~))
+		{
+			if ( SubjectInfoExists( ~<$con.OrigOrder[ID]>~,~<$con.OrigOrder[InfoType]>~ ) )
+			{
+				if ( MessageBox( Translate(OrdersMessages,NeedMergeSubjectInfo,~<$con.OrigOrder[ID]>~,~<$con.ChangedOrder[ShootDescID]>~),YESNO) != YES )
+				{	return FALSE;	}
+		
+				if ( !MergeSubjectInfo(dBase,~<$con.OrigOrder[ID]>~,~<$con.ChangedOrder[ShootDescID]>~,~<$con.OrigOrder[InfoType]>~) )
+				{	return FALSE;	}
+			}
+		}
+		else if ( (doNewWay()) && ((~<$con.OrigOrder[ShootDescID]>~ != ~~) && (~<$con.ChangedOrder[ShootDescID]>~ == ~~)) && (~<$con.ChangedOrder[ImagesOrderID]>~ == ~~) )
+		{
+			if ( SubjectInfoExists( ~<$con.OrigOrder[ShootDescID]>~,~<$con.OrigOrder[InfoType]>~ ) )
+			{
+				if ( MessageBox( Translate(OrdersMessages,NoAccessSubjectInfo,~<$con.OrigOrder[ShootDescID]>~),YESNO) != YES )
+				{	return FALSE;	}
+			}
+		}
+
+		if ( !List( UpdateFrom,ChangedOrder,~<Key>~,FALSE ) )
+		{
+			List( GetErrorDescription,0,theErr,RollBackTransaction );
+			return Warning( ~Could not update Order record where <Key>. <theErr>~ );
+		}
+
+	}
+
+	else  // Order ID changed
+	{
+
+		origOrderID = ~<$con.OrigOrder[ID]>~;
+
+		if ( ~<origOrderID>~ == ~HR500 Image Type Sorter~ )
+		{
+			List( RollBackTransaction );
+			return Warning( ~You can't change the Order of <origOrderID> because it is designated for the HR500 Image Type Sorter only.~ );
+		}
+
+		if ( dBase( RecordCountFor,~Select OrderID From JobQueue Where OrderID = '<origOrderID>'~ ) )
+		{
+			List( RollBackTransaction );
+			return Warning( ~You can't change the Order ID of <origOrderID> because you still have jobs waiting to print.~ );
+		}
+
+		if ( ADO( localDB,ConnectLocal,RecordCountFor,~Select OrderID From OrderItemsToQueue Where OrderID = '<origOrderID>'~ ) )
+		{
+			List( RollBackTransaction );
+			return Warning( ~You can't change the Order of <origOrderID> because you still have jobs being sent to the print queue.~ );
+		}
+
+		if ( localDB( RecordCountFor,~Select OrderID From OrdersToProof Where OrderID = '<origOrderID>'~ ) )
+		{
+			List( RollBackTransaction );
+			return Warning( ~You can't change the Order of <origOrderID> because you still have jobs being sent to the print queue.~ );
+		}
+
+//		OrigOrder( SetValue,ID,~<$con.ChangedOrder[ID]>~);
+
+//		if ( !List( UpdateFrom,OrigOrder,~<Key>~,TRUE ) )
+		if ( !List( UpdateFrom,ChangedOrder,~<Key>~,TRUE ) )
+		{
+			List( GetErrorDescription,0,theErr,CancelUpdate,RollBackTransaction );
+			return Warning( ~Could not update Order record where <Key>. <theErr>~ );
+		}
+
+		// Update order items.
+		cmd = ~Update OrderItems SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update Order Items records. <theErr>~ );
+		}
+
+		// Update order images.
+		cmd = ~Update Images SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update Images records. <theErr>~ );
+		}
+
+		// Update SBA data.
+		cmd = ~Update SBAImages SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update SBAImages records. <theErr>~ );
+		}
+
+		// Update DSBA data.
+		cmd = ~Update DSBAImages SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update DSBAImages records. <theErr>~ );
+		}
+
+		// Update CompSBA data.
+		cmd = ~Update CompSbaData SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update CompSbaData records. <theErr>~ );
+		}
+
+		// Update RetouchImages data.
+		cmd = ~Update RetouchImages SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update RetouchImages records. <theErr>~ );
+		}
+
+		// Update ImageSorterSummary data.
+		cmd = ~Update ImageSorterSummary SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update ImageSorterSummary records. <theErr>~ );
+		}
+
+		if ( ( !doNewWay() )  ||
+			 (( ~<$con.OrigOrder[ShootDescID]>~ == ~~ )  && ( ~<$con.ChangedOrder[ShootDescID]>~ == ~~ )) )
+		{
+			InfoType = ~~;
+
+			dBase( GetValuesFor,~Select InfoType From Orders Where ID = '<origOrderID>'~,InfoType );
+
+			cmd = ~Update SubjectInfo<InfoType> SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+			if ( !dBase( CMD,~<cmd>~ ) )
+			{
+				dBase( GetErrorDescription,theErr,RollBackTransaction );
+				return Warning( ~Could not update Subject Info records. <theErr>~ );
+			}
+		}
+
+		// Update Roll info.
+		cmd = ~Update Rolls SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update Roll records. <theErr>~ );
+		}
+
+		// Update BremsonScanList info.
+		cmd = ~Update BremsonScanList SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update BremsonScanList records. <theErr>~ );
+		}
+
+		// Update OrderNotifications info.
+		cmd = ~Update OrderNotifications SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update Order Notifications records. <theErr>~ );
+		}
+
+		// Update Retouch info.
+		cmd = ~Update Retouch SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update Retouch records. <theErr>~ );
+		}
+
+		// Update OrderItemImages info.
+		cmd = ~Update OrderItemImages SET ItemOrderID = '<$con.ChangedOrder[ID]>' Where ItemOrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update OrderItemImages records. <theErr>~ );
+		}
+
+		// Update OrderItemImages info.
+		cmd = ~Update OrderItemImages SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update OrderItemImages records. <theErr>~ );
+		}
+
+		// Update OrderDlvrbl info.
+		cmd = ~Update OrderDlvrbl SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update OrderDlvrbl records. <theErr>~ );
+		}
+
+		// Update OrderServices info.
+		cmd = ~Update OrderServices SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update OrderServices records. <theErr>~ );
+		}
+
+		// Update OrderItemsServices info.
+		cmd = ~Update OrderItemsServices SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update OrderItemsServices records. <theErr>~ );
+		}
+
+		// Update ImagesServices info.
+		cmd = ~Update ImagesServices SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update ImagesServices records. <theErr>~ );
+		}
+
+		// Update Composite jobs info.
+		cmd = ~Update Composite SET OrderID = '<$con.ChangedOrder[ID]>' Where OrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update Composite records. <theErr>~ );
+		}
+
+		// Update orders.
+		cmd = ~Update Orders SET ImagesOrderID = '<$con.ChangedOrder[ID]>' Where ImagesOrderID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update Subject Info records. <theErr>~ );
+		}
+
+		cmd = ~Delete From Orders Where ID = '<origOrderID>'~;
+		if ( !dBase( CMD,~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Could not update Order records. <theErr>~ );
+		}
+
+	}
+
+	if ( !dBase( CommitTransaction ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Database commit failed.  <theErr>~ ) );
+	}
+
+	if ( ~<$con.OrigOrder[ID]>~ != ~<$con.ChangedOrder[ID]>~ )
+	{	OrigOrder( NotifyAffectedDocuments,OrderID );	}
+
+
+	OrdersDataView( CommitChanges );
+
+	return TRUE;
+}
+
+
+Include: ~DeleteOrder.txt~;
+
+NUMERIC DeleteRecord()
+{
+	if ( !OrdersDataView( GetSelectedRows,OrdersToDelete ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	count = OrdersToDelete( ChildCount );
+
+	if ( MessageBox( Translate(OrdersMessages,RemovingAllForOrder,~<count>~),YESNO,DEFBUTTON2 ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	OrdersToDelete( MakeSQLList,OrderList,TRUE,ID);
+
+	//Cmd = ~Select count(1) from Images where OrderID In (<OrderList>)~;
+	//dbase( GetValuesFor, ~<Cmd>~, numRecs);
+
+	numrecs = 1;	// Let's stop doing these lookups they take to long in the real world
+
+	if (<numRecs> > 0)
+	{
+		DeletingImageFiles = MessageBox( Translate(OrdersMessages,DeleteImagesToo),YESNOCANCEL,DEFBUTTON2 );
+
+		if ( ~<DeletingImageFiles>~ == ~CANCEL~ )
+		{
+			return TRUE;
+		}
+
+		DeletingImageFiles = ~<DeletingImageFiles>~ == ~YES~;
+	}
+	else
+	{	DeletingImageFiles = FALSE;	}
+
+	//Cmd = ~Select count(1) from RawImages where OrderID In (<OrderList>)~;
+	//dbase( GetValuesFor, ~<Cmd>~, numRecs);
+
+	numrecs = 1;	// Let's stop doing these lookups they take to long in the real world
+
+	if (<numRecs> > 0)
+	{
+		DeletingRawFiles = MessageBox( Translate(OrdersMessages,DeleteRawImagesToo),YESNOCANCEL,DEFBUTTON2 );
+
+		if ( ~<DeletingRawFiles>~ == ~CANCEL~ )
+		{
+			return TRUE;
+		}
+
+		DeletingRawFiles = ~<DeletingRawFiles>~ == ~YES~;
+	}
+	else
+	{ DeletingRawFiles = FALSE;	}
+
+	if (<numRecs> > 0)
+	{
+		DeletingKparsOriginals = MessageBox( Translate(OrdersMessages,DeleteKparsImagesToo),YESNOCANCEL,DEFBUTTON2 );
+
+		if ( ~<DeletingKparsOriginals>~ == ~CANCEL~ )
+		{
+			return TRUE;
+		}
+
+		DeletingKparsOriginals = ~<DeletingKparsOriginals>~ == ~YES~;
+	}
+	else
+	{ DeletingKparsOriginals = FALSE;	}
+
+	StringList( RowsToDelete,New );
+
+	DeletedOrders = 0;
+
+	if ( !OrdersToDelete( RewindList ) )
+		{ return Warning( Translate( UIMessages,RewindViewListFailed ) ); }
+
+	num = 1;
+	while ( OrdersToDelete( GetNext,Order ) )
+	{
+		// Determine if the order can be deleted.  Open image and job files related
+		// to the order would be a reason that deleting an order could fail since
+		// we try to remove all order image and order item information and files
+		// associated with the order.
+		result = CanDeleteOrder(dBase,~<$con.Order[ID]>~);
+		if (<result> == TRUE)
+		{
+			OrdersDataWindow( StatusBar,Text,Translate(OrdersMessages,RemovingImagesItems,~<$con.Order[ID]>~) );
+			if ( DeleteOrdersItemsAndImages( dBase,~<$con.Order[ID]>~,<DeletingImageFiles>, <DeletingRawFiles>, <DeletingKparsOriginals> ) )
+			{
+				OrdersDataWindow( StatusBar,Text,Translate(OrdersMessages,DeletingOrder,~<$con.Order[ID]>~) );
+
+				RowsToDelete( AddString,OrdersToDelete(GetCurrentPosition) );
+
+				Log( Session,Translate(~Deleted order <$con.Order[ID]>~) );
+
+				++DeletedOrders;
+			}
+			else
+			{
+				if ( <num> == <count> )
+				{
+					MessageBox( Translate(OrdersMessages,CantDeleteOrder1,~<$con.Order[ID]>~),OK );
+				}
+				else
+				{
+					if ( MessageBox( Translate(OrdersMessages,CantDeleteOrderContinue1,~<$con.Order[ID]>~),YESNO ) != YES)
+					{
+						break;
+					}
+				}
+			}
+		}
+		else
+		{
+			if (<result> == -1)
+			{
+				if ( <num> == <count> )
+				{
+					MessageBox( Translate(OrdersMessages,CantDeleteOrder2,~<$con.Order[ID]>~),OK );
+				}
+				else
+				{
+					if ( MessageBox( Translate(OrdersMessages,CantDeleteOrderContinue2,~<$con.Order[ID]>~),YESNO ) != YES)
+					{
+						break;
+					}
+				}
+			}
+			else if (<result> == -4)
+			{
+				if ( <num> == <count> )
+				{
+					MessageBox( Translate(OrdersMessages,CantDeleteOrder4,~<$con.Order[ID]>~),OK );
+				}
+				else
+				{
+					if ( MessageBox( Translate(OrdersMessages,CantDeleteOrderContinue4,~<$con.Order[ID]>~),YESNO ) != YES)
+					{
+						break;
+					}
+				}
+			}
+			else
+			{
+				if ( <num> == <count> )
+				{
+					MessageBox( Translate(OrdersMessages,CantDeleteOrder3,~<$con.Order[ID]>~),OK );
+				}
+				else
+				{
+					if ( MessageBox( Translate(OrdersMessages,CantDeleteOrderContinue3,~<$con.Order[ID]>~),YESNO ) != YES)
+					{
+						break;
+					}
+				}
+			}
+		}
+
+		++num;
+	}
+
+	if ( <DeletedOrders> )
+	{
+		OrdersDataView( DeleteRows,SelectedIndex,RowsToDelete );
+		OrdersToDelete( NotifyAffectedDocuments,OrderID );
+	}
+
+	OrdersDataWindow( StatusBar,Text,Translate(~Order Deletion Complete~) );
+
+	return TRUE;
+}
+
+
+NUMERIC OrderImageQuery( OrderID,AsImages,Query )
+{
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTION Doc ( ~<OrderID>~ <OpenMethod> ImagesDoc "Init( ~<OrderID>~,<AsImages>,~<Query>~,0 );" );
+	return PerformActions( Actions );
+}
+
+
+NUMERIC OpenSelected()
+{
+	OpenSelectedOrders( TRUE );
+	return TRUE;
+}
+
+
+NUMERIC OpenSelectedOrders( AsImages )
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	if ( !SaveAllChanges() )
+		{ return FALSE; }
+
+	QueryItemsForOrders( SelectedOrders,<AsImages> );
+	SelectedOrders( RewindList );
+	QueryImagesForOrders( SelectedOrders,<AsImages> );
+
+	SelectedOrders( RewindList );
+	if ( SelectedOrders( GetNext,Order ) )
+	{
+		Actions = ACTION Doc ( OrderNotifyDoc OpenOnce OrderNotifyDoc "Init( ~<$con.Order[ID]>~,FALSE );" );
+		PerformActions( Actions );
+	}
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC SetScanFlag( value )
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	count = SelectedOrders( ChildCount );
+	
+	if ( <count> == 0 )
+		{ return Warning( Translate(~No orders have been selected~) ); }	
+
+	if ( <value> )
+	{
+		if ( MessageBox( ~Are you sure you want to scan all images of the <count> selected order(s)? ~,YESNO ) != YES )
+			{ return FALSE; }
+	}
+	else
+	{
+		if ( MessageBox( ~Are you sure you do not want to scan any of the images of the <count> selected order(s)? ~,YESNO ) != YES )
+			{ return FALSE; }
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		if ( IsNull( ~<$con.Order[ID]>~ ) )
+		{
+			return Warning( ~OrderID cannot be blank~ );
+		}
+
+		Cmd = ~Update Images Set Scan = <value> Where OrderID = '<$con.Order[ID]>'~;
+
+		if ( !dBase( Cmd,~<Cmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( Translate(DBMessages,CmdFailed,~<cmd>~,~<theErr>~) );
+		}		
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SetBatchID( value )
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	count = SelectedOrders( ChildCount );
+	
+	if ( <count> == 0 )
+		{ return Warning( Translate(~No orders have been selected~) ); }	
+
+	if ( <value> )
+	{
+		if ( MessageBox( ~Are you sure all rolls of the <count> selected order(s) are spliced together? ~,YESNO ) != YES )
+			{ return FALSE; }
+	}
+	else
+	{
+		if ( MessageBox( ~Are you sure all rolls of the <count> selected order(s) are separate physical rolls that are not spliced together? ~,YESNO ) != YES )
+			{ return FALSE; }
+	}
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	BatchID = ~~;
+
+	if ( <value> )
+	{
+		// NEED A UNIQUE BATCH ID
+
+		while ( TRUE )
+		{
+			BatchID = UniqueBatchID();
+
+			if ( dBase( RecordCountFor,~Select BatchID From Orders Where BatchID = '<BatchID>'~ ) == 0 )
+				break;
+		}
+	}
+
+	BatchSeq = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		OrdersDataView( SetCellValue,Order(GetRow),BatchID,~<BatchID>~ );
+
+		if ( <value> )
+		{
+			OrdersDataView( SetCellValue,Order(GetRow),BatchSeq,~<++BatchSeq>~ );
+		}
+		else
+		{
+			OrdersDataView( SetCellValue,Order(GetRow),BatchSeq,~~ );
+		}		
+	}
+
+	if ( SelectedOrders( ChildCount ) > 1 )
+	{
+		Warning( ~You have multiple orders in the batch. Make sure the Batch Seq after the Batch ID reflects the true sequence of the orders on the roll.~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SeeImagesForOrdersInSeparateWindows( AsImages )
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	count = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		theOrderID = ~<$con.Order[ImagesOrderID]>~ != ~~ ? ~<$con.Order[ImagesOrderID]>~ : ~<$con.Order[ID]>~;
+
+		OrderImageQuery( ~<theOrderID>~,~<AsImages>~,~SELECT * From Images WHERE OrderID = '<theOrderID>' Order By OrderID,Roll,Frame~ );
+	}
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC CombinedOrderImageQuery( List,AsImages )
+{
+	OrigList = ~<List>~;
+
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Error connecting to the shared database: <theErr>~ );
+	}
+
+	Query = ~Select ImagesOrderID From Orders Where ParentOrderID In ( <OrigList> )~;
+	if ( !PGenConList( OrderList,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		return FALSE;
+	}
+
+	while ( OrderList( GetNext, foundID) )
+	{
+		if ( ~<$pcon.foundID[ImagesOrderID]>~ != ~~ )
+		{
+			List = ~<List>~ == ~~ ? ~'<$pcon.foundID[ImagesOrderID]>'~ : ~<List>,'<$pcon.foundID[ImagesOrderID]>'~;
+		}	
+	}
+
+	ForgetGlobal( OrderList );
+	Query = ~Select ID From Orders Where ParentOrderID In ( <OrigList> )~;
+
+	if ( !PGenConList( OrderList,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		return FALSE;
+	}
+
+	while ( OrderList( GetNext, foundID) )
+	{
+		if ( ~<$pcon.foundID[ID]>~ != ~~ )
+		{
+			List = ~<List>~ == ~~ ? ~'<$pcon.foundID[ID]>'~ : ~<List>,'<$pcon.foundID[ID]>'~;
+		}	
+	}
+
+	Query = ~Select * From Images Where OrderID In (<List>) Order By OrderID,Roll,Frame~;
+
+	WhichDoc = <AsImages> ? ImagesDoc : ImagesDataDoc;
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTION Doc ( ~OrderImages~ <OpenMethod> <WhichDoc> "Init( ~<List>~,<AsImages>,~<Query>~,0 );" );
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+
+NUMERIC SeeImagesForOrders( AsImages )
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	QueryImagesForOrders( SelectedOrders,<AsImages> );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC QueryImagesForOrders( &SelectedOrders,AsImages )
+{
+	InList = ~~;		count = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		theOrderID = ~<$con.Order[ImagesOrderID]>~ != ~~ ? ~<$con.Order[ImagesOrderID]>~ : ~<$con.Order[ID]>~;
+
+		InList = ~<InList>~ == ~~ ? ~'<theOrderID>'~ : ~<InList>,'<theOrderID>'~;
+
+		if ( ++count >= 10 )		// BUILD UP A LIST OF UP TO 10 Order ID'S
+		{
+			CombinedOrderImageQuery( ~<InList>~,~<AsImages>~ );
+			InList = ~~;		
+			count = 0;
+		}
+	}
+
+	if ( ~<InList>~ != ~~ )
+		{  CombinedOrderImageQuery( ~<InList>~,~<AsImages>~ ); }
+
+	return TRUE;
+}
+
+NUMERIC OnOrderSummaryReport()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	InList = ~~;
+
+	Count = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		OrderID = ~<$con.Order[ID]>~ ;
+
+		Actions = ACTION Doc ( BrowserDoc Open BrowserDoc "Init(~<$App.HTTPServer>/Reports/OrderSummary.kpl?OrderID=<OrderID>~,~<OrderID> Summary Report~,25,0,50,90,0,0,0);" );
+
+		PerformActions( Actions );
+
+		if ( <++count> > 10 )
+			break;
+	}
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC SeeRollsForOrders()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	InList = ~~;
+
+	Count = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		OrderID = ~<$con.Order[ImagesOrderID]>~ != ~~ ? ~<$con.Order[ImagesOrderID]>~ : ~<$con.Order[ID]>~;
+
+		Query = ~Select * From Rolls Where OrderID = '<OrderID>' Order By OrderID,Roll~;
+
+		OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+		if ( <++count> > 1 )
+		{
+			OpenMethod = Open;
+		}
+
+		Actions = ACTION Doc ( ~Rolls~ <OpenMethod> RollsDoc "Init( ~<OrderID>~,~<Query>~ );" );
+		PerformActions( Actions );
+	}
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+
+NUMERIC SeeMoviesForOrders()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+	{ 
+		return Warning( ~There were no orders selected~ );
+	}
+
+	Count = SelectedOrders( ChildCount );
+	
+	if ( <Count> == 0 )
+	{
+		return Warning( ~There were no orders selected~ );
+	}
+	
+	if ( !SelectedOrders( MakeSQLList,List,TRUE,ID ) )
+	{	
+		return Warning( Translate( ~Error creating list of orders~ ) );
+	}
+
+
+	Query = ~Select * From AnimotoMovie Where OrderID In (<List>) Order By OrderID,ID~;
+
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+
+	if ( <++count> > 1 )
+	{
+		OpenMethod = Open;
+	}
+
+	Actions = ACTION Doc ( AnimotoMovieDoc <OpenMethod> "<$App.HtmlPages>\Animoto\AnimotoMovieDoc.txt" "Init( ~<OrderID>~,~<Query>~ );" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+
+NUMERIC SeeShootDescForOrders()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	InList = ~~;
+	Count = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		theShootDescType = ~<$con.Order[ShootDescType]>~;
+		theShootDescID = ~<$con.Order[ShootDescID]>~;
+		if (~<theShootDescID>~ != ~~)
+		{
+			InList = ~<InList>~ == ~~ ? ~'<theShootDescID>'~ : ~<InList>,'<theShootDescID>'~;
+			++Count;
+		}
+	}
+
+	if (<Count> <= 0)
+	{
+		return Warning( Translate(OrdersMessages,NoShootDesc) );
+	}
+
+	Query = ~Select * From ShootDescription Where ID In (<InList>) Order By ID~;
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTION Doc ( ~ShootDescription~ <OpenMethod> ShootDescriptionDoc "Init( ~~,~<Query>~,~<theShootDescType>~ );" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC MaintainOrder()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	Count = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		if ( !IsNull( ~<$con.Order[ID]>~ ) )
+		{
+			Actions = ACTION Doc ( ~MaintainOrdersDoc~ Open MaintainOrdersDoc "Init( ~<$con.Order[ID]>~,FALSE,TRUE,FALSE );" );
+			PerformActions( Actions );
+	
+			if ( <++count> > 5 )
+			{
+				Warning( ~No more than 5 at once~ );
+				break;
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC OnChangeLut()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	Actions = ACTION Doc ( SetLutDoc OpenOnce SetLutDoc "Init(FALSE);" );
+	PerformActions( Actions );
+
+	return TRUE;
+}
+
+NUMERIC SeeNotifications()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	if ( SelectedOrders( GetNext,Order ) )
+	{
+		if ( !IsNull( ~<$con.Order[ID]>~ ) )
+		{
+			Actions = ACTION Doc ( OrderNotifyDoc OpenOnce OrderNotifyDoc "Init( ~<$con.Order[ID]>~,TRUE );" );
+			PerformActions( Actions );
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC SeeServices()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	Count = 0;
+
+	// With the change to support both Code and ID lookups in the services
+	// tables, we need to find out if the OrderServicesTable Code column
+	// is Null.  If it is null for a specific row, then we use the original
+	// ID lookups.  If the code is populated we use a new lookup based on Code.
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Error connecting to the shared database: <theErr>~ );
+	}
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		if ( !IsNull( ~<$con.Order[ID]>~ ) )
+		{
+			Cmd = ~Select Count(*) From OrderServices Where OrderID = '<$con.Order[ID]>' AND ServicesID <> 0 AND ( Code IS NULL OR Code = '' )~;
+			numRecs = dBase( RecordCountFor, ~<Cmd>~ );
+	
+			if (<numRecs> == 0)
+			{
+				Query = ~Select OrderServices.OrderID,JobServices.ID,OrderServices.Code,JobServices.Label,OrderServices.Description,OrderServices.ServicesID From OrderServices Left Outer Join JobServices On (JobServices.Code = OrderServices.Code) Where OrderID = '<$con.Order[ID]>' Order By OrderServices.Code~;
+			}
+			else
+			{
+				Query = ~Select OrderServices.*,JobServices.Label,JobServices.Code From OrderServices Left Outer Join JobServices On (JobServices.ID = OrderServices.ServicesID) Where OrderID = '<$con.Order[ID]>' Order By OrderServices.ServicesID~;
+			}
+
+			Actions = ACTION DOC ( ~OrderServicesDoc~ Open OrderServicesDoc "Init(~<$con.Order[ID]>~,~<Query>~ );" );
+			PerformActions( Actions );
+	
+			if ( <++count> > 5 )
+			{
+				Warning( ~No more than 5 at once~ );
+				break;
+			}
+
+			ServiceCode = ~~;
+		}
+	}
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC SeeDeliverablesFor()
+{
+
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( Translate(UIMessages,NoRowsSelected) ); }
+
+	InList = ~~;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		theOrderID = ~<$con.Order[ID]>~;
+
+		InList = ~<InList>~ == ~~ ? ~'<theOrderID>'~ : ~<InList>,'<theOrderID>'~;
+	}
+
+	Query = ~Select * From OrderDlvrbl Where OrderID In (<InList>) Order By OrderID~;
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTION Doc ( ~OrderDlvrbl~ <OpenMethod> OrderDlvrblDoc "Init( ~<InList>~,~<Query>~ );" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC SeeCustomersForOrders()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	Count = SelectedOrders( ChildCount );
+
+	if ( <Count> > 10 )
+		{ return Warning( ~Please limit your search to 10 Orders.~ ); }
+
+
+	InList = ~~;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		CustomerID = ~<$con.Order[CustomerID]>~;
+
+		if ( !IsNull(~<CustomerID>~) )
+		{
+			InList = ~<InList>~ == ~~ ? ~'<CustomerID>'~ : ~<InList>,'<CustomerID>'~;
+		}
+	}
+
+
+	if ( IsNull( ~<InList>~ ) )
+	{
+		return Warning(~None of the selected orders have an assigned customer~ );
+	}
+
+	Query = ~Select * From Customers Where ID In (<InList>) Order By ID~;
+	OpenMethod = KeyState( RSHIFT ) ? Open : OpenOnce;
+	Actions = ACTION Doc ( ~Customers~ <OpenMethod> CustomersDoc "Init( ~~,~<Query>~ );" );
+	PerformActions( Actions );
+
+	if ( KeyState( LSHIFT ) ) { Queue( ~OnCloseOrdersDataView()~ ); }
+
+	return TRUE;
+}
+
+
+VOID ProcessTheOrders()
+{
+	if ( Defined( BackgroundOrderProcessor ) )
+	{
+		RemoteJobServer( BackgroundOrderProcessor,ProcessOrders,TRUE );
+	}
+}
+
+
+NUMERIC RunJobsForOrders()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	Count = SelectedOrders( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( ~There were no orders selected~ ); }
+
+	if ( MessageBox( ~<Count> orders will be processed.  Do you wish to continue?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dbLocal,ConnectLocal,BeginTransaction ) )
+	{
+		dbLocal( GetErrorDescription,theErr );
+		return Warning( ~Error connecting to the local database: <theErr>~ );
+	}
+
+	BatchID = UniquePrintBatchID();  Now = Time();
+
+	Count = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		Fields = STR ( BatchID,OrderID,OrderItemID,Sequence,Priority,Owner,SubmitDate,PrintStatus );
+		Values = STR ( '<BatchID>','<$con.Order[ID]>',0,0,<$con.Order[Priority]>,'<$con.Order[Owner]>','<Now>',1 );
+
+		Cmd = STR ( Insert Into OrderItemsToQueue(<Fields>) Values(<Values>) );
+
+		if ( !dbLocal( CMD,~<Cmd>~ ) )
+		{
+			dbLocal( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Error: <theErr>  <Cmd>~ );
+		}
+
+		Count = <Count> + 1;
+	}
+
+	if ( !dbLocal( CommitTransaction ) )
+	{
+		dbLocal( GetErrorDescription,theErr );
+		return Warning( ~Could not commit the transaction: <theErr>~ );
+	}
+
+	Queue( ~ProcessTheOrders()~ );
+
+	OrdersDataWindow( StatusBar,Text,~<Count> Orders will be submitted for printing~ );
+
+	return TRUE;
+}
+
+
+NUMERIC DisplayProductsOfType( Type,ActivatedByButton )
+{
+	Query = ~Select * From Products Where Category = '<Type>' AND Package = 0 Order By Category,Sequence,ID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Products table: <Query>. <theErr>~ );
+	}
+
+	Count = List( NumEntries );
+
+	if ( !<Count> )
+		{ return Warning( ~You don't have any proof products defined.  Create a proof product and put it in a category called Proof.~ ); }
+
+	GenCon( ListMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+			Count = 0;
+
+			while ( List( GetNext,Item ) )
+			{
+		GenCon( ProofLayout<++Count>,New,DDMenuItemDef,AddTo,ListMenu,SetValues,
+				Text,		~&<Count>)  ID: <$pcon.Item[ID]>  Name: <$pcon.Item[LayoutName]>~,
+				IDText,		~ID~ );
+
+		ActionsText = ACTION Exec ( ProduceProofsForOrders(~<$pcon.Item[ID]>~); );
+
+		ProofLayout<Count>( SetValuesFrom,ActionsText,ActionsText );
+		}
+
+
+	if ( <ActivatedByButton> )
+	{
+		OrdersDataView( DisplayMenu,ListMenu,ProofButton(GetLeft,Position),0 );
+	}
+	else
+	{
+		OrdersDataView( GetLastMousePosition,mouseX,mouseY );
+		OrdersDataView( DisplayMenu,ListMenu,<mouseX>,<mouseY> );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC  ProduceProofsForOrders( ProductID )
+{
+	if ( ~<ProductID>~ == ~~ )
+		{ return Warning( ~There was no product selected~ ); }
+
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There was no orders selected~ ); }
+
+	Count = SelectedOrders( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( ~There were no orders selected~ ); }
+
+	if ( MessageBox( ~<Count> orders will be proofed using <ProductID>.  Do you wish to continue?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dbLocal,ConnectLocal,BeginTransaction ) )
+	{
+		dbLocal( GetErrorDescription,theErr );
+		return Warning( ~Error connecting to the local database: <theErr>~ );
+	}
+
+	BatchID = UniquePrintBatchID(); Now = Time();
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		Fields = STR ( BatchID,OrderID,ProductID,SubmitDate );
+		Values = STR ( '<BatchID>','<$con.Order[ID]>','<ProductID>','<Now>' );
+
+		Cmd = STR ( Insert Into OrdersToProof(<Fields>) Values(<Values>) );
+
+		if ( !dbLocal( CMD,~<Cmd>~ ) )
+		{
+			dbLocal( GetErrorDescription,theErr,RollBackTransaction );
+			return Warning( ~Error: <theErr>  <Cmd>~ );
+		}
+	}
+
+	if ( !dbLocal( CommitTransaction ) )
+	{
+		dbLocal( GetErrorDescription,theErr );
+		return Warning( ~Could not commit the transaction: <theErr>~ );
+	}
+
+	Queue( ~ProcessTheOrders()~ );
+
+	return TRUE;
+}
+
+
+NUMERIC OpenAJob( Path )
+{
+	Index = 0;
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == JobView || ~<ViewType>~ == ImageView )
+		{
+			aView( GetDocumentPath,DocumentPath );
+
+			if ( ~<DocumentPath>~ == ~<Path>~ )
+			{ 
+				Window( SetWindowOrder,Top );
+				return TRUE;
+			}
+		}
+	}
+
+	if ( ~<Path>~ != ~~ )
+	{
+		return Open( Job,~<Path>~ );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC OpenOrderItemsForOrder( OrderID )
+{
+	Query = ~Select * From OrderItems Where OrderID = '<OrderID>' Order By ID~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ return Warning( Translate( ~Failed to query the Order Items table for Order <OrderID>~ ) ); }
+
+	NumOfJobs = List( NumEntries );
+
+	if ( <NumOfJobs> == 0 )
+		{ return TRUE; }
+
+	CurrentlyOpen = NumWindows( LayoutOrJob );
+
+	MaxOpenJobsOrLayouts = ~<$[Symbols].MaxOpenJobsOrLayouts[Long]>~;
+
+	if ( <MaxOpenJobsOrLayouts> < 1 )
+	{ 
+		MaxOpenJobsOrLayouts = 1;
+	}
+
+	if ( MessageBox( ~There are <NumOfJobs> jobs to be opened for Order <OrderID>.  Do you wish to continue?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	while ( List( GetNext,OrderItem ) )
+	{
+		if ( <++CurrentlyOpen> > <MaxOpenJobsOrLayouts> )
+		{
+			Warning( Translate( ~You can only have <MaxOpenJobsOrLayouts> jobs or layouts open at a time~ ) );
+			return FALSE;
+		}
+
+		Action = STR ( OpenAJob( ~<$pcon.OrderItem[JobPath]>~ ); );
+
+		QueueContentsOf( Action );
+	}
+
+	return TRUE;
+}
+
+NUMERIC DeleteAnOrderItem( &dBase,&OrderItem )
+{
+	OrderItem( Get,OrderID,OrderID );
+	OrderItem( Get,ID,ID );
+	OrderItem( Get,JobPath,JobPath );
+	OrderItem( Get,PreviewPath,PreviewPath );
+	
+	if ( !IsNULL( ~<PreviewPath>~ ) )
+	{
+		if ( !BroadcastMessageToAllViews( CanReleaseImage,~<PreviewPath>~ ) )
+		{ return Warning( Translate( ~Could not delete <OrderID>/<ID> \n\n  File:  <PreviewPath>\n\nbecause it is still open in a job or layout.~ ) ); }
+
+		BroadcastMessageToAllViews( ReleaseImage,~<PreviewPath>~ );
+		
+		Files( ChMod,~<PreviewPath>~,ReadWrite );
+		Files( Delete,~<PreviewPath>~ );
+		Directory( Remove,~<$str.$PreviewPath.path>~ );
+	}
+		
+	if ( !IsNULL( ~<JobPath>~ ) )
+	{
+		Files( ChMod,~<JobPath>~,ReadWrite );
+		Files( Delete,~<JobPath>~ );
+		Directory( Remove,~<$str.$JobPath.path>~ );
+	}
+
+	Key = ~ItemOrderID = '<OrderID>' AND ItemID = <ID>~;
+
+	Cmd = ~Delete From OrderItemImages Where <Key>~;
+
+	if ( !dbase( Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr,CommitTransaction );
+		return Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+	}
+	
+	Key = ~OrderID = '<OrderID>' AND OrderItemID = <ID>~;
+	
+	Cmd = ~Delete From CropServices Where <Key>~;
+
+	if ( !dbase( Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr,CommitTransaction );
+		return Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+	}
+	
+	Key = ~OrderID = '<OrderID>' AND OrderItemID = <ID>~;
+	
+	Cmd = ~Delete From OrderItemsServices Where <Key>~;
+
+	if ( !dbase( Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr,CommitTransaction );
+		return Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+	}
+	
+	OrdersDataWindow( StatusBar,Text,Translate( ~Deleting Order <OrderID> / Item '<ID>'~ ) );
+
+	Key = ~OrderID = '<OrderID>' AND ID = <ID>~;
+
+	Cmd = ~Delete From OrderItems Where <Key>~;
+
+	if ( !dbase( Cmd,~<Cmd>~ ) )
+	{
+		dBase( GetErrorDescription,theErr,CommitTransaction );
+		return Warning( Translate(DBMessages,CmdFailed,~<Cmd>~,~<theErr>~) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC DeleteOrderItemsFor( OrderID )
+{
+	Query = ~Select * from OrderItems where OrderID = '<OrderID>'~ ;
+	
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~<Query> Failed. <theErr>~ );
+	}
+	
+	List( GetConnection,dBase );
+	
+	while ( List( GetNext,OrderItem ) )
+	{
+		ReturnOnFailure( DeleteAnOrderItem( dBase,OrderItem ) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC DeleteOrderItems()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( Translate( ~There were no orders selected~ ) ); }
+		
+	Count = SelectedOrders( ChildCount ) ;
+
+	if ( MessageBox( ~Are you sure you want to delete the OrderItems for the <count> selected Orders?~,YESNO ) != YES )
+		{ return FALSE; }
+		
+	WaitCursor( Begin );
+	
+	count = 0;
+	
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		if ( !DeleteOrderItemsFor(~<$con.Order[ID]>~) )
+		{
+			WaitCursor( End );
+			return FALSE;
+		}
+		
+		++count;
+	}
+	
+	WaitCursor( End );
+	
+	return OrdersDataWindow( StatusBar,Text,Translate( ~Deleted the OrderItems for <count> Orders~ ) );
+}
+
+
+NUMERIC OpenJobsForOrders()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( Translate( ~There were no orders selected~ ) ); }
+
+	Count = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		if ( <++Count> > 1 )
+		{
+			return Warning( Translate( ~This function does one order at a time~ ) );
+		}
+
+		if ( !OpenOrderItemsForOrder( ~<$Con.Order[ID]>~ ) )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AllOptions()
+{
+	return OrdersDataView( DisplayMenu,OrdersListViewMenu,0,0 );
+}
+
+
+NUMERIC RightClickInListView()
+{
+	return OrdersDataView( DisplayMenu,OrdersListViewMenu );
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( ~<what> is not implemented yet!~ );
+	return FALSE;
+}
+
+
+NUMERIC AddReOrderLike( OrderID )
+{
+	Query = ~Select CustomerID From Orders Where ID = '<OrderID>'~;
+
+	if ( Ado( dBase,Connect,GetValuesFor,~<Query>~,CustomerID ) )
+	{
+		return ReOrderForCustomer( ~<CustomerID>~ );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC AddOriginalOrderLike( OrderID )
+{
+	Query = ~Select CustomerID From Orders Where ID = '<OrderID>'~;
+
+	if ( Ado( dBase,Connect,GetValuesFor,~<Query>~,CustomerID ) )
+	{
+		return NewOrderForCustomer( ~<CustomerID>~ );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC MaintainCrossReference()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )
+		{ return Warning( Translate( ~There were no orders selected~ ) ); }
+
+	Count = 0;
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		if ( !IsNull(~<$con.Order[ID]>~) )
+		{
+			Actions = ACTION Doc ( ~MaintainOrdersDoc~ Open MaintainOrdersDoc "Init( ~<$con.Order[ID]>~,FALSE,TRUE,FALSE );" );
+			PerformActions( Actions );
+		}
+
+		if ( <++Count> > 5 )
+		{
+			Warning( ~5 is the max number you may select at one time~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC ReOrderForCustomer( CustomerID )
+{	
+	Query = ~Select Customers.Name, Orders.* from Orders,Customers Where Orders.CustomerID = '<CustomerID>' AND Orders.CustomerID = Customers.ID~;
+
+	Init( ~<CustomerID>~,~<Query>~ );
+
+	AddRecordFor( TRUE,~<CustomerID>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC NewOrderForCustomer( CustomerID )
+{	
+	Query = ~Select Customers.Name, Orders.* from Orders,Customers Where Orders.CustomerID = '<CustomerID>' AND Orders.CustomerID = Customers.ID~;
+
+	Init( ~<CustomerID>~,~<Query>~ );
+
+	AddRecordFor( FALSE,~<CustomerID>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	return AddRecordFor( FALSE,~~ );
+}
+
+
+NUMERIC AddRecordFor( Reorder,Customer )
+{
+	if ( !Defined( Customer ) )
+		{ Customer = ~~; }
+
+	if ( Defined( CustID ) )
+		{ Customer = ~<CustID>~; }
+		
+	ImagesOrder = ~~;
+	Name = ~~;
+	ShootId = ~~;
+	ShootType = ~~;
+
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	if ( OrdersDataView( GetSelectedRows,OrderToImitate ) )		
+	{
+		OrderToImitate( GetFirst,Order );
+
+		Customer = ~<$con.Order[CustomerID]>~;
+		ShootId = ~<$con.Order[ShootDescID]>~;
+		ShootType = ~<$con.Order[ShootDescType]>~;
+
+		if ( <Reorder> )
+		{ 
+			if ( ~<$con.Order[ImagesOrderID]>~ != ~~ )	// POINT TO A  RE-ORDER?
+			{
+				message = Translate( ~<$con.Order[ID]> is already a reorder that references <$con.Order[ImagesOrderID]>.\n\nWould you like your new reorder to reference <$con.Order[ImagesOrderID]>.~ );
+				
+				if ( MessageBox( ~<message>~,YESNO ) != YES )
+				{
+					return Warning( Translate( ~Ok, then you must select another order to reorder from.~ ) );
+				}
+
+				ImagesOrder = ~<$con.Order[ImagesOrderID]>~;
+			}
+			else
+			{
+				ImagesOrder = ~<$con.Order[ID]>~;
+			}
+		}
+	}
+
+	if ( CustomerExists( ~<Customer>~,Name ) )
+	{ 
+		NewRow( SetValues,Name,~<Name>~ );
+	}
+	else if ( FALSE  )	// ~<WhichOrders>~ != ~~
+	{
+		GetTokens( ~<WhichOrders>~,~',~,Customer );
+		if ( CustomerExists( ~<Customer>~,Name ) )
+		{ 
+			NewRow( SetValues,Name,~<Name>~ );
+		}
+	}
+
+	OrderType = $Reorder ? ~Reorder~ : ~Original~;
+	
+	ID = UniqueOrderID();
+
+	NewRow( SetValues,~ID~,~<ID>~,CustomerID,~<Customer>~,ImagesOrderID,~<ImagesOrder>~,
+						~ShootDescID~, ~~, ~ShootDescType~,~~,
+						Type,~<OrderType>~,Status,~Ready~,Priority,50,RunCount,0,Owner,~<$App.UserName>~ );
+
+	NewRow( SetValues,OrderDate,~<$Date.Date>~ );
+
+	DateTime( WhenToShip,Now );
+
+	DateTimeSpan( ThirtyDays,Set,1 );
+
+	WhenToShip( PlusEqual,ThirtyDays,Format,NewDate );
+
+	NewRow( SetValues,ShipDate,~<NewDate>~ );
+
+	RowBeingAdded = OrdersDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	OrdersDataView( SetActiveCell,<RowBeingAdded>,~ID~ );
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateOrderID( OrderID )
+{
+	Query = STR ( Select ID From Orders Where ID = '<OrderID>' );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~<Query> Failed. <theErr>~ );
+	}
+
+	if ( !List( GetFirst,TheModel ) )
+		{ return TRUE; }
+
+	MessageBox( ~Sorry, an order of ID <OrderID> already exists.  You can't have two different orders with the same ID.~ );
+
+	// OrdersDataView( SetCellValue,Current,ID,~~ );
+	
+	return FALSE;
+}
+
+
+NUMERIC UpdateCustomerID( CustomerID )
+{
+	if ( CustomerExists( ~<CustomerID>~,Name ) )
+	{ 
+		OrdersDataView( SetCellValue,Current,Name,~<Name>~ );
+		return TRUE;
+	}
+	else
+	{
+		if ( ValidateCustomer( ~<CustomerID>~ ) )
+			{ return TRUE; }
+	}
+	
+	return FALSE;
+}
+
+
+
+NUMERIC EndEdit()
+{
+	OrdersDataView( GetEditedCell,row,col );
+	OrdersDataView( GetEditedCellValue,value );
+	OrdersDataView( GetGridFieldName,<col> - 1,ColumnName );
+
+	if ( ~<ColumnName>~ == ~ID~ )
+	{
+		//UpdateOrderID( ~<value>~ );
+	}
+	else if ( ~<ColumnName>~ == ~CUSTOMERID~ )
+	{
+		if ( CustomerExists( ~<value>~,Name ) )
+		{ 
+			OrdersDataView( SetCellValue,Current,Name,~<Name>~ );
+		}
+		else
+		{
+			OrdersDataView( SetCellValue,Current,Name,~~ );
+		}
+	}
+
+	return TRUE;
+}
+
+Include: ~FilmTypesCombo.txt~;
+
+NUMERIC RefreshComboBox()
+{
+	OrdersDataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,OrdersTableDefinition(GetReferenceTo,Fields) );
+
+	OrdersDataView( GetColumnName,<col>,ColumnName );
+
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+
+	if ( ~<ColumnName>~ == ~SCANSETUP~ )
+	{
+		UpdateScanSetupsCombo( ColumnDefinition,<row>,<col>);
+	}
+	else if ( ~<ColumnName>~ == ~FILMTYPE~ )
+	{
+		UpdateFilmTypesCombo( OrdersDataView,ColumnDefinition,<row>,<col>,TRUE,0,0,0 );
+	}
+	else if ( ~<ColumnName>~ == ~INFOTYPE~ )
+	{
+		UpdateInfoTypeCombo(ColumnDefinition,<row>,<col>);
+	}
+	else if ( ~<ColumnName>~ == ~SHOOTDESCTYPE~ )
+	{
+		UpdateShootDescTypeList(ColumnDefinition,<row>,<col>);
+	}
+	else if ( ~<ColumnName>~ == ~SHOOTDESCID~ )
+	{
+		UpdateShootDescIDList(ColumnDefinition,<row>,<col>);
+	}
+	else if ( ~<ColumnName>~ == ~PROGRAMID~ )
+	{
+		UpdateProgramIDCombo(ColumnDefinition,<row>,<col>);
+	}
+	else if ( ~<ColumnName>~ == ~STATUS~ )
+	{
+		UpdateStatusCombo(ColumnDefinition,<row>,<col>);
+	}
+	else if ( ~<ColumnName>~ == ~RETOUCHBATCHSETUP~ )
+	{
+		UpdateRetouchBatchSetupsCombo(ColumnDefinition,<row>,<col>);
+	}
+	else if ( ~<ColumnName>~ == ~ABSTRACTPROFILE~ )
+	{
+		UpdateAbstractProfileCombo(ColumnDefinition,<row>,<col>);
+	}
+	return TRUE;
+}
+
+
+NUMERIC UpdateInfoTypeCombo(&ColumnDefinition,Row,Col)
+{
+	if ( !PGenConList( SchemaList,Connect,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		return Warning( Translate( DBMessages, SchemaQueryFailed, ~Tables~, ~<theErr>~ ) );
+	}
+
+	SchemaList( Filter,~Table_Name Like 'SubjectInfo%'~ );
+
+	StringList(InfoTypeList,New);
+
+	Count = 0;
+
+	while ( SchemaList( GetNext,Table ) )
+	{
+		substr( ~<$pcon.Table[Table_Name]>~,strlen(~SubjectInfo~),99,Type);
+
+		if ( !SimilarStr( ~<Type>~,~Columns~ ) )
+		{
+			InfoTypeList(AddString,~<Type>~);
+			++Count;
+		}
+	}
+
+	if (<Count> > 0)
+	{
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,InfoTypeList(GetCopyOf) );
+
+		OrdersDataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateScanSetupsCombo( &ColumnDefinition,Row,Col )
+{
+	Query = STR ( Select Name From ScanSetups Order By Name );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,ScanSetups,Name );
+
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,ScanSetups(GetCopyOf) );
+
+		OrdersDataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+NUMERIC UpdateRetouchBatchSetupsCombo( &ColumnDefinition,Row,Col )
+{
+	Query = STR ( Select Name From RetouchBatchSetup Order By Name );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,Setups,Name );
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,Setups(GetCopyOf) );
+
+		OrdersDataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+NUMERIC UpdateAbstractProfileCombo( &ColumnDefinition,Row,Col )
+{
+	Query = STR ( Select Name From Profiles Where Type = 'ColorEffects' Order By Name );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,Setups,Name );
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,Setups(GetCopyOf) );
+
+		OrdersDataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+NUMERIC UpdateStatusCombo( &ColumnDefinition,Row,Col )
+{
+	Query = ~Select * From WorkstationSettings Where Computer = '<$App.ComputerName>' AND Category = 'OrderStatus' AND Enabled <> 0 Order By Item~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the WorkstationSettings table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	if ( List( NumEntries ) == 0 )
+	{
+		ForgetLocal( List );
+
+		Query = ~Select * From SystemSettings Where Category = 'OrderStatus' AND Enabled <> 0 Order By Item~;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ 
+			List( GetErrorDescription,0,theErr );
+			return Warning( Translate( ~Failed to query the SystemSettings table.\n\n<Query>\n\n<theErr>~ ) ); 
+		}
+	}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,OrderStatusList,SettingsText,FALSE );
+
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,OrderStatusList(GetCopyOf) );
+
+		OrdersDataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+	else
+	{
+		StringList( OrderStatusList,New,Is,~<$[DATABASE FieldTypes].OrderStatus[ChoiceList]>~ );
+
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,OrderStatusList(GetCopyOf) );
+
+		OrdersDataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+
+
+
+NUMERIC UpdateShootDescIDList(&ColumnDefinition,Row,Col)
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+
+	Count = 0;
+	SelectedOrders( GetFirst,Order );
+	CustomerID = ~<$Con.Order[CustomerID]>~;
+
+	if (~<CustomerID>~ != ~~)
+	{
+		Query = ~Select Distinct ShootDescID from Orders where CustomerID = '<CustomerID>'~;
+	}
+	else
+	{
+		Query = ~Select Distinct ShootDescID from Orders where CustomerID IS NULL~;
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+//	if ( List( NumEntries ) > 0 )
+//	{
+		List( MakeStringList,ShootDescIDList,ShootDescID );
+
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,ShootDescIDList(GetCopyOf) );
+
+		OrdersDataView( SetComboBox,ColumnDefinition,<Col> );
+//	}
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateShootDescTypeList(&ColumnDefinition,Row,Col)
+{
+	if ( !PGenConList( SchemaList,Connect,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		return Warning( Translate( DBMessages, SchemaQueryFailed, ~Tables~, ~<theErr>~ ) );
+	}
+
+	SchemaList( Filter,~Table_Name Like 'ShootDescription%'~ );
+
+	StringList(TypeList,New);
+
+	Count = 0;
+
+	while ( SchemaList( GetNext,Table ) )
+	{
+		substr( ~<$pcon.Table[Table_Name]>~,strlen(~ShootDescription~),99,Type);
+
+		TypeList(AddString,~<Type>~);
+		++Count;
+	}
+
+	if (<Count> > 0)
+	{
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,TypeList(GetCopyOf) );
+
+		OrdersDataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateProgramIDCombo(&ColumnDefinition,Row,Col)
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )		
+		{ return Warning( ~There were no orders selected~ ); }
+
+	Count = 0;
+	SelectedOrders( GetFirst,Order );
+	CustomerID = ~<$Con.Order[CustomerID]>~;
+
+	if (~<CustomerID>~ != ~~)
+	{
+		Query = ~Select Distinct ProgramID from CustomerProducts where CustomerID = '<CustomerID>'~;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+		{ 
+			List( GetErrorDescription,0,theErr,ClearErrors );
+			return Warning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		}
+
+		// makes empty list if numentries in List is 0
+		List( MakeStringList,CustProgIDList,ProgramID );
+
+	}
+	else
+	{	StringList(CustProgIDList,New);	}
+
+
+	ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,CustProgIDList(GetCopyOf) );
+	OrdersDataView( SetComboBox,ColumnDefinition,<Col> );
+
+	return TRUE;
+}
+
+
+
+
+FirstTime = TRUE; // Only open a window the first time
+
+NUMERIC Init2( WhichOrders,DocumentQuery,CustomerID )
+{
+	CustID = ~<CustomerID>~;
+	Global( CustID );
+	return Init( ~<WhichOrders>~,~<DocumentQuery>~ );
+}
+
+// WhichOrders - used for Title purposes only
+NUMERIC Init( WhichOrders,DocumentQuery )
+{
+	OrdersDataWindow( Set,Title,~<WhichOrders>~ == ~~ ? ~Order Data~ : ~Order Data - <WhichOrders>~ );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) ); 
+	}
+
+	//SetDocumentData( List(GetObject), TRUE );
+	SetDocumentData( List(GetObject) );
+
+	Global( WhichOrders,DocumentQuery );
+
+	if ( <FirstTime> )
+	{
+		Count = List( NumEntries );
+
+		IF 0
+		{
+			if ( <Count> > 300 )
+			{
+				if ( MessageBox( ~Your query:\n\n   <DocumentQuery>\n\nwill retrieve <Count> records\n\nAre you sure you want to continue?~,YESNO ) != YES )
+				{
+					Exit();
+				}
+			}
+		}
+
+		StatusBarText( Translate( ~Reading <Count> Orders~ ) );
+
+		WindowLocation = ~<$UserSettings.WindowLocation[OrdersList]>~;
+
+		if ( ~<WindowLocation>~ != ~~ )
+			{ OrdersDataWindow( Set,Position,~<WindowLocation>~ ); }
+
+		if ( !OrdersDataWindow( CreateWindow,~Orders~ ) )
+			{ Error( ~Failed to create the window~ ); }
+
+		FirstTime = FALSE;
+
+		return TRUE;
+	}
+
+	OrdersDataWindow( SetWindowOrder,Top );
+
+	Document( Doc,This,SetTitle,~<WhichOrders>~ == ~~ ? ~Order Data~ : ~Order Data - <WhichOrders>~ );
+
+	return RefreshListView( TRUE );	
+}
+
+
+NUMERIC OnCloseOrdersDataView()
+{
+	if ( OrdersDataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	return OrdersDataWindow( ForceCloseWindow );
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( OrdersDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !OrdersDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new orders that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( OrdersDataView( PendingChanges ) )
+	{
+		OrdersDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+NUMERIC KeydownHook(&Key,&KeyString,&View)	{ return FALSE; }	// Override. return TRUE if the key was handled FALSE if it was not.
+
+
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if ( KeydownHook(key,KeyString,View) )				{ return; }
+
+	
+	if (  !View( PerformMenuAction,OrdersListViewMenu,~<KeyString>~ ) )
+	{
+		OrdersDataView( DisplayMenu,OrdersListViewMenu,0,0  );
+	}
+}
+
+NUMERIC GenYearbook()
+{
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )
+		{ return Warning( Translate( ~There were no orders selected~ ) ); }
+		
+	IDList = ~~;
+	while ( SelectedOrders( GetNext,theRow ) )
+	{
+		theID = ~<$con.theRow[ID]>~;
+		IDList = ~<IDList>~ == ~~ ? ~<theID>~ : ~<IDList>,<theID>~;
+	}
+
+	action = ACTION DOC ( YbOutputWin OpenOnce YbOutputWin "InitWithOrder( ~<IDList>~ );" );
+	return PerformActions( action );
+}
+
+
+NUMERIC Search()
+{
+	Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( Orders );" ) );
+	return PerformActions( Actions );
+}
+
+Include: ~ExportSelectedToFile~;
+
+if ( !GenCon( OrdersTableDefinition,GetFrom,Orders,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The Orders Table is not properly defined~ ); }
+
+
+Define:	OrdersListViewMenu Using DDMenuDef AsSymbol OrdersListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	OpenOrder	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Open~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( OpenSelectedOrders(TRUE); )
+
+		Define:	AddOrder	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&New Order~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecordFor(FALSE, ~~); )
+
+		Define:	AddReOrder	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Add Reorder~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecordFor(TRUE, ~~); )
+
+		Define:	SearchItem	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Find~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( Search() )
+		
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	NULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	MaintainOrder	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Maintain Order Items~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( MaintainOrder(); )
+					
+		Define:ViewSubMenu using DDMenuItemDef	
+				Fields:	Text		~View ...~
+						IDText		~ID~
+				Contains: INLISTORDER
+				{
+					Define:	SeeImagesForOrders	using	DDMenuItemDef
+						Fields:	Text		Translate( ~View Order Images~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( SeeImagesForOrders(TRUE); )
+
+					Define:	SeeImagesDataForOrders	using	DDMenuItemDef
+						Fields:	Text		Translate( ~View Order Image Data~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( SeeImagesForOrders(FALSE); )
+
+					Define:	SeeDlvrbls	using	DDMenuItemDef
+						Fields:	Text		Translate( ~View Deliverables~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( SeeDeliverablesFor(); )
+
+					Define:	SeeItemsForOrders	using	DDMenuItemDef
+						Fields:	Text		Translate( ~View Order Items~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( SeeItemsForOrders(TRUE); )
+
+					Define:	SeeItemsDataForOrders	using	DDMenuItemDef
+						Fields:	Text		Translate( ~View Order Item Data~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( SeeItemsForOrders(FALSE); )
+								
+					Define:	SeeServicesForOrders	using	DDMenuItemDef
+						Fields:	Text		Translate( ~View Services~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( SeeServices(); )
+
+					Define:	SeeRollsForOrders	using	DDMenuItemDef
+						Fields:	Text		Translate( ~View Rolls~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( SeeRollsForOrders(TRUE); )
+								
+					Define:	SeeMoviesForOrders	using	DDMenuItemDef
+						Fields:	Text		Translate( ~View Movies~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( SeeMoviesForOrders(TRUE); )
+								
+					Define:	NULL6 using DDMenuItemDef
+						Fields:	Text		~~
+								IDText		~NULL~
+
+					Define:	SeeShootDesc	using	DDMenuItemDef
+						Fields:	Text		Translate( ~View ShootDescription~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( SeeShootDescForOrders(); )
+
+					Define:	SeeCustomersForOrders	using	DDMenuItemDef
+						Fields:	Text		Translate( ~View Customer Data~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( SeeCustomersForOrders(); )
+
+					Define:	SeeSubjectInfo	using	DDMenuItemDef
+						Fields:	Text		Translate( ~View Subject &Info~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( SeeInfoForOrders(); )
+
+					Define:	SeeJobsInQueueInfo	using	DDMenuItemDef
+						Fields:	Text		Translate( ~View Jobs In Queue~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( SeeJobsInQueue(); )
+				}
+
+
+		Define:	SeeNotificationsForOrders	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Notifications~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SeeNotifications(); )
+
+		Define:	ChangeLutForOrders	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Set Rendering Lut~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( OnChangeLut(); )
+
+		Define:	NULL3 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	RemoveImagesFromOrder using DDMenuItemDef
+			Fields:	Text		Translate( ~Remove Order Images From DB~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RemoveImagesFromOrder(FALSE); )
+
+		Define:	RemoveAndDeleteImagesFromOrder using DDMenuItemDef
+			Fields:	Text		Translate( ~Remove And Delete Order Images From DB~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RemoveImagesFromOrder(TRUE); )
+
+		Define:	GetColorTypeForOrder using DDMenuItemDef
+			Fields:	Text		Translate( ~Identify Color Type for Images~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( GetColorTypeForOrder(); )
+					
+		Define:	HeadAlignAndGroupBalance using DDMenuItemDef
+			Fields:	Text		Translate( ~Head Align and Group Balance~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( HeadAlignAndGroupBalance(); )
+					
+		Define:	PerformChromaKey using DDMenuItemDef
+			Fields:	Text		Translate( ~Manage Images~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( OnManageImages(); )
+
+		Define:	NULL5 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	OpenJobsForOrders	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Open Order Items~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( OpenJobsForOrders(); )
+
+		Define:	DeleteOrderItemsForOrders	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Delete Order Items~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteOrderItems(); )
+
+		Define:	ProduceProofsForOrders	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Produce Proofs For Orders~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DisplayProductsOfType( Proof,FALSE ); )
+
+		Define:	RunJobsForOrders	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Run Selected Orders~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RunJobsForOrders(); )
+
+		
+
+		Define:	NULL8 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SetBatchID	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Set BatchID~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SetBatchID(TRUE); )
+					StatusMessage ~Identify the rolls of one or more orders as being spliced together~
+
+		Define:	ClearBatchID	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Clear BatchID~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SetBatchID(FALSE); )
+					StatusMessage ~Identify one or more orders as having separate rolls that are not spliced together~
+
+		Define: ScanningSubMenu using DDMenuItemDef	
+				Fields:	Text		~Scanning ...~
+						IDText		~ID~
+				Contains: INLISTORDER
+				{
+					Define:	SetScanFlag	using	DDMenuItemDef
+						Fields:	Text		Translate( ~Entire order needs scanning~ )
+									IDText		~ID~
+								ActionsText  ACTION Exec ( SetScanFlag(TRUE); )
+								StatusMessage ~Indicate that all the images of one or more orders need scanning~
+
+					Define:	ClearScanFlag	using	DDMenuItemDef
+						Fields:	Text		Translate( ~Entire order does not need scanning~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( SetScanFlag(FALSE); )
+								StatusMessage ~Indicate that all the images of one or more orders do not need scanning~
+					
+					Define:	ScanIntoSelectedOrder	using	DDMenuItemDef
+						Fields:	Text		Translate( ~Scan This Order~ )
+								IDText		~ID~
+								ActionsText  ACTION Exec ( ScanIntoSelectedOrder(); )
+				}
+
+		IF 0
+		{
+			Define:	SetSequenceForImagesOrder	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Set SequenceID for Images~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SetSequenceForImages(); )
+		}
+
+		Define:	NULL9 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	ImportIntoSelectedOrder	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Import Images~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ImportIntoSelectedOrder(); )
+					
+		Define:	ImportPDFIntoSelectedOrder	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Import PDF Files~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ImportPDFIntoSelectedOrder(); )
+
+		Define:	GenYBOutput	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Create Yearbook Output~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( GenYearbook(); )
+
+		Define:	ExportImages	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Export Images~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ExportImages(); )
+
+
+		Define:	Export	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Export Data~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ExportSelectedToFile(OrdersDataView,Orders) )
+
+		Define:	SummaryReport	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Summary Report~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( OnOrderSummaryReport() )
+
+		IF 0
+		{
+			Define:	Maintain		using	DDMenuItemDef
+				Fields:	Text		Translate( ~Maintain~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( MaintainCrossReference() )
+
+		
+			Define:	SimpleOrdering	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Order Pad~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SimpleOrdering(); )
+		}
+
+		if ( RunningVersion(4.2))
+		{
+			Define:	RememberWindowLoc	using	DDMenuItemDef
+				Fields:	Text		Translate( ~Remember Window Location~ )
+						IDText		~ID~
+						ActionsText  ACTION EXEC ( OrdersDataWindow( SaveWindowLocation,WindowLocation,OrdersList ); )	
+		}
+	}
+
+
+
+Include: ~DefineStdGridButtons~;
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+Define: OrdersDataWindow Using DDWinDef
+	Fields:		Title					~Order Data for Customer <CustomerIDs>~
+				Position				0 3 90 35
+				IsPositionPercent		T
+				Purpose					~Orders~
+				TypeName				SplitterWnd
+				SplitterRows			~2 10 90~
+				SplitterColumns			1
+				EnableStatusBar			T
+
+
+	Contains:	INLISTORDER
+	{
+
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+		Fields:			ViewType				FormView
+						KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+						HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "OrderData.htm" )
+			Contains:
+			{
+				position = DefineStdGridButtons(Order) + 10;
+
+				SmallButtonWidth = 40;
+
+				Define: SummaryButton Using DDWinCtrlDef AsSymbol SummaryButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( OnOrderSummaryReport() )
+							POSITION		$position + $hGap, $vGap $SmallButtonWidth+10 $ButtonHeight
+							TEXT			Translate( ~Summary~ )
+							TOOLTIP			Translate( ~Summary report for the selected order~ )
+							TYPENAME		BUTTON
+
+				Define: MaintainButton Using DDWinCtrlDef AsSymbol MaintainButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( MaintainCrossReference() )
+							POSITION		SummaryButton(GetRight,Position), $vGap $SmallButtonWidth+10 $ButtonHeight
+							TEXT			Translate( ~Maintain~ )
+							TOOLTIP			Translate( ~Update information about the order~ )
+							TYPENAME		BUTTON
+
+				Define: ManageButton Using DDWinCtrlDef AsSymbol ManageButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( OnManageImages() )
+							POSITION		MaintainButton(GetRight,Position)+10, $vGap $SmallButtonWidth+8 $ButtonHeight
+							TEXT			Translate( ~Manage~ )
+							TOOLTIP			Translate( ~Manage~ )
+							TYPENAME		BUTTON
+
+				Define: ImportButton Using DDWinCtrlDef AsSymbol ImportButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( ImportIntoSelectedOrder() )
+							POSITION		ManageButton(GetRight,Position), $vGap $SmallButtonWidth $ButtonHeight
+							TEXT			Translate( ~Import~ )
+							TOOLTIP			Translate( ~Import images for the selected order~ )
+							TYPENAME		BUTTON
+							
+				Define: PDFButton Using DDWinCtrlDef AsSymbol PDFButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( ImportPDFIntoSelectedOrder() )
+							POSITION		ImportButton(GetRight,Position), $vGap $SmallButtonWidth $ButtonHeight
+							TEXT			Translate( ~PDF~ )
+							TOOLTIP			Translate( ~Import PDF files for the selected order~ )
+							TYPENAME		BUTTON
+
+				Define: OrderNavigatorButton Using DDWinCtrlDef AsSymbol OrderNavigatorButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( NavigateOrder() )
+							POSITION		PDFButton(GetRight,Position) + $hGap, $vGap $SmallButtonWidth+10 $ButtonHeight
+							TEXT			Translate( ~Navigate~ )
+							TOOLTIP			Translate( ~Navigate this order~ )
+							TYPENAME		BUTTON
+
+				Define: ProofButton Using DDWinCtrlDef AsSymbol ProofButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( DisplayProductsOfType( Proof,TRUE ) )
+							POSITION		OrderNavigatorButton(GetRight,Position) + 10, $vGap $SmallButtonWidth $ButtonHeight
+							TEXT			Translate( ~Proof~ )
+							TOOLTIP			Translate( ~Proof the selected order~ )
+							TYPENAME		BUTTON ;
+
+				Global( ProofButton );
+
+				Define: AddReOrderButton Using DDWinCtrlDef AsSymbol AddReOrderButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( AddRecordFor(TRUE,~~) )
+							POSITION		ProofButton(GetRight,Position) + $hGap, $vGap $SmallButtonWidth+10 $ButtonHeight
+							TEXT			Translate( ~Reorder~ )
+							TOOLTIP			Translate( ~Add a re-order for the selected customer~ )
+							TYPENAME		BUTTON
+
+				Define: RunButton Using DDWinCtrlDef AsSymbol RunButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( RunJobsForOrders() )
+							POSITION		AddReOrderButton(GetRight,Position) + $hGap, $vGap $SmallButtonWidth $ButtonHeight
+							TEXT			Translate( ~Run~ )
+							TOOLTIP			Translate( ~Run jobs for the selected orders~ )
+							TYPENAME		BUTTON
+
+
+				Define: RollsButton Using DDWinCtrlDef AsSymbol RollsButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( SeeRollsForOrders() )
+							POSITION		RunButton(GetRight,Position) +  10, $vGap $SmallButtonWidth $ButtonHeight
+							TEXT			Translate( ~Rolls~ )
+							TOOLTIP			Translate( ~See the rolls of film for the selected orders~ )
+							TYPENAME		BUTTON
+
+				Define: ImagesButton Using DDWinCtrlDef AsSymbol ImagesButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( SeeImagesForOrders(TRUE) )
+							POSITION		RollsButton(GetRight,Position) + $hGap, $vGap $SmallButtonWidth $ButtonHeight
+							TEXT			Translate( ~Images~ )
+							TOOLTIP			Translate( ~See the images for the selected orders~ )
+							TYPENAME		BUTTON
+
+				Define: OrderItemsButton Using DDWinCtrlDef AsSymbol OrderItemsButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( SeeItemsForOrders(TRUE) )
+							POSITION		ImagesButton(GetRight,Position) + $hGap, $vGap $SmallButtonWidth $ButtonHeight
+							TEXT			Translate( ~Items~ )
+							TOOLTIP			Translate( ~See the order items for the selected orders~ )
+							TYPENAME		BUTTON
+
+				Define: OrderInfoButton Using DDWinCtrlDef AsSymbol OrderInfoButton
+					Fields:	GENCONNAME		This
+							DACTIONSTEXT	ACTION EXEC ( SeeInfoForOrders(TRUE) )
+							POSITION		OrderItemsButton(GetRight,Position) + $hGap, $vGap $SmallButtonWidth $ButtonHeight
+							TEXT			Translate( ~Info~ )
+							TOOLTIP			Translate( ~See the Subject Info for the selected orders~ )
+							TYPENAME		BUTTON
+
+
+
+				IF 0
+				{
+					Define: OrderPadButton Using DDWinCtrlDef AsSymbol OrderPadButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( SimpleOrdering() )
+								POSITION		OrderInfoButton(GetRight,Position) + $hGap, $vGap $SmallButtonWidth + 20 $ButtonHeight
+								TEXT			Translate( ~OrderPad~ )
+								TOOLTIP			Translate( ~Presents a simple entry pad for selecting products and images~ )
+								TYPENAME		BUTTON
+				}
+			}
+
+		Define: OrdersDataView Using DDViewDef AsSymbol OrdersDataView
+			Fields:	ViewType				~ListView~
+					ViewDataType			Text
+					GridControlTypes		OrdersTableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION EXEC ( ChangeRecord() )
+					DeleteRecordActionsText ACTION EXEC ( DeleteRecord() )
+					RClickUpActionsText		ACTION EXEC ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					CloseActionsText		ACTION Call ( OnCloseOrdersDataView() )
+					DoubleClickActionsText	ACTION EXEC ( OpenSelectedOrders(TRUE) )
+					EndEditActionsText		ACTION Call ( EndEdit() )
+					DropActionsText			ACTION Exec ( HandleDrop() )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() )
+					ComboBoxActionsText		ACTION Call ( RefreshComboBox() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "OrderData.htm" )
+					//LoadAsync				T
+	}
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\OrdersDoc.txt~ );
+
+
+

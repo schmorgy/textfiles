@@ -1,0 +1,282 @@
+
+IncludeClass( BaseDialog );
+Include: ~UtilityRoutines~;
+Include: ~Utilities2~;
+
+Class( SetLutDlg,Extends,BaseDialog,
+		Member,Instructions1,Str,~~,
+		Member,Instructions2,Str,~~,
+		Member,Instructions3,Str,~~,
+		Member,Instructions4,Str,~~,
+		Member,fCalledFromImages,Numeric,FALSE );
+
+
+VOID SetLutDlg::SetLutDlg()					// CONSTRUCTOR
+{
+	Left = 515;
+	GoButtonText = Translate( ~Set LUT~ );
+	CancelButtonText = Translate( ~Close~ );
+	HelpPage = ~SetRenderLut.htm~;
+	GoButtonToolTip = Translate( ~Set the LUT to be used to render the image.~ );
+	Title = Translate( ~Set Rendering LUT~ );
+	Dictionary = ~DDLutDialogData~;
+
+	Instructions1 = ~The rendering LUT affects the overall contrast of exposure-corrected images.~;
+	Instructions2 = ~LUT 0 is for use with scanned images.~;
+	Instructions3 = ~LUTs 10 through 50 are designed for use with digital camera images. ~;
+	Instructions3 = ~<Instructions3>~ + ~Exposure-corrected image contrast increases with higher LUT index numbers, along with the potential for visible contouring, dark shadow noise and color tinging artifacts in the corrected images.~;
+	Instructions4 = ~To modify the LUT for an individual image within an Order, change the LUTIndex field in the Images data table or select Set Rendering LUT from the Images window right click menu.~;
+}
+
+
+VOID SetLutDlg::DefineDictionary()
+{
+	if ( !DictionaryExists( DDLutDialogData ) )
+	{
+		Dictionary: ~DDLutDialogData~ 
+		Fields: Name LutName		type Text;
+	}
+}
+
+
+VOID SetLutDlg::DefineControls()
+{
+    ComboBoxWidth	= 300;	
+    ComboBoxHeight	= 110;
+	
+	Define: InstructionsText1 Using DDWinCtrlDef AsSymbol InstructionsText1
+		Fields:	TYPENAME			STATICTEXT
+				GENCONNAME			THIS
+				LeftJustified		TRUE
+				Position			<hgap> <vGap>+20, 400, 20
+				Text				~<Instructions1>~;
+
+	Define: InstructionsText2 Using DDWinCtrlDef AsSymbol InstructionsText2
+		Fields:	TYPENAME			STATICTEXT
+				GENCONNAME			THIS
+				LeftJustified		TRUE
+				Position			<hgap>, InstructionsText1(GetBottom,Position) + $vGap, 400, 20
+				Text				~<Instructions2>~;
+
+	Define: InstructionsText3 Using DDWinCtrlDef AsSymbol InstructionsText3
+		Fields:	TYPENAME			STATICTEXT
+				GENCONNAME			THIS
+				LeftJustified		TRUE
+				Position			<hgap>, InstructionsText2(GetBottom,Position) + $vGap, 400, 55
+				Text				~<Instructions3>~;
+
+	Define: InstructionsText4 Using DDWinCtrlDef AsSymbol InstructionsText4
+		Fields:	TYPENAME			STATICTEXT
+				GENCONNAME			THIS
+				LeftJustified		TRUE
+				Position			<hgap>, InstructionsText3(GetBottom,Position) + $vGap, 400, 50
+				Text				~<Instructions4>~;
+
+	Define: LutPrompt Using DDWinCtrlDef AsSymbol LutPrompt
+		Fields:	TYPENAME			STATICTEXT
+				GENCONNAME			THIS
+				RightJustified		TRUE
+				Position			<hgap> InstructionsText4(GetBottom,Position) + $vGap * 3, 30, <ButtonHeight>
+				Text				Translate( ~LUT~ );
+
+	Define: LutComboBox Using DDWinCtrlDef AsSymbol LutComboBox
+            Fields: TypeName		SComboBox  
+                    Position		LutPrompt(GetRight,Position) + $hGap, LutPrompt(Gettop,Position)-3,<ComboBoxWidth> ,<ComboBoxHeight> 
+                    DropDownActionsText	ACTION EXEC ( <THIS>.UpdateLutComboBox(FALSE) )
+					DActionsText	~[Save ]~
+                    OActionsText    ~[Save]~
+                    GenConName       THIS
+                    GenConField      ~LutName~
+                    Tooltip          ~Select the Lut that will be used when rendering the selected orders~;
+
+	DialogWidth = aDialog(GetMaxRight,Position) + $hGap * 2;
+	DialogHeight = aDialog(GetMaxBottom,Position) - 70;
+
+	if ( $DialogWidth < $ButtonWidth * 2 + $hGap * 2 )
+	{
+		DialogWidth = $ButtonWidth * 2 + $hGap * 4;
+	}
+
+	Define: GoButton Using DDWinCtrlDef AsSymbol GoButton
+		Fields:	GENCONNAME			THIS
+					DACTIONSTEXT			ACTION EXEC ( <THIS>.OnGoButton() )
+					POSITION				($DialogWidth/2) - ($ButtonWidth) - $hGap,$DialogHeight+$vGap * 2 + 3, $ButtonWidth, $ButtonHeight
+					TEXT						Translate( ~<GoButtonText>~ )
+					TOOLTIP					Translate( ~<GoButtonToolTip>~ )
+					TYPENAME				BUTTON
+					ISTABSTOP				TRUE
+
+	Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+		Fields:	GENCONNAME			THIS
+					DACTIONSTEXT			ACTION EXEC ( <THIS>.DoCancelButton() )
+					POSITION				GoButton(GetRight,Position) + $hGap,GoButton(GetTop,Position),
+												$ButtonWidth, $ButtonHeight
+					TEXT						Translate( ~<CancelButtonText>~ )
+					TOOLTIP					Translate( ~<CancelButtonToolTip>~ )
+					TYPENAME				BUTTON
+					ISTABSTOP				TRUE
+}
+
+VOID SetLutDlg::SetPosition()
+{
+	DialogWidth = aDialog(GetMaxRight,Position) + $hGap * 2 + 5;
+	DialogHeight = aDialog(GetMaxBottom,Position) + $vGap;
+
+	aDialog( Set,Position,~<Left> <Top> <DialogWidth> <DialogHeight>~ );
+}
+
+NUMERIC SetLutDlg::OnGoButton()
+{
+	result = FALSE;
+	dlg( GetInput );
+		
+	Lut = ~<$con.DlgData[LutName]>~;
+	index = GetLutIndex( ~<Lut>~ );
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	if (<fCalledFromImages>)
+	{
+		UpdateImages(dBase,~<index>~);
+	}
+	else
+	{
+		UpdateOrder(dBase,~<index>~);
+	}
+
+	return TRUE;
+}
+	
+NUMERIC SetLutDlg::UpdateImages(&dBase,index)
+{
+	if ( GenCon( View,FindActiveImageThumbnailView ) )
+	{ 
+		if ( View( IsThumbNailView ) && (~<$con.View[ViewDataType]>~ == ~Image~) )
+		{
+			if ( !View( GetSelected,SelectedImages ) )		
+			{ 
+				return Warning( ~There are no image selected.~ );
+			}
+		}
+	}
+
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		StatusBar( 0,~Changing LUT for <$con.Image[OrderID]>~ );
+		ImageCorrections( UpdateLutIndex, ~<$con.Image[OrderID]>~, ~<$con.Image[Roll]>~, ~<$con.Image[Frame]>~, <index> );
+	}
+
+	BroadcastMessageToAllViews( RenderingLutChanged );
+	StatusBar( 0,~LUT change complete~ );
+	return TRUE;
+}
+
+NUMERIC SetLutDlg::UpdateOrder(&dBase,index)
+{
+	if ( GenCon( TheWindow,GetWindow,~OrdersDataWindow~ ) )
+	{
+		if ( TheWindow( GetActiveViewOfWindow,View ) )
+		{ 
+			if ( !View( GetSelected,SelectedOrders ) )		
+			{ 
+				return Warning( ~There are no orders selected~ );
+			}
+		}
+	}
+
+	while ( SelectedOrders( GetNext,Order ) )
+	{
+		StatusBar( 0,~Changing LUT for <$con.Order[ID]>~ );
+
+		if ( IsNull( ~<$con.Order[ID]>~ ) )
+		{
+			return Warning( ~OrderID cannot be blank~ );
+		}
+
+		ImageCorrections( UpdateLutIndex, ~<$con.Order[ID]>~, ~~, ~~, <index> );
+	}
+
+	StatusBar( 0,~LUT change complete~ );
+	return TRUE;
+}
+
+NUMERIC SetLutDlg::Initialize( calledFromImages )
+{
+	fCalledFromImages = Numeric( ~<calledFromImages>~ );
+	return TRUE;
+}
+
+NUMERIC SetLutDlg::UpdateLutComboBox( firstEntry )
+{
+	StatusBar( 0,~~ );
+	
+// Create a string list that contains the translated Lut names.
+	StringList( LutsList,New,NoDuplicateValues,InAlphaOrder );
+
+	if ( GetLutList( LutsList ) )
+	{
+		index = dlg( ComboBox,LutComboBox,GetSelectedIndex );
+
+		dlg( SetControlFromStringList,LutComboBox,LutsList,Selection );
+		if ( <firstEntry> )
+		{
+			LutName = ~~;
+			if ( GetWorkstationSettings( ConversionLut,LUT,LutName,enabled ) )
+			{
+				if ( !IsNull( ~<LutName>~ ) )
+				{
+					dlg( ComboBox,LutComboBox,SelectString,~<LutName>~,-1 );
+				}
+			}
+			else
+			{
+				dlg( ComboBox,LutComboBox,SetSelectedIndex,0 );
+			}			
+		}
+		else
+		{
+			dlg( ComboBox,LutComboBox,SetSelectedIndex,<index> );
+		}
+	}
+
+
+	return TRUE;
+}
+
+
+NUMERIC SetLutDlg::OnDialogEnd()
+{
+	dlg( GetInput );
+	Lut = ~<$con.DlgData[LutName]>~;
+	
+	SetWorkstationSettings( ~ConversionLut~,~LUT~, ~<Lut>~, TRUE );
+	
+	return TRUE;
+}	
+
+
+VOID Init( calledFromImages )
+{
+	if ( !Defined( SetLut ) )
+	{
+		SetLutDlg( New,SetLut );
+
+		SetLut.DefineDictionary();
+		SetLut.DefineDialog();
+		SetLut.UpdateLutComboBox( TRUE );
+		SetLut.Initialize(~<calledFromImages>~);
+
+		Global( SetLut );
+	}
+	else
+	{
+		SetLut.ReOpen();
+	}
+
+	return;
+}
+

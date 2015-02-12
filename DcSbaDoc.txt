@@ -1,0 +1,601 @@
+IncludeClass( BaseClass );
+
+Class( DSba,Extends,BaseClass,
+			Member,Dictionary,Str,~DDDCSBAControlDict~,
+			Member,ErrorDictionary,Str,~DDDCSbaErrorInfo~,
+			Member,m_AutoBalanceSetup,str,~~,
+			Member,m_checkColorType,Numeric,0,
+			Member,m_BatchMode,Numeric,0 );	
+
+
+VOID DSba::DSba()					// CONSTRUCTOR
+{
+	Enabled = TRUE;
+	m_checkColorType = FALSE;
+	if ( GetSystemSettings( ~AdjustImages~,~CheckColorType~,Value,Enabled ))
+	{
+		m_checkColorType = Numeric( ~<Value>~ ) != 0;
+	}
+
+}
+
+
+VOID DSba::!DSba()					// DESTRUCTOR
+{
+	CloseBalancer();
+}
+
+
+VOID DSba::DefineDictionary()
+{
+	Dictionary:	~<ErrorDictionary>~
+		Fields:	Name APIErrorCode			Type long
+		Fields:	Name SbaErrorCode			Type long
+		Fields:	Name Text					Type Text;
+
+
+	Dictionary:	~<Dictionary>~
+		Fields: Name	SBALevel			Type  long
+		Fields: Name	ColorType			Type  long
+
+		Fields: Name	redOverride			Type  long
+		Fields: Name	greenOverride		Type  long
+		Fields: Name	blueOverride		Type  long
+		Fields: Name	brightnessOverride	Type  long 
+		Fields: Name	UseSBAPlus			Type  long
+
+		Fields: Name	SbaR				Type  long 
+		Fields: Name	SbaG				Type  long 
+		Fields: Name	SbaB				Type  long 
+		Fields: Name	SbaFlesh			Type  long
+
+		Fields: Name	xferDenN			Type  long 
+		Fields: Name	xferDenGM			Type  long 
+		Fields: Name	xferDenI			Type  long 
+		Fields: Name	AvgDenR				Type  long
+		Fields: Name	AvgDenG				Type  long
+		Fields: Name	AvgDenB				Type  long
+		Fields: Name	AvgDenN				Type  long
+		Fields: Name	MinDenR				Type  long
+		Fields: Name	MinDenG				Type  long
+		Fields: Name	MinDenB				Type  long
+		Fields: Name	MinDenN				Type  long
+		Fields: Name	MaxDenR				Type  long
+		Fields: Name	MaxDenG				Type  long
+		Fields: Name	MaxDenB				Type  long
+		Fields: Name	MaxDenN				Type  long
+		Fields: Name	AvgEdgeR			Type  long
+		Fields: Name	AvgEdgeG			Type  long
+		Fields: Name	AvgEdgeB			Type  long
+		Fields: Name	AvgEdgeN			Type  long
+		Fields: Name	unwtDenGM			Type  long 
+		Fields: Name	unwtDenI			Type  long 
+		Fields: Name	AvgHue				Type  long
+		Fields: Name	AvgSat				Type  long
+		Fields: Name	PercentFlesh		Type  Double	Precision	6	Scale 2	LowValue 0	HighValue 100
+		Fields: Name	FleshAdjust			Type  Double	Precision	6	Scale 2	LowValue 0	HighValue 4096
+		Fields: Name	PreferenceName		Type  Text
+
+		Fields: Name	SrgbAvgHue			Type  long
+		Fields: Name	SrgbAvgSat			Type  long
+
+		Fields: Name	SrgbAvgDenR			Type  long
+		Fields: Name	SrgbAvgDenG			Type  long
+		Fields: Name	SrgbAvgDenB			Type  long
+		Fields: Name	SrgbAvgDenN			Type  long
+		Fields: Name	SrgbAvgDenGM		Type  long
+		Fields: Name	SrgbAvgDenIL		Type  long
+
+		Fields: Name	SrgbEdgeAvgR		Type  long
+		Fields: Name	SrgbEdgeAvgG		Type  long
+		Fields: Name	SrgbEdgeAvgB		Type  long
+		Fields: Name	SrgbEdgeAvgN		Type  long
+		Fields: Name	SrgbEdgeAvgGM		Type  long
+		Fields: Name	SrgbEdgeAvgIL		Type  long
+
+		Fields: Name	Order				Type  Text 
+		Fields: Name	Roll				Type  Text 
+		Fields: Name	Frame				Type  Text 
+		Fields: Name	Path				Type  Text 
+		Fields: Name	ICCProfile			Type  Text
+		
+		Fields: Name	GenerateSbaTime		Type long
+		Fields: Name	SbaCompleteTime		Type long
+
+		Fields: Name	TraceCalls			Type long 
+		Fields: Name	TimeCalls			Type long 
+		Fields: Name	EmbeddedProfile		Type long
+		Fields:	Name	ProfileLength		Type long	
+		Fields: Name	CheckedForEmbeddedProfile Type long
+		Fields:	Name	TaggedColorSpaceName	Type	text
+		Fields: Name	ChromaKeyMask		Type long
+		;
+}
+
+VOID DSba::InitDictionaryData()
+{
+	if ( !Defined( m_SbaControl ) )
+	{
+		Define:	m_SbaControl Using ~<Dictionary>~ AsSymbol m_SbaControl Private
+			Fields:	redOverride			 0
+					greenOverride		 0
+					blueOverride		 0
+					brightnessOverride	 0
+					ICCProfile				~~
+					Path					~~ 
+					SBALevel			 0
+					ColorType			 0
+					;
+	}
+
+	if ( !Defined( m_SbaErrorInfo ) )
+	{
+		Define:	m_SbaErrorInfo Using ~<ErrorDictionary>~ AsSymbol m_SbaErrorInfo Private
+			Fields:	APIErrorCode		 0
+					SbaErrorCode		 0
+					Text				~~
+					;
+	}
+
+}
+
+NUMERIC DSba::LoadSbaRoutines()
+{
+	if ( Defined( Balancer ) )
+	{
+		return TRUE;
+	}
+
+	if (  !DCSBA( Balancer ) )
+	{
+		ErrMsg = Translate( ~Error starting the auto balance software.~ );
+		Log( Session, ~<ErrMsg>~ );
+		return FALSE;
+	}
+
+	if ( !Balancer( Initialize ) )
+	{
+		ErrMsg = Translate( ~Unable to initialize auto balance.~ );
+		Log( Session, ~<ErrMsg>~ );
+		return FALSE;
+	}
+
+	if ( !Balancer( SetSbaErrorInfo,m_SbaErrorInfo ) )
+	{
+		ErrMsg = Translate( ~Unable to initialize auto balance.~ );
+		Log( Session, ~<ErrMsg>~ );
+		return FALSE;
+	}
+
+	Private( Balancer );
+
+//	SetTimeCallsFlag();
+
+//	SetTraceCallsFlag();
+
+	return TRUE; 
+}
+
+
+NUMERIC DSba::SetAutoBalTracking( value )
+{
+	if ( Defined( Balancer ) )
+	{
+		return Balancer( SetDSbaTracking,<value> );
+	}
+	
+	return FALSE;
+}
+
+VOID DSba::SetBatchMode( value )					// Accessor
+{
+	m_BatchMode = <value> ;
+}
+
+NUMERIC DSba::BalanceImage( &thumbnailImage,autoBalanceSetup,
+							SBALevel,Order,Roll,Frame,Path,ICCProfile,
+							embeddedProfile,embeddedProfileChecked, Color )
+{
+	result = FALSE;
+	ColorType = <Color>; 
+	ColorUnknown = FALSE;
+	if ( <m_checkColorType> && <ColorType> == 0 )
+	{
+		ColorUnknown = TRUE;
+		ColorType  = DetermineColorType( ~<Path>~ );
+	}
+	m_SbaControl( SetValues,ColorType,<ColorType> );
+
+	if ( !IsNull( ~<thumbnailImage>~ ) )
+	{
+		ImageMem( theThumbnailImage, Is, ~<thumbnailImage>~, TEMPORARY );
+	}
+	
+	if ( <ColorType> >= 3 )	// B&W Spot. sepia. sepia Spot
+	{
+		if ( <ColorUnknown> )
+		{
+			ImageCorrections( UpdateColorType,~<Path>~,<ColorType> );
+		}
+
+		Log( Session,~SBA was not applied to sepia or spot color image Order = <Order>, Roll= <Roll>, Frame = <Frame>~ );
+		if ( !IsNull( ~<thumbnailImage>~ ) )
+		{
+			Free( <embeddedProfile> );
+		}
+		return FALSE;
+	}
+	else if ( <ColorType> == 2 )	//BW
+	{
+		SBALevel = 16;				// Density only
+	}
+
+	ImageCorrections( GetCurrentCorrections,~<Path>~,CopiedCorrections );
+
+	// Get the corrections for a specific image.
+	CopiedCorrections( GetValues,	~OpRestrictions~, OpRestrictions );
+	ImageCorrections( Free,~<Path>~ );
+
+	if ( ( <m_BatchMode> && <OpRestrictions> == 2 ) || ( <OpRestrictions> == 3 ))
+	{
+		Log( Session,~SBA was not applied to previously corrected image: <Path>~ );
+		if ( !IsNull( ~<thumbnailImage>~ ) )
+		{
+			Free( <embeddedProfile> );
+		}
+		return FALSE;
+	}
+
+	if ( !DImageSba.LoadSbaRoutines() )
+	{
+		if ( !IsNull( ~<thumbnailImage>~ ) )
+		{
+			Free( <embeddedProfile> );
+		}
+		return FALSE;
+	}
+
+	if ( DefinedAndNotNull( autoBalanceSetup ) )
+	{
+		m_SbaControl( SetValues,PreferenceName,~<autoBalanceSetup>~ );
+		
+		result = SetSbaPreferenceData( ~<autoBalanceSetup>~ );
+		if ( !<result> )
+		{
+			ErrMsg = Translate( ~Failed to load the Preference: <autoBalanceSetup>~ );
+
+			HandleSbaError( ~<ErrMsg>~ );
+			if ( !IsNull( ~<thumbnailImage>~ ) )
+			{
+				Free( <embeddedProfile> );
+			}
+			return <result>;
+		}
+
+	}
+
+	m_SbaControl( SetValues,Order,~<Order>~,Roll,~<Roll>~,Frame,~<Frame>~,
+				Path,~<Path>~,ICCProfile,~<ICCProfile>~,
+				EmbeddedProfile,~<embeddedProfile>~,
+				CheckedForEmbeddedProfile, ~<embeddedProfileChecked>~,
+				SBALevel,~<SBALevel>~,ColorType,<ColorType> );
+
+	
+	if ( !IsNull( ~<thumbnailImage>~ ) )
+	{
+		theThumbnailImage( Permanent );	// this will be deleted by the Balancer
+	}
+
+	result = Balancer( GenSbaAsync,m_SbaControl,theThumbnailImage );
+	
+	if ( !<result> )
+	{
+		ErrMsg = Translate( ~Auto Balance failed for Order: <Order>, Roll: <Roll>, Frame: <Frame>.~ );
+
+		HandleSbaError( ~<ErrMsg>~ );
+	}
+
+	return <result>;
+
+}
+
+
+NUMERIC DSba::SetSbaPreferenceData( SbaSetup )
+{
+//	if ( ~<SbaSetup>~ != ~<m_AutoBalanceSetup>~ )
+//	{
+		ForgetPrivate( m_PrefsList );
+		PrefsQuery = ~Select * From DSbaPrefsDef WHERE name = '<SbaSetup>'~;
+
+		if ( !PGenConList( m_PrefsList,Connect,Cursor,Forward,Query,~<PrefsQuery>~ ) )
+		{
+			m_AutoBalanceSetup = ~~;
+			m_PrefsList( GetErrorDescription,0,theErr );
+			Log( Session, Translate( ~QueryFailed: <PrefsQuery>. <theErr>~ ) ); 
+			return FALSE;
+		}
+
+		m_PrefsList( SetConnection,~~ );	// DISCONNECT LIST FROM THE DATABASE
+
+		Count = m_PrefsList( NumEntries );
+
+		if ( <Count> < 1 )
+		{
+			m_AutoBalanceSetup = ~~;
+			ErrMsg = Translate( ~A preference named <SbaSetup> does not exist in the Auto Balance Preferences table.~ );
+			Log( Session, ~<ErrMsg>~ );
+			return FALSE;
+		}
+
+		Private( m_PrefsList );
+		m_AutoBalanceSetup = ~<SbaSetup>~;
+//	}
+
+
+	if ( !m_PrefsList( GetFirst,setup ) )
+	{
+		m_AutoBalanceSetup = ~~;
+		ErrMsg = Translate( ~A preference named <SbaSetup> does not exist in the Auto Balance Preferences table.~ );
+		Log( Session, ~<ErrMsg>~ );
+		return FALSE;
+	}
+
+	if ( !Balancer( SetPreference,setup ) )
+	{
+		ErrMsg = Translate( ~Failed to initialize the preferences.~ );
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+
+
+VOID DSba::GetSbaSliders( &den,&red,&green,&blue )
+{
+	m_SbaControl( GetValues, BrightnessOverride,den,
+							 RedOverride,		red,
+							 GreenOverride,		green,
+							 BlueOverride,		blue );
+
+}
+
+NUMERIC DSba::GetColorType()
+{
+	m_SbaControl( GetValues, ColorType,	colorType );
+
+	return <colorType>;
+}
+
+
+VOID DSba::CloseBalancer()
+{
+	ForgetPrivate( m_PrefsList );
+	ForgetPrivate( Balancer );
+	ForgetPrivate( m_SbaControl ); 
+	ForgetPrivate( m_SbaErrorInfo ); 
+}
+
+
+VOID DSba::SetTraceCallsFlag()
+{
+	if ( !Defined( Balancer ) )
+	{
+		return;
+	}
+
+	TraceCalls = TRUE;
+	Balancer( SetTraceCallsFlag,~<TraceCalls>~ );
+
+	if ( !Defined( Balancer ) )
+	{
+		return;
+	}
+}
+
+
+VOID DSba::SetTimeCallsFlag()
+{
+	if ( !Defined( Balancer ) )
+	{
+		return;
+	}
+
+	TimeCalls = TRUE;
+	Balancer( SetTimeCallsFlag,~<TimeCalls>~ );
+
+}
+
+
+NUMERIC DSba::HandleSbaError( ErrMsg )
+{
+	Message = ~~;
+	DiagMsg1 = ~~;
+	DiagMsg2 = ~~;
+
+	DiagAction = ~~;
+
+	m_SbaErrorInfo( GetValues, APIErrorCode, APIErrorCode, SbaErrorCode, SbaErrorCode, Text, ErrorMsg );
+
+	// First check for a balancer error, then an API error.
+
+	if ( GenCon( DiagMsg1,GetFrom,~<SbaErrorCode>~,~[STRINGS DCSBAErrorMessages]~ ) )
+	{
+		DiagMsg1( GetValues, Text, TextMsg );
+		Temp = Translate( ~\n\n~ );
+		Message = ~<ErrMsg>~ + ~<Temp>~ + ~<TextMsg>~;
+	}
+	else if ( GenCon( DiagMsg2,GetFrom,~<APIErrorCode>~,~[STRINGS DCSBAAPIErrorMessages]~ ) )
+	{
+		DiagMsg2( GetValues, Text, TextMsg );
+		Temp = Translate( ~\n\n~ );
+		Message = ~<ErrMsg>~ + ~<Temp>~ + ~<TextMsg>~;
+	}
+	else if ( DefinedAndNotNull( ErrMsg ) && DefinedAndNotNull( ErrorMsg ) ) 
+	{
+		Temp = Translate( ~\n\nDetailed error information:\n\n~ );
+		Message = ~<ErrMsg>~ + ~<Temp>~ + ~<ErrorMsg>~;
+	}
+	else if ( DefinedAndNotNull( ErrMsg ) && !DefinedAndNotNull( ErrorMsg ) ) 
+	{
+		Message = ~<ErrMsg>~;
+	}
+	else if ( !DefinedAndNotNull( ErrMsg ) && DefinedAndNotNull( ErrorMsg ) ) 
+	{
+		Message = ~<ErrorMsg>~;
+	}
+	else
+	{
+		Message = Translate( ~\n\nUnable to get detailed error information:\n\n~ );
+	}
+
+	Log( Session, ~<Message>~ );
+
+	m_SbaErrorInfo( SetValues, APIErrorCode, 0, SbaErrorCode, 0, Text, ~~ );
+
+	return FALSE;
+}
+
+
+NUMERIC SbaInit( )
+{
+	if ( !Defined( DImageSba ) )
+	{
+		DSba( New,DImageSba );
+
+		DImageSba.DefineDictionary();
+		DImageSba.InitDictionaryData();
+	}
+
+	Global( DImageSba );
+
+	return TRUE;
+
+}
+
+NUMERIC BalanceImage( &thumbnailImage, autoBalanceSetup,
+					SBALevel, OrderID, Roll, Frame, Path, ICCProfile,
+					embeddedProfile, embeddedProfileChecked, colorType )
+{
+	if ( !Defined( DImageSba ) )
+	{
+		SbaInit();
+	}
+
+	result = FALSE;
+
+	if ( ~<Path>~ == ~~ )
+	{
+		Log( Session,~DcSbsDoc: The Path for Order: <OrderID> Roll: <Roll> Frame: <Frame> is blank~ );
+		return FALSE;
+	}
+	
+	if ( !Files(FileExists, ~<Path>~) )
+	{
+		Log( Session,~DcSbsDoc: The Path does not exist: <Path>~ );
+	}
+
+	result = DImageSba.BalanceImage(thumbnailImage,~<autoBalanceSetup>~,~<SBALevel>~,
+								~<OrderID>~,~<Roll>~,~<Frame>~,~<Path>~,~<ICCProfile>~,
+								~<embeddedProfile>~,~<embeddedProfileChecked>~,<colorType> );
+	return <result>;
+}
+
+VOID GetSbaSliders( &den,&red,&green,&blue )
+{
+	if Defined( DImageSba )
+	{
+		DImageSba.GetSbaSliders( den,red,green,blue );
+	}
+}
+
+NUMERIC GetColorType()
+{
+	if Defined( DImageSba )
+	{
+		return DImageSba.GetColorType();
+	}
+	
+	return 0;
+}
+
+NUMERIC SetAutoBalTracking( value )
+{
+	if Defined( DImageSba )
+	{
+		return DImageSba.SetAutoBalTracking( <value> );
+	}
+
+	return FALSE;
+}
+
+
+NUMERIC GetSBALevel( SBAOption )
+{
+	SBALevel = 0;
+	if ( DefinedAndNotNull( SBAOption ) )
+	{
+		if ( <SBAOption> == 1 )
+		{
+			SBALevel = 0;
+		}
+		else if ( <SBAOption> == 2 )
+		{
+			SBALevel = 16;
+		}
+		else if ( <SBAOption> == 3 )
+		{
+			SBALevel = 1;
+		}
+	}
+
+	return <SBALevel>;
+}
+
+STR  GetSBAPreference( Preference )
+{
+	preferenceFile = ~~;
+	if ( DefinedAndNotNull( Preference ) )
+	{
+		PreferenceName = ~<Preference>~;
+	}
+	else
+	{
+		DefaultAutoBalPref = ~~;
+		GetWorkstationSettings( ~Analyzer~, ~DefaultAutoBalPref~, DefaultAutoBalPref, Enabled );
+		if ( IsNull( ~<DefaultAutoBalPref>~ ) )
+		{
+			GetSystemSettings( ~Analyzer~, ~DefaultAutoBalPref~, DefaultAutoBalPref, Enabled );
+		}
+		if ( !IsNULL( ~<DefaultAutoBalPref>~ ) )
+		{
+			PreferenceName = ~<DefaultAutoBalPref>~;
+		}
+		else
+		{
+			PrefsQuery = ~Select Name From DSbaPrefsDef Order By Name~;
+
+			if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<PrefsQuery>~ ) )
+			{
+				List( GetErrorDescription,0,theErr );
+				Log( Session, Translate( Translations, QueryFailed, ~<PrefsQuery>~, ~<theErr>~ ) ); 
+				return ~~;
+			}
+
+			List( SetConnection,~~ );	// DISCONNECT LIST FROM THE DATABASE
+
+			Count = List( NumEntries );
+
+			if ( !<Count> )
+			{
+				return ~~;
+			}
+
+			if ( List( GetFirst, Record ) )
+			{
+				PreferenceName = ~<$pcon.Record[Name]>~;
+			}
+		}
+	}
+
+	return ~<PreferenceName>~;
+}

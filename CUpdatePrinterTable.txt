@@ -1,0 +1,326 @@
+//	CRESuspend.txt
+
+//	THIS PROGRAM WILL TOGGLE THE SUSPEND FLAG
+
+ExecC() ;
+
+
+//	USEFUL GLOBALS
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+
+
+//	THIS IS TO ALLOW THE PRE-SCAN TO WORK
+//	ALL CALLS WILL BE HANDLED DIRECTLY TO
+//	THE 'C' FUNCTIONS.
+main()
+{
+}
+
+
+SetPrinterStatus( char *thePrinterGC, TCHAR *Status )
+{
+	char	*PGCList ;
+	TCHAR	 theQuery[256] ;
+	char	*thePGC ;
+	char	*anADO ;
+	int		 result = 0 ;
+
+	// CREATE A NEW UPGENCONLIST.
+	anADO = ConnectToADO() ;
+	if( anADO == NULL )
+	{
+		return( result ) ;
+	}
+
+	PGCList = NewPGenConList(anADO);
+	if( PGCList == NULL )
+	{
+		HandleDBError(anADO) ;
+		if( anADO )		{ anADO = Delete( anADO ) ; }
+		return( result ) ;
+		//goto AllDone ;
+	}
+
+	// Larry See Tom
+
+	sprintf( theQuery, "Update Printers Set Status = '%s' Where PrinterName = '", Status ) ;
+	strcat( theQuery, GetStringValue( thePrinterGC, "PrinterName")) ;
+	strcat( theQuery, "\'" ) ;
+
+	// GET THE PRINTER INFO FROM THE DATABASE.
+	result = Query(PGCList, theQuery, "Optmistic","Dynamic") ;
+
+	if( result != 1 )
+	{
+		HandleDBError(anADO) ;
+	}
+
+//AllDone:
+	if( anADO )		{ anADO = Delete( anADO ) ; }
+	if( PGCList )	{ PGCList = Delete( PGCList ) ; }
+
+	return( result ) ;
+}
+
+
+UpdatePrinterStatus(TCHAR *Field, TCHAR *Status, TCHAR *Option, TCHAR *GCName, TCHAR *GCPosition)
+{
+	char	*PrinterGC ;
+	UADO	*anADO ;
+	int		 result ;
+	TCHAR	 PrinterName[64] ;
+	TCHAR	 theQuery[512] ;
+
+	Debug(0) ;
+
+	PrinterGC = GetTreeObject( GCName, GCPosition ) ;
+	if( PrinterGC == NULL )
+	{
+		return( FALSE ) ;
+	}
+
+	GetAttrValue( PrinterGC, "PrinterName", PrinterName ) ;
+
+	sprintf( theQuery, "Update Printers Set Status = %d Where Printername = '%s'",
+		atoi(Option), PrinterName ) ;
+
+	anADO = ConnectToADO() ;
+
+	result = DoSQL( anADO, theQuery ) ;
+
+	result = anADO->RefreshConnectionCache() ;
+
+	anADO = delete anADO ;
+
+}
+
+HandleDBError(UADO *anADO)
+{
+	long	ErrorCount, ErrorIndex ;
+	TCHAR	ADOErrDesc[2048] ;
+	TCHAR	theMsg[4096] ;
+	long	StopHere = 0 ;
+
+	Debug(StopHere) ;
+
+	ErrorCount = GetErrorCount( anADO ) ;
+	if( ErrorCount == 0L )
+	{
+		HandleError( _T("LostDBConnection"), _T("Strings UIMessages")) ;
+	}
+	else
+	{
+		for( ErrorIndex = 0L ; ErrorIndex < ErrorCount ; ErrorIndex++ )
+		{
+			GetErrorDescription( anADO, ErrorIndex, ADOErrDesc ) ;
+			sprintf( theMsg, "Database Error: %s", ADOErrDesc ) ;
+			ShowDialog( theMsg ) ;
+		}
+	}
+}
+
+
+DoSQL( UADO *anADO, TCHAR *theSQLStatement )
+{
+	int		result	= 0x8000405 ;	//	COULD NOT UPDATE BECAUSE LOCKED BY ANOTHER
+	long	count	= 0 ;
+	long	Level ;
+	int		RefreshResult ;
+
+	while( result && count < 30 )
+	{
+		result = ADOCommand( anADO, theSQLStatement, "SQL", NULL ) ;
+		count++ ;
+		if( result != 0L )
+		{
+			RefreshResult = anADO->RefreshConnectionCache() ;
+			Sleep(2000) ;
+		}
+
+//		if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 7 )
+		{
+			SessionLogDirect( "DoSQL: %s, result = %0lX, Count = %ld [%0lX]",
+								theSQLStatement, result, count, anADO ) ;
+		}
+	}
+
+	if( result != 0 )
+	{
+		HandleDBError(anADO) ;
+	}
+	else
+	{
+		RefreshResult = anADO->RefreshConnectionCache() ;
+//		if( gRELookAhead->GetLongValue(_T("RELogLevel")) > 7 )
+		{
+			SessionLogDirect("DoSQL: CommitTransaction result = %0lX", result) ;
+		}
+	}
+	return( result ) ;
+}
+
+
+
+
+/*
+	sprintf( theQuery,
+		"Select * From Printers Where PrinterName = '%s'",
+						PrinterName ) ;
+
+	PGCList = InitDBTransaction( &anADO ) ;
+	if( PGCList == NULL )
+	{
+		return( FALSE ) ;
+	}
+
+	result = Query(PGCList, theQuery, "Optimistic", "Dynamic" ) ;
+	if( result != 1 )
+	{
+		HandleADOError(char *anADO) ;
+
+		RollBackTransaction( anADO ) ;
+		anADO = Delete( anADO ) ;
+		PGCList = Delete( PGCList ) ;
+		return( FALSE ) ;
+	}
+
+	PGC = GetFirst( PGCList ) ;
+	if( PGC == NULL )
+	{
+		anADO = Delete( anADO ) ;
+		PGCList = Delete( PGCList ) ;
+		return( FALSE ) ;
+	}
+
+	GetAttrValue( PGC, Field, PrinterStatus ) ;
+
+	if( stricmp( PrinterStatus, Status ) == 0 )
+	{
+		SetAttrValue( PGC, Field, Option ) ;
+		SetAttrValue( PrinterGC, Field, Option ) ;
+		changed = TRUE ;
+	}
+	else
+	{
+		if( stricmp( PrinterStatus, Option ) == 0 )
+		{
+			SetAttrValue( PGC, Field, Status ) ;
+			SetAttrValue( PrinterGC, Field, Status ) ;
+			changed = TRUE ;
+		}
+		else
+		{
+			SetAttrValue( PGC, Field, Status ) ;
+			SetAttrValue( PrinterGC, Field, Status ) ;
+			changed = TRUE ;
+		}
+	}
+
+	if( changed )
+	{
+		result = DBUpdate( PGCList ) ;
+		if( result != TRUE )
+		{
+			HandleADOError(anADO) ;
+			RollBackTransaction( anADO ) ;
+			anADO = Delete( anADO ) ;
+			PGCList = Delete( PGCList ) ;
+			return( FALSE ) ;
+		}
+
+		CommitTransaction( anADO ) ;
+	}
+
+
+	anADO = Delete( anADO ) ;
+	PGCList = Delete( PGCList ) ;
+	return( TRUE ) ;
+}
+*/
+
+ConnectToADO()
+{
+	char	*ADO ;
+	TCHAR	 msg[256] ;
+	int		 result ;
+
+	ADO = NewADO() ;
+
+	if( ADO == NULL )
+	{
+		MessageBox( "Could not get ADO.", "MB_OK" ) ;
+		return(ADO) ;
+	}
+
+	result = ConnectKPIS( ADO ) ;
+	if( result )
+	{
+		sprintf( msg, "Could not get Connection. Error = %d", result ) ;
+		MessageBox( msg, "MB_OK" ) ;
+		return(ADO) ;
+		Delete( ADO ) ;
+		ADO = NULL ;
+		return(ADO) ;
+	}
+
+	return( ADO ) ;
+}
+
+
+InitDBTransaction( char **anADO )
+{
+	char	*PGCList ;
+	char	*ADO ;
+	int		 result ;
+	long	 TransactionLevel ;
+
+	ADO = ConnectToADO() ;
+	if( ADO == NULL )
+	{
+		ReportError( "Cannot get Database connection.", 0, 0 ) ;
+		*anADO = NULL ;
+		return( NULL ) ;
+	}
+
+	result = BeginTransaction( ADO, &TransactionLevel ) ;
+	if( result != 0 )
+	{
+		ReportError( "Cannot begin transaction.", 0, 0 ) ;
+		*anADO = NULL ;
+		return( NULL ) ;
+	}
+
+	PGCList = NewPGenConList(ADO);
+	if( PGCList == NULL )
+	{
+		RollBackTransaction( ADO ) ;
+		*anADO = NULL ;
+		ReportError( "Cannot get Database recordset.", 0, 0 ) ;
+		return( NULL ) ;
+	}
+
+	*anADO = ADO ;
+
+	return( PGCList ) ;
+}
+
+
+
+HandleADOError(char *anADO)
+{
+	TCHAR	ADOErrDesc[1024] ;
+	TCHAR	theMsg[2048] ;
+	long	ErrorCount ;
+	long	ErrorIndex ;
+
+	ErrorCount = GetErrorCount( anADO ) ;
+	for( ErrorIndex = 0L ; ErrorIndex < ErrorCount ; ErrorIndex++ )
+	{
+		GetErrorDescription( anADO, ErrorIndex, ADOErrDesc ) ;
+		sprintf( theMsg, "Queue Query Failed: %s", ADOErrDesc ) ;
+		ReportError( theMsg, 0, 0);
+	}
+}

@@ -1,0 +1,138 @@
+
+LastCropX = 50;	LastCropY = 50;  LastCropWidth = 100;  LastCropLength = 100; 
+
+
+NUMERIC OnUseLastCrop()
+{
+	return ImageCorrections( UpdateCrop,GetOpenImagePath(),~<LastCropX>~,~<LastCropY>~,~<LastCropWidth>~,~<LastCropLength>~ );
+}
+
+
+VOID RememberCrop(&X,&Y,&Width,&Length)
+{
+	LastCropX = ~<X>~;	LastCropY = ~<Y>~;  LastCropWidth = ~<Width>~;  LastCropLength = ~<Length>~; 
+}
+
+NUMERIC Analyzer::SetCrop()
+{
+	if ( IsNULL( GetOpenImagePath() ) )
+	{
+		return Warning( ~You must open an image first~ );
+	}
+
+	Query = ~Select Name From Crops Order By Name~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Crops table: <Query>. <theErr>~ );
+	}
+
+	Count = List( NumEntries );
+
+	if ( FALSE /* !<Count> */ )
+	{
+		if ( MessageBox( ~There are no crops defined.  Would you like to define crops?~,YESNO ) == YES )
+		{
+			action = ACTION DOC ( AllCrops OpenOnce CropsDoc "Init( ~~,~SELECT * From Crops Order By Name~ );" );
+			return PerformActions( action );			
+		}
+
+		return FALSE;
+	}
+
+	GenCon( ListMenu,New,DDMenuDef,SetValues,Position,-1 );
+
+	Count = 0;
+
+	while ( List( GetNext,Item ) )
+	{
+		GenCon( CropName<++Count>,New,DDMenuItemDef,
+				SetValues,	Text,~&<Count>)  <$pcon.Item[Name]>~,
+							IDText,	~ID~ );
+
+		theAction  = ACTION EXEC ( WantCrop(~<$pcon.Item[Name]>~); );
+
+		CropName<Count>( SetValuesFrom,ActionsText,theAction );
+
+		ListMenu( InsertBack,CropName<Count> );
+	}
+
+	GenCon( CropName<++Count>,New,DDMenuItemDef,SetValues,	Text,~&All)  Select all of the image~,IDText,	~ID~ );
+	theAction  = ACTION EXEC ( CropEntire(); );
+	CropName<Count>( SetValuesFrom,ActionsText,theAction );
+	ListMenu( InsertBack,CropName<Count> );
+
+
+	GenCon( CropName<++Count>,New,DDMenuItemDef,SetValues,	Text,~&Open)  Open the crops table~,IDText,	~ID~ );
+	theAction  = ACTION EXEC ( OpenCropsTable(); );
+	CropName<Count>( SetValuesFrom,ActionsText,theAction );
+	ListMenu( InsertBack,CropName<Count> );
+
+	GenCon( CropName<++Count>,New,DDMenuItemDef,SetValues,	Text,~&Save)  Remember the current crop~,IDText,	~ID~ );
+	theAction  = ACTION EXEC ( OnSaveCrop(); );
+	CropName<Count>( SetValuesFrom,ActionsText,theAction );
+	ListMenu( InsertBack,CropName<Count> );
+
+	View( DisplayMenu,ListMenu,10,10 );	//CropButton(GetLeft,Position),CropButton(GetTop,Position)
+
+	return TRUE;
+}
+
+NUMERIC OpenCropsTable()
+{
+	action = ACTION DOC ( AllCrops OpenOnce CropsDoc "Init( ~~,~SELECT * From Crops Order By Name~ );" );
+	return PerformActions( action );			
+}
+
+
+NUMERIC WantCrop( Name )
+{
+	Query = ~Select Name,CropX,CropY,CropWidth,CropLength From Crops Where Name = '<Name>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the Crops table: <Query>. <theErr>~ );
+	}
+
+	if ( !List( GetFirst,Item ) )
+	{
+		return Warning( ~Failed to query the Crops table: <Query>. <theErr>~ );
+	}
+
+	CopiedCropX = ~<$pcon.Item[CropX]>~;
+	CopiedCropY = ~<$pcon.Item[CropY]>~;
+	CopiedCropWidth = ~<$pcon.Item[CropWidth]>~;
+	CopiedCropLength = ~<$pcon.Item[CropLength]>~;
+
+	RememberCrop( CopiedCropX,CopiedCropY,CopiedCropWidth,CopiedCropLength );
+
+	return OnUseLastCrop();
+}
+
+NUMERIC CropEntire()
+{
+	RememberCrop( 50,50,100,100 );
+	return OnUseLastCrop();
+}
+
+STR GetOpenImagePath()
+{
+	DocumentPath = ~~;
+
+	while ( GenCon( Window,GetWindowByIndex,<Index++> ) )
+	{
+		if ( !Window( GetNext,aView ) )
+			continue;
+
+		aView( Get,ViewType,ViewType );
+
+		if ( ~<ViewType>~ == ImageEditView )
+		{
+			aView( GetDocumentPath,DocumentPath );
+		}
+	}
+
+	return ~<DocumentPath>~;
+}

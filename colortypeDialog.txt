@@ -1,0 +1,336 @@
+IncludeClass(BaseHTML);
+IncludeClass(BaseHTMLWin);
+IncludeClass(BaseThread);
+
+Class( ColorTypeWin,Extends,BaseHTMLWin );
+		
+Class( CtThread,Extends,BaseThread,
+	     Member,m_checkColorType,Numeric,0 );
+
+VOID CtThread::CtThread( )	
+{ 
+	BaseHtml::LoadTranslationFile( Orders,SetColorType,SetColorType );
+	BaseHtml::LoadTranslationFile( Engine,FieldTypes,FieldTypes );
+
+	Enabled = TRUE;
+	m_checkColorType = FALSE;
+	if ( GetSystemSettings( ~AdjustImages~,~CheckColorType~,Value,Enabled ))
+	{
+		m_checkColorType = Numeric( ~<Value>~ ) != 0;
+	}
+}
+
+VOID CtThread::!CtThread()	
+{ 
+}
+
+
+NUMERIC	CtThread::HandleThread( OrderListReference )
+{ 
+	fRunning = TRUE;
+	return DetectColorType( ~<OrderListReference>~ );
+}
+
+NUMERIC CtThread::HandleQuit()					
+{
+	fRunning = FALSE;
+	return TRUE; 
+}
+
+NUMERIC CtThread::DetectColorType( OrderListReference )
+{
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		msg = TR(SetColorType,ConnectDatabaseFail,~<theErr>~);
+		Invoke( OnShowMessage,~<msg>~ );
+		return FALSE;
+	}
+	
+	GenCon( OrderList,Is,<OrderListReference>,Temporary );
+	
+	orderFound = OrderList( GetFirst,Order );
+	Frames	   = 0;
+	colorType  = 0;
+
+	While ( <orderFound> )
+	{
+		OrderID = ~<$con.Order[ID]>~ ;
+
+		if ( <fAborting> )
+		{
+			break;
+		}
+
+		Query = ~Select OrderID,Roll,Frame,Path,ColorType From Images Where OrderID = '<OrderID>' Order By OrderID,Roll,Frame~;
+
+		if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+		{
+			WaitCursor( End );
+			List( GetErrorDescription,0,theErr );
+			msg = TR( SetColorType,QueryFailed,~<Query>~,~<theErr>~ );
+			Invoke( OnShowMessage,~<msg>~ );
+			return FALSE;
+		}
+
+		while ( List( GetNext,Image ) )
+		{
+			if ( <fAborting> )
+			{
+				break;
+			}
+
+			colorType = Numeric( ~<$pcon.Image[ColorType]>~ );
+			if ( <colorType> != 0 )
+			{
+				continue;
+			}
+			colorType = DetermineColorType( ~<$pcon.Image[Path]>~ );
+			cmd = ~Update Images Set ColorType = <colorType> Where OrderID = '<OrderID>' And Roll = '<$pcon.Image[Roll]>' And Frame = '<$pcon.Image[Frame]>'~;
+
+			if ( !dBase( cmd,~<Cmd>~ ) )
+			{
+				WaitCursor( End );
+				dBase( GetErrorDescription,theErr );
+				msg = TR( DBMessages,UpdateFailed, ~<cmd>~,~<theErr>~ );
+				Invoke( OnShowMessage,~<msg>~ );
+				return FALSE;
+			}
+
+			++Frames;
+
+			if ( !<fAborting> )
+			{
+				cText = TR( FieldTypes,ColorType_Unknown);
+				if ( <colorType> == 1 )
+				{
+					cText = TR( FieldTypes,ColorType_Color);
+				}
+				else if ( <colorType> == 2 )
+				{
+					cText = TR( FieldTypes,ColorType_BW);
+				}
+				else if ( <colorType> == 3 )
+				{
+					cText = TR( FieldTypes,ColorType_BWSpot);
+				}
+				else if ( <colorType> == 4 )
+				{
+					cText = TR( FieldTypes,ColorType_Sepia);
+				}
+				else if ( <colorType> == 5 )
+				{
+					cText = TR( FieldTypes,ColorType_SepiaSpot);
+				}
+
+				thePath = ~<$pcon.Image[Path]>~;
+				thePath = ~<$Str.$thePath.CPath>~;
+				msg = TR( SetColorType, ColorForPath,~<thePath>~,~<cText>~ );
+				Invoke( OnShowMessage,~<msg>~ );
+			}
+		}
+
+		ForgetLocal( List );
+
+		if ( !<fAborting> )
+		{
+			msg = TR( SetColorType,OrderAnalyzed,~<entity>~ );
+			Invoke( OnShowMessage,~<msg>~ );
+		}
+		
+		orderFound = OrderList( GetNext,Order );	
+	}
+	dBase(Close);
+
+	if ( !<fAborting> )
+	{
+		msg = TR( SetColorType, OperationComplete );
+		Invoke( OnShowMessage,~<msg>~ );	
+	}
+		
+	return true;
+		
+}
+
+VOID ColorTypeWin::ColorTypeWin()
+{
+	BaseHtml::LoadTranslationFile( Orders,SetColorType,SetColorType );
+
+	fWindowStyle = ~WS_SIZEBOX~;
+	WindowWidth = 550;
+	WindowHeight = 420;
+
+	fTitle = TR( SetColorType,Title );
+
+}
+
+VOID ColorTypeWin::Reopen()
+{
+}
+
+NUMERIC ColorTypeWin::OkayToCancel()
+{
+	if ( Defined( aThread ) )
+	{
+		if ( aThread.Paused() )
+		{
+			aThread.Resume();
+		}
+
+		aThread.Abort();
+	}
+
+	ForgetPrivate( aThread );
+	ForgetPrivate( dBase );
+		
+	return TRUE;
+}
+
+
+VOID ColorTypeWin::DefineMessages()
+{
+	BaseHtml::DefineMessages();
+}
+
+
+NUMERIC ColorTypeWin::OnOKCT()
+{
+	EnableControls( FALSE );
+
+	if ( !Defined( aThread ) )
+	{
+		CtThread( New,aThread );
+		Private( aThread );
+	}
+	else if ( aThread.Paused() )
+	{
+		aThread.Pause( FALSE );
+		aThread.Resume();
+		return TRUE;
+	}
+
+	if ( GenCon( TheWindow,GetWindow,~OrdersDataWindow~ ) )
+	{
+		if ( !TheWindow( GetViewOfWindow,OrdersDataView,OrdersDataView ) )
+		{ 
+			msg = TR( SetColorType,NoOrderSelected );
+			fHtmlView( Execute,~CtWarning('<msg>')~ );
+			ForgetPrivate( aThread );
+			return FALSE;
+		}
+	}
+	else
+	{
+		msg = TR( SetColorType,NoOrderSelected );
+		fHtmlView( Execute,~CtWarning('<msg>')~ );
+		ForgetPrivate( aThread );
+		return FALSE;
+	}
+
+	if ( !OrdersDataView( GetSelectedRows,SelectedOrders ) )
+	{ 
+		msg = TR( SetColorType,NoOrderSelected );
+		fHtmlView( Execute,~CtWarning('<msg>')~ );
+		ForgetPrivate( aThread );
+		return FALSE;  
+	}
+
+	GenCon( OrdersList, IsCopyOf, SelectedOrders,Permanent );
+
+//	aThread.DebugThread();
+
+	result = aThread.NewOneShot( OrdersList( GetObject ) );
+
+	return TRUE;
+}
+
+VOID ColorTypeWin::OnPauseCT()
+{
+	if ( !Defined( aThread ) )
+	{
+		return;
+	}
+
+	aThread.Pause( TRUE );
+	aThread.Suspend();
+	EnableControls( TRUE );
+
+}
+
+VOID ColorTypeWin::OnResumeCT()
+{
+	if ( !Defined( aThread ) )
+	{
+		return;
+	}
+
+	aThread.Resume();
+	EnableControls( TRUE );
+
+}
+
+VOID ColorTypeWin::OnCancelCT()
+{
+	OnClose();
+}
+
+/**************************************************************/
+/*************** END of ColorTypeWin OBJECT METHODS *****************/
+/**************************************************************/
+
+NUMERIC ColorTypeWin::EnableControls( Enabled )
+{
+	if ( <Enabled> )
+	{
+		fHtmlView( Execute,~Enable(GetElement('okBtn'))~ );
+		fHtmlView( Execute,~Disable(GetElement('PauseBtn'))~ );
+	}
+	else
+	{
+		fHtmlView( Execute,~Disable(GetElement('okBtn'))~ );
+		fHtmlView( Execute,~Enable(GetElement('PauseBtn'))~ );
+	}
+
+	return TRUE;
+}
+
+
+/**************Click Handlers ***************************************************/
+
+VOID ColorTypeWin::HelpRoutine()			
+{ 
+//	OpenHelpPage(~<$App.HTTPServer>/Manual/Orders/ColorType.kpl~,TR(ColorType,HelpPageTitle));
+}
+
+
+VOID ColorTypeWin::ShowImageMsg( msg )
+{
+	fHtmlView( Execute, ~CtWarning(  '<msg>' )~ );
+}
+
+VOID InitDoc( )
+{
+	if ( !ObjectAlreadyExists( SetCT ) )
+	{
+		ColorTypeWin( New,SetCT );
+		SetCT( Global );
+
+		SetCT.CreateDialog( ~/Orders/AssignColorType.kpl~ ); //InitWindow();
+	}
+}
+
+// Entry Points from other scripts
+
+
+VOID Init()		{ InitDoc(); }
+
+VOID OnShowMessage( msg )
+{
+	if ( !Defined( SetCT ) )
+	{
+		return;
+	}
+
+	SetCT.ShowImageMsg( ~<msg>~ );
+}
+

@@ -1,0 +1,429 @@
+//	CREControlDlg.txt
+
+ExecC() ;
+
+//	THIS FILE CONTAINS THE CODE TO CONTROL THE RENDER ENGINE
+
+//	SOME USEFUL GLOBALS
+
+char	*NULL ;
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+
+UGenCon	*gDataGC ;			//	THE DIALOG DATA GENCON
+UGenCon *gDlgDef ;			//	THE DIALOG DEFINITION
+char	*gDlg ;				//	THE POINTER TO THE DIALOG OBJECT
+
+UADO	*gADO ;				//	THE DATABASE OBJECT
+
+main()
+{
+	Debug(0) ;
+	printf(_T("main()\r\n")) ;
+}
+
+SetDialogData( UGenCon *LocalGC, char *Dlg, UGenCon *DlgDef)
+{
+	Debug(0) ;
+	gDataGC = LocalGC ;
+	gDlg = Dlg ;
+	gDlgDef = DlgDef ;
+
+	HangTreeObject( gDataGC, _T("[GenCons]")) ;
+}
+
+term()
+{
+	printf( _T("term(): gDataGC = %0lX\r\n"), gDataGC ) ;
+	if( gDataGC )
+	{
+		PluckTreeObject( gDataGC->GetName(), _T("[GenCons]")) ;
+		gDataGC = delete gDataGC ;
+	}
+}
+
+Close()
+{
+	Debug(0) ;
+	CloseDialog( gDlg ) ;
+}
+
+Run()
+{
+	Debug(0) ;
+	printf( _T("Run()\r\n")) ;
+	SetState( 1L ) ;
+}
+
+Resume()
+{
+	Debug(0) ;
+	printf( _T("Resume()\r\n")) ;
+	SetState( 1L ) ;
+}
+
+Suspend()
+{
+	Debug(0) ;
+	printf( _T("Suspend()\r\n")) ;
+	SetState( 2L ) ;
+}
+
+Shutdown()
+{
+	Debug(0) ;
+	printf( _T("Shutdown()\r\n")) ;
+	SetState( -1L ) ;
+}
+
+Quit()
+{
+	Debug(0) ;
+	printf( _T("Quit()\r\n")) ;
+	SetState( -2L ) ;
+}
+
+FindPaperPack()
+{
+	Debug(0) ;
+	printf( _T("FindPaperPack()\r\n")) ;
+
+	TCHAR	PaperPack[1024] ;
+	FileDialog( 1, NULL, PaperPack, "", NULL, Translate(_T("Select Paper Pack:"))) ;
+	gDataGC->SetAttrValue( _T("PaperPack"), PaperPack ) ;
+	DisplayControlValues( gDlg ) ;
+}
+
+FindCalLut()
+{
+	Debug(0) ;
+	printf( _T("FindCalLut()\r\n")) ;
+	TCHAR	CalLut[1024] ;
+	FileDialog( 1, NULL, CalLut, "", NULL, Translate(_T("Select Calibration Lut:"))) ;
+	gDataGC->SetAttrValue( _T("CalLut"), CalLut ) ;
+	DisplayControlValues( gDlg ) ;
+}
+
+OutputFilePath()
+{
+	Debug(0) ;
+	printf( _T("OutputFilePath()\r\n")) ;
+	TCHAR	FilePath[1024] ;
+	FileDialog( 1, NULL, FilePath, "", NULL, Translate(_T("Select FilePath:"))) ;
+	gDataGC->SetAttrValue( _T("OutputFilePath"), FilePath ) ;
+	DisplayControlValues( gDlg ) ;
+}
+
+
+void NewPrinter()
+{
+	TCHAR	theQuery[2048] ;
+	printf( _T("NewPrinter()\r\n")) ;
+
+	//	GET THE OLD LIST AND DELETE IT
+	UStringList	*aSL = PluckTreeObject( _T("QueueList"), _T("[Strings]")) ;
+	if( aSL )	{ aSL = delete aSL ; }
+
+	sprintf( theQuery, _T("Select QueueName From Printers Where PrinterName = '%s'"),
+						gDataGC->GetStringValue(_T("PrinterName"))) ;
+
+	//	GET THE NEW LIST AND HANG IT
+	aSL = GetListFromDataBase( _T("QueueName"), theQuery ) ;
+	if( aSL )
+	{
+		aSL->SetName( _T("QueueList") ) ;
+		HangTreeObject( aSL, _T("[Strings]")) ;
+	}
+
+	GetPrinterInfo() ;
+	GetQueueInfo() ;
+
+	DisplayControlValues( gDlg ) ;
+}
+
+int GetPrinterInfo()
+{
+	TCHAR		 theQuery[2048] ;
+	TCHAR		 Word[2048] ;
+	TCHAR		*SelectCmd = _T("Select * From Printers where PrinterName = '%s'") ;
+	UStringList	*aSL = NULL ;
+
+	sprintf( theQuery, SelectCmd, gDataGC->GetStringValue(_T("PrinterName"))) ;
+
+	if( gADO == NULL )
+	{
+		gADO = ConnectToADO() ;
+		if( gADO == NULL )	{ return(0) ; }
+	}
+
+	UPGenConList *aPGCList = new UPGenConList( gADO ) ;
+	if( aPGCList == NULL )	{ return(0) ; }
+
+	int result = Query(aPGCList, theQuery, _T("ReadOnly"),_T("Forward")) ;
+	if( result != 1 )
+	{
+		aPGCList = delete aPGCList ;
+		return(0) ;
+	}
+
+	UPGenCon *aPGC = (UPGenCon *) aPGCList->GetFirst() ;
+
+	if( aPGC )
+	{
+		aPGC->GetAttrValue(_T("PrinterModel"), Word ) ;
+		gDataGC->SetAttrValue(_T("PrinterModel"), Word ) ;
+
+		aPGC->GetAttrValue(_T("QueueName"), Word ) ;
+		gDataGC->SetAttrValue(_T("QueueName"), Word ) ;
+
+		aPGC->GetAttrValue(_T("RunAttended"), Word ) ;
+		gDataGC->SetAttrValue(_T("Attended"), Word ) ;
+	}
+
+	aPGCList = delete aPGCList ;
+	return( 1 ) ;
+}
+
+void NewQueue()
+{
+	TCHAR	theQuery[2048] ;
+	Debug(0) ;
+	printf( _T("NewQueue()\r\n")) ;
+
+	GetQueueInfo() ;
+
+	DisplayControlValues( gDlg ) ;
+}
+
+int GetQueueInfo()
+{
+	TCHAR		 theQuery[2048] ;
+	TCHAR		 Word[2048] ;
+	TCHAR		*SelectCmd = _T("Select * From QueueDefinition where QueueName = '%s'") ;
+	UStringList	*aSL = NULL ;
+
+	sprintf( theQuery, SelectCmd, gDataGC->GetStringValue(_T("QueueName"))) ;
+
+	if( gADO == NULL )
+	{
+		gADO = ConnectToADO() ;
+		if( gADO == NULL )	{ return(0) ; }
+	}
+
+	UPGenConList *aPGCList = new UPGenConList( gADO ) ;
+	if( aPGCList == NULL )	{ return(0) ; }
+
+	int result = Query(aPGCList, theQuery, _T("ReadOnly"),_T("Forward")) ;
+	if( result != 1 )
+	{
+		aPGCList = delete aPGCList ;
+		return(0) ;
+	}
+
+	UPGenCon *aPGC = (UPGenCon *) aPGCList->GetFirst() ;
+
+	if( aPGC )
+	{
+		aPGC->GetAttrValue(_T("PaperSurface"), Word ) ;
+		gDataGC->SetAttrValue(_T("PaperSurface"), Word ) ;
+
+		aPGC->GetAttrValue(_T("ICCProfile"), Word ) ;
+		gDataGC->SetAttrValue(_T("ICCProfile"), Word ) ;
+
+		aPGC->GetAttrValue(_T("PackageCut"), Word ) ;
+		gDataGC->SetAttrValue(_T("PackageCut"), Word ) ;
+
+		aPGC->GetAttrValue(_T("PaperWidth"), Word ) ;
+		gDataGC->SetAttrValue(_T("PaperWidth"), Word ) ;
+
+		aPGC->GetAttrValue(_T("PaperAdvance"), Word ) ;
+		gDataGC->SetAttrValue(_T("PaperAdvance"), Word ) ;
+
+		aPGC->GetAttrValue(_T("Resolution"), Word ) ;
+		gDataGC->SetAttrValue(_T("Resolution"), Word ) ;
+
+		long PaperFill = aPGC->GetLongValue(_T("PaperFill") ) ;
+		gDataGC->SetLongValue(_T("PaperFill"), PaperFill ) ;
+
+		aPGC->GetAttrValue(_T("BreakOnNewImage"), Word ) ;
+		gDataGC->SetAttrValue(_T("ImageBreak"), Word ) ;
+
+		aPGC->GetAttrValue(_T("PaperPack"), Word ) ;
+		gDataGC->SetAttrValue(_T("PaperPack"), Word ) ;
+
+		aPGC->GetAttrValue(_T("CalibrationLut"), Word ) ;
+		gDataGC->SetAttrValue(_T("CalLut"), Word ) ;
+
+		aPGC->GetAttrValue(_T("OutputFileType"), Word ) ;
+		gDataGC->SetAttrValue(_T("FileType"), Word ) ;
+
+		aPGC->GetAttrValue(_T("OutputPath"), Word ) ;
+		gDataGC->SetAttrValue(_T("OutputFilePath"), Word ) ;
+	}
+
+	aPGCList = delete aPGCList ;
+	return( 1 ) ;
+}
+
+
+void SetState( long State )
+{
+	TCHAR	*StateText = NULL ;
+
+	gDataGC->SetLongValue( _T("State"), State ) ;
+
+	switch( State )
+	{
+		case	-2	:	StateText = Translate(_T("Quitting")) ;			break ;
+		case	-1	:	StateText = Translate(_T("Shutting Down")) ;	break ;
+		case	 0	:	StateText = Translate(_T("Not Running")) ;		break ;
+		case	 1	:	StateText = Translate(_T("Running")) ;			break ;
+		case	 2	:	StateText = Translate(_T("Suspended")) ;		break ;
+	}
+
+	gDataGC->SetAttrValue( _T("StateText"), StateText ) ;
+	DisplayControlValues( gDlg ) ;
+}
+
+
+Apply()
+{
+	Debug(0) ;
+	long	ReadAhead ;
+	long	ParseAhead ;
+	long	ProgramAhead ;
+	long	RenderAhead ;
+	long	QtyToRender ;
+	long	BatchPollTime ;
+	TCHAR	BarCodeColor[64] ;
+
+	long RELogLevel ;
+	long REBLogLevel ;
+	long HOPLogLevel ;
+	long ProgramIMA ;
+	long PerformRender ;
+	long ForceImaChainError ;
+	long ForceImaRenderError ;
+	long RunContinuous ;
+	long DeletePackageJob ;
+	long UseMMX ;
+
+	UGenCon	*theREGC = GetTreeObject( _T("RELookAhead"), _T("[GenCons]") ) ;
+
+	if( gDataGC )
+	{
+		ReadAhead = gDataGC->GetLongValue(_T("ReadAhead")) ;
+		ParseAhead = gDataGC->GetLongValue(_T("ParseAhead")) ;
+		ProgramAhead = gDataGC->GetLongValue(_T("ProgramAhead")) ;
+		RenderAhead = gDataGC->GetLongValue(_T("RenderAhead")) ;
+		QtyToRender = gDataGC->GetLongValue(_T("QtyToRender")) ;
+		BatchPollTime = gDataGC->GetLongValue(_T("BatchPollTime")) ;
+		gDataGC->GetAttrValue( _T("BarCodeColor"), BarCodeColor ) ;
+
+		RunContinuous = gDataGC->GetLongValue(_T("RunContinuous")) ;
+		DeletePackageJob = gDataGC->GetLongValue(_T("DeletePackageJob")) ;
+		RELogLevel = gDataGC->GetLongValue(_T("RELogLevel")) ;
+		REBLogLevel = gDataGC->GetLongValue(_T("REBatchLogLevel")) ;
+		HOPLogLevel = gDataGC->GetLongValue(_T("HOPLogLevel")) ;
+		UseMMX = gDataGC->GetLongValue(_T("UseMMX")) ;
+		ProgramIMA = gDataGC->GetLongValue(_T("ProgramIMA")) ;
+		PerformRender = gDataGC->GetLongValue(_T("PerformRender")) ;
+		ForceImaChainError = gDataGC->GetLongValue(_T("ForceImaChainError")) ;
+		ForceImaRenderError = gDataGC->GetLongValue(_T("ForceImaRenderError")) ;
+	}
+
+	if( theREGC )
+	{
+		theREGC->SetLongValue( _T("ReadAhead"), ReadAhead ) ;
+		theREGC->SetLongValue( _T("ParseAhead"), ParseAhead ) ;
+		theREGC->SetLongValue( _T("ProgramAhead"), ProgramAhead ) ;
+		theREGC->SetLongValue( _T("RenderAhead"), RenderAhead ) ;
+		theREGC->SetLongValue( _T("QtyToRender"), QtyToRender ) ;
+		theREGC->SetLongValue( _T("BatchPollTime"), BatchPollTime ) ;
+		theREGC->SetAttrValue( _T("BarCodeColor"), BarCodeColor ) ;
+
+		theREGC->SetLongValue( _T("RunContinuous"), RunContinuous ) ;
+		theREGC->SetLongValue( _T("DeletePackageJob"), DeletePackageJob ) ;
+		theREGC->SetLongValue( _T("RELogLevel"), RELogLevel ) ;
+		theREGC->SetLongValue( _T("REBatchLogLevel"), REBLogLevel ) ;
+		theREGC->SetLongValue( _T("HOPLogLevel"), HOPLogLevel ) ;
+		theREGC->SetLongValue( _T("UseMMX"), UseMMX ) ;
+		theREGC->SetLongValue( _T("ProgramIMA"), ProgramIMA ) ;
+		theREGC->SetLongValue( _T("PerformRender"), PerformRender ) ;
+		theREGC->SetLongValue( _T("ForceImaChainError"), ForceImaChainError ) ;
+		theREGC->SetLongValue( _T("ForceImaRenderError"), ForceImaRenderError ) ;
+	}
+}
+
+UStringList *GetListFromDataBase( TCHAR *DBField, TCHAR *theQuery )
+{
+	TCHAR		 Word[2048] ;
+	UStringList	*aSL = NULL ;
+
+	if( gADO == NULL )
+	{
+		gADO = ConnectToADO() ;
+		if( gADO == NULL )	{ return(NULL) ; }
+	}
+
+	UPGenConList *aPGCList = new UPGenConList( gADO ) ;
+	if( aPGCList == NULL )	{ return(NULL) ; }
+
+	int result = Query(aPGCList, theQuery, _T("ReadOnly"),_T("Forward")) ;
+	if( result != 1 )
+	{
+		aPGCList = delete aPGCList ;
+		return(NULL) ;
+	}
+
+	UPGenCon *aPGC = (UPGenCon *) aPGCList->GetFirst() ;
+	if( aPGC )
+	{
+		aSL = new UStringList ;
+	}
+
+	while( aPGC )
+	{
+		aPGC->GetAttrValue( DBField, Word ) ;
+		aSL->AddString(Word, FALSE ) ;
+		aPGC = (UPGenCon *) aPGCList->GetNext() ;
+	}
+
+	aPGCList = delete aPGCList ;
+	return( aSL ) ;
+}
+
+ConnectToADO()
+{
+	UADO	*ADO ;
+	TCHAR	 msg[256] ;
+	int		 result ;
+
+	gADO = new UADO ;
+
+	if( gADO == NULL )
+	{
+		MessageBox( "Could not get ADO.", "MB_OK" ) ;
+		return(ADO) ;
+	}
+
+	result = ConnectKPIS( gADO ) ;
+	if( result )
+	{
+		sprintf( msg, "Could not get Connection. Error = %d", result ) ;
+		MessageBox( msg, "MB_OK" ) ;
+		gADO = delete gADO ;
+		return(gADO) ;
+	}
+
+	return( gADO ) ;
+}
+
+
+TCHAR *Translate(TCHAR *Text)
+{
+	return( Text ) ;
+}
+
+
+

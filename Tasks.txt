@@ -1,0 +1,2806 @@
+Include: ~AddNewProfiles~;
+Include: ~AddSBADataFormatList.txt~;
+Include: ~AddFTAdjustFormatList.txt~;
+
+
+VOID ReOpen()
+{
+}
+
+NUMERIC AddTask( &Table,Name,Enabled,Type,Description,&Process,&HelpAction )
+{
+	if ( ~<HelpAction>~ == ~~ )
+	{
+		HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_<Name>.htm" );
+	}
+
+	Table( AddNew,SetFields,	
+				Name,			~<Name>~,
+				Enabled,		<Enabled>,
+				Type,			~<Type>~,
+				Description,	~<Description>~ );
+
+	Table( SetFieldsFromContentsOf,Process,Process );
+	Table( SetFieldsFromContentsOf,HelpAction,HelpAction );
+
+	if ( !Table( Update ) )
+	{
+		Table( GetConnection,Connection );
+		Connection( GetErrorDescription,theErr );
+		Table( CancelUpdate );
+		return Warning( Translate( ~Could not update the tasks table for Name = <Name>. <theErr>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddUserTask( &Table,Name,Category,&Sequence,Enabled,User,Function )
+{
+	Sequence += 10;
+
+	Table( AddNew,SetFields,	
+				Name,			~<Name>~,
+				Category,		~<Category>~,
+				Sequence,		<Sequence>,
+				Enabled,		<Enabled>,
+				UserName,		~<User>~,
+				Function,		~<Function>~ );
+
+	Table( Update );
+	if ( !Table( Update ) )
+	{
+		Table( GetConnection,Connection );
+		Connection( GetErrorDescription,theErr );
+		Table( CancelUpdate );
+		return Warning( Translate( ~Could not update User Tasks for Name = <Name>. <theErr>~ ) );
+	}
+
+	return TRUE;
+
+}
+
+
+VOID PopulatePLSUserTasksTable(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM PLSUserTasks~ ) )
+		{	Error( ~Could not open PLSUserTasks recordset~ ); }
+
+	seq = 0;
+
+	TasksTable( MoveFirst );
+
+	seq = 0;
+
+	// Determine whether we are running with DP2 or ProSeries.
+	labSoftware = ~<$[Symbols].LabSoftware[Value]>~;
+
+	if ( SimilarStr( ~<labSoftware>~,~DP2~ ) )
+	{
+		AddUserTask(TasksTable,~Production Report~,			~PS Lab Software~,seq,TRUE,~*~,~PS Lab Software~);
+	}
+
+	AddUserTask(TasksTable,~Auto E-mail~,				~PS Lab Software~,seq,TRUE,~*~,~PS Lab Software~);
+	AddUserTask(TasksTable,~RImage Setup~,				~PS Lab Software~,seq,TRUE,~*~,~PS Lab Software~);
+
+	if ( SimilarStr( ~<labSoftware>~,~DP2~ ) )
+	{
+		AddUserTask(TasksTable,~Click Administration~,		~PS Lab Software~,seq,TRUE,~*~,~PS Lab Software~);
+		AddUserTask(TasksTable,~ProShots Catalog~,			~PS Lab Software~,seq,TRUE,~*~,~PS Lab Software~);
+		AddUserTask(TasksTable,~Services~,					~PS Lab Software~,seq,TRUE,~*~,~PS Lab Software~);
+		AddUserTask(TasksTable,~Add Customer~,				~PS Lab Software~,seq,TRUE,~*~,~PS Lab Software~);
+	}
+
+	AddUserTask(TasksTable,~Session Log~,				~PS Lab Software~,seq,TRUE,~*~,~PS Lab Software~);
+}
+
+VOID PopulateTasksTable(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	action = STR ( DigitalCameraDoc OpenOnce DigitalCameraDoc );
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "DigitalCameraDoc.htm" );
+	AddTask( TasksTable,~Digital Camera~,1,~DOC~,~Digital Camera~,action,HelpAction );
+
+	action = STR ( EditImages OpenOnce EditImagesDoc3 );
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "ImageEdit.htm" );
+	AddTask( TasksTable,~Adjust Images~,1,~DOC~,~Adjust Images~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "ImageEditOrderRoll.htm" );
+	action = STR ( EditImagesForOrderRollDoc Open EditImagesForOrderRollDoc   );
+	AddTask( TasksTable,~Global Adjust Images~,1,~DOC~,~Global Adjust Images~,action,HelpAction );
+	
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "AlignmentAndBalance.html" );
+	action = STR ( HeadAlign OpenOnce "<$@App.HTMLPages>\HeadAlign\HeadAlign.kpl" "InitTheWindow();"   );
+	AddTask( TasksTable,~Group Balance~,1,~DOC~,~Group Balance~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "AllSearches.htm" );
+	action = STR ( AllOrders Open SearchDoc "Search(Orders);"  );
+	AddTask( TasksTable,~Orders Search~,1,~DOC~,~Search for specific Orders~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "SetStatusByWorkstation.htm" );
+	action = STR ( SetStatusByWorkstation.txt Open SetStatusByWorkstation );
+	AddTask( TasksTable,~Log In Order~,1,~DOC~,~Set the Order status based on the purpose of this workstation~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_OrderItems_ Searches.htm" );
+	action = STR ( AllOrderItems Open SearchDoc "Search(OrderItems);"  );
+	AddTask( TasksTable,~Order Items Search~,1,~DOC~,~Search for specific OrderItems~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_Activity.htm" );
+
+	action = MACROSOFF STR ( Select * From Activity Where DateEntered = '<$@Date.DateYMD>' Order By TimeEntered ); MACROSON
+	AddTask( TasksTable,~Todays Activity~,1,~Activity~,~Show Activity That has Occured Today~,action,HelpAction );
+
+	action = MACROSOFF STR ( Select * From Activity Where UserName = '<$@App.UserName>' OR Destination = '<$@App.UserName>' Order By DateEntered,TimeEntered ); MACROSON
+	AddTask( TasksTable,~My Activity~,1,~Activity~,~Show Activity Created By Me or Assigned to Me~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_Activity.htm" );
+	action = STR ( DeleteActivity Open DeleteActivity "DeleteActivityOlderThanToday(); Exit();"  );
+	AddTask( TasksTable,~Delete Day Old~,1,~DOC~,~Delete any Activity older than today~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_OrderNotify.htm" );
+	action = STR ( OrderNotifyDoc OpenOnce OrderNotifyDoc "Init(~~,TRUE);" );
+	AddTask( TasksTable,~Order Notification~,TRUE,~DOC~,~Order Notification~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_OrderQuery.htm" );
+
+	action = STR ( Select * From Orders Where Owner = '<$@App.UserName>' Order By ShipDate );
+	AddTask( TasksTable,~My Orders~,1,~Orders~,~Orders that belong to me~,action,HelpAction );
+
+	action = STR ( Select * From Orders Where Status = 'Hold' Order By ShipDate );
+	AddTask( TasksTable,~Orders On Hold~,1,~Orders~,~Orders On Hold~,action,HelpAction );
+
+	action = STR ( Select * From Orders Where Status Like 'Ready%' Order By ShipDate,Priority Desc );
+	AddTask( TasksTable,~Are Ready~,1,~Orders~,~Orders that are ready~,action,HelpAction );
+
+	action = STR ( Select * From Orders Where Status Like 'Scan%' Order By ShipDate,Priority Desc );
+	AddTask( TasksTable,~Need Scanning~,1,~Orders~,~Orders that are ready to be scanned~,action,HelpAction );
+
+	action = STR ( Select * From Orders Where CameraFileConversionStatus = 1 Order By ShipDate,Priority Desc );
+	AddTask( TasksTable,~Need Conversion~,1,~Orders~,~Orders that have camera images to be converted~,action,HelpAction );
+
+	action = STR ( Select * From Orders Where Status Like 'Proof%' Order By ShipDate,Priority Desc );
+	AddTask( TasksTable,~Need Proofing~,1,~Orders~,~Orders that are ready to be proofed~,action,HelpAction );
+
+	action = STR ( Select * From Orders Where Status Like 'Auto Balanc%' Order By ShipDate,Priority Desc );
+	AddTask( TasksTable,~Need Auto Balancing~,1,~Orders~,~Orders that are ready to be auto balanced~,action,HelpAction );
+
+	action = STR ( Select * From Orders Where Status Like 'Adjust%' Order By ShipDate,Priority Desc );
+	AddTask( TasksTable,~Need Adjustment~,1,~Orders~,~Orders that are ready to be adjusted~,action,HelpAction );
+
+	action = STR ( Select * From Orders Where Status Like 'Auto Retouch%' Order By ShipDate,Priority Desc );
+	AddTask( TasksTable,~Need Auto Retouching~,1,~Orders~,~Orders that are ready to be auto retouched~,action,HelpAction );
+
+	action = STR ( Select * From Orders Where Status Like 'Retouch%' Order By ShipDate,Priority Desc );
+	AddTask( TasksTable,~Need Retouching~,1,~Orders~,~Orders that are ready to be retouched~,action,HelpAction );
+
+	action = STR ( Select * From Orders Where Status Like 'Print%' Order By ShipDate,Priority Desc );
+	AddTask( TasksTable,~Need Printing~,1,~Orders~,~Orders that are ready to be printed~,action,HelpAction );
+
+	action = STR ( Select * From Orders Where ID In (Select OrderID From OrderNotifications Where  NotifyText Is Not NULL) Order By ShipDate,Priority Desc );
+	AddTask( TasksTable,~Have Notifications~,1,~Orders~,~Orders that have pending notifications~,action,HelpAction );
+
+	action = STR ( Select * From Orders Where Priority > 50 Order By Priority DESC );
+	AddTask( TasksTable,~High Priority Orders~,1,~Orders~,~Orders with a priority Greater than 50~,action,HelpAction );
+
+	action = MACROSOFF  STR ( Select * From Orders Where ShipDate = <$Date.SharedDateQuote><$Date.DateYMD><$Date.SharedDateQuote> Order By ShipDate ); MACROSON
+	AddTask( TasksTable,~Orders Due Today~,1,~Orders~,MACROSOFF ~Orders with a ship date of today~ MACROSON,action,HelpAction );
+					
+	action = MACROSOFF  STR ( Select * From Orders Where ShipDate < <$Date.SharedDateQuote><$Date.DateYMD><$Date.SharedDateQuote> Order By ShipDate ); MACROSON
+	AddTask( TasksTable,~Past Due Orders~,1,~Orders~,MACROSOFF ~Orders that were due before today~ MACROSON,action,HelpAction );
+
+	action = MACROSOFF  STR ( Select * From Orders Where ShipDate > <$Date.SharedDateQuote><$Date.DateYMD><$Date.SharedDateQuote> Order By ShipDate ); MACROSON
+	AddTask( TasksTable,~Future Orders~,1,~Orders~,MACROSOFF ~Orders that are due after today~ MACROSON,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_OrderQuery.htm" );
+	action = STR ( AllOrders OpenOnce OrdersDoc "Init( ~~,~Select * From Orders Where Status Like 'Scan%' Order By ShipDate,Priority Desc~ );" );
+	AddTask( TasksTable,~Orders To Scan~,1,~DOC~,~View Orders that need scanning~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "Navigator.htm" );
+	action = STR ( FrameSelectorDoc Open FrameSelectorDoc );
+	AddTask( TasksTable,~Navigate~,1,~DOC~,~Work with an order~,action,HelpAction );
+	
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "Greenscreen.htm" );
+	action = STR ( GreenScreenDoc Open "<$@App.HTMLPages>\GreenScreen\GreenScreenDoc.txt" "InitTheWindow();" );
+	AddTask( TasksTable,~Manage Images~,1,~DOC~,~Chroma Key~,action,HelpAction );
+
+	action = STR ( CloseOrderWindows Open CloseOrderWindows );
+	AddTask( TasksTable,~Close Order~,1,~DOC~,~Close windows related to orders~,action );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "Bremson.htm" );
+	action = STR ( BremsonCustomers Open BremsonCustomersDoc "Init(~Customers~,~Select * From Customers~);" );
+	AddTask( TasksTable,~Bremson Customers~,1,~DOC~,~Search for specific Customers~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "Bremson.htm" );
+	action = STR ( BremsonOrders Open BremsonOrdersDoc "Init(~Orders~,~Select * From Orders~);" );
+	AddTask( TasksTable,~Bremson Orders~,1,~DOC~,~Search for specific Orders~,action,HelpAction );
+	
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "OpenOrdersWindows.htm" );
+	action = STR ( SelectOrder Open OpenOrderDoc );
+	AddTask( TasksTable,~Select Order~,1,~DOC~,~Operate on a specific order~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "OpenOrdersWindows.htm" );
+	action = STR ( SelectOrder Open OpenCustomerOrderDoc );
+	AddTask( TasksTable,~Select Customer Order~,1,~DOC~,~Operate on a specific customer original order~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "AllSearches.htm" );
+	action = STR ( AllCustomers Open SearchDoc "Search(Customers);" );
+	AddTask( TasksTable,~Customers Search~,1,~DOC~,~Search for specific Customers~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "CustomersData.htm" );					
+	action = STR ( AllCustomers Open CustomersDoc "InitAddNew();" );
+	AddTask( TasksTable,~Add Customer~,1,~DOC~,~Add a new customer~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "AllSearches.htm" );
+	action = STR ( AllShootDesc Open ShootDescriptionDoc "Search(ShootDescription);" );
+	AddTask( TasksTable,~Shoot Search~,1,~DOC~,~Search for specific ShootDescription~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "Products.htm" );
+	action = STR ( ProductsDoc2 Open ProductsDoc2 "Init( ~~,TRUE,~Select * From Products Order By Category,Sequence,Subsequence~ );" );
+	AddTask( TasksTable,~Products~,1,~DOC~,~Open the Products Window~,action,HelpAction );
+
+	action = STR ( LayoutNew Open LayoutNewDialog );
+	AddTask( TasksTable,~New Layout~,1,~DOC~,~Create a layout for a new product~,action );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "AllSearches.htm" );
+	action = STR ( ImagesSearch Open SearchDoc "Search(Images);" );
+	AddTask( TasksTable,~Images Search~,1,~DOC~,~Search for specific Images~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "AllSearches.htm" );
+	action = STR ( RawImagesSearch Open SearchDoc "Search(RawImages);" );
+	AddTask( TasksTable,~Raw Images Search~,1,~DOC~,~Search for specific raw Images~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_Activity_Searches.htm" );
+	action = STR ( SubjectSearch Open SearchDoc "Search(Activity);" );
+	AddTask( TasksTable,~Activity Search~,1,~DOC~,~Search for specific Activity~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "AllSearches.htm" );
+	action = STR ( SubjectSearch Open SearchDoc "Search(SubjectInfo);" );
+	AddTask( TasksTable,~Subject Search~,1,~DOC~,~Search for specific SubjectInfo~,action,HelpAction );
+	
+	action = STR ( EditImages OpenOnce EditImagesDoc3 );
+	AddTask( TasksTable,~Edit Images~,1,~DOC~,~Edit Images~,action );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "AllSearches.htm" );
+	action = STR ( JobQueue Open JobQueueDoc "Init( ~~,~Select * From JobQueue Order By QueueName,Priority DESC,SubmitDate,BatchID,OrderID,OrderItemSequence~ );" );
+	AddTask( TasksTable,~Job Queue~,1,~DOC~,~Jobs that are queued for printing~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "RunOrderItems.htm" );
+	action = STR ( RunOrderItems OpenOnce RunOrderItemsDoc "Init(~~);" );
+	AddTask( TasksTable,~Run Order Items~,1,~DOC~,~Run specific OrderItems~,action,HelpAction );
+	
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "OrderItems.htm" );
+	action = STR ( EditTemplates OpenOnce EditTemplates );
+	AddTask( TasksTable,~Printing Templates~,1,~DOC~,~Edit Templates~,action,HelpAction );
+	
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "OrderItems.htm" );
+	action = STR (  EditBooks Open EditBooks "Init(~All Books~,~Select * From Books Order By OrderID,GroupID~);");
+	AddTask( TasksTable,~View Books~,1,~DOC~,~Edit Books~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "OrderItems.htm" );
+	action = STR ( EditBookAttributes Open EditBookAttributes "Init(~All Book Attributes~,~Select * from BookAttributes Order By OrderID,GroupID,Sequence~);");
+	AddTask( TasksTable,~Book Attributes~,1,~DOC~,~Edit Book Attributes~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "OrderItems.htm" );
+	action = STR ( Inks Open Inks "Init(~Inks~,~Select * from Inks Order By DeviceType,Inkname~);");
+	AddTask( TasksTable,~Inks~,1,~DOC~,~Edit Inks~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "OrderItems.htm" );
+	action = STR ( Textures Open Textures "Init(~Textures~,~Select * from Textures Order By DeviceType,Sequence~);");
+	AddTask( TasksTable,~Textures~,1,~DOC~,~Edit Textures~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "NexpressConfig.htm" );		
+	action = STR ( NexPressConfig_1c OpenOnce NexPressConfig_1c );
+	AddTask( TasksTable,~Press Config~,1,~DOC~,~Press Config~,action,HelpAction );
+
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "OrderItems.htm" );
+	action = STR ( BookProductsForC8000Creo Open BookProductsForC8000Creo "Init(~Book Product Data for C8000/Creo~,~Select * from BookProductsForC8000Creo Order By ProductID~);");
+	AddTask( TasksTable,~Book Product C8000Creo~,1,~DOC~,~Edit Book Products for C8000/Creo~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "OrderItems.htm" );
+	action = STR ( BookProductsForNexpress Open BookProductsForNexpress "Init(~Book Product Data for NexPress~,~Select * from BookProductsForNexPress Order By ProductID~);");
+	AddTask( TasksTable,~Book Product NexPress~,1,~DOC~,~Edit Book Products for Nexpress~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "OrderItems.htm" );
+	action = STR ( EditTemplateAttributes Open EditTemplateAttributes "Init(~All book product Attributes~, ~Select * From BookProductAttributes Order By ProductID,Attribute,Sequence~);");
+	AddTask( TasksTable,~Book Product Attributes~,1,~DOC~,~Edit Template Attributes~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "OrderItems.htm" );
+	action = STR ( PackagesDoc Open PackagesDoc "Init(~All book products~, ~Select * From Packages Where PackageID In (Select ID From Products Where Book <> 0) Order By PackageID,Sequence~);");
+	AddTask( TasksTable,~Book Products~,1,~DOC~,~Edit Books~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "OrderItems.htm" );
+	action = STR ( TemplateOverridesSetup Open TemplateOverridesSetup "Init(~All Template Overrides Setups~,~Select * from TemplateOverridesSetup Order By OverrideName,OverrideType,Sequence~);");
+	AddTask( TasksTable,~Template Override Setup~,1,~DOC~,~Edit Template Overrides Setup~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "OrderItems.htm" );
+	action = STR ( EditTemplateOverrides Open EditTemplateOverrides "Init(~All Template Overrides~,~Select * from TemplateOverrides Order By PrinterType,OverrideType,Sequence~);");
+	AddTask( TasksTable,~Template Overrides~,1,~DOC~,~Edit Template Overrides~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "RJSDropZone.htm" );
+	action = STR ( RJSDropTarget OpenOnce RJSDropTarget "Init();" );
+	AddTask( TasksTable,~Remote Queue Drop~,1,~DOC~,~Drag files into the remote queues~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "AllSearches.htm" );
+	action = STR ( JobQueueSearch Open SearchDoc "Search(JobQueue);" );
+	AddTask( TasksTable,~Job Queue Search~,1,~DOC~,~Search for specific entries in the JobQueue~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_JobQueueSum.htm" );
+	action = STR ( JobQueueSummary OpenOnce JobQueueSummaryDoc "Init();");
+	AddTask( TasksTable,~JobQueue Summary~,1,~DOC~,~Queue Summary~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_AddPrinter.htm" );
+	action = STR ( PrinterWizardDoc2 Open PrinterWizardDoc2 "InitPrintWizard();" );
+	AddTask( TasksTable,~Printer Setup~,1,~DOC~,~Defined Printers~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_Printers.htm" );
+	action = STR ( Printers Open PrintersDoc "Init( ~~,~Select * From Printers Order By PrinterName~);" );
+	AddTask( TasksTable,~Printers~,1,~DOC~,~Defined Printers~,action,HelpAction );
+	
+	action = STR ( Printers OpenOnce PrintersDoc "RunAllPrinters();" );
+	AddTask( TasksTable,~Run All Printers~,1,~DOC~,~Defined Printers~,action );
+
+	action = STR ( Printers OpenOnce PrintersDoc "SuspendAllPrinters();" );
+	AddTask( TasksTable,~Suspend All Printers~,1,~DOC~,~Defined Printers~,action );
+
+	action = STR ( Printers OpenOnce PrintersDoc "ResumeAllPrinters();" );
+	AddTask( TasksTable,~Resume All Printers~,1,~DOC~,~Defined Printers~,action );
+
+	action = STR ( Printers OpenOnce PrintersDoc "ShutdownAllPrinters();" );
+	AddTask( TasksTable,~Shutdown All Printers~,1,~DOC~,~Defined Printers~,action );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_Printer Queues.htm" );
+	action = STR ( PrinterQueues Open PrinterQueuesDoc "Init( ~~,~Select * From QueueDefinition Order By QueueName~);" );
+	AddTask( TasksTable,~Printer Queues~,1,~DOC~,~Defined Printer Queues~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_Printer Control.htm" );
+	action = STR ( CREControl Open CREControl.txt );
+	AddTask( TasksTable,~Printer Control~,1,~DOC~,~Render Engine Settings~,action,HelpAction );
+
+	//	NEW	08/12/02 LK
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_Printer RP30Control.htm" );
+	action = STR ( RP30Control Open C_RP30_Controller.txt );
+	AddTask( TasksTable,~RP30 Control~,1,~DOC~,~RP30 Controls~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_RenderEngine.htm" );		
+	action = STR ( RenderEngineDlg_1 OpenOnce RenderEngineDlg_1 );
+	AddTask( TasksTable,~Render Engine~,1,~DOC~,~Render Engine~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_Printer Models.htm" );
+	action = STR ( PrinterModels Open PrinterModelsDoc "Init( ~~,~Select * From PrinterModels Order By Model~);" );
+	AddTask( TasksTable,~Printer Models~,1,~DOC~,~Defined Printer Models~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "T_Queries.htm" );
+	action = STR ( QueryDoc OpenOnce QueryDoc "Init( ~All~,~Select * From Query Order By Name~,StayOpen);" );
+	AddTask( TasksTable,~Queries~,1,~DOC~,~Queries~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "SortsData.htm" );
+	action = STR ( Sorts OpenOnce SortsDoc "Init( ~All~,~Select * From Sorts Order By Name~);" );
+	AddTask( TasksTable,~Sorts~,1,~DOC~,~Sort Definitions~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "DlvrblChoicesData.htm" );
+	action = STR ( OrderDlvrbChoice OpenOnce OrderDlvrblChoicesDoc "Init(~All~,~Select * from OrderDlvrblChoices Order By Name~ );" );
+	AddTask( TasksTable,~Dlvrbl Choices~,1,~DOC~,~Define Product Choices~,action,HelpAction );
+	
+	action = STR ( LabInfoWin OpenOnce LabInfoWin "Init();" );
+	AddTask( TasksTable,~Lab Info~,1,~DOC~,~Enter Lab Info~,action );
+
+	action = STR ( LicenseManagement OpenOnce LicenseManagement "Init( FALSE,FALSE,FALSE );" );
+	AddTask( TasksTable,~License Management~,1,~DOC~,~Manage Software Licenses~,action );
+
+	action = STR ( AddLibertyProducts OpenOnce AddLibertyProducts "Init();" );
+	AddTask( TasksTable,~Add Liberty Products~,1,~DOC~,~Add Liberty Products~,action );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "OpenTableData.htm" );
+	action = STR ( CompositeNodes OpenOnce CompositeNodesDoc "Init(~All~,~Select * from CompositeNodes Order By ProductID,NodeName~ );" );
+	AddTask( TasksTable,~Composite Nodes~,1,~DOC~,~Define Composite Special Nodes~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "OpenTableData.htm" );
+	action = STR ( OpenTable Open OpenTableDoc "Init(~NodeDetails~,~Select * from NodeDetails Order By OrderID,ProductID~,~OrderID,ProductID,NodeName~ );" );
+	AddTask( TasksTable,~Open Node Details~,1,~DOC~,~Open the table~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "OpenTableData.htm" );
+	action = STR ( OpenTable Open OpenTableDoc "Init(~Composite~,~Select * from Composite Order By OrderID,Collection~,~OrderID,Collection~ );" );
+	AddTask( TasksTable,~Open Composite~,1,~DOC~,~Open the table~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "CompMacroData.htm" );
+	action = STR ( CompMacros OpenOnce CompMacrosDoc "Init(~Select * from CompositeMacros Order By Category,Name~ );" );
+	AddTask( TasksTable,~Composite Macros~,1,~DOC~,~View Composite Macros~,action,HelpAction );
+
+	action = ACTIONS ( CCallBack( COpenEditWindow OpenEditWindow REStatus "Render Engine Status" "10 10 50 80") );
+	AddTask( TasksTable,~Render Status~,1,~DOC~,~Show the status of rendering~,action );
+
+	action = STR ( LabOrderItems OpenOnce OrderItemsDoc "OrderItemsForCustomer( Translate(~Lab~),TRUE );" );
+	AddTask( TasksTable,~Lab Jobs~,1,~DOC~,~Internal Jobs for the lab~,action );
+
+	Actions = ACTION Doc ( ~<OrderID>~ Open ImagesDoc "Init( ~<OrderID>~,<AsImages>,~<Query>~,0 );" );
+
+	action = STR ( LabImages Open ImagesDoc "OrderImagesForCustomer( Translate(~Lab~),TRUE );" );
+	AddTask( TasksTable,~Lab Images~,1,~DOC~,~Images for the lab~,action );
+
+	action = STR ( Explorer Open ExplorerDoc "Init(~Explore~,~~);" );
+	AddTask( TasksTable,~Explore~,1,~DOC~,~Find external files~,action );
+
+	action = STR ( LabReferenceImage Open LabReferenceImage );
+	AddTask( TasksTable,~Reference Image~,1,~DOC~,~View Reference Image~,action );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "Diagnostic.htm" );
+
+	action = STR ( AppTimingDoc Open AppTimingDoc );
+	AddTask( TasksTable,~Timing Monitor~,1,~DOC~,~Monitor App Timers~,action,HelpAction );
+
+	action = STR ( FindStringsInLogs_1cpp OpenOnce FindStringsInLogs_1cpp );
+	AddTask( TasksTable,~Search Logs~,1,~DOC~,~Search Logs~,action,HelpAction );
+
+	action = STR ( AppMemoryDoc Open AppMemoryDoc );
+	AddTask( TasksTable,~Memory Trend~,1,~DOC~,~Show Memory Trend~,action,HelpAction );
+
+	action = ~<$@App.Scripts>\Utilities\ImportKPISGrids.txt~;
+	AddTask( TasksTable,~Import KPIS Layouts~,1,~Open~,~Import KPIS Layouts~,action,HelpAction );
+
+	action = STR ( ImportKPISPatternDoc Open ImportKPISPatternDoc );
+	AddTask( TasksTable,~Import KPIS Patterns~,1,~DOC~,~Import KPIS Grid Patterns~,action,HelpAction );
+
+	action = STR ( PatternEditorDoc3 Open PatternEditorDoc3 "Init(~~,~~);" );
+	AddTask( TasksTable,~Edit Patterns~,1,~DOC~,~Edit Grid Patterns~,action,HelpAction );
+
+	action = STR ( GridDefinitionDoc Open GridDefinitionDoc );
+	AddTask( TasksTable,~Edit Grid Definitions~,1,~DOC~,~Edit Grid Definitions~,action,HelpAction );
+
+	action = ~<$@App.Scripts>\Utilities\CPieSettings.cpp~;
+
+	HelpAction = ~~;
+	AddTask( TasksTable, ~PIE Settings~, 0, ~Open~, ~Change PIE Settings~, action, HelpAction); 
+	
+	HelpAction = ~~;
+	action = STR ( GroupPictureFromClassPicture Open GroupPictureFromClassPicture "Init(~);" );
+	//		 Table, Name, Enabled,Type,Description,Process,HelpAction
+	AddTask( TasksTable, ~Group Picture~, 1, ~DOC~, ~Create Group Picture~, action, HelpAction); 
+
+}
+
+
+VOID PopulateAdminTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	Value = 0;
+	if ( !GetSystemSettings( ~Scanning~,~FilmtermAdjustFrameCount~,Value,Enabled ))
+	{
+		SetSystemSettings( ~Scanning~,~FilmtermAdjustFrameCount~,~1000~,TRUE );
+	}
+
+	SetupKarsSystemSettings();
+	SetupNexpressSettings();
+	SetupQualexSettings();
+	SetupCatalogSettings();
+
+	TasksTable( MoveFirst );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "T_User Settings.htm" );
+	action = STR ( AllSettings OpenOnce SettingsDoc "Init( ~~,~Select * From Settings Order By UserName,Category,Item~);" );
+	AddTask( TasksTable,~User Settings~,1,~DOC~,~View User Settings~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "T_Workstation Settings.htm" );
+	action = STR ( AllWorkstationSettings OpenOnce WorkstationSettingsDoc "Init( ~~,~Select * From WorkstationSettings Order By Computer,Category,Item~);" );
+	AddTask( TasksTable,~WorkStation Settings~,1,~DOC~,~View Workstation Settings~,action,HelpAction  );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "T_System Settings.htm" );
+	action = STR ( AllSystemSettings Open SystemSettingsDoc "Init( ~~,~Select * From SystemSettings Order By Category,Item~);" );
+	AddTask( TasksTable,~System Settings~,1,~DOC~,~View System Settings~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "T_User Tasks.htm" );
+	action = STR ( UserTasks Open UserTasksDoc "Init(~~,~Select * From UserTasks Order By Category,Sequence~,StayOpen,TRUE);" );
+	AddTask( TasksTable,~User Tasks~,1,~DOC~,~View User Tasks~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "T_System Tasks.htm" );
+	action = STR ( SystemTasks Open TasksDoc "Init(~~,~Select * From Tasks Order By Name~,StayOpen,TRUE);" );
+	AddTask( TasksTable,~System Tasks~,1,~DOC~,~View System Tasks~,action,HelpAction );
+
+	action = STR ( ProfilesDoc OpenOnce ProfilesDoc "Init(~~,~Select * From Profiles Order By Type, Name~);" );
+	AddTask( TasksTable,~ICC Profiles~,1,~DOC~,~View ICC Profiles for Color Management~,action );
+
+	action = STR ( ViewProfilesDoc OpenOnce ViewProfilesDoc "Init(~~,~Select * From ViewProfiles Order By ComputerName,UserName~);" );
+	AddTask( TasksTable,~View Profiles~,1,~DOC~,~See Profiles used for monitor viewing~,action );
+
+	action = STR ( RemoteJobServer OpenOnce RemoteJobServerDoc "Init(~~, ~Select * From RemoteJobDirs Order By Computer,Priority~);" );
+	AddTask( TasksTable,~Remote Queues~,1,~DOC~,~View Remote Queues~,action );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "T_Scheduled Jobs.htm" );
+	action = STR ( Jobs OpenOnce JobsDoc "Init( ~~,~Select * From Jobs Order By RunAt,Priority~ );" );
+	AddTask( TasksTable,~Scheduled Jobs~,1,~DOC~,~View Scheduled Jobs~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "T_File Formats.htm" );
+	action = STR ( FileFormats Open FileFormatsDoc "Init( ~~,~~,~Select * From FileFormats Order By ID,Sequence~ );" );
+	AddTask( TasksTable,~File Formats~,1,~DOC~,~View File Formats~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "T_Users.htm" );
+	action = STR ( Users Open UsersDoc "Init(~~,~Select * From Users~);" );
+	AddTask( TasksTable,~Users~,1,~DOC~,~View Users~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "T_Macros.htm" );
+	action = STR ( Macros Open MacrosDoc "Init(~Macros~,~Select * From Macros~);" );
+	AddTask( TasksTable,~Macros~,1,~DOC~,~View Macros~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "T_Session Log.htm" );
+	action = STR (  UtilityRoutines Open UtilityRoutines "DisplaySessionLog(); Exit();" );
+	AddTask( TasksTable,~Session Log~,1,~DOC~,~View Session Log~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "T_Workstation Prefs.htm" );
+	action = STR (  UtilityRoutines Open UtilityRoutines "DisplayWorkstationPrefs(); Exit();" );
+	AddTask( TasksTable,~Workstation Prefs~,1,~DOC~,~View Workstation.Prf~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "CreateALut.htm" );
+	action = STR (  MakeLutDoc Open MakeLutDoc );
+	AddTask( TasksTable,~Create Lut~,1,~DOC~,~Create Lut~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "SystemIDs.htm" );
+	action = STR (  EditSystemIDs Open EditSystemIDs );
+	AddTask( TasksTable,~System IDs~,1,~DOC~,~System IDs~,action,HelpAction );
+
+	action = STR (  UtilityRoutines Open UtilityRoutines "SpawnCalibrationApp(); Exit();" );
+	AddTask( TasksTable,~Calibration~,1,~DOC~,~Calibration~,action );
+
+	action = STR (  UtilityRoutines Open UtilityRoutines "CloseWindows(); Exit();" );
+	AddTask( TasksTable,~Close Windows~,1,~DOC~,~Close All Windows~,action );
+
+
+	action = STR (  LangTranslationsDoc Open LangTranslationsDoc "init( ~All~,~Select * from Translations Order By Lang,Category,ID~);" );
+	AddTask( TasksTable,~Language~,1,~DOC~,~Language~,action );
+
+
+	action = STR ( DigitalCameraOrderProcessor OpenOnce DigitalCameraQueueDoc "ConsoleInit();" );
+	AddTask( TasksTable,~Digital Camera Queues~,1,~DOC~,~View Digital Camera Queues~,action );
+
+	action = STR ( ImageQueries Open DCProfilesDoc "Init(~~,~Select * From DCProfiles Order By EquipmentMake, EquipmentModel~);" );
+	AddTask( TasksTable,~Digital Camera Profiles~,1,~DOC~,~View Digital Camera Specific Input Profiles for Color Management~,action );
+
+
+	action = STR (  PurgeSBADoc OpenOnce PurgeSBADoc "Init();" );
+	AddTask( TasksTable,~Delete SBA Data~,1,~DOC~,~Delete SBA Data~,action );
+
+
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+	AddUserTask(TasksTable,~Users~,					Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~User Settings~,			Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Workstation Settings~,	Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~System Settings~,		Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~User Tasks~,			Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~System Tasks~,			Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~ICC Profiles~,			Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~View Profiles~,			Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Remote Queues~,			Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Scheduled Jobs~,		Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~File Formats~,			Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Macros~,				Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Composite Macros~,		Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~File Locations~,		Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Session Log~,			Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Workstation Prefs~,		Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Queries~,				Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Create Lut~,			Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~System IDs~,			Admin,seq,TRUE,~*~,~Admin~);
+	
+
+	AddUserTask(TasksTable,~Digital Camera Queues~,	Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Digital Camera Profiles~,	Admin,seq,TRUE,~*~,~Admin~);
+
+	AddUserTask(TasksTable,~Sorts~,				Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Dlvrbl Choices~,	Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Delete SBA Data~,	Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Lab Info~,			Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~License Management~,Admin,seq,TRUE,~*~,~Admin~);
+	AddUserTask(TasksTable,~Add Liberty Products~, Admin,seq,TRUE,~*~,~Admin~);
+
+}
+
+
+VOID PopulateSchemaTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	HelpAction = ACTION ShowHelpPage ( AdminHelpFile "Database Info.htm" );
+
+	action = STR ( Tables Open SQLDoc );
+	AddTask( TasksTable,~SQL Maintenance~,1,~DOC~,~SQL Maintenance~,action,HelpAction );
+
+	action = STR ( Tables Open SchemaDoc "Init(Tables);" );
+	AddTask( TasksTable,~Tables~,1,~DOC~,~Tables~,action,HelpAction );
+
+	action = STR ( PrimaryKeys Open SchemaDoc "Init(PrimaryKeys);" );
+	AddTask( TasksTable,~PrimaryKeys~,1,~DOC~,~PrimaryKeys~,action,HelpAction );
+
+	action = STR ( Asserts Open SchemaDoc "Init(Asserts);" );
+	AddTask( TasksTable,~Asserts~,1,~DOC~,~Asserts~,action,HelpAction );
+
+	action = STR ( Catalogs Open SchemaDoc "Init(Catalogs);" );
+	AddTask( TasksTable,~Catalogs~,1,~DOC~,~Catalogs~,action,HelpAction );
+
+	action = STR ( CharacterSets Open SchemaDoc "Init(CharacterSets);" );
+	AddTask( TasksTable,~CharacterSets~,1,~DOC~,~CharacterSets~,action,HelpAction );
+
+	action = STR ( CheckConstraints Open SchemaDoc "Init(CheckConstraints);" );
+	AddTask( TasksTable,~CheckConstraints~,1,~DOC~,~CheckConstraints~,action,HelpAction );
+
+	action = STR ( Collations Open SchemaDoc "Init(Collations);" );
+	AddTask( TasksTable,~Collations~,1,~DOC~,~Collations~,action,HelpAction );
+
+	action = STR ( Columns Open SchemaDoc "Init(Columns);" );
+	AddTask( TasksTable,~Columns~,1,~DOC~,~Columns~,action,HelpAction );
+
+	action = STR ( ColumnsDomain Open SchemaDoc "Init(ColumnsDomain);" );
+	AddTask( TasksTable,~ColumnsDomain~,1,~DOC~,~ColumnsDomain~,action,HelpAction );
+
+	action = STR ( ColumnPrivileges Open SchemaDoc "Init(ColumnPrivileges);" );
+	AddTask( TasksTable,~ColumnPrivileges~,1,~DOC~,~ColumnPrivileges~,action,HelpAction );
+
+	action = STR ( ConstraintColumn Open SchemaDoc "Init(ConstraintColumn);" );
+	AddTask( TasksTable,~ConstraintColumn~,1,~DOC~,~ConstraintColumn~,action,HelpAction );
+
+	action = STR ( ForeignKeys Open SchemaDoc "Init(ForeignKeys);" );
+	AddTask( TasksTable,~ForeignKeys~,1,~DOC~,~ForeignKeys~,action,HelpAction );
+
+	action = STR ( Indexes Open SchemaDoc "Init(Indexes);" );
+	AddTask( TasksTable,~Indexes~,1,~DOC~,~Indexes~,action,HelpAction );
+
+	action = STR ( KeyColumnUsage Open SchemaDoc "Init(KeyColumnUsage);" );
+	AddTask( TasksTable,~KeyColumnUsage~,1,~DOC~,~KeyColumnUsage~,action,HelpAction );
+
+	action = STR ( ProcedureParameters Open SchemaDoc "Init(ProcedureParameters);" );
+	AddTask( TasksTable,~ProcedureParameters~,1,~DOC~,~ProcedureParameters~,action,HelpAction );
+	
+	action = STR ( ReferentialConstraints Open SchemaDoc "Init(ReferentialConstraints);" );
+	AddTask( TasksTable,~ReferentialConstraints~,1,~DOC~,~ReferentialConstraints~,action,HelpAction );
+
+	action = STR ( Schemata Open SchemaDoc "Init(Schemata);" );
+	AddTask( TasksTable,~Schemata~,1,~DOC~,~Schemata~,action,HelpAction );
+
+	action = STR ( SQLLanguages Open SchemaDoc "Init(SQLLanguages);" );
+	AddTask( TasksTable,~SQLLanguages~,1,~DOC~,~SQLLanguages~,action,HelpAction );
+
+	action = STR ( Statistics Open SchemaDoc "Init(Statistics);" );
+	AddTask( TasksTable,~Statistics~,1,~DOC~,~Statistics~,action,HelpAction );
+
+	action = STR ( TableConstraints Open SchemaDoc "Init(TableConstraints);" );
+	AddTask( TasksTable,~TableConstraints~,1,~DOC~,~TableConstraints~,action,HelpAction );
+
+	action = STR ( TablePrivileges Open SchemaDoc "Init(TablePrivileges);" );
+	AddTask( TasksTable,~TablePrivileges~,1,~DOC~,~TablePrivileges~,action,HelpAction );
+
+	action = STR ( Translations Open SchemaDoc "Init(Translations);" );
+	AddTask( TasksTable,~Translations~,1,~DOC~,~Translations~,action,HelpAction );
+
+	action = STR ( UsagePrivileges Open SchemaDoc "Init(UsagePrivileges);" );
+	AddTask( TasksTable,~UsagePrivileges~,1,~DOC~,~UsagePrivileges~,action,HelpAction );
+
+	action = STR ( DBInfoLiterals Open SchemaDoc "Init(Literals);" );
+	AddTask( TasksTable,~Literals~,1,~DOC~,~Literals~,action,HelpAction );
+
+	action = STR ( DBInfoLiterals Open SchemaDoc "Init(ReservedWords);" );
+	AddTask( TasksTable,~ReservedWords~,1,~DOC~,~ReservedWords~,action,HelpAction );
+
+	action = STR ( DBInfoLiterals Open SchemaDoc "Init(Properties);" );
+	AddTask( TasksTable,~Properties~,1,~DOC~,~Properties~,action,HelpAction );
+
+	action = STR ( DBInfoLiterals Open SchemaDoc "Init(Trustees);" );
+	AddTask( TasksTable,~Trustees~,1,~DOC~,~Trustees~,action,HelpAction );
+
+	action = STR ( CompareDBStructure Open CompareDBStructure );
+	AddTask( TasksTable,~Compare Databases~,1,~DOC~,~Compare Databases~,action,HelpAction );
+	
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+	AddUserTask(TasksTable,~SQL Maintenance~,	DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~Tables~,			DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~PrimaryKeys~,		DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~Catalogs~,			DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~Asserts~,			DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~CharacterSets~,		DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~CheckConstraints~,	DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~Collations~,		DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~Columns~,			DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~ColumnsDomain~,DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~ColumnPrivileges~,	DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~ConstraintColumn~,		DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~ForeignKeys~,		DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~Indexes~,			DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~KeyColumnUsage~,	DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~ReferentialConstraints~,	DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~Schemata~,		DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~SQLLanguages~,		DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~Statistics~,		DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~TableConstraints~,		DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~TablePrivileges~,		DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~UsagePrivileges~,		DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~Literals~,			DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~ReservedWords~,			DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+	AddUserTask(TasksTable,~Compare Databases~,		DatabaseInfo,seq,TRUE,~*~,~DatabaseInfo~);
+}
+
+
+
+VOID PopulateUserTasksTable(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+
+	TasksTable( MoveFirst );
+
+	seq = 0;
+
+	AddUserTask(TasksTable,~Select Order~,		~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Select Customer Order~,		~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Customers Search~,	~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Add Customer~,		~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Orders Search~,		~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Order Items Search~,~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Shoot Search~,~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Images Search~,		~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Subject Search~,	~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Adjust Images~,		~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Global Adjust Images~,		~Order Entry~,seq,TRUE,~*~,~OrderEntry~);	
+	AddUserTask(TasksTable,~Navigate~,			~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Manage Images~,		~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Close Order~,		~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Products~,			~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+	AddUserTask(TasksTable,~Job Queue Search~,	~Order Entry~,seq,TRUE,~*~,~JobPopulation~);
+	AddUserTask(TasksTable,~Books~,					~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+
+	AddUserTask(TasksTable,~Digital Camera~,	~Order Entry~,seq,TRUE,~*~,~OrderEntry~);
+
+	AddUserTask(TasksTable,~PIE Settings~,	~Order Entry~,seq,TRUE,~*~,~Admin~);  // Function = Admin, Category = Order Entry
+
+	seq = 0;
+	AddUserTask(TasksTable,~Bremson Customers~,		~Diagnostic~,seq,TRUE,~*~,~Diagnostic~);
+	AddUserTask(TasksTable,~Bremson Orders~,		~Diagnostic~,seq,TRUE,~*~,~Diagnostic~);
+	
+	seq = 0;
+	AddUserTask(TasksTable,~Orders Search~,			~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+	AddUserTask(TasksTable,~Order Items Search~,	~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+
+	AddUserTask(TasksTable,~My Orders~,				~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+	AddUserTask(TasksTable,~Orders On Hold~,		~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+	AddUserTask(TasksTable,~High Priority Orders~,	~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+	AddUserTask(TasksTable,~Orders Due Today~,		~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+	AddUserTask(TasksTable,~Past Due Orders~,		~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+	AddUserTask(TasksTable,~Future Orders~,			~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+
+	AddUserTask(TasksTable,~Are Ready~,				~Order Query~,seq,TRUE,~*~,~OrderQuery~);	
+	AddUserTask(TasksTable,~Need Scanning~,			~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+	AddUserTask(TasksTable,~Need Conversion~,		~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+
+	AddUserTask(TasksTable,~Need Proofing~,			~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+	AddUserTask(TasksTable,~Need Auto Retouching~,	~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+	AddUserTask(TasksTable,~Need Retouching~,		~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+	AddUserTask(TasksTable,~Need Auto Balancing~,		~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+	AddUserTask(TasksTable,~Need Adjustment~,		~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+	AddUserTask(TasksTable,~Need Printing~,			~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+	AddUserTask(TasksTable,~Have Notifications~,	~Order Query~,seq,TRUE,~*~,~OrderQuery~);
+
+	seq = 0;
+	AddUserTask(TasksTable,~Todays Activity~,		~Activity~,seq,TRUE,~*~,~Activity~);
+	AddUserTask(TasksTable,~My Activity~,			~Activity~,seq,TRUE,~*~,~Activity~);
+	AddUserTask(TasksTable,~Activity Search~,		~Activity~,seq,TRUE,~*~,~Activity~);
+	AddUserTask(TasksTable,~Delete Day Old~,		~Activity~,seq,TRUE,~*~,~Activity~);
+	AddUserTask(TasksTable,~Order Notification~,	~Activity~,seq,FALSE,~*~,~Activity~);
+	seq = 0;
+
+	AddUserTask(TasksTable,~Run Order Items~,		~Printing~,seq,TRUE,~*~,~Printing~);
+
+	AddUserTask(TasksTable,~Job Queue Search~,		~Printing~,seq,TRUE,~*~,~Printing~);
+	AddUserTask(TasksTable,~JobQueue Summary~,		~Printing~,seq,TRUE,~*~,~Printing~);
+	AddUserTask(TasksTable,~Remote Queue Drop~,		~Printing~,seq,TRUE,~*~,~Printing~);
+
+	AddUserTask(TasksTable,~Printer Queues~,		~Printing~,seq,TRUE,~*~,~Printing~);
+	AddUserTask(TasksTable,~Printers~,				~Printing~,seq,TRUE,~*~,~Printing~);
+	AddUserTask(TasksTable,~Printer Models~,		~Printing~,seq,TRUE,~*~,~Printing~);
+	AddUserTask(TasksTable,~Calibration~,			~Printing~,seq,TRUE,~*~,~Printing~);
+	AddUserTask(TasksTable,~ICC Profiles~,			~Printing~,seq,TRUE,~*~,~Printing~);
+	AddUserTask(TasksTable,~Printer Setup~,			~Printing~,seq,TRUE,~*~,~Printing~);
+	AddUserTask(TasksTable,~View Books~,			~Books~,seq,TRUE,~*~,~Books~);
+	AddUserTask(TasksTable,~Book Attributes~,		~Books~,seq,TRUE,~*~,~Books~);
+	AddUserTask(TasksTable,~Book Products~,			~Books~,seq,TRUE,~*~,~Books~);
+	AddUserTask(TasksTable,~Book Product Attributes~,	~Books~,seq,TRUE,~*~,~Books~);
+	AddUserTask(TasksTable,~Book Product NexPress~,	~Books~,seq,TRUE,~*~,~Books~);
+	AddUserTask(TasksTable,~Book Product C8000Creo~, ~Books~,seq,TRUE,~*~,~Books~);
+	AddUserTask(TasksTable,~Printing Templates~,	~Books~,seq,TRUE,~*~,~Books~);
+	AddUserTask(TasksTable,~Template Overrides~,	~Books~,seq,TRUE,~*~,~Books~);
+	AddUserTask(TasksTable,~Template Override Setup~,~Books~,seq,TRUE,~*~,~Books~);
+	AddUserTask(TasksTable,~Inks~,					~Books~,seq,TRUE,~*~,~Books~);
+	AddUserTask(TasksTable,~Textures~,				~Books~,seq,TRUE,~*~,~Books~);
+	AddUserTask(TasksTable,~Press Config~,			~Books~,seq,TRUE,~*~,~Books~);
+		
+	AddUserTask(TasksTable,~Render Engine~,			~Printing~,seq,TRUE,~*~,~Printing~);
+
+	seq = 0;
+	AddUserTask(TasksTable,~Lab Jobs~,				~Lab Work~,seq,TRUE,~*~,~JobPopulation~);
+	AddUserTask(TasksTable,~Lab Images~,			~Lab Work~,seq,TRUE,~*~,~JobPopulation~);
+	AddUserTask(TasksTable,~Adjust Images~,			~Lab Work~,seq,TRUE,~*~,~JobPopulation~);
+
+	AddUserTask(TasksTable,~Products~,				~Lab Work~,seq,TRUE,~*~,~JobPopulation~);
+	AddUserTask(TasksTable,~Job Queue Search~,		~Lab Work~,seq,TRUE,~*~,~JobPopulation~);
+	AddUserTask(TasksTable,~Explore~,				~Lab Work~,seq,TRUE,~*~,~JobPopulation~);
+	AddUserTask(TasksTable,~Close Order~,			~Lab Work~,seq,TRUE,~*~,~JobPopulation~);
+
+	seq = 0;
+	AddUserTask(TasksTable,~Timing Monitor~,		~Diagnostic~,seq,TRUE,~*~,~Diagnostic~);
+	AddUserTask(TasksTable,~Search Logs~,			~Diagnostic~,seq,TRUE,~*~,~Diagnostic~);
+	AddUserTask(TasksTable,~Memory Trend~,			~Diagnostic~,seq,FALSE,~*~,~Diagnostic~);
+
+	seq = 0;
+	AddUserTask(TasksTable,~Import KPIS Layouts~,	~Grids~,seq,TRUE,~*~,~Grids~);
+	AddUserTask(TasksTable,~Import KPIS Patterns~,	~Grids~,seq,TRUE,~*~,~Grids~);
+	AddUserTask(TasksTable,~Edit Patterns~,			~Grids~,seq,TRUE,~*~,~Grids~);
+	AddUserTask(TasksTable,~Edit Grid Definitions~,	~Grids~,seq,TRUE,~*~,~Grids~);
+	AddUserTask(TasksTable,~Composite Nodes~,		Grids,seq,TRUE,~*~,~Grids~);
+	AddUserTask(TasksTable,~Open Node Details~,		Grids,seq,TRUE,~*~,~Grids~);
+	AddUserTask(TasksTable,~Open Composite~,		Grids,seq,TRUE,~*~,~Grids~);
+	AddUserTask(TasksTable,~Group Picture~,	Grids,seq,TRUE,~*~,~Grids~);
+
+}
+
+VOID PopulateControlPanelTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_ControlPanels.htm" );
+	action = STR (  UtilityRoutines Open UtilityRoutines "OpenControlPanel(~desk.cpl~); Exit();" );	
+	AddTask( TasksTable,~Display Control Panel~,1,~DOC~,~Display Control Panel~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_ControlPanels.htm" );
+	action = STR (  UtilityRoutines Open UtilityRoutines "OpenControlPanel(~intl.cpl~); Exit();" );	
+	AddTask( TasksTable,~Regional Control Panel~,1,~DOC~,~Regional Control Panel~,action,HelpAction );
+}
+
+
+VOID PopulateScriptingTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	action = STR ( ExampleWindow Open "HTMLpages\example\ExampleWindow.txt" "init();" );
+	AddTask( TasksTable,~HTML Scripting~,0,~DOC~,~Tools for HTML Scripting~,action );
+
+
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+
+	AddUserTask(TasksTable,~HTML Scripting~,	Scripting,seq,FALSE,~*~,~Scripting~);
+}
+
+
+VOID PopulateTrackingTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	action = STR ( OperatorsDoc OpenOnce OperatorsDoc "Init();" );
+	AddTask( TasksTable,~Operators~,1,~DOC~,~Define and setup Operators~,action );
+
+	action = STR ( ComputersDoc OpenOnce ComputersDoc "Init();" );
+	AddTask( TasksTable,~Computers~,1,~DOC~,~Define and setup Computers~,action );
+
+	action = STR ( EventsDoc OpenOnce EventsDoc "Init();" );
+	AddTask( TasksTable,~Events~,1,~DOC~,~Define and setup Events~,action );
+
+	action = STR ( OperationsDoc OpenOnce OperationsDoc "Init();" );
+	AddTask( TasksTable,~Operations~,1,~DOC~,~Define and setup Operations~,action );
+
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+
+	AddUserTask(TasksTable,~Operators~,	~Tracking~,seq,FALSE,~*~,~Tracking~);
+	AddUserTask(TasksTable,~Computers~,	~Tracking~,seq,FALSE,~*~,~Tracking~);
+	AddUserTask(TasksTable,~Events~,	~Tracking~,seq,FALSE,~*~,~Tracking~);
+	AddUserTask(TasksTable,~Operations~,~Tracking~,seq,FALSE,~*~,~Tracking~);
+}
+
+
+VOID PopulateRImageTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	action = STR ( CDCreationSetupDoc OpenOnce CDCreationSetupDoc "Init(~~);" );
+	AddTask( TasksTable,~Setup RImage Writers~,1,~DOC~,~Define and setup RImage Writers~,action );
+
+	action = STR ( RImageDoc OpenOnce RImageDoc "Init();" );
+	AddTask( TasksTable,~RImage Writers~,1,~DOC~,~Manage RImage Writers~,action );
+
+	action = STR ( RImageTemplatesDoc OpenOnce RImageTemplatesDoc "Init(~All~,~Select * From RImageTemplates Order By ID~);" );
+	AddTask( TasksTable,~RImage Templates~,1,~DOC~,~Manage RImage Templates~,action );
+
+	action = STR ( RImageOrdersDoc OpenOnce RImageOrdersDoc "Init(~All~,~Select * From RImageOrders Order By Writer,Progress,Priority desc,SubmitDate~);" );
+	AddTask( TasksTable,~RImage Orders~,1,~DOC~,~Manage RImage Orders~,action );
+		
+	action = STR ( ImageMastering OpenOnce "<$@App.HTMLPages>\ImageMastering\ImageMastering.kpl" "InitTheWindow();" );
+	AddTask( TasksTable,~Image Mastering~,1,~DOC~,~Manage Local Media Writing~,action );
+
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+
+	AddUserTask(TasksTable,~Setup RImage Writers~,	~CD Writing~,seq,TRUE,~*~,~CD Writing~);
+	AddUserTask(TasksTable,~RImage Writers~,		~CD Writing~,seq,TRUE,~*~,~CD Writing~);
+	AddUserTask(TasksTable,~RImage Templates~,		~CD Writing~,seq,TRUE,~*~,~CD Writing~);
+	AddUserTask(TasksTable,~RImage Orders~,			~CD Writing~,seq,TRUE,~*~,~CD Writing~);
+	AddUserTask(TasksTable,~Image Mastering~,		~CD Writing~,seq,TRUE,~*~,~CD Writing~);
+}
+
+
+VOID PopulateServicesTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	action = STR ( JobServicesDoc OpenOnce JobServicesDoc "Init(~All~,~Select * From JobServices Order By ID~);" );
+	AddTask( TasksTable,~Job Services~,1,~DOC~,~Define Job Services~,action );
+
+	action = STR ( NegativeServicesDoc OpenOnce NegativeServicesDoc "Init(~All~,~Select * From NegativeServices Order By ID~);" );
+	AddTask( TasksTable,~Negative Services~,1,~DOC~,~Define Negative Services~,action );
+
+	action = STR ( CropServiceCodesDoc OpenOnce CropServiceCodesDoc "Init(~All~,~Select * From CropServiceCodes Order By ID~);" );
+	AddTask( TasksTable,~Crop Services~,1,~DOC~,~Define Crop Service Service Codes~,action );
+
+	action = STR ( PrintServicesDoc OpenOnce PrintServicesDoc "Init(~All~,~Select * From PrintServices Order By ID~);" );
+	AddTask( TasksTable,~Print Services~,1,~DOC~,~Define Print Services~,action );
+
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+
+	AddUserTask(TasksTable,~Job Services~,			~Services~,seq,TRUE,~*~,~Services~);
+	AddUserTask(TasksTable,~Negative Services~,		~Services~,seq,TRUE,~*~,~Services~);
+	AddUserTask(TasksTable,~Print Services~,		~Services~,seq,TRUE,~*~,~Services~);
+	AddUserTask(TasksTable,~Crop Services~,			~Services~,seq,TRUE,~*~,~Services~);
+
+}
+
+VOID PopulateAnalyzerTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	action = STR ( Analyzer OpenOnce Analyzer "Initialize(Analyzer);" );
+	AddTask( TasksTable,~Digital Analyzer~,1,~DOC~,~Activate Digital Analyzer~,action );
+
+	action = STR (  DSbaBatchDlg OpenOnce DSbaBatchDlg "Init();" );
+	AddTask( TasksTable,~Auto Balance Batch~,1,~DOC~,~Auto Balance Batch~,action );
+
+	action = STR (  DSBAImagesDataDoc OpenOnce DSBAImagesDataDoc "Init();" );
+	AddTask( TasksTable,~View Auto Bal Data~,1,~DOC~,~View Auto Bal Data~,action );
+
+	action = STR (  DSbaPrefsDefDoc OpenOnce DSbaPrefsDefDoc "Init();" );
+	AddTask( TasksTable,~Auto Balance Prefs~,1,~DOC~,~Auto Balance Prefs~,action );
+
+	action = STR (  CompSBADataDoc OpenOnce CompSBADataDoc "Init();" );
+	AddTask( TasksTable,~Composite SBA Data~,1,~DOC~,~Composite SBA Data~,action );
+
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+
+	AddUserTask(TasksTable,~Digital Analyzer~,	~Analyzing~,seq,TRUE,~*~,~Analyzing~);
+	AddUserTask(TasksTable,~Adjust Images~,		~Analyzing~,seq,TRUE,~*~,~Analyzing~);
+	AddUserTask(TasksTable,~Global Adjust Images~,~Analyzing~,seq,TRUE,~*~,~Analyzing~);	
+	AddUserTask(TasksTable,~Group Balance~,~Analyzing~,seq,TRUE,~*~,~Analyzing~);
+	AddUserTask(TasksTable,~Auto Balance Batch~,~Analyzing~,seq,TRUE,~*~,~Analyzing~);
+	AddUserTask(TasksTable,~View Auto Bal Data~,	~Analyzing~,seq,TRUE,~*~,~Analyzing~);
+	AddUserTask(TasksTable,~Auto Balance Prefs~,	~Analyzing~,seq,TRUE,~*~,~Analyzing~);
+	AddUserTask(TasksTable,~Composite SBA Data~,	~Analyzing~,seq,TRUE,~*~,~Analyzing~);
+}
+
+VOID PopulateReportingTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	action = STR ( HttpServerDoc OpenOnce HttpServerDoc "Init(FALSE);" );
+	AddTask( TasksTable,~Report Server~,1,~DOC~,~Report Server~,action );
+
+	action = STR ( IEPrintDoc OpenOnce IEPrintDoc "Init(FALSE,FALSE);" );
+	AddTask( TasksTable,~Report Driver~,1,~DOC~,~Report Driver~,action );
+
+	action = STR ( BrowserDoc Open BrowserDoc "Init(~Reports/index.html~,~<$@App.Title> Reporting~,0,0,85,75,FALSE,FALSE,FALSE);" );
+	AddTask( TasksTable,~Reports~,1,~DOC~,~Reports~,action );
+
+	action = STR ( BrowserDoc Open BrowserDoc "InitIE(~Reports/index.html~,~<$@App.Title> Reporting~);" );
+	AddTask( TasksTable,~Reports (IE)~,1,~DOC~,~Reports External~,action );
+
+	action = STR ( ReportQueueDoc OpenOnce ReportQueueDoc "Init()" );
+	AddTask( TasksTable,~Report Queue~,1,~DOC~,~Reports External~,action );
+
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+
+	AddUserTask(TasksTable,~Report Server~,	~Reports~,seq,TRUE,~*~,~Reports~);
+	AddUserTask(TasksTable,~Reports~,		~Reports~,seq,TRUE,~*~,~Reports~);
+	AddUserTask(TasksTable,~Reports (IE)~,~Reports~,seq,TRUE,~*~,~Reports~);
+
+	AddUserTask(TasksTable,~Report Queue~,~Reports~,seq,TRUE,~*~,~Reports~);
+	AddUserTask(TasksTable,~Report Driver~,~Reports~,seq,TRUE,~*~,~Reports~);
+}
+
+
+VOID PopulateInternetTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	action = STR ( BrowserDoc Open BrowserDoc "Init();" );
+	AddTask( TasksTable,~Browser~,1,~DOC~,~Browser~,action );
+
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+
+	AddUserTask(TasksTable,~Browser~,	~Reports~,seq,FALSE,~*~,~Reports~);
+}
+
+
+VOID PopulateAutoRetouchingTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	action = STR ( RetouchDefaultDlg OpenOnce RetouchDefaultDlg "Init();" );
+	AddTask( TasksTable,~Configure Defaults~,1,~DOC~,~Configure Defaults~,action );
+
+	action = STR ( RetouchImagesDoc OpenOnce RetouchImagesDoc "Init(~Retouch Images~,~~);" );
+	AddTask( TasksTable,~Images to Retouch~,1,~DOC~,~Images to Retouch~,action );
+
+	action = STR ( RetouchBatchSetupsDoc OpenOnce RetouchBatchSetupsDoc "Init();" );
+	AddTask( TasksTable,~Retouch Batch Setups~,1,~DOC~,~Retouch Batch Setups~,action );
+
+	action = STR ( RetouchImagesDoc OpenOnce RetouchImagesDoc "Init(~Retouch Batch Queue~,~WHERE RetouchState = 'QueuedForBatch'~);" );
+	AddTask( TasksTable,~Retouch Batch Queue~,1,~DOC~,~Images to Retouch~,action );
+
+	action = STR ( RetouchBatchDoc OpenOnce RetouchBatchDoc "Init(FALSE,FALSE);" );
+	AddTask( TasksTable,~Run Retouch Batch~,1,~DOC~,~Run Retouch Batch~,action );
+
+	action = STR ( RetouchImagesDoc OpenOnce RetouchImagesDoc "Init(~Retouch Review Queue~,~WHERE RetouchState = 'QueuedForReview'~);" );
+	AddTask( TasksTable,~Retouch Review Queue~,1,~DOC~,~Images to Retouch~,action );
+
+	action = STR ( RetouchReviewDoc OpenOnce RetouchReviewDoc "Init(FALSE);" );
+	AddTask( TasksTable,~Run Review~,1,~DOC~,~Run Review~,action );
+
+	action = STR ( RetouchImagesDoc OpenOnce RetouchImagesDoc "Init(~Retouch Merge Queue~,~WHERE RetouchState = 'QueuedForMerge'~);" );
+	AddTask( TasksTable,~Retouch Merge Queue~,1,~DOC~,~Images to Retouch~,action );
+
+	action = STR ( RetouchMergeDoc OpenOnce RetouchMergeDoc "Init(FALSE,FALSE);" );
+	AddTask( TasksTable,~Run Merge~,1,~DOC~,~Run Merge~,action );
+
+	action = STR (  SpawnRetouchCreditsDoc Open SpawnRetouchCreditsDoc );
+	AddTask( TasksTable,~Purchase Credits~,1,~DOC~,~Purchase Credits~,action );
+
+	action = STR (  KparsDataDoc Open KparsDataDoc "Init();" );
+	AddTask( TasksTable,~KPARS Analysis Data~,1,~DOC~,~KPARS Analysis Data~,action );
+
+	action = STR (  SpawnLocalKPARSDongleDoc Open SpawnLocalKPARSDongleDoc );
+	AddTask( TasksTable,~Local KPARS Dongle~,1,~DOC~,~Local KPARS Dongle~,action );
+
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+
+	AddUserTask(TasksTable,~Configure Defaults~,~Auto Retouching~,seq,TRUE,~*~,~Auto Retouching~);
+	AddUserTask(TasksTable,~Retouch Batch Setups~,~Auto Retouching~,seq,TRUE,~*~,~Auto Retouching~);
+	AddUserTask(TasksTable,~Images to Retouch~,~Auto Retouching~,seq,TRUE,~*~,~Auto Retouching~);
+	AddUserTask(TasksTable,~Retouch Batch Queue~,~Auto Retouching~,seq,TRUE,~*~,~Auto Retouching~);
+	AddUserTask(TasksTable,~Run Retouch Batch~,~Auto Retouching~,seq,TRUE,~*~,~Auto Retouching~);
+	AddUserTask(TasksTable,~Retouch Review Queue~,~Auto Retouching~,seq,TRUE,~*~,~Auto Retouching~);
+	AddUserTask(TasksTable,~Run Review~,~Auto Retouching~,seq,TRUE,~*~,~Auto Retouching~);
+	AddUserTask(TasksTable,~Retouch Merge Queue~,~Auto Retouching~,seq,TRUE,~*~,~Auto Retouching~);
+	AddUserTask(TasksTable,~Run Merge~,~Auto Retouching~,seq,TRUE,~*~,~Auto Retouching~);
+	AddUserTask(TasksTable,~Purchase Credits~,~Auto Retouching~,seq,TRUE,~*~,~Auto Retouching~);
+	AddUserTask(TasksTable,~Remote KPARS Dongle~,~Auto Retouching~,seq,TRUE,~*~,~Auto Retouching~);
+	AddUserTask(TasksTable,~Local KPARS Dongle~,~Auto Retouching~,seq,TRUE,~*~,~Auto Retouching~);
+	AddUserTask(TasksTable,~KPARS Analysis Data~,~Auto Retouching~,seq,TRUE,~*~,~Auto Retouching~);
+}
+
+NUMERIC SetupNexpressSettings()
+{
+	SetSystemSettings( ~Nexpress~,~Install~,~1~,TRUE );
+	
+	return TRUE;
+}
+
+NUMERIC SetupCatalogSettings()
+{
+	if ( !GetSystemSettings( ~RteExporter~,~PrintsInfoUpdated~,Value,Enabled ) )
+	{
+		SetSystemSettings( ~RteExporter~,~PrintsInfoUpdated~,~FALSE~,TRUE );
+	}
+	if ( !GetSystemSettings( ~RteExporter~,~CatalogUpdatedDate~,Value,Enabled ) )
+	{
+		SetSystemSettings( ~RteExporter~,~CatalogUpdatedDate~,~01/01/1901~,TRUE );
+	}
+	
+	return TRUE;
+}
+
+NUMERIC SetupQualexSettings()
+{	
+	if ( !GetSystemSettings( ~Gifting~,~UserName~,Value,Enabled ) )
+	{
+		SetSystemSettings( ~Gifting~,~UserName~,~~,TRUE );
+	}
+
+	if ( !GetSystemSettings( ~Gifting~,~Password~,Value,Enabled ) )
+	{
+		SetSystemSettings( ~Gifting~,~Password~,~~,TRUE );
+	}
+	
+	if ( !GetSystemSettings( ~Gifting~,~URL~,Value,Enabled ) )
+	{
+		SetSystemSettings( ~Gifting~,~URL~,~/order/sendorder~,TRUE );
+	}
+	
+	return TRUE;
+}
+
+NUMERIC	SetupKarsSystemSettings()
+{
+	Value = 0;
+
+	if ( !GetSystemSettings( ~AutoRetouching~,~EnhancementDataFolder~,Value,Enabled ))
+	{
+		Path = ~<$App.ShareDirectory>\KparsData~;
+		KparsPath = MakePath( Type, UNC, ~<Path>~);
+		SetSystemSettings( ~AutoRetouching~,~EnhancementDataFolder~,~<KparsPath>~,TRUE );
+	}
+
+	if (GetSystemSettings( ~AutoRetouching~,~RetouchDRGBLimit~,Value,Enabled ) )
+	{
+		cmd = ~Delete from SystemSettings Where Category='AutoRetouching' AND (Item='RetouchSatLimit' OR Item='RetouchSaturationLimit' OR Item='RetouchDRGBLimit' OR Item='RetouchContrastLimit' OR Item='RetouchGammaLimit')~;
+			
+		if ( !ADO( dBase, Connect, Cmd, ~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription, theErr );
+			Warning( ~Could not delete RetouchSaturationLimit from SystemSettings: <theErr>~ );
+		}
+	}
+	
+	if ( !GetSystemSettings( ~AutoRetouching~,~ApplyColorCorrections~,Value,Enabled ))
+	{
+		SetSystemSettings( ~AutoRetouching~,~ApplyColorCorrections~,~1~,TRUE );
+	}
+
+	if ( !GetSystemSettings( ~AutoRetouching~,~OverWriteOriginal~,Value,Enabled ))
+	{
+		SetSystemSettings( ~AutoRetouching~,~OverWriteOriginal~,~0~,TRUE );
+	}
+
+	if ( !GetSystemSettings( ~AutoRetouching~,~OriginalPrefix~,Value,Enabled ))
+	{
+		SetSystemSettings( ~AutoRetouching~,~OriginalPrefix~,~~,TRUE );
+	}
+
+	if ( !GetSystemSettings( ~AutoRetouching~,~OriginalSuffix~,Value,Enabled ))
+	{
+		SetSystemSettings( ~AutoRetouching~,~OriginalSuffix~,~_original~,TRUE );
+	}
+
+	if ( !GetSystemSettings( ~AutoRetouching~,~OriginalPath~,Value,Enabled ))
+	{
+		SetSystemSettings( ~AutoRetouching~,~OriginalPath~,~~,TRUE );
+	}
+
+	if ( !GetSystemSettings( ~AutoRetouching~,~BatchCompleteProcessing~,Value,Enabled ))
+	{
+		SetSystemSettings( ~AutoRetouching~,~BatchCompleteProcessing~,~REVIEW~,TRUE );
+	}
+
+	if ( !GetSystemSettings( ~AutoRetouching~,~LowCreditWarning~,Value,Enabled ))
+	{
+		SetSystemSettings( ~AutoRetouching~,~LowCreditWarning~,~100~,TRUE );
+	}
+
+	if ( !GetSystemSettings( ~AutoRetouching~,~AutoMergeOnAccept~,Value,Enabled ))
+	{
+		SetSystemSettings( ~AutoRetouching~,~AutoMergeOnAccept~,TRUE,TRUE );
+	}
+
+	if ( !GetSystemSettings( ~AutoRetouching~,~IgnoreColorProfiles~,Value,Enabled ))
+	{
+		SetSystemSettings( ~AutoRetouching~,~IgnoreColorProfiles~,FALSE,TRUE );
+	}
+
+	if ( GetSystemSettings( ~AutoRetouching~,~IgnoreProfiles~,Value,Enabled ))
+	{
+		cmd = ~Delete from SystemSettings Where Category='AutoRetouching' AND Item='IgnoreProfiles'~;
+	 
+		if ( !ADO( dBase, Connect, Cmd, ~<cmd>~ ) )
+		{
+			dBase( GetErrorDescription, theErr );
+			Warning( ~Could not delete IgnoreProfiles from SystemSettings: <theErr>~ );
+		}
+	}
+
+	return TRUE;
+}
+
+
+VOID PopulateScanTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_Scan.htm" );
+	action = STR ( ScannerSizzleDoc OpenOnce ScannerSizzleDoc "Init(~Sizzle~);" );
+	AddTask( TasksTable,~Scan 3570~,1,~DOC~,~Activate 3570 Scanning Control~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "S_ScanHR.htm" );
+	action = STR ( ScannerHR500Doc OpenOnce ScannerHR500Doc "Init(~HR500~);" );
+	AddTask( TasksTable,~Scan HR500~,1,~DOC~,~Activate HR500 Scanning Control~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "CropsData.htm" );
+	action = STR ( AllCrops OpenOnce CropsDoc "Init( ~~,~SELECT * From Crops Order By Name~ );" );
+	AddTask( TasksTable,~Crops~,1,~DOC~,~View predefined crops~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "DRGBRefs.htm" );
+	action = STR ( AllDRGBRefs OpenOnce DRGBRefsDoc "Init( ~~,~SELECT * From DRGBRefs Order By Name~ );" );
+	AddTask( TasksTable,~DRGB References~,1,~DOC~,~View predefined DRGBRefs~,action,HelpAction );
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "FilmTermEditor.htm" );
+	action = STR (  SpawnFilmTermEditorDoc Open SpawnFilmTermEditorDoc );
+	AddTask( TasksTable,~FilmTerm Editor~,1,~DOC~,~FilmTerm Editor~,action );
+
+	action = STR (  ImageSorterDoc Open ImageSorterDoc "Init(~HR500~);" );
+	AddTask( TasksTable,~HR500 Image Sorter~,1,~DOC~,~HR500 Image Sorter~,action );
+
+	action = STR ( FilmtermDataDoc OpenOnce FilmtermDataDoc "Init(~~,~Select * From FilmtermData~);" );
+	AddTask( TasksTable,~FilmTerm Data~,1,~DOC~,~FilmTerm Data~,action );
+	
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+
+	AddUserTask(TasksTable,~Scan 3570~,			Scanning,seq,TRUE,~*~,~Scanning~);
+	AddUserTask(TasksTable,~Scan HR500~,		Scanning,seq,TRUE,~*~,~Scanning~);
+	AddUserTask(TasksTable,~Orders To Scan~,	Scanning,seq,TRUE,~*~,~Scanning~);
+	AddUserTask(TasksTable,~Orders Search~,		Scanning,seq,TRUE,~*~,~Scanning~);
+	AddUserTask(TasksTable,~Customers Search~,	Scanning,seq,TRUE,~*~,~Scanning~);
+	AddUserTask(TasksTable,~Shoot Search~,~Scanning~,seq,TRUE,~*~,~Scanning~);
+	AddUserTask(TasksTable,~Crops~,				Scanning,seq,TRUE,~*~,~Scanning~);
+	AddUserTask(TasksTable,~DRGB References~,	Scanning,seq,TRUE,~*~,~Scanning~);
+	AddUserTask(TasksTable,~Adjust Images~,		Scanning,seq,TRUE,~*~,~Scanning~);
+	AddUserTask(TasksTable,~FilmTerm Data~,		Scanning,seq,TRUE,~*~,~Scanning~);
+	AddUserTask(TasksTable,~HR500 Image Sorter~,Scanning,seq,TRUE,~*~,~Scanning~);
+	AddUserTask(TasksTable,~FilmTerm Editor~,	Scanning,seq,TRUE,~*~,~Scanning~);
+}
+
+
+Define:	Category		CopyOf Name		~[Database FieldTypes]~	 Fields: DisplayName ~Category~ Constraints ~NOT NULL~
+Define:	Name			CopyOf Name		~[Database FieldTypes]~	 Fields: DisplayName ~Name~ Constraints ~NOT NULL~
+Define:	Description		CopyOf LongText	~[Database FieldTypes]~  Fields: DisplayName ~Description~
+Define: Enabled			CopyOf Boolean	~[Database FieldTypes]~	 Fields: DisplayName ~Enabled~
+Define:	Activate		CopyOf LongText	~[Database FieldTypes]~	 Fields: DisplayName ~Activate~						
+Define:	Path			CopyOf Path		~[Database FieldTypes]~	 Fields: DisplayName ~Defined In~
+Define:	Definition		CopyOf LongText	~[Database FieldTypes]~	 Fields: DisplayName ~Definition~
+
+NUMERIC AddMacroCategory(&Table,Category,DescriptionFile,DescriptionTag,DescriptionSubTag,IsNodeCategory,Sequence)
+{
+	Table( AddNew,MacroCategory );
+	
+	MacroCategory( Set,	
+				Category,			~<Category>~,
+				DescriptionFile,	~<DescriptionFile>~,
+				DescriptionTag,		~<DescriptionTag>~,
+				DescriptionSubTag,	~<DescriptionSubTag>~,
+				IsNodeCategory,		~<IsNodeCategory>~,
+				Sequence,			~<Sequence>~ );
+
+	if ( !Table( Update ) )
+	{
+		Table( GetConnection,Connection );
+		Connection( GetErrorDescription,theErr );
+		Table( CancelUpdate );
+		return Warning( Translate( ~Could not update the MacrosCategory table for Category = <Category>. <theErr>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddMacroItem (&Table,Category,MacroItemName,MacroName,DescriptionFile,DescriptionTag,
+					  DescriptionSubTag,HelpDescriptionFile,HelpDescriptionTag,
+					  HelpDescriptionSubTag,Sequence,RefersToDataTable,TableName,FieldName)
+{
+	Table( AddNew,MacroItem );
+	
+	MacroItem( Set,	
+				Category,				~<Category>~,
+				MacroItemName,			~<MacroItemName>~,
+				MacroName,				~<MacroName>~,
+				DescriptionFile,		~<DescriptionFile>~,
+				DescriptionTag,			~<DescriptionTag>~ ,
+				DescriptionSubTag,		~<DescriptionSubTag>~ ,
+				HelpDescriptionFile,	~<HelpDescriptionFile>~ ,
+				HelpDescriptionTag,		~<HelpDescriptionTag>~ ,
+				HelpDescriptionSubTag,	~<HelpDescriptionSubTag>~ ,
+				Sequence,				~<Sequence>~,
+				RefersToDataTable,		~<RefersToDataTable>~,
+				DataTable,				~<TableName>~,
+				FieldName,				~<FieldName>~
+				);
+
+	if (!IsNull(~<$pcon.MacroItem[Category]>~) && !IsNull(~<$pcon.MacroItem[MacroItemName]>~) && !IsNull(~<$pcon.MacroItem[MacroName]>~) )
+	{
+		if ( !Table( Update ) )
+		{
+			Table( GetConnection,Connection );
+			Connection( GetErrorDescription,theErr );
+			Table( CancelUpdate );
+			return Warning( Translate( ~Could not update the MacrosItems table for Category = <Category>. <theErr>~ ) );
+		}
+	}
+	else
+	{
+		Log(Session,~NULL value while attempting to add MacroItem: Category=<$pcon.MacroItem[Category]>,macroitemname=<$pcon.MacroItem[MacroItemName]>,macroname=<$pcon.MacroItem[MacroName]>~);
+	}
+
+
+	return TRUE;
+}
+
+NUMERIC AddMacro( &Table,Category,Name,Description,Enabled,&Activate,Path,&Definition )
+{
+	Table( AddNew,Macro );
+	
+	Macro( Set,	
+				Category,		~<Category>~,
+				Name,			~<Name>~,
+				Description,	~<Description>~,
+				Enabled,		<Enabled>,
+				Path,			~<Path>~ );
+
+	Macro( SetFromContentsOf,Activate,Activate );
+	Macro( SetFromContentsOf,Definition,Definition );
+
+	if ( !Table( Update ) )
+	{
+		Table( GetConnection,Connection );
+		Connection( GetErrorDescription,theErr );
+		Table( CancelUpdate );
+		return Warning( Translate( ~Could not update the Macros table for Name = <Name>. <theErr>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+VOID PopulateDateTimeMacros(&database)
+{
+
+	if ( !PGenConList( MacrosTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM Macros~ ) )
+	{
+		Warning( ~Could not open Macros recordset~ );
+		return;
+	}
+
+	if ( !PGenConList( MacroItemsTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM MacroItems~ ) )
+	{
+		Warning( ~Could not open Macro Items recordset~ );
+		return;
+	}
+
+	// Customer Macros
+
+	Sequence = 0;
+	MACROSOFF	action = ~<$@Date.Date>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~Date~,~Todays Date~,1,action,~~,~~ );
+//	AddMacroItem(Table,		Category,	MacroItemName,MacroName,DescriptionFile,DescriptionTag,DescriptionSubTag,HelpDescriptionFile,HelpDescriptionTag,HelpDescriptionSubTag,Sequence,RefersToDataTable,TableName,FieldName);
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~Date~,		 ~Date~,	Macros,			DateDate,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.LongDate>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~LongDate~,~Todays Date in long format~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~LongDate~,	 ~LongDate~, Macros,		DateLongDate,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.DateTime>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~DateTime~,~Todays Date and time~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~DateTime~,	 ~DateTime~, Macros,		DateDateTime,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.LongDateTime>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~LongDateTime~,~Todays Date and time in long format~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~LongDateTime~,	 ~LongDateTime~, Macros,		DateLongDateTime,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.TimeZone>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~TimeZone~,~The current time zone~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~TimeZone~,	 ~TimeZone~, Macros,		DateTimezone,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.Year>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~Year~,~The current year~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~Year~,	 ~Year~, Macros,		DateYear,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.YearWithOutCentury>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~YearWithOutCentury~,~The year without the century~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~YearWithOutCentury~,	 ~YearWithOutCentury~, Macros,		DateYearWithoutCentury,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.WeekNumber>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~WeekNumber~,~The week of the year~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~WeekNumber~,	 ~WeekNumber~, Macros,		DateWeekNumber,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.WeekDay>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~WeekDay~,~The day of the week~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~WeekDay~,	 ~WeekDay~, Macros,		DateWeekday,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.Time>~;	MACROSON
+	AddMacro( MacrosTable,~Time~,~Time~,~Current Time~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Time,		~Time~,	 ~Time~, Macros,		TimeTime,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.AMPM>~;	MACROSON
+	AddMacro( MacrosTable,~Time~,~AMPM~,~AM or PM indicator for current time~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Time,		~AMPM~,	 ~AMPM~, Macros,		TimeAMPM,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.Hour>~;	MACROSON
+	AddMacro( MacrosTable,~Time~,~Hour~,~Current Hour~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Time,		~Hour~,	 ~Hour~, Macros,		TimeHour,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.Minute>~;	MACROSON
+	AddMacro( MacrosTable,~Time~,~Minute~,~Current Minute~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Time,		~Minute~,	 ~Minute~, Macros,		TimeMinute,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.Second>~;	MACROSON
+	AddMacro( MacrosTable,~Time~,~Second~,~Current Second~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Time,		~Second~,	 ~Second~, Macros,		TimeSecond,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.TimeHMS>~;	MACROSON
+	AddMacro( MacrosTable,~Time~,~TimeHMS~,~Current Time formatted as HMS~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Time,		~TimeHMS~,	 ~TimeHMS~, Macros,		TimeHMS,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.TimeYMDHMS>~;	MACROSON
+	AddMacro( MacrosTable,~Time~,~TimeYMDHMS~,~Current Date Time formatted as YMDHMS~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Time,		~TimeYMDHMS~,	 ~TimeYMDHMS~, Macros,		TimeYMDHMS,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.MonthName>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~MonthName~,~Current Month~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~MonthName~,	 ~MonthName~, Macros,		DateMonthName,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.ShortMonthName>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~ShortMonthName~,~Abbreviated Current Month~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~ShortMonthName~,	 ~v~, Macros,		DateShortMonthName,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Date.WeekDayName>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~WeekDayName~,~Day of the week~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~WeekDayName~,	 ~WeekDayName~, Macros,		DateWeekdayName,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+	
+	MACROSOFF	action = ~<$@Date.ShortWeekDayName>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~ShortWeekDayName~,~Abbreviated day of the week~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~ShortWeekDayName~,	 ~ShortWeekDayName~, Macros,		DateShortWeekdayName,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+	
+	MACROSOFF	action = ~<$@Date.DayOfYear>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~DayOfYear~,~Day of the year~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~DayOfYear~,	 ~DayOfYear~, Macros,		DateDayOfYear,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+	
+	MACROSOFF	action = ~<$@func.TodayPlusN(N)>~;	MACROSON
+	AddMacro( MacrosTable,~Date~,~TodayPlusN~,~The date N days into the future~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem( MacroItemsTable,Date,		~TodayPlusN~,	 ~TodayPlusN~, Macros,		TodayPlusN,~~,~~,~~,~~,<Sequence>,0,~~,~~);
+}
+
+VOID PopulateNodeMacros(&database)
+{
+	if ( !PGenConList( MacrosTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM Macros~ ) )
+	{
+		Warning( ~Could not open Macros recordset~ );
+		return;
+	}
+
+
+	MACROSOFF	action = ~<$@IFile.%NODENUMBER%>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~IFile~,~The IFile of another node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@IFile.%NODENUMBER%.filename>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~IFile FileName and Ext~,~The Filename and extension of an IFile of another node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@IFile.%NODENUMBER%.filename.WithoutExt>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~IFile FileName~,~The Filename of an IFile of another node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@IFile.%NODENUMBER%.path>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~IFile Path~,~The Path of an IFile of another node, without the filename~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@IFile.%NODENUMBER%.Volume>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~IFile Volume~,~The Volume of an IFile of another node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@IFile.%NODENUMBER%.PathWithoutVolume>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~IFile PathWithoutVolume~,~The path of an IFile of another node, without the volume~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@IFile.%NODENUMBER%.folder>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~IFile Folder~,~The folder of an IFile of another node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@IFile.%NODENUMBER%.Ext>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~IFile Extension~,~The extension of an IFile of another node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@IFile.%NODENUMBER%.Parentfolder>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~IFile Parentfolder~,~The parent folder of an IFile of another node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@IFile.%NODENUMBER%.Grandparentfolder>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~IFile Grandparentfolder~,~The grandparent folder of an IFile of another node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Chr.Copyright>~;	MACROSON
+	AddMacro( MacrosTable,~Character~,~Copyright Symbol~,~Copyright symbol ©~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Chr.Backquote>~;	MACROSON
+	AddMacro( MacrosTable,~Character~,~Back quote~,~Back quote~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Chr.Registered>~;	MACROSON
+	AddMacro( MacrosTable,~Character~,~Registered Symbol~,~Registered symbol ®~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Chr.Trademark>~;	MACROSON
+	AddMacro( MacrosTable,~Character~,~Trademark Symbol~,~Trademark symbol TM~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Chr.CRLF>~;	MACROSON
+	AddMacro( MacrosTable,~Character~,~Return LineFeed~,~Carriage Return and Line Feed~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Chr.JL>~;	MACROSON
+	AddMacro( MacrosTable,~Character~,~Join Lines~,~DP2 Join Lines Symbol (decimal value 194).  The join lines character is used in a text node.  The character is replaced with either a space or a return character, depending on whether the join lines keyword in a job is set to 1 or 0.~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Chr.Tilde>~;	MACROSON
+	AddMacro( MacrosTable,~Character~,~Tilde~,~KPL Delimiter~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Text.%NODENUMBER%>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~Text~,~The Text of another node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@LogoText1.%NODENUMBER%>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~Logo Text 1~,~The Text from Logo 1 of another node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@LogoText2.%NODENUMBER%>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~Logo Text 2~,~The Text from Logo 2 of another node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@NodeName.%NODENUMBER%>~;	MACROSON
+	AddMacro( MacrosTable,~SameAs~,~NodeName~,~Node name of another node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Func.OrderRollFrameForNode(%NODENUMBER%)>~;	MACROSON
+	AddMacro( MacrosTable,~Lookup~,~OrderRollFrameForNode~,~Order,Roll,Frame For a Node~,1,action,~~,~~ );
+ 
+ 	MACROSOFF	action = ~<$@Func.OrderRollFramePathForNode(%NODENUMBER%)>~;	MACROSON
+	AddMacro( MacrosTable,~Lookup~,~OrderRollFramePathForNode~,~Order\Roll\Frame For a Node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Func.CustomerNameForNode(%NODENUMBER%)>~;	MACROSON
+	AddMacro( MacrosTable,~Lookup~,~CustomerNameForNode~,~CustomerName For a Node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Func.CustomerSepiaForNode(%NODENUMBER%)>~;	MACROSON
+	AddMacro( MacrosTable,~Lookup~,~CustomerSepiaForNode~,~Customer Preferred Sepia Lut For a Node~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Func.SubjectFieldForOrderedFromField(%NODENUMBER%,UserDefinedFieldNumber)>~;	MACROSON
+	AddMacro( MacrosTable,~Lookup~,~SubjectFieldForOrderedFromField~,~Lookup SubjectInfo data for the field that caused the creation of the OrderItem~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Func.RenderListAttribute(`MajorKeyword:`,`MinorKeyword:`)>~;	MACROSON
+	AddMacro( MacrosTable,~Lookup~,~RenderListAttribute~,~Look up any attribute in the job~,1,action,~~,~~ );
+
+	// Customer Macros
+	AddCustomerMacros(database,MacrosTable);
+	// End Customer Macros
+
+	AddProductMacros(database,MacrosTable);
+
+
+	// Order Macros
+	AddOrderMacros(database,MacrosTable);
+	// End Orders Macros
+
+	AddOrderItemMacros(database,MacrosTable);
+
+	// Book Macros
+	AddBookMacros(database,MacrosTable);
+	
+	// Movie Macros
+	AddMovieMacros(database,MacrosTable);
+
+	// Image Macros
+	AddImageMacros(database,MacrosTable);
+	// End Image Macros
+
+
+	AddSubjectInfoMacros(database,MacrosTable);
+	AddSubjectInfoBookMacros(database,MacrosTable);
+	AddShootDescMacros(database,MacrosTable);
+
+	MACROSOFF	action = ~<$@Func.ImageFromSubjectFieldForNode(%NODENUMBER%,ARGNodeField,ARGFieldToMatch)>~;	MACROSON
+	AddMacro( MacrosTable,~FindImage~,~Image from SubjectInfo~,~Use SubjectInfo field for a selected node to find SubjectInfo record for an Image~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Func.NthImageForSubjectFromNode(N,%NODENUMBER%)>~;	MACROSON
+	AddMacro( MacrosTable,~FindImage~,~Find Nth Image For Subject~,~The SubjectID of the selected node is looked up and use to retrieve the Nth image for that subject~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Func.FUNCTIONNAME(%NODENUMBER%)>~;	MACROSON
+	AddMacro( MacrosTable,~Functions~,~Node Related~,~Format for calling FUNCTIONNAME referring to the selected node~,1,action,~~,~~ );
+
+	AddRImageCustomerMacros(database);
+	AddRImageOrderMacros(database);
+	AddRImageGeneralMacros(database);
+
+}
+
+// Do I need this?
+Define:	MacroType		CopyOf MacroType ~[Database FieldTypes]~ Fields: DisplayName ~Macro Type~	
+
+//MacroType 0 = Image, 1 = Text
+NUMERIC AddCompMacro( &Table,Category,Name,Description,MacroType,Enabled,&Activate )
+{
+	Table( AddNew,Macro );
+	
+	Macro( Set,	
+				Category,		~<Category>~,
+				Name,			~<Name>~,
+				Description,	~<Description>~,
+				MacroType,		<MacroType>,
+				Enabled,		<Enabled> );
+
+	Macro( SetFromContentsOf,Activate,Activate );
+
+	if ( !Table( Update ) )
+	{
+		Table( GetConnection,Connection );
+		Connection( GetErrorDescription,theErr );
+		Table( CancelUpdate );
+		Warning( Translate( ~Could not update the CompositeMacros table for Name = <Name>. <theErr>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+VOID PopulateCompositeMacros(&database)
+{
+	if ( !PGenConList( CompMacrosTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM CompositeMacros~ ) )
+	{
+		Warning( ~Could not open Macros recordset~ );
+		return;
+	}
+
+	// Do not put ' in Description field.  Text will end at this char as not allowed
+	// 3rd to last field for AddCompMacro is 0 = Image, 1 = Text macro
+	// NUMERIC AddCompMacro( &Table,Category,Name,Description,MacroType,Enabled,&Activate )
+	MACROSOFF	action = ~<$Func.Absentees()>~;	MACROSON
+	AddCompMacro( CompMacrosTable,~~,~Absentees~,~Gets the first name and last name of Absentees by looking for SubjectInfo records with no Image records.~,1,1,action );
+
+	MACROSOFF	action = ~<$Func.SIFromImage(Firstname)> <$Func.SIFromImage(Lastname)>~;	MACROSON
+	AddCompMacro( CompMacrosTable,~~,~NameFromImage~,~Gets the first name and last name from the Subject Info for the image~,1,1,action );
+
+	MACROSOFF	action = ~<$Func.TaggedImage(ColumnName,`Value`)>~;	MACROSON
+	AddCompMacro( CompMacrosTable,~~,~General TaggedImage~,~Set parameters to return image for record which has in ColumnName the Value~,0,1,action );
+	
+	MACROSOFF	action = ~<$Func.TaggedImage(Teacher,`P`)>~;	MACROSON
+	AddCompMacro( CompMacrosTable,~~,~Principal Image~,~Principal image in the sample data~,0,1,action );
+	
+	MACROSOFF	action = ~<$Func.TaggedName(ColumnName,Value)>~;	MACROSON
+	AddCompMacro( CompMacrosTable,~~,~General TaggedName~,~Gets the first and last name for record which has in ColumnName the Value~,1,1,action );
+
+	MACROSOFF	action = ~<$Func.TaggedName(Teacher,`P`)>~;	MACROSON
+	AddCompMacro( CompMacrosTable,~~,~Principal Name~,~Gets the first and last name for principal for the sample data~,1,1,action );
+
+	MACROSOFF	action = ~<$Func.FindMatchingImage(MatchField,ColumnName,`Value`)>~;	MACROSON
+	AddCompMacro( CompMacrosTable,~~,~General FindMatchingImage~,~the image path of a record matching contents of Matchfield and has in ColumnName the Value.~,0,1,action );
+
+	MACROSOFF	action = ~<$Func.FindMatchingName(MatchField,ColumnName,`Value`)>~;	MACROSON
+	AddCompMacro( CompMacrosTable,~~,~General FindMatchingName~,~1st, last name of a record matching contents of Matchfield and has in ColumnName the Value.~,1,1,action );
+
+	MACROSOFF	action = ~<$Func.FindMatchingImage(Homeroom,Teacher,T)>~;	MACROSON
+	AddCompMacro( CompMacrosTable,~~,~Teacher Image~,~Finds Teacher image for the sample data~,0,1,action );
+
+	MACROSOFF	action = ~<$Func.FindMatchingName(Homeroom,Teacher,T)>~;	MACROSON
+	AddCompMacro( CompMacrosTable,~~,~Teacher Name~,~Get the Teacher name macro, Finds letter T in the Teacher field for the composite's homeroom~,1,1,action );
+
+	MACROSOFF	action = ~<$Func.SI(Firstname)> <$Func.SI(Lastname)>~;	MACROSON
+	AddCompMacro( CompMacrosTable,~~,~Student FirstnameLastname~,~For the Default Countable records, returns name - FirstName LastName~,1,1,action );
+}
+
+
+VOID PopulateExportTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	action = STR ( ExportImagesDoc Open ExportImagesDoc "Init();" );
+	AddTask( TasksTable,~Export OrderImages~,1,~DOC~,~Export~,action );
+
+	action = STR ( ExportOrderItems Open "<$@App.HTMLPages>\ExportOrderItems\ExportOrderItems.kpl" "InitTheWindow();" );
+	AddTask( TasksTable,~Export OrderItems~,1,~DOC~,~Export~,action );
+	
+	action = STR ( IF36Pix Open "<$@App.HTMLPages>\IF36Pix\IF36Pix.kpl" "InitTheWindow();" );
+	AddTask( TasksTable,~36Pix I/F~,1,~DOC~,~Export~,action );
+	
+	if ( RunningVersion(16) )
+	{
+		action = STR ( ServerMonitor Open "<$@App.HTMLPages>\rDP2\ServerMonitor\ServerMonitor.txt" "InitTheWindow();" );
+		AddTask( TasksTable,~Remote Monitor~,1,~DOC~,~Remote Ordering~,action );
+		
+		action = STR ( CatalogCreator Open "<$@App.HTMLPages>\rDP2\CatalogCreator\CatalogCreator.txt" "InitTheWindow();" );
+		AddTask( TasksTable,~Catalog Manager~,1,~DOC~,~Remote Ordering~,action );
+	}
+	
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+	AddUserTask(TasksTable,~Export OrderImages~,~Export~,seq,TRUE,~*~,~Export~);
+	AddUserTask(TasksTable,~Export OrderItems~,~Export~,seq,TRUE,~*~,~Export~);
+	AddUserTask(TasksTable,~36Pix I/F~,~Export~,seq,TRUE,~*~,~Export~);
+	
+	if ( RunningVersion(16) )
+	{
+		AddUserTask(TasksTable,~Remote Monitor~,~Remote Ordering~,seq,TRUE,~*~,~Remote Ordering~);
+		AddUserTask(TasksTable,~Catalog Manager~,~Remote Ordering~,seq,TRUE,~*~,~Remote Ordering~);
+	}
+}
+
+
+VOID PopulateAnimotoTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+	
+	action = STR ( Animoto Open "<$@App.HTMLPages>\Animoto\Animoto.kpl" "InitTheWindow();" );
+	AddTask( TasksTable,~Animoto I/F~,1,~DOC~,~Animoto~,action );
+	
+	action = STR ( AnimotoDoc Open "<$@App.HTMLPages>\Animoto\AnimotoDoc.txt" "Init( ~ALL~,~Select * From Animoto~ );" );
+	AddTask( TasksTable,~Animoto Setups~,1,~DOC~,~Animoto~,action );
+	
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "AllSearches.htm" );
+	action = STR ( AnimotoCustomer Open SearchDoc "Search(AnimotoCustomer);"  );
+	AddTask( TasksTable,~Animoto Customers~,1,~DOC~,~Search for specific Animoto Customers~,action,HelpAction );
+	
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "AllSearches.htm" );
+	action = STR ( AnimotoMovie Open SearchDoc "Search(AnimotoMovie);"  );
+	AddTask( TasksTable,~Animoto Movies~,1,~DOC~,~Search for specific Animoto Movies~,action,HelpAction );
+	
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "AllSearches.htm" );
+	action = STR ( AnimotoMovie Open SearchDoc "Search(AnimotoUsage);"  );
+	AddTask( TasksTable,~Animoto Usage~,1,~DOC~,~Search for specific Animoto Usage~,action,HelpAction );
+
+
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+	
+	AddUserTask(TasksTable,~Animoto I/F~,~Animoto~,seq,TRUE,~*~,~Animoto~);
+	AddUserTask(TasksTable,~Animoto Setups~,~Animoto~,seq,TRUE,~*~,~Animoto~);
+	AddUserTask(TasksTable,~Animoto Customers~,~Animoto~,seq,TRUE,~*~,~Animoto~);
+	AddUserTask(TasksTable,~Animoto Usage~,~Animoto~,seq,TRUE,~*~,~Animoto~);
+	AddUserTask(TasksTable,~Animoto Movies~,~Animoto~,seq,TRUE,~*~,~Animoto~);
+}	
+
+
+
+VOID PopulateImportTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	action = STR ( ImportFromFileDoc OpenOnce ImportFromFileDoc );
+	AddTask( TasksTable,~Import~,1,~DOC~,~Import From Text Files~,action );
+
+	action = STR ( ImportFromShooter OpenOnce ImportFromShooter );
+	AddTask( TasksTable,~Shooter~,1,~DOC~,~Import From Shooter Disks~,action );
+
+	action = STR ( AccunetSyncDoc OpenOnce AccunetSyncDoc "SyncWithCustomers(~~);" );
+	AddTask( TasksTable,~Accunet~,1,~DOC~,~Import From Accunet~,action );
+
+	action = STR ( ImportImagesDoc OpenOnce ImportImagesDoc "Init(~~);" );
+	AddTask( TasksTable,~Images~,1,~DOC~,~Import Images from other sources~,action );
+
+	action = STR ( ImageRestoreDoc OpenOnce ImageRestoreDoc "Init(FALSE,FALSE);" );
+	AddTask( TasksTable,~Image Restore~,1,~DOC~,~Restore images from offline storage~,action );
+
+	action = STR ( ImportCmdsDoc Open ImportCmdsDoc );
+	AddTask( TasksTable,~Commands~,1,~DOC~,~Import Commands from other systems~,action );
+
+	action = STR ( OpenTextFileDBDoc OpenOnce OpenTextFileDBDoc "Init();" );
+	AddTask( TasksTable,~Open Text DB~,1,~DOC~,~Open a text file as a database~,action );
+
+	action = STR ( SubjInfoSetupWin OpenOnce SubjInfoSetupWin "Init();" );
+	AddTask( TasksTable,~Subject Info Import~,1,~DOC~,~Open a text file to import as subject info~,action );
+
+	action = STR ( OpenJetFileDBDoc OpenOnce OpenJetFileDBDoc "Init();" );
+	AddTask( TasksTable,~Open Jet DB~,1,~DOC~,~Open a Jet database~,action );
+
+	action = STR ( OpenExcelFileDBDoc OpenOnce OpenExcelFileDBDoc "Init();" );
+	AddTask( TasksTable,~Open Excel DB~,1,~DOC~,~Open an Excel database~,action );
+
+	action = STR ( OpenXMLFileDBDoc OpenOnce OpenXMLFileDBDoc "Init();" );
+	AddTask( TasksTable,~Open XML DB~,1,~DOC~,~Open an XML database~,action );
+
+	action = STR ( AllFilmTypes OpenOnce FilmTypesDoc "Init();" );
+	AddTask( TasksTable,~Film Types~,1,~DOC~,~View Film Types~,action );
+
+	action = STR ( AllFilmFormats OpenOnce FilmFormatsDoc "Init();" );
+	AddTask( TasksTable,~Film Formats~,1,~DOC~,~View Film Formats~,action );
+
+	action = STR ( ImportTwainWin OpenOnce ImportTwainWin "Init(``);" );
+	AddTask( TasksTable,~TWAIN~,1,~DOC~,~TWAIN~,action );
+	
+	action = STR ( RawCameraSetupDoc OpenOnce RawCameraSetupDoc "Init();" );
+	AddTask( TasksTable,~Bibble Setup~,1,~DOC~,~Bibble Setup~,action );
+
+	action = STR ( CDRestoreWin OpenOnce CDRestoreWin "InitStatic(~~);" );
+	AddTask( TasksTable,~CD Restore~,1,~DOC~,~CD Restore~,action );
+	
+	action = STR ( ImportPDFDoc OpenOnce ImportPDFDoc "Init();" );
+	AddTask( TasksTable,~Import PDF~,1,~DOC~,~Import PDF~,action );
+
+
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM UserTasks~ ) )
+		{	Error( ~Could not open UserTasks recordset~ ); }
+
+	seq = 0;
+
+	AddUserTask(TasksTable,~Import~,	Import,seq,TRUE,~*~,~Import~);
+	AddUserTask(TasksTable,~Shooter~,Import,seq,TRUE,~*~,~Import~);
+	AddUserTask(TasksTable,~Accunet~,Import,seq,TRUE,~*~,~Import~);
+	AddUserTask(TasksTable,~Film Types~,Import,seq,TRUE,~*~,~Import~);
+	AddUserTask(TasksTable,~Film Formats~,Import,seq,TRUE,~*~,~Import~);
+	AddUserTask(TasksTable,~Images~,Import,seq,TRUE,~*~,~Import~);
+
+	AddUserTask(TasksTable,~Image Restore~,Import,seq,TRUE,~*~,~Import~);
+
+	AddUserTask(TasksTable,~Raw Images Search~,		~Import~,seq,TRUE,~*~,~Import~);
+
+	AddUserTask(TasksTable,~Commands~,Import,seq,TRUE,~*~,~Import~);
+	AddUserTask(TasksTable,~Open Text DB~,Import,seq,TRUE,~*~,~Import~);
+	AddUserTask(TasksTable,~Subject Info Import~,Import,seq,TRUE,~*~,~Import~);
+	AddUserTask(TasksTable,~Open Jet DB~,Import,seq,TRUE,~*~,~Import~);
+	AddUserTask(TasksTable,~TWAIN~,		Import,seq,TRUE,~*~,~Import~);
+	AddUserTask(TasksTable,~Bibble Setup~,	Import,seq,TRUE,~*~,~Import~);
+	AddUserTask(TasksTable,~CD Restore~,	Import,seq,TRUE,~*~,~Import~);
+	AddUserTask(TasksTable,~Import PDF~,	Import,seq,TRUE,~*~,~Import~);
+
+	AddUserTask(TasksTable,~KPIS Grids Layouts~,Import,seq,FALSE,~*~,~Import~);
+}
+
+VOID PopulateAccunetTasks(&database)
+{
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,TasksTable,~SELECT * FROM Tasks~ ) )
+	{
+		Error( ~Could not open Tasks recordset~ );
+	}
+
+	if ( !database( CmdType,SQL,Lock,Optimistic,Cursor,Static,RECORDSET,UserTasksTable,~SELECT * FROM UserTasks~ ) )
+	{	
+		Error( ~Could not open UserTasks recordset~ );
+	}
+
+	TasksTable( MoveFirst );
+
+	MoreFiles = findfile( aDirectoryEntry,Find,~w:\AccunetProduction\Programs\*.exe~ );
+
+	seq = 0;
+
+	HelpAction = ACTION ShowHelpPage ( KPISHelpFile "T_AccunetStatus.htm" );	
+	action = STR (  CheckForAccunet Open CheckForAccunet "IsAccunetInstalled(TRUE); Exit();" );	
+	AddTask( TasksTable,~Accunet Status~,1,~DOC~,~Determine if Accunet is installed and setup correctly~,action,HelpAction );
+	AddUserTask(UserTasksTable,~Accunet Status~,~Accunet A-G~,seq,TRUE,~*~,~Accunet A-G~);
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Title,Title );
+
+		aDirectoryEntry( Get,FileName,FileName );
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+			continue;
+
+		if ( !SimilarStr( ~<$str.$FileName.ext>~,~exe~ ) )
+			continue;
+
+		HelpAction = ACTION DOC (  UtilityRoutines Open UtilityRoutines "RunAccunetProgram(~<Title>.hlp~); Exit();" );
+		action = STR (  UtilityRoutines Open UtilityRoutines "RunAccunetProgram(~<Title>.exe~); Exit();" );	
+
+		Title = ~ <Title>~;
+
+		AddTask( TasksTable,~<Title>~,1,~DOC~,~Run the <Title> Accunet program~,action,HelpAction );
+
+		substr( ~<Title>~,1,1,FirstChar );
+
+		if ( Asc(~<FirstChar>~) >= Asc(~A~) && Asc(~<FirstChar>~) <= Asc(~G~) )
+		{
+			AccCategory = ~Accunet A-G~;
+		}
+		else if ( Asc(~<FirstChar>~) >= Asc(~H~) && Asc(~<FirstChar>~) <= Asc(~O~) )
+		{
+			AccCategory = ~Accunet H-O~;
+		}
+		else
+		{
+			AccCategory = ~Accunet P-Z~;
+		}
+
+		AddUserTask(UserTasksTable,~<Title>~,~<AccCategory>~,seq,TRUE,~*~,~<Title>~);
+
+		++count;
+	}
+}
+
+VOID AddRImageGeneralMacros(&database)
+{
+	if ( !PGenConList( RImageMacrosTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM RImageMacros~ ) )
+	{
+		Warning( ~Could not open RImageMacros recordset~ );
+		return;
+	}
+
+	if ( PGenConList( List,Connection,database,Cursor,Forward,Query,~Select * From Customers Where ID = '1'~ ) )
+	{
+		action = ~<OrderID>~;	
+		AddMacro( RImageMacrosTable,~General~,~OrderID~,~OrderID~,1,action,~~,~~ );
+
+		action = ~<JobID>~;	
+		AddMacro( RImageMacrosTable,~General~,~JobID~,~JobID~,1,action,~~,~~ );
+
+		action = ~<Copies>~;	
+		AddMacro( RImageMacrosTable,~General~,~Copies~,~Copies~,1,action,~~,~~ );
+	
+		action = ~<Volume>~;	
+		AddMacro( RImageMacrosTable,~General~,~Volume~,~Volume~,1,action,~~,~~ );
+	
+		action = ~<PublishType>~;	
+		AddMacro( RImageMacrosTable,~General~,~PublishType~,~PublishType~,1,action,~~,~~ );
+	}
+}
+
+
+VOID AddRImageCustomerMacros(&database)
+{
+	if ( !PGenConList( RImageMacrosTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM RImageMacros~ ) )
+	{
+		Warning( ~Could not open RImageMacros recordset~ );
+		return;
+	}
+
+	if ( PGenConList( List,Connection,database,Cursor,Forward,Query,~Select * From Customers Where ID = '1'~ ) )
+	{
+		Index = 0;
+
+		while ( List( GetFieldName,<Index++>,FieldName ) )
+		{
+			action = ~<$@Func.CustomerField(`<OrderID>`,<FieldName>)>~;	
+			AddMacro( RImageMacrosTable,~Customers~,~Customer <FieldName>~,~Customer <FieldName>~,1,action,~~,~~ );
+		}	
+	}
+}
+
+
+VOID AddRImageOrderMacros(&database)
+{
+	if ( !PGenConList( RImageMacrosTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM RImageMacros~ ) )
+	{
+		Warning( ~Could not open RImageMacros recordset~ );
+		return;
+	}
+
+	if ( PGenConList( List,Connection,database,Cursor,Forward,Query,~Select * From Orders Where ID = '1'~ ) )
+	{
+		Index = 0;
+
+		while ( List( GetFieldName,<Index++>,FieldName ) )
+		{
+			action = ~<$@Func.OrderField(  `<OrderID>` ,<FieldName>)>~;	
+			AddMacro( RImageMacrosTable,~Orders~,~Order <FieldName>~,~Order <FieldName>~,1,action,~~,~~ );
+		}	
+	}
+}
+
+
+VOID AddCustomerMacros(&database,&MacrosTable)
+{
+	if ( PGenConList( List,Connection,database,Cursor,Forward,Query,~Select * From Customers Where ID = '1'~ ) )
+	{
+		Index = 0;
+		Sequence = 0;
+
+		if ( !PGenConList( MacroItemsTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM MacroItems~ ) )
+		{
+			Warning( ~Could not open Macro Items recordset~ );
+			return;
+		}
+		while ( List( GetFieldName,<Index++>,FieldName ) )
+		{
+			Sequence = <Sequence> + 10;
+			action = ~<$@Func.CustomerFieldForNode(%NODENUMBER%,<FieldName>)>~;
+			AddMacro( MacrosTable,~Customers~,~Customer <FieldName> For Node~,~Customer <FieldName> For a Node~,1,action,~~,~~ );
+		//	AddMacroItem(	Table,			Category,		MacroItemName,					MacroName,						DescriptionFile,DescriptionTag,DescriptionSubTag,HelpDescriptionFile,HelpDescriptionTag,HelpDescriptionSubTag,Sequence,RefersToDataTable,TableName,FieldName);
+			AddMacroItem( MacroItemsTable,CustomersByImage,~Customer <FieldName> For Node~,~Customer <FieldName> For Node~,Macros,			CustomersField,~<FieldName>~,	 ~Macros~,	~CustomersByImageMacroHelp~,	~~,					<Sequence>,1,				Customers,~<FieldName>~);
+
+			action = ~<$@Func.CustomerFieldForOrderItem(<FieldName>)>~;
+			AddMacro( MacrosTable,~Customers~,~Customer <FieldName> For OrderItem~,~Customer <FieldName> For OrderItem~,1,action,~~,~~ );
+			AddMacroItem( MacroItemsTable,CustomersByOrderItem,~Customer <FieldName> For OrderItem~,~Customer <FieldName> For OrderItem~,Macros,CustomersField,~<FieldName>~,~Macros~,~CustomersByOrderItemMacroHelp~,~~,<Sequence>,1,Customers,~<FieldName>~);
+
+ 
+		}	
+	}
+}
+
+
+VOID AddProductMacros(&database,&MacrosTable)
+{
+	if ( PGenConList( List,Connection,database,Cursor,Forward,Query,~Select * From Products Where ID = '1' Order By ID~ ) )
+	{
+		Index = 0;
+
+		while ( List( GetFieldName,<Index++>,FieldName ) )
+		{
+			action = ~<$@Func.ProductField(<FieldName>)>~;
+			AddMacro( MacrosTable,~Products~,~Product <FieldName>~,~Returns <FieldName> from the Products table.~,1,action,~~,~~ );
+		}	
+	}
+}
+
+
+VOID AddOrderMacros(&database,&MacrosTable)
+{
+	if ( PGenConList( List,Connection,database,Cursor,Forward,Query,~Select * From Orders Where ID = '1'~ ) )
+	{
+		Index = 0;
+
+		if ( !PGenConList( MacroItemsTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM MacroItems~ ) )
+		{
+			Warning( ~Could not open Macro Items recordset~ );
+			return;
+		}
+		Sequence = 0;
+		while ( List( GetFieldName,<Index++>,FieldName ) )
+		{
+			Sequence = <Sequence> + 10;
+			action = ~<$@Func.OrderFieldForNode(%NODENUMBER%,<FieldName>)>~;
+			AddMacro( MacrosTable,~Orders~,~Order <FieldName> For Node~,~Returns the <FieldName> from the Orders table using the Order ID of the image in a node.~,1,action,~~,~~ );
+		//	AddMacroItem(Table,Category,MacroItemName,MacroName,DescriptionFile,DescriptionTag,DescriptionSubTag,HelpDescriptionFile,HelpDescriptionTag,HelpDescriptionSubTag,Sequence,RefersToDataTable,TableName,FieldName);
+			AddMacroItem( MacroItemsTable,OrdersByImage,~Order <FieldName> For Node~,~Order <FieldName> For Node~,Macros,OrdersField,~<FieldName>~,~Macros~,~OrdersByImageMacroHelp~,~~,<Sequence>,1,Orders,~<FieldName>~);
+
+			action = ~<$@Func.OrderFieldForOrderItem(<FieldName>)>~;
+			AddMacro( MacrosTable,~Orders~,~Order <FieldName> For OrderItem~,~Returns the <FieldName> in the Orders table using the the OrderID: value in an output specification as the order ID.~,1,action,~~,~~ );
+			AddMacroItem( MacroItemsTable,OrdersByOrderItem,~Order <FieldName> For OrderItem~,~Order <FieldName> For OrderItem~,Macros,OrdersField,~<FieldName>~,~Macros~,~OrdersByOrderItemMacroHelp~,~~,<Sequence>,1,Orders,~<FieldName>~);
+		}	
+	}
+}
+
+
+VOID AddImageMacros(&database,&MacrosTable)
+{
+	if ( PGenConList( List,Connection,database,Cursor,Forward,Query,~Select * From Images Where OrderID = '1' AND Roll = '1' AND Frame = '1'~ ) )
+	{
+		Index = 0;
+		Sequence = 0;
+
+		if ( !PGenConList( MacroItemsTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM MacroItems Order by Sequence~ ) )
+		{
+			Warning( ~Could not open Macro Items recordset~ );
+			return;
+		}
+		//	AddMacroItem(	Table,		Category,MacroItemName,		MacroName,			DescriptionFile,DescriptionTag,DescriptionSubTag,HelpDescriptionFile,HelpDescriptionTag,HelpDescriptionSubTag,Sequence,RefersToDataTable,TableName,FieldName);
+		Sequence = <Sequence> + 10;
+		AddMacroItem( MacroItemsTable,	Images,	~IFile FileName and Ext~, ~IFile FileName and Ext~,	Macros,	IFileFileNameAndExt,~~,		~Macros~,			~IFileFileNameAndExtMacroHelp~,				~~,		<Sequence>,0,				~~,~~);
+		Sequence = <Sequence> + 10;
+		AddMacroItem( MacroItemsTable,	Images,	~IFile FileName~,  ~IFile FileName~,	Macros,			SameAsIfile,~~,		~Macros~,			~SameAsIfileMacroHelp~,				~~,		<Sequence>,0,				~~,~~);
+		Sequence = <Sequence> + 10;
+		AddMacroItem( MacroItemsTable,	Images,	~IFile Extension~, ~IFile Extension~,	Macros,			IFileExtension,~~,		~Macros~,			~SameAsIfileExtensionMacroHelp~,				~~,		<Sequence>,0,				~~,~~);
+		Sequence = <Sequence> + 10;
+		AddMacroItem( MacroItemsTable,	Images,	~IFile Folder  ~, ~IFile Folder  ~,	Macros,			IFileFolder,~~,		~Macros~,			~SameAsIfileFolderMacroHelp~,				~~,		<Sequence>,0,				~~,~~);
+
+		// grandparent folder
+		Sequence = <Sequence> + 10;
+		AddMacroItem( MacroItemsTable,	Images,	~IFile Grandparentfolder~, ~IFile Grandparentfolder~,	Macros,			IFileGrandparentFolder,~~,		~Macros~,			~SameAsIfileGrandparentFolderMacroHelp~,				~~,		<Sequence>,0,				~~,~~);
+
+		// parent folder
+		Sequence = <Sequence> + 10;
+		AddMacroItem( MacroItemsTable,	Images,	~IFile Parentfolder~, ~IFile Parentfolder~,	Macros,			IFileParentFolder,~~,		~Macros~,			~SameAsIfileParentFolderMacroHelp~,				~~,		<Sequence>,0,				~~,~~);
+
+		// path without volume
+		Sequence = <Sequence> + 10;
+		AddMacroItem( MacroItemsTable,	Images,	~IFile PathWithoutVolume~, ~IFile PathWithoutVolume~,	Macros,			IFilePathWithoutVolume,~~,		~Macros~,			~SameAsIfilePathWithoutVolumeMacroHelp~,				~~,		<Sequence>,0,				~~,~~);
+
+		// volume
+		Sequence = <Sequence> + 10;
+		AddMacroItem( MacroItemsTable,	Images,	~IFile Volume~, ~IFile Volume~,	Macros,			IFileVolume,~~,		~Macros~,			~SameAsIfileVolumeMacroHelp~,				~~,		<Sequence>,0,				~~,~~);
+
+		while ( List( GetFieldName,<Index++>,FieldName ) )
+		{
+			action = ~<$@Func.ImageFieldForNode(%NODENUMBER%,<FieldName>)>~;
+			AddMacro( MacrosTable,~Images~,~Image <FieldName> For Node~,~Returns <FieldName> in the images table for the image in a Node~,1,action,~~,~~ );
+			Sequence = <Sequence> + 10;
+			//	AddMacroItem(	Table,			Category,		MacroItemName,					MacroName,						DescriptionFile,DescriptionTag,DescriptionSubTag,HelpDescriptionFile,HelpDescriptionTag,HelpDescriptionSubTag,Sequence,RefersToDataTable,TableName,FieldName);
+			AddMacroItem( MacroItemsTable,	Images,			~Image <FieldName> For Node~,  ~Image <FieldName> For Node~,	Macros,			ImagesField,~<FieldName>~,	 ~Macros~,				 ~ImagesMacroHelp~,				~~,					<Sequence>,1,				Images,~<FieldName>~);
+		}
+		
+
+		action = ~<$@Func.ImageDRGBForNode(%NODENUMBER%)>~;
+		AddMacro( MacrosTable,~Images~,~Image DRGB For Node~,~Returns DRGB corrections for an image in a Node~,1,action,~~,~~ );
+
+		action = ~<$@Func.DRGBCorrectionsForNode(%NODENUMBER%)>~;
+		AddMacro( MacrosTable,~Images~,~Required DRGB Corrections for good exposure~,~Required DRGB Corrections for good exposure~,1,action,~~,~~ );
+		
+		action = ~<$@Func.MetaDataForNode(%NODENUMBER%,TagName)>~;
+		AddMacro( MacrosTable,~Images~,~Meta Data Value~,~Meta Data Value~,1,action,~~,~~ );
+	}
+}
+
+VOID AddOrderItemMacros(&database,&MacrosTable)
+{
+	if ( PGenConList( List,Connection,database,Cursor,Forward,Query,~Select * From OrderItems Where OrderID = '1' AND ID = 1~ ) )
+	{
+		Index = 0;
+
+		while ( List( GetFieldName,<Index++>,FieldName ) )
+		{
+			action = ~<$@Func.OrderItemField(<FieldName>)>~;
+			AddMacro( MacrosTable,~Order Items~,~OrderItem <FieldName> For Job~,~OrderItem <FieldName> For Job~,1,action,~~,~~ );
+		}	
+	}
+}
+
+VOID AddBookMacros(&database,&MacrosTable)
+{
+	if ( PGenConList( List,Connection,database,Cursor,Forward,Query,~Select * From Books Where OrderID = '1' AND GroupID = 1~ ) )
+	{
+		Index = 0;
+
+		while ( List( GetFieldName,<Index++>,FieldName ) )
+		{
+			action = ~<$@Func.BookField(<FieldName>)>~;
+			AddMacro( MacrosTable,~Books~,~Book <FieldName> For Job~,~Book <FieldName> For Job~,1,action,~~,~~ );
+		}
+		
+		Index = 0;
+
+		while ( List( GetFieldName,<Index++>,FieldName ) )
+		{
+			action = ~<$@Func.BookFieldForItemType(%NODENUMBER%,`ItemType`,<FieldName>)>~;
+			AddMacro( MacrosTable,~Books~,~Book <FieldName> For Image in Item Type~,~Returns <FieldName> from the Books table for an image in an order item having the Type field in Order Items set to ItemType~,1,action,~~,~~ );
+			
+		}	
+		Index = 0;
+
+		action = ~<$@Func.BookAttributeFieldForItemType(%NODENUMBER%,`ItemType`,`Attribute`)>~;
+		AddMacro( MacrosTable,~Books~,~Book Attribute Value For Image in Item Type~,~Returns the Value for Attribute from the Books Attributes table for an image in an order item having the Type field in Order Items set to ItemType.  For example, the Type field may contain 'Movie', 'DP2 Products' or 'Subject Packages'~,1,action,~~,~~ );
+			
+	}
+}
+
+VOID AddMovieMacros(&database,&MacrosTable)
+{
+	if ( PGenConList( List,Connection,database,Cursor,Forward,Query,~Select * From Books Where OrderID = '1' AND GroupID = 1~ ) )
+	{
+		action = ~<$@Func.WebResURLForMovie(%NODENUMBER%)>~;
+		AddMacro( MacrosTable,~Movies~,~Web Res Movie URL~,~Returns the URL of the web resolution movie~,1,action,~~,~~ );	
+		action = ~<$@Func.HiResURLForMovie(%NODENUMBER%)>~;
+		AddMacro( MacrosTable,~Movies~,~High Res Movie URL~,~Returns the URL of the high resolution movie~,1,action,~~,~~ );	
+	}
+}
+NUMERIC AddSubjectInfoMacros(&database,&MacrosTable)
+{
+	if ( !PGenConList( SchemaList,Connection,database,Cursor,Keyset,Schema,Tables ) )
+		{ return Warning( Translate( ~Failed to query database for tablenames~ ) ); }
+
+	while ( SchemaList( GetNext,TableEntry ) )
+	{
+		TableName = Upper(~<$pcon.TableEntry[Table_Name]>~);
+
+		if ( String( BeginsWith,~SUBJECTINFO~,~<TableName>~ ) != ~~ && !SimilarStr( ~<TableName>~,~SUBJECTINFOCOLUMNS~ ) )
+		{
+			if ( PGenConList( List,Connection,database,Cursor,Forward,Query,~Select * From <TableName> where SubjectID = '1'~ ) )
+			{
+				Index = 0;
+
+				while ( List( GetFieldName,<Index++>,FieldName ) )
+				{
+					action = ~<$@Func.SubjectFieldForNode(%NODENUMBER%,<FieldName>)>~;
+					AddMacro( MacrosTable,~<TableName>~,~<TableName> <FieldName> For Node~,~Returns <FieldName> from the subject information table named <TableName> for the image in a Node~,1,action,~~,~~ );
+				}	
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+NUMERIC AddSubjectInfoBookMacros(&database,&MacrosTable)
+{
+	if ( !PGenConList( SchemaList,Connection,database,Cursor,Keyset,Schema,Tables ) )
+		{ return Warning( Translate( ~Failed to query database for tablenames~ ) ); }
+
+	while ( SchemaList( GetNext,TableEntry ) )
+	{
+		TableName = Upper(~<$pcon.TableEntry[Table_Name]>~);
+
+		if ( String( BeginsWith,~SUBJECTINFO~,~<TableName>~ ) != ~~ && !SimilarStr( ~<TableName>~,~SUBJECTINFOCOLUMNS~ ) )
+		{
+			if ( PGenConList( List,Connection,database,Cursor,Forward,Query,~Select * From <TableName> where SubjectID = '1'~ ) )
+			{
+				Index = 0;
+
+				while ( List( GetFieldName,<Index++>,FieldName ) )
+				{
+					action = ~<$@Func.SubjectFieldForBook(Restriction,<FieldName>)>~;
+					AddMacro( MacrosTable,~<TableName>~,~<TableName> <FieldName> For Book~,~Returns the first <FieldName> from the subject information table named <TableName> for an image in a book, excluding those images meeting the restriction~,1,action,~~,~~ );
+				}
+			}
+		}
+	}
+
+	return TRUE;
+}
+NUMERIC AddShootDescMacros(&database,&MacrosTable)
+{
+	if ( !PGenConList( SchemaList,Connection,database,Cursor,Keyset,Schema,Tables ) )
+		{ return Warning( Translate( ~Failed to query database for tablenames~ ) ); }
+
+	while ( SchemaList( GetNext,TableEntry ) )
+	{
+		TableName = Upper(~<$pcon.TableEntry[Table_Name]>~);
+
+		if ( String( BeginsWith,~SHOOTDESCRIPTION~,~<TableName>~ ) != ~~ )
+		{
+			if ( PGenConList( List,Connection,database,Cursor,Forward,Query,~Select * From <TableName> where ID = '1'~ ) )
+			{
+				Index = 0;
+
+				while ( List( GetFieldName,<Index++>,FieldName ) )
+				{
+					action = ~<$@Func.ShootDescFieldForNode(%NODENUMBER%,<FieldName>)>~;
+					AddMacro( MacrosTable,~<TableName>~,~<TableName> <FieldName> For Node~,~Returns the <FieldName> from the ShootDescription Table named <TableName> For the image in a Node.~,1,action,~~,~~ );
+				}	
+			}
+		}
+	}
+
+	return TRUE;
+}
+
+
+VOID PopulateGSMacros(&database)
+{
+	if ( !PGenConList( MacrosTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM Macros~ ) )
+	{
+		Warning( ~Could not open Macros recordset~ );
+		return;
+	}
+
+	if ( !PGenConList( MacroItemsTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM MacroItems~ ) )
+	{
+		Warning( ~Could not open Macro Items recordset~ );
+		return;
+	}
+
+	Sequence = 0;
+
+	MACROSOFF	action = ~<$@func.BGIDFromCustBGID(`CustCode`)>~;	MACROSON
+	AddMacro( MacrosTable,~GreenScreen~,~BGID From Customer BGID for OrderItem~,~BGID From a Customer BG ID based on the OrderID from the OrderItem~,1,action,~~,~~ );
+	
+	MACROSOFF	action = ~<$@func.BGIDFromCustBGIDForNode(`CustCode`,Node)>~;	MACROSON
+	AddMacro( MacrosTable,~GreenScreen~,~BGID From Customer BGID for Image~,~BGID From a Customer BG ID based on the OrderID from the Image in the node~,1,action,~~,~~ );
+	
+	MACROSOFF	action = ~<$@func.BGIDFromCustBGIDForFirstImage(`CustCode`,Node)>~;	MACROSON
+	AddMacro( MacrosTable,~GreenScreen~,~BGID From Customer BGID for the First Image~,~BGID From a Customer BG ID based on the OrderID from the Image in the first non-null Iprompted node~,1,action,~~,~~ );
+
+}
+
+
+
+VOID PopulateMiscMacros(&database)
+{
+	if ( !PGenConList( MacrosTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM Macros~ ) )
+	{
+		Warning( ~Could not open Macros recordset~ );
+		return;
+	}
+
+	if ( !PGenConList( MacroItemsTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM MacroItems~ ) )
+	{
+		Warning( ~Could not open Macro Items recordset~ );
+		return;
+	}
+
+	Sequence = 0;
+
+	MACROSOFF	action = ~<$@UserSettings.Type[Item]>~;	MACROSON
+	AddMacro( MacrosTable,~Settings~,~User~,~Value from the user settings table~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@SystemSettings.Type[Item]>~;	MACROSON
+	AddMacro( MacrosTable,~Settings~,~System~,~Value from the system settings table~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Func.FUNCTIONNAME(ARG1,ARG2,...)>~;	MACROSON
+	AddMacro( MacrosTable,~Functions~,~Any~,~Format For Any Function~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Func.LabName()>~; MACROSON
+	AddMacro( MacrosTable,~Lookup~,~LabName~,~Name of my lab~,1,action,~~,~~ );
+
+	MACROSOFF	action = ~<$@Page.Output>~; MACROSON
+	AddMacro( MacrosTable,~Printing~,~PageNumber~,~Page Number of Order on Output~,1,action,~~,~~ );
+//	AddMacroItem (Table,		Category,	MacroItemName,MacroName,DescriptionFile,DescriptionTag,DescriptionSubTag,HelpDescriptionFile,HelpDescriptionTag,HelpDescriptionSubTag,Sequence,RefersToDataTable,TableName,FieldName);
+	Sequence += 10;
+	AddMacroItem(MacroItemsTable,Printing,	PageNumber,PageNumber,Macros,PrintingPageNumber,~~,~Macros~,~PrintingPageNumberMacroHelp~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@TotalPages.Output>~; MACROSON
+	AddMacro( MacrosTable,~Printing~,~TotalPages~,~Total Pages of Order on Output~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem(MacroItemsTable,Printing,	TotalPages,TotalPages,Macros,PrintingTotalPages,~~,~Macros~,~PrintingTotalPagesMacroHelp~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Page.Output> of <$@TotalPages.Output>~; MACROSON
+	AddMacro( MacrosTable,~Printing~,~Page N of M~,~Page N of M for the Order on Output~,1,action,~~,~~ );
+	Sequence += 10;
+	AddMacroItem(MacroItemsTable,Printing,~Page N of M~,~Page N of M~,Macros,PrintingPageNumberMofN,~~,~Macros~,~PrintingPageNumberMofNMacroHelp~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@PrinterName.Output>~; MACROSON
+	AddMacro( MacrosTable,~Printing~,~PrinterName~,~Name of the printer~,1,action,~~,~~ );
+	AddMacroItem(MacroItemsTable,Printing,~PrinterName~,~PrinterName~,Macros,PrintingPrinterName,~~,~Macros~,~PrinterNameMacroHelp~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@QueueName.Output>~; MACROSON
+	AddMacro( MacrosTable,~Printing~,~QueueName~,~Name of the printer queue~,1,action,~~,~~ );
+	AddMacroItem(MacroItemsTable,Printing,~QueueName~,~QueueName~,Macros,PrintingQueueName,~~,~Macros~,~QueueNameMacroHelp~,~~,<Sequence>,0,~~,~~);
+
+	MACROSOFF	action = ~<$@Func.CustomerFieldForNode(%NODENUMBER%,RLOGO)> <$@Func.CustomerFieldForNode(%NODENUMBER%,gLOGO)> <$@Func.CustomerFieldForNode(%NODENUMBER%,BLOGO)>~; MACROSON
+	AddMacro( MacrosTable,~Customers~,~Logo Color By Customer~,~Returns the Red, Green and Blue components of a customer's logo color.~,1,action,~~,~~ );
+}
+
+
+NUMERIC AddProofBookProducts( &dBase )
+{
+	Query = ~Select Category From Products Where Category = 'proof'~;
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Unable to get the user settings from the database.  Default settings will be used instead.\n\n<Query>\n\n<theErr>~ ) ); 
+		return TRUE;
+	}
+	
+	if ( !List( GetNext,Setting ) )
+	{
+
+		// The "proof" category doesn't exist, create it and add all proof book products
+
+		LayoutPath = ~<$app.ShareDirectory>\Layouts\Proof~;
+
+		MoreFiles = findfile( aDirectoryEntry,Find,~<LayoutPath>\PB_*.txt~ );
+
+		while ( $Morefiles )
+		{
+		
+			Morefiles = aDirectoryEntry( Next );
+
+			aDirectoryEntry( Get,Path,ProductPath );
+			FileName = ~<$Str.$ProductPath.FileName>~;
+			ID = ~<$Str.$ProductPath.FileName.WithoutExt>~;
+			PreviewPath = ~<$Str.$ProductPath.Path>\Preview\<FileName>.jpg~;
+			
+			if ( aDirectoryEntry( Dots ) )
+				continue;
+
+			if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+				continue;
+
+			Parameters = ~ID,LayoutName,Category,ProductType,StyleType,ProductLayoutPath,PreviewPath,Sequence~;
+
+			NextSequence = CalcNextSequenceForCategory( dBase,Products,Category,~Proof~,Sequence );
+
+			Values = ~'<ID>','<ID>','Proof','Digital',0,'<ProductPath>','<PreviewPath>',<NextSequence>~;
+
+			SQLCommand = ~Insert Into Products(<Parameters>) Values(<Values>)~;
+
+			if ( !dBase( Cmd, ~<SQLCommand>~ ) )
+			{
+				dBase( GetErrorNumber,theErrNo );
+				dBase( GetErrorDescription, theErr );
+				if ( <theErrNo> != -2147217873 )
+				{				
+					Log( Session,~Unable to insert Products to the database.\n\n<SQLCommand>\n\n<theErr>~);		
+					return FALSE;		
+				}
+				else
+				{
+					Log( Session,~Product already in the database.\n\n<SQLCommand>\n\n<theErr>~);		
+				}
+			}
+		}
+	}
+	else
+	{
+		// The Proof category exists, check for the proof book products
+		LayoutPath = ~<$app.ShareDirectory>\Layouts\Proof~;
+
+		MoreFiles = findfile( aDirectoryEntry,Find,~<LayoutPath>\PB_*.txt~ );
+		StringList( ProofBookProducts,New );
+
+		while ( $Morefiles )
+		{
+		
+			Morefiles = aDirectoryEntry( Next );
+
+			aDirectoryEntry( Get,Path,ProductPath );
+			
+			if ( aDirectoryEntry( Dots ) )
+				continue;
+
+			if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+				continue;
+
+			ProofBookProducts( AddString, ~<ProductPath>~ );
+		}
+
+		// Check product in db vs. product on hard drive
+		
+		result = ProofBookProducts( GetFirstString, proofBookProduct );
+
+		while ( <result> )
+		{
+			Query = ~Select ID From Products Where ID = '<$Str.$proofBookProduct.FileName.WithoutExt>'~;
+			if ( !PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+			{ 
+				List( GetErrorDescription,0,theErr );
+				Warning( Translate( ~Unable to open database in order to load Proof Book Products\n\n<Query>\n\n<theErr>~ ) ); 
+				return FALSE;
+			}			
+			if ( !List( GetNext,Setting ) )
+			{
+				ID = ~<$Str.$proofBookProduct.FileName.WithoutExt>~;
+				Parameters = ~ID,LayoutName,Category,ProductType,StyleType,ProductLayoutPath,PreviewPath,Sequence~;
+
+				NextSequence = CalcNextSequenceForCategory( dBase,Products,Category,~Proof~,Sequence );
+
+				Values = ~'<ID>','<ID>','Proof','Digital',0,'<proofBookProduct>','<LayoutPath>\Preview\<$Str.$proofBookProduct.FileName>.jpg',<NextSequence>~;
+
+				SQLCommand = ~Insert Into Products(<Parameters>) Values(<Values>)~;
+
+				if ( !dBase( Cmd, ~<SQLCommand>~ ) )
+				{
+					dBase( GetErrorNumber,theErrNo );
+					dBase( GetErrorDescription, theErr );
+					if ( <theErrNo> != -2147217873 )
+					{				
+						Log( Session,~Unable to insert Products to the database.\n\n<SQLCommand>\n\n<theErr>~);		
+						return FALSE;		
+					}
+					else
+					{
+						Log( Session,~Product already in the database.\n\n<SQLCommand>\n\n<theErr>~);		
+					}
+				}
+
+			}
+
+			result = ProofBookProducts( GetNextString, proofBookProduct );
+
+		}
+
+
+	}
+	
+	return TRUE;		
+}
+
+
+NUMERIC CalcNextSequenceForCategory( &Connection,Table,CategoryField,NewCategory,SequenceField )
+{
+	if ( !Connection( CMD,~Select MAX(<SequenceField>) From <Table> Where <CategoryField> = '<NewCategory>'~,MaxSequence ) )
+	{
+		NextSequence = -1;
+	}
+	else
+	{
+		NextSequence = ~<$rs.MaxSequence[#0]>~ == ~~ ? ~-1~ : ~<$rs.MaxSequence[#0]>~;
+	}
+
+	return $NextSequence + 1;
+}
+
+NUMERIC AddMacroCategories(&database)
+{
+	// Add the entries to the MacroCategories table
+	if ( !PGenConList( MacroCategoriesTable,Connection,database,Cursor,Keyset,Query,~SELECT * FROM MacroCategories~ ) )
+	{
+		Warning( ~Could not open MacroCategories recordset~ );
+		return 0;
+	}
+	Sequence = 10;
+	AddMacroCategory(MacroCategoriesTable,CustomersByImage,Macros,CustomersByImage,~~,1,<Sequence>);
+	Sequence += 10;
+	AddMacroCategory(MacroCategoriesTable,CustomersByOrderItem,Macros,CustomersByOrderItem,~~,0,<Sequence>);
+	Sequence += 10;
+	AddMacroCategory(MacroCategoriesTable,OrdersByImage,Macros,OrdersByImage,~~,1,<Sequence>);
+	Sequence += 10;
+	AddMacroCategory(MacroCategoriesTable,OrdersByOrderItem,Macros,OrdersByOrderItem,~~,0,<Sequence>);
+	Sequence += 10;
+	AddMacroCategory(MacroCategoriesTable,Images,Macros,Images,~~,1,<Sequence>);
+	Sequence += 10;
+	AddMacroCategory(MacroCategoriesTable,Date,Macros,Date,~~,0,<Sequence>);
+	Sequence += 10;
+	AddMacroCategory(MacroCategoriesTable,Time,Macros,Time,~~,0,<Sequence>);
+	Sequence += 10;
+	AddMacroCategory(MacroCategoriesTable,Printing,Macros,Printing,~~,0,<Sequence>);
+	return 1;
+}
+
+
+NUMERIC PopulateTasks( WantRestart, ShowMessages )
+{
+	if ( !<WantRestart> && <ShowMessages> )
+	{
+		Msg = Translate( ~Are you sure you want to reload tasks and macros? ~ );
+
+		if ( MessageBox( ~<Msg>~,YESNO ) != YES )
+		{
+			return TRUE;
+		}
+	}
+
+	StatusBarText( ~Deleting Old Tasks~ );
+
+	WaitCursor( Begin );
+
+	if ( !ado( db,CONNECT ) )
+		{ return Warning( ~Could not open DP2 Database~ ); }
+
+	if ( !db( Cmd,~Delete FROM Tasks Where UserDefined = 0~ ) )
+		{ return Warning( ~Could not delete all records in the table Tasks~ ); }
+
+	if ( !db( Cmd,~Delete FROM UserTasks Where UserDefined = 0~ ) )
+		{ return Warning( ~Could not delete all records in the table UserTasks~ ); }
+
+	if ( !db( Cmd,~Delete FROM Macros Where UserDefined = 0~ ) )
+		{ return Warning( ~Could not delete all records in the table Macros~ ); }
+
+	if ( !db( Cmd,~Delete FROM CompositeMacros Where UserDefined = 0~ ) )
+		{ return Warning( ~Could not delete all records in the table CompositeMacros~ ); }
+
+	if ( !db( Cmd,~Delete FROM PLSTasks Where UserDefined = 0~ ) )
+		{ return Warning( ~Could not delete all records in the table Tasks~ ); }
+
+	if ( !db( Cmd,~Delete FROM PLSUserTasks Where UserDefined = 0~ ) )
+		{ return Warning( ~Could not delete all records in the table UserTasks~ ); }
+
+	if ( !db( Cmd,~Delete FROM RImageMacros Where UserDefined = 0~ ) )
+		{ return Warning( ~Could not delete all records in the table RImageMacros~ ); }
+
+	if ( !db( Cmd,~Delete FROM MacroCategories Where UserDefined = 0~ ) )
+		{ return Warning( ~Could not delete all records in the table MacroCategories~ ); }
+
+	if ( !db( Cmd,~Delete FROM MacroItems Where UserDefined = 0~ ) )
+		{ return Warning( ~Could not delete all records in the table MacroItems~ ); }
+
+	Accunet( Interface,Reset );
+
+	StatusBarText( ~Tasks~ );
+	PopulateTasksTable(db);
+
+	StatusBarText( ~User Tasks~ );
+	PopulateUserTasksTable(db);
+
+	StatusBarText( ~Scan Tasks~ );
+	PopulateScanTasks(db);
+
+	StatusBarText( ~Checking for AutoRetouching Dongle~ );
+
+	if ( !Authorized( ~KEXDSS~ ) )
+	{
+		kparsCredits = 0;
+		dongleError = 0;
+
+		Enabled = FALSE;
+		Value = ~0~;
+		GetSystemSettings( ~AutoRetouching~,~KPARS~,Value,Enabled );
+		kparsCredits = CheckKparsDongle(dongleError);
+		if ( <dongleError> == 0 || ( ~<Enabled>~ == ~1~ && ~<Value>~ == ~1~ ) )
+		{
+			SetSystemSettings( ~AutoRetouching~,~KPARS~,~1~,TRUE );
+			PopulateAutoRetouchingTasks(db);
+			Enabled = FALSE;
+			Value = ~0~;
+			if ( !GetWorkstationSettings( ~AutoRetouching_<$App.Instance>~,~KPARS~,Value,Enabled ) )
+			{
+				if ( <ShowMessages> )
+				{
+					msg = ~Do you want to enable Auto-Retouching for this instance of DP2 on this workstation?~;
+					if ( MessageBox( Translate( ~<msg>~ ),YESNO ) == YES )
+					{
+						SetWorkstationSettings( ~AutoRetouching_<$App.Instance>~,~KPARS~,1,TRUE );
+					}
+					else
+					{
+						SetWorkstationSettings( ~AutoRetouching_<$App.Instance>~,~KPARS~,0,TRUE );
+					}
+				}			
+			}
+		}
+	}
+
+	StatusBarText( ~RImage Tasks~ );
+	PopulateRImageTasks(db);
+
+	StatusBarText( ~Tracking Tasks~ );
+	PopulateTrackingTasks(db);
+
+	StatusBarText( ~Services Tasks~ );
+	PopulateServicesTasks(db);
+
+	StatusBarText( ~Reporting Tasks~ );
+	PopulateReportingTasks(db);
+
+	StatusBarText( ~Analyzer Tasks~ );
+	PopulateAnalyzerTasks(db);
+
+	StatusBarText( ~Internet Tasks~ );
+	PopulateInternetTasks(db);
+
+	StatusBarText( ~Admin Tasks~ );
+	PopulateAdminTasks(db);
+
+	StatusBarText( ~Schema Tasks~ );
+	PopulateSchemaTasks(db);
+
+	StatusBarText( ~DateTime Macros~ );
+	PopulateDateTimeMacros(db);
+
+	StatusBarText( ~Misc Macros~ );
+	PopulateMiscMacros(db);
+	
+	StatusBarText( ~Green Screen Macros~ );
+	PopulateGSMacros(db);
+
+	StatusBarText( ~Node Macros~ );
+
+	AddMacroCategories(db);
+
+	PopulateNodeMacros(db);
+
+	StatusBarText( ~Composite Macros~ );
+	PopulateCompositeMacros(db);
+
+	StatusBarText( ~Control Panel Tasks~ );
+	PopulateControlPanelTasks(db);
+
+	StatusBarText( ~Import Tasks~ );
+	PopulateImportTasks(db);
+	
+	StatusBarText( ~Animoto Tasks~ );
+	PopulateAnimotoTasks(db);
+	
+	StatusBarText( ~Export Tasks~ );
+	PopulateExportTasks(db);
+
+	StatusBarText( ~Accunet Tasks~ );
+	PopulateAccunetTasks(db);
+
+	StatusBarText( ~Scripting~ );
+	PopulateScriptingTasks(db); 
+
+	StatusBarText( ~Adding New Profiles~ );
+	AddNewProfiles(db);
+	
+	StatusBarText( ~SBA Data~ );
+	PopulateFormatListForSbaData(db);
+
+	StatusBarText( ~FTA Adjust~ );
+	PopulateFormatListForFTAdjust(db);
+
+	StatusBarText( ~Adding Proof Book Products~ );
+	AddProofBookProducts(db);
+
+	if ( !GetSystemSettings( ~HonorImageOrientation~,~PIE~,Value,enabled ) )
+	{
+		SetSystemSettings( ~HonorImageOrientation~,~PIE~,~0~,TRUE );
+	}
+
+	WaitCursor( End );
+
+	StatusBarText( ~Done reloading tasks and macros~ );
+
+	if ( $WantRestart && <ShowMessages> )
+	{
+		MessageBox( Translate( ~Tasks and Macros have been loaded.\n\nYou need to restart the Application to continue.~ ) );
+		Abort();
+	}
+
+	action = ACTION DOC ( TaskBarDoc "RefreshDoc();" );
+	return PerformActions( action );
+}

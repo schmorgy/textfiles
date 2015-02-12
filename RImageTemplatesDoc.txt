@@ -1,0 +1,503 @@
+Include: ~FormattingRoutines~;
+
+IncludeClass( BaseGrid );
+
+VOID	RImageTemplates::RImageTemplates()						// CONSTRUCTOR
+{
+	TableName = ~RImageTemplates~;
+	DocumentQuery = ~Select * from <TableName> Order By ID~;
+	Title = RunningVersion(14) ? ~Media Burning Templates~ : ~RImage Templates~;
+	WindowTop = 25;
+	WindowWidth = 100;
+	WindowHeight = 25;
+	HelpPage = ~RImageTemplate.htm~;
+	SplitterRows = ~2 7 93~;
+}
+
+STR		RImageTemplates::GetKey( &Item )					// PRIMARY KEY FOR THE TABLE
+{
+	return ~ID = '<$con.Item[ID]>'~;
+}
+
+
+NUMERIC RImageTemplates::ChangeRecordAudits( &Changed )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[ID]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  ID cannot be blank.~ ) ); }
+
+	return TRUE;
+}
+
+NUMERIC RImageTemplates::UpdateMacrosList()
+{
+	ControlView( GetControlValue,CategoryComboBox,Category );
+
+	Query = ~Select Name From RImageMacros Where Category = '<Category>' Order By Name~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	List( MakeStringList,Macros,Name );
+
+	return ControlView( SetControlFromStringList,MacrosComboBox,Macros );
+}
+
+
+NUMERIC RImageTemplates::UpdateCategoriesList()
+{
+	Query = ~Select Distinct Category From RImageMacros Order By Category~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) );
+	}
+
+	List( MakeStringList,Macros,Category );
+
+	 ControlView( SetControlFromStringList,CategoryComboBox,Macros );
+
+	return UpdateMacrosList();
+}
+
+
+NUMERIC RImageTemplates::ViewMacros()
+{
+	Actions = ACTION Doc ( ~RImageMacrosDoc~ OpenOnce RImageMacrosDoc "Init();" );
+	return PerformActions( Actions );
+}
+
+NUMERIC RImageTemplates::OnUseMacro()
+{
+	ControlView( GetControlValue,MacrosComboBox,Name );
+
+	if ( IsNull( ~<Name>~ ) )
+	{
+		return Warning( Translate(~You have not selected a macro to use~) );
+	}
+
+	if ( !ADO( dBase,Connect,GetValuesFor,~Select Activate from RImageMacros Where Name = '<Name>'~,Invoke ) )
+	{
+		List( GetErrorDescription,theErr );
+		return Warning( Translate(~Failed to find the Activation string for Macro <Name>.  <theErr>~) );
+	}
+
+	CopyContentsToClipboard(Invoke);
+
+	StatusBar( ~The macro '<Name>' is now in your paste buffer. Select an insertion point in the appropriate Data field and type ctrl-v to paste~ );
+
+	return TRUE;
+}
+
+
+NUMERIC RImageTemplates::AddControls( position )
+{
+	Define: EditListButton Using DDWinCtrlDef AsSymbol EditListButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnDoubleClick() )
+				POSITION		$position + $hGap, $vGap 80 $ButtonHeight
+				TEXT			Translate( ~File List~ )
+				TOOLTIP			Translate( ~Edit the list of files to copy~ );
+
+	Define: LabelDataButton Using DDWinCtrlDef AsSymbol LabelDataButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnLabelDataButton() )
+				POSITION		EditListButton(GetRight,Position) + $hGap, $vGap EditListButton(GetWidth,Position) $ButtonHeight
+				TEXT			Translate( ~Label Data~ )
+				TOOLTIP			Translate( ~Edit the data fields for the label~ );
+
+	Define: CategoryStatic Using DDWinCtrlDef AsSymbol  CategoryStatic Private
+		Fields:	TYPENAME		StaticText
+				POSITION		LabelDataButton(GetRight,Position) + $hGap, $vGap+3 60 $ButtonHeight
+				RIGHTJUSTIFIED	TRUE
+				TEXT			Translate( ~Category~ )
+
+	Define: CategoryComboBox Using DDWinCtrlDef AsSymbol CategoryComboBox  Private
+		Fields: TypeName        ComboBox  
+				Position		CategoryStatic(GetRight,Position) + $hGap*2, $vGap,100,120
+				DropDownActionsText	ACTION EXEC ( <THIS>.UpdateCategoriesList() )
+				DActionsText	ACTION EXEC ( <THIS>.UpdateMacrosList() )
+				OActionsText	ACTIONS ( Save )
+				GenConName		THIS
+				GenConField		~Category~
+				Mask			~<$[DATABASE FieldTypes].ScanSetupName[Mask]>~
+				PromptChar		~<$[DATABASE FieldTypes].ScanSetupName[PromptChar]>~
+				AllowedChars	~<$[DATABASE FieldTypes].ScanSetupName[AllowedChars]>~
+				DisallowedChars ~<$[DATABASE FieldTypes].ScanSetupName[DisallowedChars]>~
+				Tooltip			~Select a category of macros~
+
+	Define: MacroStatic Using DDWinCtrlDef AsSymbol  MacroStatic Private
+		Fields:	TYPENAME		StaticText
+				Position		CategoryComboBox(GetRight,Position) + $hGap, CategoryStatic(GetTop,Position),40,$ButtonHeight
+				RIGHTJUSTIFIED	TRUE
+				TEXT			Translate( ~Macro~ )
+
+	Define: MacrosComboBox Using DDWinCtrlDef AsSymbol MacrosComboBox  Private
+		Fields: TypeName        ComboBox  
+				Position		MacroStatic(GetRight,Position) + $hGap*2, CategoryComboBox(GetTop,Position),160,120
+				//IActionsText	ACTION EXEC ( <THIS>.UpdateMacrosList() )
+				DropDownActionsText	ACTION EXEC ( <THIS>.UpdateMacrosList() )
+				DActionsText	ACTIONS ( Save )
+				OActionsText	ACTIONS ( Save )
+				GenConName		THIS
+				GenConField		~Template~
+				Mask			~<$[DATABASE FieldTypes].ScanSetupName[Mask]>~
+				PromptChar		~<$[DATABASE FieldTypes].ScanSetupName[PromptChar]>~
+				AllowedChars	~<$[DATABASE FieldTypes].ScanSetupName[AllowedChars]>~
+				DisallowedChars ~<$[DATABASE FieldTypes].ScanSetupName[DisallowedChars]>~
+				Tooltip			~Select a predefined Macro from this list and then press the Copy button.~
+
+	Define: UseMacroButton Using DDWinCtrlDef AsSymbol  UseMacroButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.OnUseMacro() )
+				Position		MacrosComboBox(GetRight,Position) + $hGap*2, MacrosComboBox(GetTop,Position),50,$ButtonHeight
+				TEXT			Translate( ~Copy~ )
+				TOOLTIP			Translate( ~Press this button to copy the macro into your paste buffer.  Then use ctrl-v to paste it into one of the Data fields below.~ );
+
+	Define: ViewMacrosButton Using DDWinCtrlDef AsSymbol  ViewMacrosButton Private
+		Fields:	TYPENAME		BUTTON
+				DACTIONSTEXT	ACTION EXEC ( <THIS>.ViewMacros() )
+				POSITION		UseMacroButton(GetRight,Position)+$hGap, UseMacroButton(GetTop,Position) 20 $ButtonHeight
+				TEXT			Translate( ~?~ )
+				TOOLTIP			Translate( ~View the list of Label Macros~ );
+
+	return ViewMacrosButton( GetRight,Position );
+				
+	return LabelDataButton( GetRight,Position );
+}
+
+
+NUMERIC RImageTemplates::OnLabelDataButton( &ColumnDefinition,row,col )
+{
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( ~There were no selected items~ ); }
+
+	if ( SelectedItems( GetNext,Item ) )
+	{
+		Query = ~Select * From RImageMergeTemplates Where ID = '<$con.Item[ID]>'~;
+		Actions = ACTION DOC ( RImageMergeTemplateDoc OpenOnce RImageMergeTemplateDoc "Init(~<$con.Item[ID]>~,~<Query>~);" );
+		return PerformActions( Actions );
+	}
+
+	return Warning( ~There were no selected items~ );
+}
+
+
+
+NUMERIC UpdateFilePathCombo( &ColumnDefinition,row,col )
+{
+	return TRUE;
+}
+
+
+NUMERIC RImageTemplates::DeleteRelatedRecords( &connection,&Item )
+{
+	Cmd = ~Delete From RImageEditListTemplates Where ID = '<$con.Item[ID]>'~;
+
+	if ( !connection( Cmd,~<Cmd>~ ) )
+	{
+		return Warning(~Failed to delete the Edit list for ID = '<$con.Item[ID]>'~ );
+	}
+
+	Cmd = ~Delete From RImageMergeTemplates Where ID = '<$con.Item[ID]>'~;
+
+	if ( !connection( Cmd,~<Cmd>~ ) )
+	{
+		return Warning(~Failed to delete the ;abel data for ID = '<$con.Item[ID]>'~ );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RImageTemplates::OpenSelected()	{ return OnDoubleClick(); }
+
+
+NUMERIC RImageTemplates::OnDoubleClick()
+{
+	if ( !DataView( GetSelected,SelectedItems ) )	{ return Warning( ~There were no selected items~ ); }
+
+	if ( SelectedItems( GetNext,Item ) )
+	{
+		Query = ~Select * From RImageEditListTemplates Where ID = '<$con.Item[ID]>'~;
+		Actions = ACTION DOC ( RImageEditListTemplatesDoc OpenOnce RImageEditListTemplatesDoc "Init(~<$con.Item[ID]>~,~<Query>~);" );
+		PerformActions( Actions );
+	}
+
+	return TRUE;
+}
+
+NUMERIC	RImageTemplates::OnButtonClickWantFile(Row,Col)
+{ 
+	if ( IsColumnName(<Col>,~FilePath~ ) )
+	{
+		FileType = GetCellValue( <row>,Filetype );
+
+		return Numeric( ~<FileType>~ ) == 0;
+	}
+
+	return TRUE;
+}
+
+STR RImageTemplates::OnButtonClickTitle(Row,Col)
+{
+	if ( IsColumnName(<Col>,~MergeFile~ ) )		{ return Translate(~Find the file with data for the label~); }
+	if ( IsColumnName(<Col>,~LabelFile~ ) )		{ return Translate(~Find the label definition file~); }
+	if ( IsColumnName(<Col>,~FilePath~ ) )
+	{ 
+		if ( OnButtonClickWantFile(<Row>,<Col>) )
+		{
+			return Translate(~Find the edit list file~);
+		}
+		else
+		{
+			return Translate(~Find the parent directory~);
+		}
+	}
+
+	return BaseGrid::OnButtonClickTitle(<Row>,<Col>);
+}
+
+
+STR RImageTemplates::OnButtonClickFixupPath(Row,Col,Path)
+{
+	if ( IsColumnName(<Col>,~XMLGenerator~ ) )
+	{ 
+		return ~<$str.$Path.FileName>~;
+	}
+
+	return BaseGrid::OnButtonClickFixupPath(<Row>,<Col>,~<Path>~);
+}
+
+
+STR RImageTemplates::OnButtonClickDirectory(Row,Col)
+{
+	if ( IsColumnName(<Col>,~XMLGenerator~) )
+	{ 
+		return ~<$App.Directory>\Scripts\RImageXMLScripts~;
+	}
+
+	return BaseGrid::OnButtonClickFixupPath(<Row>,<Col>,~<Path>~);
+}
+
+
+NUMERIC RImageTemplates::HasRelatedRecords( &Changed,&Original,ChangedRow,IsNewRow )
+{ 
+	return !SimilarStr( ~<$con.Changed[ID]>~,~<$con.Original[ID]>~ );
+}
+
+
+NUMERIC RImageTemplates::ChangeRelatedRecords( &connection,&Changed,&Original,ChangedRow,IsNewRow )
+{ 
+	cmd = ~Update RImageEditListTemplates SET ID = '<$con.Changed[ID]>' Where ID = '<$con.Original[ID]>'~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( ~Could not update related RImageEditListTemplates records. <theErr>~ );
+	}
+
+	cmd = ~Update RImageMergeTemplates SET ID = '<$con.Changed[ID]>' Where ID = '<$con.Original[ID]>'~;
+
+	if ( !connection( CMD,~<cmd>~ ) )
+	{
+		connection( GetErrorDescription,theErr );
+		return Warning( ~Could not update related RImageMergeTemplates records. <theErr>~ );
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC RImageTemplates::OnDuplicateRecord( &NewRow )	
+{ 
+	ID = ~<$con.NewRow[ID]>~;
+	
+	Index = 1;
+	
+	if ( !ADO( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( ~Failed to connect to the database.  <theErr>~ );
+	}
+	
+	while ( TRUE )
+	{		
+		BreakIF( dbase(RecordCountFor,~Select ID From RImageTemplates Where ID = '<ID>_<++Index>'~) == 0 );
+	}
+	
+	NewRow( Set,ID,~<ID>_<Index>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC RImageTemplates::OnDuplicateComplete( &RowToImitate,&NewRow,RowBeingAdded )
+{
+	ChangeRecord();
+	
+	OldID = ~<$con.RowToImitate[ID]>~;
+	NewID = ~<$con.NewRow[ID]>~; 
+	
+	if ( IsNull(~<NewID>~) )
+	{
+		return Warning( ~The ID can't be null~ );
+	}
+	
+	Query = ~Select * From RImageEditListTemplates Where ID='<OldID>'~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Database query failed: <Query>  <theErr>~ );
+	}
+	
+	List( GetConnection,dBase );
+	
+	while ( List(GetNext,Rec) )
+	{
+		Cmd = ~Insert Into RImageEditListTemplates(ID,ToPath,FromPath,DeleteAfter) Values('<NewID>','<$pcon.Rec[ToPath]>','<$pcon.Rec[FromPath]>',<$pcon.Rec[DeleteAfter]>)~;
+		
+		if ( !dbase( Cmd,~<Cmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			return Warning( ~Database update failed: <Cmd>  <theErr>~ );
+		}
+	}
+	
+	ForgetPrivate( List );
+	
+	Query = ~Select * From RImageMergeTemplates Where ID='<OldID>'~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Static,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Database query failed: <Query>  <theErr>~ );
+	}
+	
+	List( GetConnection,dBase );
+	
+	while ( List(GetNext,Rec) )
+	{
+		Cmd = ~Insert Into RImageMergeTemplates(ID,FieldNumber,FieldData) Values('<NewID>','<$pcon.Rec[FieldNumber]>','<$pcon.Rec[FieldData]>')~;
+		
+		if ( !dbase( Cmd,~<Cmd>~ ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			return Warning( ~Database update failed: <Cmd>  <theErr>~ );
+		}
+	}
+	
+	return TRUE;
+}
+
+NUMERIC RImageTemplates::OnAddRecord( &NewRow )
+{
+	NewRow( Set,Copies,1 );
+	NewRow( Set,Priority,5 );
+	NewRow( Set,MediaType,0 );
+	return TRUE;
+}
+
+
+NUMERIC RImageTemplates::EndEdit()
+{
+	DataView( GetEditedCell,row,col );
+	DataView( GetEditedCellValue,value );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	MediaTypeString = GetCellValue( <Row>, ~MEDIATYPE~ );
+	MediaTypeValue = MakeNumber( ~<MediaTypeString>~ );
+
+	// If CD (a value of 0) is the current Media Type
+	if ( <MediaTypeValue> == 0 )
+	{
+		// Then clear the File System Extensions
+		// field ( set to None (a value of 0) )
+		//
+		// Currently only the DVD Media Type DVD uses the
+		// settings contained in the File System field.
+
+		DataView( SetCellValue, Current, FileSystem, 0 );
+	}
+
+	// If DVD (a value of 1) is the current Media Type
+	if ( <MediaTypeValue> == 1 )
+	{
+		// Then clear the File System Extensions that
+		// are not supported by the DVD ( set to None
+		// (a value of 0) )
+
+		DataView( SetCellValue, Current, PowerImage, 0 );
+		DataView( SetCellValue, Current, RecordingType, 0 );
+		DataView( SetCellValue, Current, AppleExtensions, 0 );
+	}
+
+	return TRUE;
+}
+
+
+VOID RImageTemplates::DataViewDefinition()
+{
+	Fields:
+		ComboBoxChangedActionsText	ACTION Call ( <This>.EndEdit() )
+		EndEditActionsText			ACTION Call ( <This>.EndEdit() )
+}
+
+
+
+NUMERIC RImageTemplates::UpdateFILESYSTEMCombo( &ColumnDefinition,Row,Col )
+{
+	MediaTypeValue = GetCellValue( <Row>, ~MEDIATYPE~ );
+
+	// If CD (a value of 0) is the current Media Type
+	if ( MakeNumber( ~<MediaTypeValue>~ ) == 0 )
+	{
+		StringList( list,New,Is,~<$[DATABASE FieldTypes].RImageNoFileSystem[ChoiceList]>~ );
+	}
+
+	// Else If DVD (a value of 1) is the current Media Type
+	else
+	{
+		StringList( list,New,Is,~<$[DATABASE FieldTypes].RImageFileSystem[ChoiceList]>~ );
+	}
+
+	ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,list(GetCopyOf) );
+
+	DataView( SetComboBox,ColumnDefinition,<Col> );
+
+	return TRUE;
+}
+
+
+NUMERIC RImageTemplates::InitComplete()		{ return UpdateCategoriesList(); }
+
+
+NUMERIC Init( Which,Query )
+{
+	if ( Defined( Grid ) )
+	{
+		Grid.ReOpen();
+		return TRUE;
+	}
+	else
+	{
+		Class( RImageTemplates,Extends,BaseGrid,
+				Member,fID,Str,~<Which>~ );
+
+		RImageTemplates( New,Grid );
+
+		Grid.Set( DocumentQuery,~<Query>~ );
+		Grid.Set( Title,RunningVersion(14) ? ~Media Burning Templates - <Which>~ : ~RImage Templates - <Which>~ );
+
+		Grid.DefineWindow();
+		Grid.Init();
+
+		return Global( Grid );
+	}
+}
+

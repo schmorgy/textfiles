@@ -1,0 +1,355 @@
+
+
+
+NUMERIC RefreshComboBox()	// NOT USED
+{
+	DataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,TableDefinition(GetReferenceTo,Fields) );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+
+	if ( SimilarStr(~<ColumnName>~,~ICCProfile~ ) )
+	{
+		UpdateProfilesComboBox( DataView,ColumnDefinition,<row>,<col>,FALSE,0,0,0 );
+	}
+	else if ( ~<ColumnName>~ == ~WORKINGSPACEPROFILE~ )
+	{
+		UpdateWorkingSpaceProfilesComboBox( DataView,ColumnDefinition,<row>,<col>,FALSE,0,0,0 );
+	}
+
+
+	return TRUE;
+}
+
+VOID UpdateProfilesComboBox(&DataView,&ColumnDefinition,Row,Col)
+{
+	Query = ~Select * From Profiles Where (Type = 'Output') Or (Type Like 'W%') And Path <> ''~;
+
+	if ( !PGenConList( ProfilesList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		ProfilesList( GetErrorDescription,0,theErr );
+		ShowWarning( Translate( ~Failed to query the Profiles table.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	ProfilesList( MakeStringList,Profiles,Name );
+	ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,Profiles(GetCopyOf) );
+	DataView( SetComboBox,ColumnDefinition,<Col> );
+}
+
+VOID UpdateWorkingSpaceProfilesComboBox(&DataView,&ColumnDefinition,Row,Col)
+{
+	Query = ~Select * From Profiles Where Type Like 'W%' And Path <> ''~;
+
+	if ( !PGenConList( ProfilesList,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		ProfilesList( GetErrorDescription,0,theErr );
+		ShowWarning( Translate( ~Failed to query the Profiles table.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	ProfilesList( MakeStringList,Profiles,Name );
+	ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,Profiles(GetCopyOf) );
+	DataView( SetComboBox,ColumnDefinition,<Col> );
+}
+
+
+NUMERIC RefreshListView( Requery )
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate( ~Would you like to save your pending changes?~ ),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed: <DocumentQuery>. <theErr>~ ) );
+	}
+
+	SetDocumentData( List(GetObject) );
+	
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+	NumEntries = List( NumEntries );
+	DataWindow( StatusBar,Text,~<NumEntries> Records~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC ChangeRecord()
+{
+	if ( !DataView( GetChangedRow,ChangedSetup,OrigSetup,ChangedRow,IsNewRow ) )
+		{ return Warning( ~There was no changed row.~ ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	Key = STR ( Setup = '<$Con.OrigSetup[Setup]>' );
+
+	Query = ~Select * From ExportImageSetups Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <Query>. <theErr>~ );
+	}
+
+	if ( !List( UpdateFrom,ChangedSetup,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate,ClearErrors );
+		return Warning( Translate( ~Could not update ExportImageSetups record where <Key>. <theErr>~ ) );
+	}
+
+	DataView( CommitChanges );
+
+	return TRUE;
+}
+
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,SetupsToDelete ) )		
+		{ return Warning( ~There was no row selected to delete~ ); }
+
+	Count = SetupsToDelete( ChildCount );
+
+	if ( <Count> <= 0 )
+		{ return Warning( ~There are no selected setups to delete~ ); }
+
+	if ( MessageBox( ~Are you sure you want to delete the <Count> selected setups?~,YESNO ) != YES )
+		{ return FALSE; }
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	StringList( RowsToDelete,New );
+
+	while ( SetupsToDelete( GetNext,Setup ) )
+	{
+		Key = ~Setup = '<$con.Setup[Setup]>'~;
+
+		if ( !dBase( CMD,~Delete From ExportImageSetups Where <Key>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			return Warning( ~Could not delete ExportImageSetup where <Key>. <theErr>~ );
+		}
+
+		RowsToDelete( AddString,SetupsToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord( &DataLocation )
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+	
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( ~You are too low on memory to add any more rows~ ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,Setup );
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	ActiveView( DisplayMenu,ViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( ~Would you like to save your pending changes?~,YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( ForceCloseWindow );
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( ~Are you sure you want to cancel all changes including new setups that have not been saved?~, YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC AddSetup( WhichSetups,DocumentQuery,SetupToAdd )
+{
+	if ( !Init( ~<WhichSetups>~,~<DocumentQuery>~ ) )	{ return FALSE; }
+
+	return AddRecord( SetupToAdd );
+}
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+
+NUMERIC Init( WhichSetups,DocumentQuery )
+{
+	DataWindow( Set,Title,~<WhichSetups>~ == ~~ ? ~Setup Data~ : ~Setup Data - <WhichSetups>~ );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{
+			List( GetErrorDescription,0,theErr ); 
+			Error( ~Failed to query the ExportImageSetups table. <DocumentQuery>.  <theErr>~ );
+		}
+
+		SetDocumentData( List(GetObject) );
+
+		Global( WhichSetups,DocumentQuery );
+
+		if ( !DataWindow( CreateWindow,~Export Image Setups~ ) )
+			{ Error( ~Failed to create the window~ ); }
+
+		NumEntries = List( NumEntries );
+		DataWindow( StatusBar,Text,~<NumEntries> Records~ );
+
+	}
+	else
+	{
+		RefreshListView();
+	}
+
+	return TRUE;
+}
+
+Include: ~ExportSelectedToFile~;
+
+Include: ~FileBrowseButtonsInGridView~;
+
+if ( !GenCon( TableDefinition,GetFrom,ExportImageSetups,~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The ExportImageSetups Table is not properly defined~ ); }
+	
+
+Define:	ViewMenu Using DDMenuDef AsSymbol ViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Add Setup~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Save Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Cancel Changes~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( ~&Delete~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( ~Refresh (F5)~ )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+
+		Define:	NULL3 using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+		Define:	Export	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuExport )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ExportSelectedToFile(Dataview,ExportImageSetups) )
+	}
+
+Define: DataWindow Using DDWinDef
+	Fields:		Title					~Export Image Setups~
+				Position				0 70 100 25
+				IsPositionPercent		T
+
+	Contains:	INLISTORDER
+	{
+		Define: DataView Using DDViewDef AsSymbol DataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		TableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord(); )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord(); )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView(TRUE) )
+					CloseActionsText		ACTION Call ( OnCloseDataView() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "ExportImageSetups.htm" )
+					ButtonClickActionsText	ACTION Exec ( OnButtonClick(DataView,Translate( ~Find the desired path ...~ ),~<$App.ShareDirectory>~) )
+					ComboBoxActionsText		ACTION Call ( RefreshComboBox() )
+	}
+	
+

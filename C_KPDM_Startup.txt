@@ -1,0 +1,553 @@
+//	C_KPDM_Startup.cpp
+
+ExecC() ;
+
+//	THIS FILE CONTAINS THE STARTUP SCRIPT FOR THE KPDM HOT FOLDER APPLICATION
+
+char	*NULL ;
+int		 FALSE = 0L ;
+int		 TRUE  = ! FALSE ;
+TCHAR	 gconfigFileName[2048] ;
+TCHAR	 gerrMsg[2048] ;
+TCHAR	 gstate[2048] ;
+
+int		 gTesting = FALSE ;
+
+//main()
+//{
+//	Debug(1) ;
+//
+//	UGenCon *PrinterSetup = ReadPrinterSetup() ;
+//	Init( PrinterSetup ) ;
+//
+//	Debug(1) ;
+//}
+
+
+main()
+{
+}
+
+Test()
+{
+	LaunchProgram(_T("C:\\Winnt\\System32\\Notepad.exe")) ;
+}
+
+//	VERIFY THIS DEVICE HAS A POINTER TO A HOT FOLDER APPLICATION
+//	VERIFY WE HAVE THE PATH TO THE CONTRL AND RESPONSE FOLDERS
+//	WRITE THE CONFIGURATION FILE
+//	INVOKE THE HOT FOLDER APPLICATION AND RETURN
+
+int Init(UGenCon *PrinterSetup)
+{
+	int		 Result = FALSE ;
+//	Debug(1) ;
+	TCHAR	*AppPath = PrinterSetup->GetStringValue(_T("HFExePath")) ;
+	if( AppPath == NULL )		{ return( Result ) ; }
+	if( AppPath[0] == 0x00 )	{ return( Result ) ; }
+
+//DebugGenCon( PrinterSetup ) ;
+
+	TCHAR	*ControlFolder = PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+	if( ControlFolder == NULL )
+	{
+		return( Result ) ;
+	}
+	
+	TCHAR	*ResponseFolder = PrinterSetup->GetStringValue(_T("ResponseFolder")) ;
+	if( ResponseFolder == NULL )
+	{
+		return( Result ) ;
+	}
+
+	//	DELETE PREVIOUS RESPONSE FILES.
+//	Result = CleanResponseFiles( ResponseFolder ) ;
+	Result = CleanFolder( ResponseFolder, _T("*.sta") ) ;
+	Result = CleanFolder( ControlFolder, _T("*.act") ) ;
+
+	Result = CreateConfigFile(PrinterSetup, ControlFolder) ;
+
+	if( Result )
+	{
+		LaunchProgram( AppPath ) ;
+
+		//	WRITE THE ACTION FILE TO get launch state
+		//	states => launching, error, running, suspended
+		// wait if launching and shutdown app if error - can't talk to printer
+		// running or suspended mean we are set to go.
+
+		ControlFolder	= PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+		TCHAR	 ActionPath[1024] ;
+
+		sprintf( ActionPath, _T("%s\\%03ld.act"), ControlFolder, 1L) ;
+		char	*fp = fopen( ActionPath, _T("w")) ;
+		if( fp )
+		{
+			fprintf( fp, _T("ACTION: STATUS\n") ) ;
+			fclose(fp) ;
+		}
+		WaitForStatus( PrinterSetup, 1L ) ;  //set state string
+//		SessionLogDirect( _T("C_KPDM_Startup.returned from WaitForStatus ") );
+
+		if( (stricmp(gstate, _T("Launching")) == 0) || (stricmp(gstate, _T("Error")) == 0) )
+		{//timed out or error launching, exit app
+			if(stricmp(gstate, _T("Error")) == 0)
+			{
+				strcpy( gerrMsg, _T("Received error from CRT Printer when Launching.")) ;
+				MessageBox( gerrMsg, _T("MB_OK") ) ;
+			}
+			else
+			{
+				MessageBox( _T("Timed out waiting to establish connection to printer.  IPS application will be shutdown."), _T("MB_OK") ) ;
+			}
+
+			sprintf( ActionPath, _T("%s\\%03ld.act"), ControlFolder, 2L) ;
+			fp = fopen( ActionPath, _T("w")) ;
+			if( fp )
+			{
+				fprintf( fp, _T("ACTION: SHUTDOWN\n") ) ;
+				fclose(fp) ;
+			}
+			return(FALSE); //error in launching IPS
+		}
+	}
+
+	return( Result ) ;
+}
+
+int LaunchProgram( TCHAR *AppPath )
+{
+	int		 Result = FALSE ;
+	TCHAR	*verb = _T("open") ;
+	TCHAR	*file = AppPath ;
+	TCHAR	 AppDir[2048] ;
+	TCHAR	 ConfigFile[2048];
+
+	if( AppPath )
+	{
+		if( AppPath[0] )
+		{
+			GetAppDirectory( AppPath, AppDir ) ;
+
+			TCHAR	*defaultDirectory = AppDir ;
+		//	TCHAR	*cmd = _T("SW_SHOW") ;
+		//	TCHAR	*cmd = _T("MAXIMIZE") ;
+			TCHAR	*cmd = _T("MINIMIZE") ;
+
+//			SessionLogDirect(_T("C_KPDM_Startup. gconfigFileName \"%s\""), gconfigFileName ) ;
+			sprintf( ConfigFile, _T("\"%s\""), gconfigFileName ) ;
+//			SessionLogDirect(_T("C_KPDM_Startup.app file \"%s\", ConfigFile \"%s\", defaultdir \"%s\""), file, ConfigFile, defaultDirectory ) ;
+
+			Result = ShellExecute(verb, file, ConfigFile, defaultDirectory, cmd ) ;
+		}
+	}
+	return( Result ) ;
+}
+
+//	gTimeOutTime IS THE TIME WE WAIT FOR A STATUS RESPONSE.
+long	gTimeOutTime = 10000L ;
+
+WaitForStatus( UGenCon *PrinterSetupGC, long ActionNumber )
+{
+	TCHAR	 First7Lines[2048] ;
+	TCHAR	*ResponseText ;
+	TCHAR	 StatusFileName[2048] ;
+	TCHAR	*ResponseFolder = PrinterSetupGC->GetStringValue(_T("ResponseFolder")) ;
+	sprintf( StatusFileName, _T("%s\\%03ld.sta"), ResponseFolder, ActionNumber ) ;
+	TCHAR	*ControlFolder	= PrinterSetupGC->GetStringValue(_T("ControlFolder")) ;
+	TCHAR	 ActionPath[1024] ;
+	char	*fp ;
+//	SessionLogDirect( _T("C_KPDM_Startup.status file: %s "), StatusFileName ) ;
+	
+	long	StartTime = Clock() ;
+	long	TimeOut = StartTime + gTimeOutTime ;
+	while( Clock() < TimeOut )
+	{
+
+//		SessionLogDirect( _T("C_KPDM_Startup - trying to get status file ") ) ;
+		ResponseText = GetFile( StatusFileName ) ;
+		if( ResponseText )
+		{
+			GetFirstSevenLines( ResponseText, First7Lines ) ;
+//			SessionLogDirect( _T("C_KPDM_Startup - WaitForStatus: ResponseText: \"%s\""), First7Lines ) ;
+			ParseJob( ResponseText) ; //sets state variable
+//			SessionLogDirect( _T("C_KPDM_Startup - WaitForStatus: ParseJob set state to \"%s\""), gstate ) ;
+
+			DeleteThisFile( StatusFileName ) ;
+			free( ResponseText ) ;
+
+			if(stricmp(gstate,  _T("Launching")) == 0)
+			{
+				//wait and try to read again 
+//				SessionLogDirect( _T("C_KPDM_Startup - WaitForStatus: wait and try to read again")) ;
+
+				sprintf( ActionPath, _T("%s\\%03ld.act"), ControlFolder, 1L) ;
+				fp = fopen( ActionPath, _T("w")) ;
+				if( fp )
+				{
+					fprintf( fp, _T("ACTION: STATUS\n") ) ;
+					fclose(fp) ;
+				}
+			}	
+			else
+			{
+				break ;	//	we are launched ok or with error
+			}
+		}
+		Sleep( 1000L ) ;
+	}
+	long	EndTime = Clock() ;
+	
+	SessionLogDirect( _T("C_KPDM_Startup.WaitForStatus: Time: %ld ms"), EndTime - StartTime ) ;
+
+}
+
+int	DeleteThisFile( TCHAR *FilePath )
+{
+	int	Result = FALSE ;
+//	SessionLogDirect( _T("C_KPDM_Startup.DeleteThisFile - \"%s\""),FilePath);
+
+	if( FilePath )
+	{
+		if( *FilePath )
+		{
+			Result = unlink( FilePath ) ;
+			if( Result )
+			{
+			 //	HANDLE THE ERROR
+				TCHAR	Msg[1024] ;
+				int		ErrNo = errno(Msg) ;
+				SessionLogDirect( _T("**C_KPDM_Startup.DeleteThisFile: Error %ld \"%s\" deleting \"%s\""),
+								ErrNo, Msg, FilePath ) ;
+			}
+		}
+	}
+	return( Result ) ;
+}
+
+ParseJob( TCHAR *Text )
+{
+	long	ErrCode = 0L ;
+	int	Negative = 0L ;
+	TCHAR	Token[2048] ;
+	TCHAR	tmperrMsg[2048] ;
+
+	UParser	*theParser = new UParser ;
+	theParser->SetText(Text) ;
+
+	theParser->GetToken(Token) ;
+	while( *Token )
+	{
+//		SessionLogDirect( _T("C_KPDM_Startup. ParseJob . Token = %s"), Token ) ;
+		if( stricmp( Token, _T("State:")) == 0 )
+		{
+			theParser->GetToken(gstate) ;
+//			SessionLogDirect( _T("C_KPDM_Startup. ParseJob . state = %s"), gstate ) ;
+		}
+
+		if( stricmp( Token, _T("Code:")) == 0 )
+		{
+			theParser->GetToken(Token) ;
+			if( stricmp( Token, _T("-")) == 0 )
+			{
+				Negative++ ;
+				theParser->GetToken(Token) ;
+			}
+
+			ErrCode = atoi( Token ) ;
+
+			if( Negative )
+			{
+				ErrCode = -ErrCode ;
+			}
+//			SessionLogDirect( _T("C_KPDM_Startup. ParseJob . Code= %ld"), ErrCode) ;
+		}
+
+		if( stricmp( Token, _T("Msg:")) == 0 )
+		{
+			GetMultiLineQuotedString( theParser, tmperrMsg ) ;
+			sprintf(gerrMsg, _T("%s"), tmperrMsg);
+//			SessionLogDirect( _T("C_KPDM_Startup. ParseJob: Msg: \"%s\"."), gerrMsg ) ;
+		}
+
+		theParser->GetToken(Token) ;
+	}
+
+	theParser->SetText(NULL) ;
+	delete theParser ;
+}
+
+int GetMultiLineQuotedString( UParser *theParser, TCHAR *Buffer )
+{
+	theParser->GetUntil(0x22, Buffer, FALSE ) ;
+	theParser->GetUntil(0x22, Buffer, FALSE ) ;
+
+	return( TRUE ) ;
+}
+
+int	GetAppDirectory( TCHAR *FullPath, TCHAR *Directory )
+{
+	strcpy( Directory, FullPath ) ;
+	long	loop ;
+	long	length = strlen( FullPath ) ;
+
+	while( length > 0 )
+	{
+		if( Directory[length] == '\\' )
+		{
+			Directory[length] = 0 ;
+			length = 0 ;
+		}
+		length-- ;
+	}
+}
+
+int CreateConfigFile( UGenCon *PrinterSetup, TCHAR *ControlFolder )
+{
+	TCHAR		LogFileName[2048] ;
+	TCHAR		TimeStamp[128] ;
+	TCHAR		configFilePath[2048];
+
+	TCHAR		*ExeDirectory = GetExeDirectory() ;
+	sprintf( configFilePath, _T("%s\\IPS"), ExeDirectory);
+	sprintf( gconfigFileName, _T("%s\\IPS\\KPDM_Config.cfg"), ExeDirectory ) ;
+//	SessionLogDirect(_T("C_KPDM_Startup.gconfigfilename \"   %s  \""), gconfigFileName ) ;
+	CreateFullDirectoryPath( configFilePath ) ;
+	GetSortableTimeNow(TimeStamp) ;
+
+	char	*fp = fopen(gconfigFileName, _T("w")) ;
+
+	if( fp )
+	{
+		TCHAR	*PrinterModelStr = PrinterSetup->GetStringValue(_T("PrinterModel")) ;
+		TCHAR	*Model ;
+		TCHAR	*Type  ;
+		TCHAR	*Logo  ;
+		long	 PrinterType ;
+
+		if( stricmp( PrinterModelStr, _T("Kodak CRT")) == 0 )	//	4" CRT
+		{
+			Model = _T("Kodak Digital CRT Printer") ;
+			Type  = _T("Kodak Digital CRT Printer") ;
+			PrinterType = 3L ;
+		}
+		if( stricmp( PrinterModelStr, _T("Kodak LFCRT")) == 0 )	//	LFCRT
+		{
+			Model = _T("Kodak LFCRT Printer") ;
+			Type  = _T("Kodak LFCRT Printer") ;
+			PrinterType = 2L ;
+		}
+		if( stricmp( PrinterModelStr, _T("KPDM")) == 0 )		//	KPDM
+		{
+			Model = _T("Kodak Digital MultiPrinter") ;
+			Type  = _T("Kodak Digital MultiPrinter") ;
+			PrinterType = 1L ;
+		}
+//		if( stricmp( PrinterModelStr, _T("Disk")) == 0 )		//	KPDM II
+		if( stricmp( PrinterModelStr, _T("KPDM II")) == 0 )		//	KPDM II
+		{
+			Model = _T("Kodak Digital MultiPrinter II") ;
+			Type  = _T("Kodak Digital MultiPrinter II") ;
+			PrinterType = 0L ;
+		}
+
+//		fprintf( fp, _T("#\n")) ;
+//		fprintf( fp, _T("# KODAK PROFESSIONAL KPDM Image Print Server Configuration\n")) ;
+//		fprintf( fp, _T("#\n")) ;
+//		fprintf( fp, _T("KPDMIPSApp:\n")) ;
+
+		sprintf( LogFileName, _T("%s\\SessionLogs\\IPS"), ExeDirectory ) ;
+		CreateFullDirectoryPath( LogFileName ) ;
+
+		sprintf( LogFileName, _T("%s\\SessionLogs\\IPS\\%s_%s.log"),
+				ExeDirectory, PrinterSetup->GetStringValue(_T("PrinterName")), TimeStamp ) ;
+
+		PrinterSetup->SetAttrValue(_T("LogFile"), LogFileName ) ;
+
+		fprintf( fp, _T("LogFile: %s\n"), LogFileName) ;
+
+		fprintf( fp, _T("Name: %s\n"), PrinterSetup->GetStringValue(_T("PrinterName"))) ;
+		fprintf( fp, _T("PrinterType: %ld\n"), PrinterType ) ;
+		fprintf( fp, _T("NumberBuffers: 3\n")) ;
+		fprintf( fp, _T("HotFolder: %s\n"), PrinterSetup->GetStringValue(_T("ControlFolder"))) ;
+		CreateFullDirectoryPath( PrinterSetup->GetStringValue(_T("ControlFolder")) ) ;
+		fprintf( fp, _T("ResponseFolder: %s\n"), PrinterSetup->GetStringValue(_T("ResponseFolder"))) ;
+		CreateFullDirectoryPath( PrinterSetup->GetStringValue(_T("ResponseFolder")) ) ;
+
+		fprintf( fp, _T("MaxJobs: 50\n")) ;
+
+		if( gTesting )
+		{
+			fprintf( fp, _T("STUB: TRUE\n")) ;
+		}
+
+		fclose(fp) ;
+		return( TRUE ) ;
+	}
+	return( FALSE ) ;
+}
+
+
+int CleanFolder( TCHAR *Folder, TCHAR *FileExtn )
+{
+	TCHAR			 FilePath[2048] ;
+	TCHAR			*FileName ;
+
+	sprintf( FilePath, _T("%s\\%s"), Folder, FileExtn ) ;
+
+	UList			*theFiles = GetFileList(FilePath) ;
+	UListIterator	*anIter = new UListIterator(theFiles) ;
+
+	UGenCon	*aFileGC = anIter->GetLast() ;
+	while( aFileGC )
+	{
+		FileName = aFileGC->GetStringValue(_T("FileName")) ;
+		sprintf( FilePath, _T("%s\\%s"), Folder, FileName ) ;
+		SessionLogDirect(_T("C_KPDM_Startup.CleanFolder: deleting \"%s\""), FilePath ) ;
+		unlink( FilePath ) ;
+		aFileGC = anIter->GetPrev() ;
+	}
+
+	delete anIter ;
+	delete theFiles ;
+	return( TRUE ) ;
+}
+
+UList *GetFileList(TCHAR *Path)
+{
+	long	*FileHandle ;
+	char	 FileData[2048] ;
+	TCHAR	 FileName[2048] ;
+	TCHAR	 FileDate[1024] ;
+	int		 Result ;
+	long	 FileAttr ;
+	long	 longHandle ;
+	UGenCon	*FileDataGC ;
+
+	UList	*theList = new UList ;
+
+	strcpy( FileName, Path ) ;
+	FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+	FileHandle = FindFirstFile( FileName, FileData ) ;
+	longHandle = FileHandle ;
+	if( longHandle != 0xFFFFFFFF )
+	{
+		Result = FindFileConvToGC( FileData, FileDataGC ) ;
+		FindFileConvTime( FileDataGC, _T("ACCESSED"), FileDate ) ;
+
+		theList->InsertBack(FileDataGC) ;
+
+		FileAttr = FileDataGC->GetLongValue(_T("FileAttributes")) ;
+		while( Result )
+		{
+			Result = FindNextFile( FileHandle, FileData ) ;
+			if( Result )
+			{
+				FileDataGC = new UGenCon ( GetDataDictionary(_T("DDFindFileData")) ) ;
+				FindFileConvToGC( FileData, FileDataGC ) ;
+				theList->InsertBack(FileDataGC) ;
+			}
+		}
+
+		Result = FindClose( FileHandle ) ;
+	}
+	return( theList ) ;
+}
+
+int DebugGenCon( UGenCon *aGC )
+{
+	TCHAR		*AttrName ;
+	TCHAR		 AttrValue[2048] ;
+
+	UDataDict	*theDict = aGC->GetDataDict() ;
+
+	TCHAR		*GCName = aGC->GetName() ;
+	TCHAR		*DDName = theDict->GetName() ;
+
+	char		*fp = fopen( _T("C:\\Temp\\KPDMPrinterSetup.txt"), _T("w")) ;
+	if( fp )
+	{
+		fprintf( fp, _T("Create \"%s\" Using \"%s\"\r\n{\r\n"), GCName, DDName ) ;
+		UListIterator	*anIter = new UListIterator( theDict ) ;
+		UAttribute		*anAttr = (UAttribute *) anIter->GetFirst() ;
+		while( anAttr )
+		{
+			AttrName = anAttr->GetName() ;
+			if( aGC->AttrChanged( AttrName ))
+			{
+				aGC->GetAttrValue( AttrName, AttrValue ) ;
+				fprintf( fp, _T("\t%s\t\t\"%s\"\r\n"), AttrName, AttrValue ) ;
+			}
+			anAttr = (UAttribute *) anIter->GetNext() ;
+		}
+		fprintf( fp, _T("\r\n%c ;\r\n"), 0x0x7D) ;
+		delete anIter ;
+		fclose(fp) ;
+	}
+	return( TRUE ) ;
+}
+
+UGenCon *ReadPrinterSetup()
+{
+	TCHAR	 Keyword[1024] ;
+	TCHAR	 Value[1024] ;
+	TCHAR	 Token[1024] ;
+	UGenCon	*PrinterSetup ;
+
+	TCHAR	*SetupText = GetFile( _T("C:\\Temp\\KPDMPrinterSetup.txt")) ;
+	if( SetupText )
+	{
+		UParser	*aParser = new UParser ;
+		aParser->SetText( SetupText ) ;
+
+		aParser->GetToken( Token ) ;	//	Create
+		aParser->GetToken( Keyword ) ;	//	GenCon Name
+		aParser->GetToken( Token ) ;	//	Using
+		aParser->GetToken( Value ) ;	//	Dictionary name
+
+		PrinterSetup = new UGenCon( GetDataDictionary( Value )) ;
+		PrinterSetup->SetName( Keyword ) ;
+
+		aParser->GetToken( Token ) ;	//	 Open Brace
+
+		while( *Keyword != 0x7D )		//	Close Brace
+		{
+			aParser->GetToken( Keyword ) ;
+			aParser->GetToken( Value ) ;
+			PrinterSetup->SetAttrValue( Keyword, Value ) ;
+		}
+
+		aParser->SetText( NULL ) ;
+		delete aParser ;
+		free( SetupText ) ;
+	}
+
+	return( PrinterSetup ) ;
+}
+
+
+TCHAR	*GetFirstSevenLines( TCHAR *Src, TCHAR *Dst )
+{
+	long	LineCount = 1L ;
+	long	SrcPos = 0 ;
+	long	DstPos = 0 ;
+
+	while( Src[SrcPos] )
+	{
+		if( Src[SrcPos] == 0x0A )
+		{
+			LineCount++ ;
+		}
+		Dst[DstPos] = Src[SrcPos] ;
+		DstPos++ ;
+		SrcPos++ ;
+		if( LineCount >= 7 )
+		{
+			break ;
+		}
+	}
+	Dst[DstPos] = 0x00; 
+	return( Dst ) ;
+}
+
+

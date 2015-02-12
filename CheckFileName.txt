@@ -1,0 +1,196 @@
+
+
+NUMERIC CheckFileName( &dBase, &ImagePath, &Order, &Roll, &Frame, &Ext, RollNotInImagePath, &ImagePathModified, &RollModified )
+{
+	ImagePathModified = FALSE;
+
+	OriginalImagePath = ~<ImagePath>~;
+	ModifiedImagePath = ~<ImagePath>~;
+
+	RollModified = FALSE;
+
+	OriginalRoll = ~<Roll>~;
+	ModifiedRoll = ~<Roll>~;
+
+	// Convert the full path image file name to an SQLSafe and PathSafe format
+
+	MakeSQLSafeRemoveQuotes( ModifiedImagePath );
+
+	if ( ~<OriginalImagePath>~ != ~<ModifiedImagePath>~  )
+	{
+		ImagePathModified = TRUE;
+		message = Translate( ~CheckFileName: modified image path to be SQL safe:  old path <OriginalImagePath>  new path <ModifiedImagePath>~ );
+		dBase( LogActivity,Msg,~<message>~,Type,Warning );
+		Log( Session,~<message>~ );
+		OriginalImagePath = ~<ModifiedImagePath>~;
+	}
+
+	MakePathSafe( ModifiedImagePath );
+
+	if ( ~<OriginalImagePath>~ != ~<ModifiedImagePath>~  )
+	{
+		ImagePathModified = TRUE;
+		message = Translate( ~CheckFileName: modified image path to be Path safe:  old path <OriginalImagePath>  new path <ModifiedImagePath>~ );
+		dBase( LogActivity,Msg,~<message>~,Type,Warning );
+		Log( Session,~<message>~);
+		OriginalImagePath = ~<ModifiedImagePath>~;
+	}
+
+	if ( AuditPathString(~<ModifiedImagePath>~) )
+	{
+		message = Translate( ~CheckFileName: audit of valid path characters failed in image path:  <ModifiedImagePath>~ );
+		dBase( LogActivity,Msg,~<message>~,Type,Error );
+		Log( Session,~<message>~);
+		return FALSE;
+	}
+
+
+	if ( <RollNotInImagePath> )
+	{
+		MakeSQLSafeRemoveQuotes( ModifiedRoll );
+
+		if ( ~<OriginalRoll>~ != ~<ModifiedRoll>~ )
+		{
+			RollModified = TRUE;
+			message = Translate( ~CheckFileName: modified roll number to be SQL safe:  old roll number <OriginalRoll>  new roll number <ModifiedRoll>~ );
+			dBase( LogActivity,Msg,~<message>~,Type,Warning );
+			Log( Session,~<message>~ );
+			OriginalRoll = ~<ModifiedRoll>~;
+		}
+
+		MakePathSafe( ModifiedRoll );
+
+		if ( ~<OriginalRoll>~ != ~<ModifiedRoll>~ )
+		{
+			RollModified = TRUE;
+			message = Translate( ~CheckFileName: modified roll number to be Path safe:  old roll number <OriginalRoll>  new roll number <ModifiedRoll>~ );
+			dBase( LogActivity,Msg,~<message>~,Type,Warning );
+			Log( Session,~<message>~ );
+			OriginalRoll = ~<ModifiedRoll>~;
+		}
+	}
+
+
+	// NOTE: AT THIS POINT ModifiedImagePath MUST CONTAIN THE NEW "FIXED" FILENAME //
+
+
+	// Make sure that the path is a UNC Path.
+
+	ModifiedImagePath = MakePath( Type,UNC,~<ModifiedImagePath>~);
+
+	if ( ~<OriginalImagePath>~ != ~<ModifiedImagePath>~  )
+	{
+		ImagePathModified = TRUE;
+		message = Translate( ~CheckFileName: modified image path to be a UNC path:  old path <OriginalImagePath>  new path <ModifiedImagePath>~ );
+		dBase( LogActivity,Msg,~<message>~,Type,Warning );
+		Log( Session,~<message>~);
+		OriginalImagePath = ~<ModifiedImagePath>~;
+	}
+
+	//if ( !Files( IsUNC,~<ModifiedImagePath>~ ) && NetworkOperation() )
+	//{
+	//	message = Translate( UIMessages,UnsharedFileOK,~<ModifiedImagePath>~ );
+	//	dBase( LogActivity,Msg,~<message>~,Type,Error );
+	//	Log( Session,~<message>~);
+	//	return FALSE;
+	//}
+
+
+	// Now extract the order/roll/frame from the path
+
+	NewFileName = ~<$Str.$ModifiedImagePath.FileName>~;
+	NewExt = ~<$Str.$ModifiedImagePath.Ext>~;
+	NewFrame = ~<$Str.$NewFileName.WithOutExt>~;
+
+	if ( <RollNotInImagePath> )
+	{
+		NewOrder = ~<$Str.$ModifiedImagePath.Folder>~;
+		NewRoll = ~<ModifiedRoll>~;
+	}
+	else
+	{
+		NewOrder = ~<$Str.$ModifiedImagePath.ParentFolder>~;
+		NewRoll = ~<$Str.$ModifiedImagePath.Folder>~;
+	}
+
+
+	// Make sure we found values
+
+	if ( ( ~<NewOrder>~ == ~~ ) || ( ~<NewRoll>~ == ~~ ) || ( ~<NewFrame>~ == ~~ ) )
+	{
+		message = Translate( ~CheckFileName: failed to extract order/roll/frame information from image path:  Order:[<NewOrder>]  Roll:[<NewRoll>]  Frame:[<NewFrame>]  image path:[<ModifiedImagePath>]~ );
+		dBase( LogActivity,Msg,~<message>~,Type,Error );
+		Log( Session,~<message>~);
+		return FALSE;
+	}
+
+
+	// Make sure that the values are within our size specs.
+
+	if ( strlen(~<NewFrame>~) > 31 )
+	{ 
+		message = Translate( ~CheckFileName: the frame number extracted from the image path is greater than 31 characters:  Order:[<NewOrder>]  Roll:[<NewRoll>]  Frame:[<NewFrame>]  image path:[<ModifiedImagePath>]~ );
+		dBase( LogActivity,Msg,~<message>~,Type,Error );
+		Log( Session,~<message>~);
+		return FALSE;
+	} 
+
+	if ( strlen(~<NewRoll>~) > 31 )
+	{
+		message = Translate( ~CheckFileName: the roll number extracted from the image path is greater than 31 characters:  Order:[<NewOrder>]  Roll:[<NewRoll>]  Frame:[<NewFrame>]  image path:[<ModifiedImagePath>]~ );
+		dBase( LogActivity,Msg,~<message>~,Type,Error );
+		Log( Session,~<message>~);
+		return FALSE;
+	}
+
+	Order = ~<NewOrder>~;
+	Roll = ~<NewRoll>~;
+	Frame = ~<NewFrame>~;
+	Ext = ~<NewExt>~;
+
+	return TRUE;
+}
+
+
+NUMERIC CheckFileStatus( &dBase,ImagePath,Order,WhichRoll,WhichFrame, &AnotherOrderExistsWithSameImage )
+{
+	// Now do sanity checks on the database tables to make sure we're not reassigning this image.
+
+	Query = ~Select OrderID,Roll,Frame From Images Where Path = '<ImagePath>'~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		message = Translate( ~Query Failed <Query>. <theErr>~ );
+		dBase( LogActivity,Msg,~<message>~,Type,Error );
+		Log( Session,~<message>~);
+
+		message = Translate( ~CheckFileStatus: failed to search the images table for an image record with the same image path:  image path:[<ImagePath>]~ );
+		dBase( LogActivity,Msg,~<message>~,Type,Error );
+		Log( Session,~<message>~);
+
+		return FALSE;
+	}
+
+	AnotherOrderExistsWithSameImage = FALSE;
+
+	while ( List( GetNext, Image ) )
+	{
+		if ( SimilarStr(~<$pcon.Image[OrderID]>~,~<Order>~) && SimilarStr(~<$pcon.Image[Roll]>~,~<WhichRoll>~) && SimilarStr(~<$pcon.Image[Frame]>~,~<WhichFrame>~) )
+			continue;
+
+		AnotherOrderExistsWithSameImage = TRUE;
+		break;
+	}
+
+	if ( <AnotherOrderExistsWithSameImage> )
+	{
+		message = Translate( ~CheckFileStatus: another order/roll/frame [<$pcon.Image[OrderID]>/<$pcon.Image[Roll]>/<$pcon.Image[Frame]>] contains the same image file name:  [<imagepath>] ~ );
+		dBase( LogActivity,Msg,~<message>~,Type,Error );
+		Log( Session,~<message>~);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+

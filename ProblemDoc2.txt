@@ -1,0 +1,1369 @@
+IncludeClass(BaseDialog);
+IncludeClass(BaseInternet);
+
+Class( ProblemDialog,Extends,BaseDialog,
+		Member,fZipPath,Str,~~,
+		Member,fZip,Object,Zip,
+		Member,fFirstTime,Numeric,1,
+		Member,fModuleList,Object,StringList,Constructor,New,
+		Member,fRegionList,Object,StringList,Constructor,New,
+		Member,fExternalFilesList,Object,StringList,Constructor,New );
+
+VOID	ProblemDialog::ProblemDialog()
+{
+	Title = TR(ProblemReport,Title);
+	Left = 200;
+	Dictionary = ~DDProblemDialog~;
+	HelpPage = ~Report_CustProblem.htm~;
+	hGap = 5;
+
+	fFirstTime = TRUE;
+}
+
+VOID	ProblemDialog::TranslationText()
+{
+	LoadTranslationFile(Standard,Standard,Standard);
+	LoadTranslationFile(~Administration\ProblemReport~,ProblemReport,ProblemReport);
+}
+
+VOID	ReOpen()					{ ThisDialog.ReOpen(); }
+
+
+VOID	ProblemDialog::RecursiveDirectoryDelete( path,search )
+{
+	MoreFiles = findfile( aDirectoryEntry,Find,~<path>\<search>~ );
+
+	while ( $Morefiles )
+	{
+		Morefiles = aDirectoryEntry( Next );
+
+		aDirectoryEntry( Get,Path,aPath );
+			
+		if ( aDirectoryEntry( Dots ) )
+			continue;
+			
+		if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		{
+			RecursiveDirectoryDelete( ~<aPath>~,~<search>~,count );
+			
+			Directory( Remove,~<aPath>~ );
+			continue;
+		}
+
+		Files( ChMod,~<aPath>~,Write );
+
+		if ( !Files( Delete,~<aPath>~ ) )
+		{
+			GetLastError( ErrorString,msg );
+			Log(Session,~Error trying to delete <aPath>.  <msg>~);
+		}
+	}
+}
+
+
+
+NUMERIC ProblemDialog::HandleImageDrop( &SelectedImages,&SrcView )
+{
+	Directory( Create,~<$App.Directory>\Problem\Images~ );
+	
+	Count = 0;
+
+	while ( SelectedImages( GetNext,Image ) )
+	{
+		if ( !IsNull( ~<$con.Image[path]>~ ) )
+		{
+			TheDestPath = ~<$App.Directory>\Problem\Images\<$con.Image[path].pathwithoutvolume>~;
+			Files( Copy,~<$con.Image[path]>~,~<TheDestPath>~ );
+			++Count;
+		}
+		else
+		{
+			log( Session,~<$con.Image[OrderID]>,<$con.Image[Roll]>,<$con.Image[Frame]> has no image~ );
+		}
+	}
+
+	return Warning( TR(ProblemReport,CopiedImages,~<Count>~) );
+}
+
+
+
+NUMERIC ProblemDialog::RewriteJobOrLayout( SrcPath,DstPath )
+{
+	dlg( SetStatus,0,TR(ProblemReport,Adding,~<SrcPath>~) );
+
+	if ( !Document( Job,ParseFile,~<SrcPath>~ ) )
+	{
+		return Failure( Translate( ~An error occured while parsing <SrcPath>~ ) );
+	}
+
+	if ( !Job( GetRenderList,0,RenderList ) )
+	{ 
+		return Failure( Translate( ~There was no render list for <SrcPath>~ ) );
+	}
+
+	return RenderList( WriteJob,~<DstPath>~ );
+}
+
+
+
+NUMERIC ProblemDialog::HandleOrderItemDrop( &SelectedOrderItems,&SrcView )
+{
+	Directory( Create,~<$App.Directory>\Problem\OrderItems~ );
+	
+	Count = 0;
+
+	while ( SelectedOrderItems( GetNext,OrderItem ) )
+	{
+		if ( !IsNull( ~<$con.OrderItem[JobPath]>~ ) )
+		{
+			TheDestPath = ~<$App.Directory>\Problem\OrderItems\<$con.OrderItem[JobPath].pathwithoutvolume>~;
+			Files( Copy,~<$con.OrderItem[JobPath]>~,~<TheDestPath>~ );
+
+			ParsedDestPath = ~<$str.$TheDestPath.WithoutExt>_RolledOut.txt~;
+			RewriteJobOrLayout( ~<$con.OrderItem[JobPath]>~,~<ParsedDestPath>~ );
+			++Count;
+		}
+		else
+		{
+			Warning( TR(ProblemReport,OrderItemHasNoJob,~<$con.OrderItem[OrderID]>~,~<$con.OrderItem[ID]>~) );
+		}
+	}
+
+	return Warning( TR(ProblemReport,CopiedOrderItems,~<Count>~) );
+}
+
+
+NUMERIC ProblemDialog::HandleProductDrop( &SelectedProducts,&SrcView )
+{
+	Directory( Create,~<$App.Directory>\Problem\Products~ );
+	
+	Count = 0;
+
+	while ( SelectedProducts( GetNext,Product ) )
+	{
+		TheDestPath = ~<$App.Directory>\Problem\Products\<$con.Product[ID]>\<$con.Product[ProductLayoutPath].pathwithoutvolume>~;
+
+		Multiple = false;
+		ADO( dbase,connect,GetValuesFor,~Select Multiple From Products Where ID = '<$con.Product[ID]>'~,Multiple );
+
+		if ( !IsNull( ~<$con.Product[ProductLayoutPath]>~ ) )
+		{
+			if ( <Multiple> )	// Like for school composites?
+			{ 
+				MoreFiles = findfile( aDirectoryEntry,Find,~<$con.Product[ProductLayoutPath]>\*.*~ );
+
+				while ( $Morefiles )
+				{
+					Morefiles = aDirectoryEntry( Next );
+
+					aDirectoryEntry( Get,Path,aPath );
+			                
+					if ( aDirectoryEntry( Dots ) )
+							continue;
+			                
+					if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+						continue;
+
+					if ( Numeric( ~<$str.$aPath.ext>~ ) )
+					{
+						UnrolledOutPath = ~<TheDestPath>\<$str.$aPath.filename>~;
+						Files( Copy,~<aPath>~,~<$str.$UnrolledOutPath.RemoveDoubleBackSlashes>~ );
+
+						ParsedDestPath = ~<TheDestPath>\RolledOut_<$str.$aPath.filename>~;
+						RewriteJobOrLayout( ~<aPath>~,~<$str.$ParsedDestPath.RemoveDoubleBackSlashes>~ );
+					}
+				}
+			}
+			else	// It is just a single layout
+			{
+				
+				Files( Copy,~<$con.Product[ProductLayoutPath]>~,~<TheDestPath>~ );
+				ParsedDestPath = ~<$str.$TheDestPath.WithoutExt>_RolledOut.txt~;
+				RewriteJobOrLayout( ~<$con.Product[ProductLayoutPath]>~,~<ParsedDestPath>~ );
+			}
+
+			++Count;
+
+			MessagePump();
+		}
+		else
+		{
+			Warning( TR(ProblemReport,ProductHasNoLayout,~<$con.Product[ID]>~) );
+		}
+	}
+
+	return Warning( TR(ProblemReport,CopiedProducts,~<Count>~) );
+}
+
+
+
+NUMERIC	ProblemDialog::ProcessDraggedFile( &DraggedFile )
+{
+	Path = GetFileName( DraggedFile );
+
+	MakeTildeSafe( Path );
+
+	fExternalFilesList( AddString,~<Path>~ );
+
+	return TRUE;
+}
+
+
+NUMERIC	ProblemDialog::DragComplete( &DraggedFiles )
+{
+	Count = GetDragCount( DraggedFiles );
+
+	Warning( TR(ProblemReport,CopiedFiles,~<Count>~) );
+
+	return TRUE;
+}
+
+
+NUMERIC ProblemDialog::CreateSchemaDump( SchemaType )
+{
+	dlg( SetStatus,0,TR(ProblemReport,Adding,~<SchemaType>~) );
+
+	if ( !PGenConList( SchemaList,Connect,Cursor,Keyset,Schema,~<SchemaType>~ ) )
+	{
+		return FALSE;
+	}
+
+	Path = ~<$App.Directory>\Problem\<SchemaType>.xml~;
+
+	SchemaList( Save,~<$App.Directory>\Problem\<SchemaType>.xml~,~XML~ );
+
+	return TRUE;
+}
+
+
+
+NUMERIC ProblemDialog::CreateTableDump( Query,TableName )
+{
+	dlg( SetStatus,0,TR(ProblemReport,Adding,~<TableName>~) );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{
+		return FALSE;
+	}
+
+	Path = ~<$App.Directory>\Problem\<TableName>.xml~;
+
+	List( Save,~<$App.Directory>\Problem\<TableName>.xml~,~XML~ );
+
+	return TRUE;
+}
+
+NUMERIC ProblemDialog::AddTablesToZip()
+{
+	CreateTableDump( ~Select * From WorkstationSettings~,~WorkstationSettings~ );
+	CreateTableDump( ~Select * From SystemSettings~,~SystemSettings~ );
+	CreateTableDump( ~Select * From Settings~,~UserSettings~ );
+	CreateTableDump( ~Select * From Users~,~Users~ );
+	CreateTableDump( ~Select * From Printers~,~Printers~ );
+	CreateTableDump( ~Select * From QueueDefinition~,~PrinterQueues~ );
+	CreateTableDump( ~Select * From PrinterRes~,~PrinterRes~ );
+	CreateTableDump( ~Select * From Profiles~,~Profiles~ );
+	CreateTableDump( ~Select * From ViewProfiles~,~ViewProfiles~ );
+	CreateTableDump( ~Select * From RemoteJobDirs~,~RemoteJobDirs~ );
+	CreateTableDump( ~Select * From ReportQueue~,~ReportQueue~ );
+	
+	CreateTableDump( ~Select * From CustomerBackgrounds~,~CustomerBackgrounds~ );
+	CreateTableDump( ~Select * From BackgroundSubjectColumns~,~BackgroundSubjectColumns~ );
+	CreateTableDump( ~Select * From BackgroundTypes~,~BackgroundTypes~ );
+	
+	CreateTableDump( ~Select * From ExportImageSetups~,~ExportImageSetups~ );
+
+	CreateTableDump( ~Select * From RImage~,~RImage~ );
+
+	CreateTableDump( ~Select * From RImageEditListTemplates~,~RImageEditListTemplates~ );
+	CreateTableDump( ~Select * From RImageMergeTemplates~,~RImageMergeTemplates~ );
+	CreateTableDump( ~Select * From RImageTemplates~,~RImageTemplates~ );
+
+	CreateTableDump( ~Select * From ScanSetups~,~ScanSetups~ );
+	CreateTableDump( ~Select * From RetouchBatchSetup~,~RetouchBatchSetup~ );
+	CreateTableDump( ~Select * From Tasks~,~Tasks~ );
+
+	CreateTableDump( ~Select * From IDs~,~IDs~ );
+	CreateTableDump( ~Select * From LabInfo~,~LabInfo~ );
+	
+	CreateTableDump( ~Select * From Animoto~,~Animoto~ );
+
+	CreateSchemaDump( ~Indexes~ );
+	CreateSchemaDump( ~Statistics~ );
+	CreateSchemaDump( ~PrimaryKeys~ );
+	CreateSchemaDump( ~ForeignKeys~ );
+	CreateSchemaDump( ~Columns~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ProblemDialog::AddPrinterFilesToZip( )
+{
+	dlg( SetStatus,0,TR(ProblemReport,AddingPrinterFiles) );
+
+	fZip( Files,~<$App.ShareDirectory>\PrintRecords\*.*~ );
+	AddFiles(Recursively);
+
+	fZip( Files,~<$App.Directory>\SessionLogs\IPS\*.*~ );
+
+	fZip( Files,~<$App.Directory>\..\d-workflow\logs\server\*.*~ );
+	fZip( Files,~<$App.Directory>\..\d-workflow\config\server\pdmplus.ini~ );
+	AddFiles();
+
+	fZip( Files,~<$App.Directory>\..\d-workflow\server\d-workflow\DB\*.*~ );
+	AddFiles(Recursively);
+
+	fZip( Files,~<$App.Directory>\..\Netprinter Interface Application\Logfiles\*.*~ );
+	fZip( Files,~<$App.Directory>\..\Netprinter Interface Application\IACmdBuffer\*.*~ );
+	AddFiles();
+
+	fZip( Files,~<$App.Directory>\..\Netprinter Interface Application\DBIA\DB\*.*~ );
+
+	return AddFiles(Recursively);
+}
+
+
+NUMERIC ProblemDialog::AddDraggedFilesToZip( )
+{
+	dlg( SetStatus,0,TR(ProblemReport,AddingDraggedFiles) );
+
+	fZip( Files,~<$App.Directory>\Problem\Images\*.*~ );
+	AddFiles(Recursively);
+
+	fZip( Files,~<$App.Directory>\Problem\OrderItems\*.*~ );
+	AddFiles(Recursively);
+
+	fZip( Files,~<$App.Directory>\Problem\Products\*.*~ );
+	AddFiles(Recursively);
+
+	fZip( Files,~<$App.Directory>\Problem\DraggedFiles\*.*~ );
+	AddFiles(Recursively);
+
+	fZip( Files,~<$App.Directory>\Problem\JobQueueFiles\*.*~ );
+	AddFiles(Recursively);
+
+	return TRUE;
+}
+
+NUMERIC ProblemDialog::AddFilesToZip( )
+{
+	dlg( SetStatus,0,TR(ProblemReport,AddingStandardFiles) );
+
+	fZip( Files,~<$App.Directory>\Problem\*.*~ );
+	fZip( Files,~<$App.Directory>\SessionLogs\*.*~ );
+	fZip( Files,~<$App.Directory>\Heap\*.*~ );
+	fZip( Files,~<$App.Directory>\TraceFiles\<$App.Name.WithoutExt>\*.*~ );
+	fZip( Files,~<$App.Volume>\TiffHeaderDump.txt~ );
+	fZip( Files,~<$App.Volume>\JpegHeaderDump.txt~ );
+	fZip( Files,~<$App.Directory>\SessionLogs\<$App.Name.WithoutExt>\*.*~ );
+	fZip( Files,~<$App.ShareDirectory>\Scripts\Macros\*.*~ );
+	fZip( Files,~<$App.ShareDirectory>\Scripts\ScriptOverrides\*.*~ );
+	fZip( Files,~<$App.ShareDirectory>\TraceFiles\<$App.Name.WithoutExt>\Animoto\CommunicationsTrace\*.*~ );
+
+	AddFiles();
+	
+	fZip( Files,~<$App.ShareDirectory>\Scripts\ScriptLibOverrides\*.*~ );
+	AddFiles(Recursively);
+	
+	return TRUE;
+}
+
+NUMERIC ProblemDialog::AddDynaZipFilesToZip()
+{
+	fZip( Files,~<$Sys.WindowsDirectory>\DYNAZIP.LOG~ );
+	fZip( Files,~<$Sys.WindowsDirectory>\DZIPLOG.TXT~ );
+
+	return AddFiles();
+}
+
+
+NUMERIC ProblemDialog::AddExternalFiles()
+{
+	dlg( SetStatus,0,TR(ProblemReport,AddingExternalFiles) );
+
+	more = fExternalFilesList( GetFirstString,Path );
+
+	while ( <more> )
+	{
+		fZip( Files,~<Path>~ );
+
+		more = fExternalFilesList( GetNextString,Path );
+	}
+
+	AddFiles();
+
+	fExternalFilesList( DeleteAll );
+
+	return TRUE;
+}
+
+
+NUMERIC ProblemDialog::SystemInfo()
+{	
+	ExecuteToFile( ~<$Sys.Directory>\systeminfo.exe~,~<$App.Directory>\Problem\SystemInfo.txt~ );
+
+	return TRUE;
+}
+
+
+NUMERIC ProblemDialog::CaptureEventLogs()
+{
+	dlg( SetStatus,0,TR(ProblemReport,SaveEventLogs) );
+	
+	EventLog( Type,Application,Path,~<$App.Directory>\Problem\Application.evt~,Backup );
+
+	EventLog( Type,System,Path,~<$App.Directory>\Problem\System.evt~,Backup );
+
+	return TRUE;
+}
+
+VOID ProblemDialog::CreateXML( &theXML,&From,&Email,&theDate,&theTime,&theDescription,&theModule,&theSubModule,&IsRepeatable,&theRegion,&theCase,&theReportPath )
+{	
+	theXML = ~<?xml version="1.0" encoding="utf-8" ?>
+<Problem>
+	<UniqueID><$Sym.LabID></UniqueID>
+	<Customer><From></Customer>
+	<CustomerEmail><Email></CustomerEmail>
+	<Region><theRegion></Region>
+	<Date><theDate></Date>
+	<Time><theTime></Time>
+	<Case><theCase></Case>
+	<Application><$App.Title></Application>
+	<Module><theModule></Module>
+	<SubModule><theSubModule></SubModule>
+	<Repeatable><IsRepeatable></Repeatable>
+	<ReportPath><theReportPath></ReportPath>
+	<Description>
+	<![CDATA[
+		
+<theDescription>
+		
+	]]>
+	</Description>
+</Problem>~;
+}
+
+	
+NUMERIC ProblemDialog::CreateDescription( theDirectory,&theXML )
+{
+	if ( !File( theFile,Open,~<theDirectory>\Problem.xml~,UnicodeOutput,Create,Write ) )	// CREATE AND OPEN THE JOB
+	{
+		return Warning( TR(ProblemReport,CreateFailed,~<theDirectory>\Problem.txt~,~<$func.GetLastErrorMsg()>~) );
+	}
+
+	theFile( WriteContentsOf,theXML );
+	theFile( CRLF );
+
+	thefile( Close );
+	
+	return TRUE;
+}
+
+NUMERIC ProblemDialog::Initialize()
+{
+	Directory( Create,~<$App.Directory>\Problem~ );
+
+	RecursiveDirectoryDelete( ~<$App.Directory>\Problem~,~*.*~ );
+
+	return TRUE;
+}
+
+NUMERIC ProblemDialog::SendViaFTP( Region,Customer )
+{
+	dlg( SetStatus,0,TR(ProblemReport,SendingFile) );
+	
+	RegionNoSpaces = ~<$str.$Region.nospaces>~;
+	CustomerNoSpaces = ~<$str.$Customer.nospaces>~;
+	
+	if ( Authorized( DP2 ) )	// CCC really wants em in the original place
+	{
+		if ( !FTPFileToKodak( ~<fZipPath>~,~DP2~,~CustomerCare~,~<CustomerNoSpaces>~ ) )
+		{
+			return Warning( ~Failed to ftp file <fZipPath> to DP2/CustomerCare/<CustomerNoSpaces>.  <$func.GetLastErrorMsg()>~ );
+		}
+	}
+	else
+	{
+		if ( !FTPFileToKodak( ~<fZipPath>~,~CustomerCare~,~<RegionNoSpaces>~,~<CustomerNoSpaces>~ ) )
+		{
+			return Warning( TR(ProblemReport,FTPFailed,~<fZipPath>~,~DP2/CustomerCare/<RegionNoSpaces>/<CustomerNoSpaces>~,~<$func.GetLastErrorMsg()>~) );
+		}
+	}
+	
+	return TRUE;
+}
+
+NUMERIC LogThreadList()
+{
+	log( Session,~Active Threads:~ );
+
+	if ( !GenCon( ThreadsList,GetFrom,Threads,~[GenCons]~ ) )
+	{
+		return TRUE;
+	}
+
+	while ( ThreadsList( GetNext,aThread ) )
+	{
+		aThread( GetName,Name );
+		log( Session,~	<$con.aThread.name>~ );
+	}
+
+	return TRUE;
+}
+
+NUMERIC ProblemDialog::AddToZipFile(path)
+{
+	fZip( Files,~<path>~ );
+
+	return AddFiles();
+}
+
+
+NUMERIC ProblemDialog::AddFiles(Mode)
+{
+	dlg( SetStatus,0,TR(ProblemReport,Zipping) );
+
+	if ( SimilarStr( ~<Mode>~,Recursively ) )
+	{
+		fZip( Recurse,TRUE );
+	}
+
+	if ( <fFirstTime> )
+	{
+		fZip( Operation,Add,Path,~<fZipPath>~ );
+		fFirstTime = FALSE;
+	}
+	else
+	{
+		fZip( Operation,Update,Path,~<fZipPath>~ );
+	}
+
+	if ( !fZip( Zip ) )
+	{
+		fZip( Clear,Diagnostics,TRUE );
+		return Warning( TR(ProblemReport,ZipFailure,~<$func.GetLastErrorMsg()>~) );
+	}
+
+	fZip( Clear,Diagnostics,TRUE );
+
+	fZip( Recurse,FALSE );
+
+	return TRUE;
+}
+
+
+
+NUMERIC ProblemDialog::Initial()
+{
+	dlg( GetInput );
+
+	if ( IsNull( ~<$con.DlgData[Customer]>~ ) )		{ return Warning( TR(ProblemReport,CustomerNull) ); }
+	if ( IsNull( ~<$con.DlgData[Email]>~ ) )		{ return Warning( TR(ProblemReport,EmailNull) ); }
+	if ( IsNull( ~<$con.DlgData[Description]>~ ) )	{ return Warning( TR(ProblemReport,DescriptionNull) ); }
+	
+	if ( dlg( ComboBox,ModuleField,GetSelectedIndex ) == 0 )
+	{
+		return Warning( TR(ProblemReport,ChooseAModule) );
+	}
+	
+	if ( dlg( ComboBox,SubModuleField,GetSelectedIndex ) == 0 )
+	{
+		return Warning( TR(ProblemReport,ChooseASubModule) );
+	}
+	
+
+	FileName = ~PR_<$Date.SortableDateTime>.zip~;
+
+	Directory( Create,~<$App.Directory>\ProblemReports~ );
+
+	fZipPath = ~<$App.Directory>\ProblemReports\<$App.Title.NoSpaces>_<FileName>~;
+
+	Files( Delete,~<$Sys.WindowsDirectory>\DYNAZIP.LOG~ );
+	Files( Delete,~<$Sys.WindowsDirectory>\DZIPLOG.TXT~ );
+
+	Files( Delete,~<fZipPath>~ );
+
+	Log( Session,~Creating Problem Report: <fZipPath>~ );
+	Log( Session,~Report Description:      <$con.DlgData[Description]>~ );
+
+	fZip( Clear,Diagnostics,TRUE );
+
+	return TRUE;
+}
+
+
+NUMERIC ProblemDialog::OnGoButton(ZipAndFTP)
+{
+	ReturnOnFailure( Initial() );
+	
+	fModuleList( GetStringAt,dlg( ComboBox,ModuleField,GetSelectedIndex ),ModuleTranslation );
+	Index = dlg( ComboBox,ModuleField,GetSelectedIndex );
+	
+	SubModuleIndex = dlg( ComboBox,SubModuleField,GetSelectedIndex );
+	
+	ModuleTranslation = ~Unknown~; 
+	SubModuleTranslation = ~Unknown~;
+	
+	if ( MethodDefined( ~SubModule<Index>~ ) )
+	{
+		fSubModule<Index>List( GetStringAt,<SubModuleIndex>,SubModuleTranslation );
+	}
+	
+	fRegionList( GetStringAt,dlg( ComboBox,RegionField,GetSelectedIndex ),RegionTranslation );
+
+	TranslationsOptions(Disable);
+	RegionENU = TR(<RegionTranslation>);
+	ModuleENU = TR(<ModuleTranslation>);
+	SubModuleENU = TR(<SubModuleTranslation>);
+	TranslationsOptions(Enable);
+	
+	Customer	= ~<$con.DlgData[Customer]>~;
+	Email		= ~<$con.DlgData[Email]>~;
+	Region		= ~<RegionENU>~;
+	Date		= ~<$Date.Date>~;
+	Time		= ~<$Date.Time>~;
+	Description = IsNull(~<$con.DlgData[Description]>~) ? ~No Description~ : ~<$con.DlgData[Description]>~;
+	Module		= IsNull(~<ModuleENU>~) ? ~No Module~ : ~<ModuleENU>~;
+	SubModule	= IsNull(~<SubModuleENU>~) ? ~No SubModule~ : ~<SubModuleENU>~;
+	Case		= IsNull(~<$con.DlgData[Case]>~) ? ~No Case~ : ~<$con.DlgData[Case]>~;
+
+	if ( Authorized( DP2 ) )	// CCC really wants em in the original place
+	{		
+		Reportpath  = ~DP2/CustomerCare/<$Str.$Customer.NoSpaces>/<$str.$fZipPath.filename>~;
+	}
+	else
+	{
+		Reportpath  = ~CustomerCare/<$Str.$Region.NoSpaces>/<$Str.$Customer.NoSpaces>/<$str.$fZipPath.filename>~;
+	}
+
+	Repeatable = DlgData(GetNumeric,Repeatable);
+	
+	dlg(EnableControls, False, SendViaFTPButton,ZipButton );
+	
+	theXML = ~~;
+	
+	CreateXML( theXML,Customer,Email,Date,Time,Description,Module,SubModule,Repeatable,Region,Case,ReportPath );
+
+	CreateDescription( ~<$App.Directory>\Problem~,theXML );
+
+	LargestFreeBlock = GetLargestFreeBlockSize();
+
+	Log( Session,~Max Virtual Memory = <LargestFreeBlock>~ );
+
+	Debug( DumpMemoryUsage,~~,Log );
+
+	CaptureEventLogs();
+	
+	SystemInfo();
+
+	LogThreadList();
+
+	Debug( DumpHeaps );
+
+	Debug( DumpDLLBaseAddresses );
+
+	Log( FlushSessionLog );
+
+	AddTablesToZip();
+
+	AddFilesToZip();
+
+	AddPrinterFilesToZip();
+
+	AddDraggedFilesToZip();
+
+	AddExternalFiles();
+
+	AddDynaZipFilesToZip();
+
+	if ( <ZipAndFTP> )
+	{
+		if ( SendViaFTP( ~<RegionENU>~,~<$con.DlgData[Customer]>~ ) )
+		{
+			CR = chr(0x0D);  LF = chr(0x0A);
+
+			Msg = ~<Customer><CR><LF><Region><CR><LF><Email><CR><LF><Case><CR><LF><Module><CR><LF><SubModule><CR><LF><When><CR><LF><CR><LF>CustomerCare/<$str.RegionENU.NoSpaces>/<$con.DlgData[Customer].NoSpaces>/<$str.$fZipPath.filename> is on FTP Site.<CR><LF><CR><LF><Description>~;
+
+			dlg( SetStatus,0,TR(ProblemReport,Emailing) );
+
+			DestEmail = ~<$con.DlgData[RegionEMail]>~;
+			
+			CC_Email = ~WW-KCPS-Support@kodak.com~;
+			
+			if ( Authorized( ~KEXDSS~ ) )
+			{
+				if ( !SendMail( Subject,~KEXDSS Beta <$[Symbols].Version[Value]> <$app.title> Problem Report From <RegionENU> / <$con.DlgData[Customer]>   <$Sym.LabID>  On FTP Site~,
+							Contents,ContentsOf(theXML),
+							CC,~<CC_Email>~,~<CC_Email>~,
+							Recipient,~<DestEmail>~,~<DestEmail>~ ) )
+				{
+					Warning( TR(ProblemReport,EmailFailed,~<DestEmail>~,~<$func.GetLastErrorMsg()>~) );
+				}
+			}
+			else
+			{
+				if ( !SendMail( Subject,~<$[Symbols].Version[Value]> <$app.title> Problem Report From <RegionENU> / <$con.DlgData[Customer]>   <$Sym.LabID>  On FTP Site~,
+							Contents,ContentsOf(theXML),
+							CC,~<CC_Email>~,~<CC_Email>~,
+							Recipient,~<DestEmail>~,~<DestEmail>~ ) )
+				{
+					Warning( TR(ProblemReport,EmailFailed,~<DestEmail>~,~<$func.GetLastErrorMsg()>~) );
+				}
+			}
+		}
+	}
+	else
+	{
+		Warning( TR(ProblemReport,ProblemIsStored,~<fZipPath>~) );
+	}
+
+	dlg( SetStatus,0,TR(ProblemReport,CleaningUp) );
+
+	RecursiveDirectoryDelete( ~<$App.Directory>\Problem~,~*.*~ );
+
+	return dlg( SetStatus,0,TR(ProblemReport,ProblemComplete) );
+}
+
+
+VOID ProblemDialog::DefineControls()
+{
+	Define: NamePrompt Using DDWinCtrlDef AsSymbol NamePrompt
+		Fields:	GENCONNAME			THIS
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			$hGap,$vGap, 200, $ButtonHeight
+				TEXT				TR(ProblemReport,Name)
+				RIGHTJUSTIFIED		TRUE
+				TYPENAME			StaticText
+				FONTWEIGHT			600
+				
+	Define: NameField Using DDWinCtrlDef AsSymbol NameField
+		Fields:	GENCONNAME			THIS
+				GENCONFIELD			Customer
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			NamePrompt(GetRight,Position) + $hGap,NamePrompt(GetTop,Position)-2, 300, $ButtonHeight
+				TYPENAME			MaskedEditText	
+				ALLOWEDCHARS		~'~	
+	
+	Define: LabIDField Using DDWinCtrlDef AsSymbol LabIDField
+		Fields:
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			NameField(GetRight,Position) + 40,NameField(GetTop,Position)+4, 100, $ButtonHeight
+				TYPENAME			StaticText	
+				FONTWEIGHT			200
+				TEXT				~<$Sym.LabID>~  			
+	
+	Define: EMailPrompt Using DDWinCtrlDef AsSymbol EMailPrompt
+		Fields:	GENCONNAME			THIS
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			NamePrompt(GetLeft,Position),NamePrompt(GetBottom,Position)+$vGap, NamePrompt(GetWidth,Position), $ButtonHeight
+				TEXT				TR(ProblemReport,EMail)
+				RIGHTJUSTIFIED		TRUE
+				TYPENAME			StaticText
+				FONTWEIGHT			600
+
+	Define: EMailField Using DDWinCtrlDef AsSymbol EMailField
+		Fields:	GENCONNAME			THIS
+				GENCONFIELD			EMail
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			EMailPrompt(GetRight,Position) + $hGap,EMailPrompt(GetTop,Position)-2, NameField(GetWidth,Position), $ButtonHeight
+				TYPENAME			MaskedEditText		
+				MASK				RepeatStr(80,~%~)  
+	
+		
+	Define: RegionPrompt Using DDWinCtrlDef AsSymbol RegionPrompt
+		Fields:	GENCONNAME			THIS
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			NamePrompt(GetLeft,Position),EMailPrompt(GetBottom,Position)+$vGap, NamePrompt(GetWidth,Position), $ButtonHeight
+				TEXT				TR(ProblemReport,Region)
+				RIGHTJUSTIFIED		TRUE
+				TYPENAME			StaticText
+				FONTWEIGHT			600
+
+	Define: RegionField Using DDWinCtrlDef AsSymbol RegionField
+		Fields:	TYPENAME			SComboBox  
+				POSITION			RegionPrompt(GetRight,Position)+$hGap, RegionPrompt(GetTop,Position)-2, 150, $ButtonHeight*6
+				IACTIONSTEXT		~[Get]~
+				DACTIONSTEXT		~[Save Exec("<THIS>.OnCustomerCare()")]~
+				OACTIONSTEXT		~[Save]~
+				GENCONNAME			THIS
+				ISENABLED			T
+				GENCONFIELD			~Region~
+				ISINDEX				TRUE
+				
+				
+	Define: RegionEmailField Using DDWinCtrlDef AsSymbol RegionEmailField
+		Fields:	GENCONNAME			THIS
+				IACTIONSTEXT		ACTIONS ( Get )
+				DACTIONSTEXT		ACTIONS ( Save )
+				GENCONFIELD			RegionEmail
+				POSITION			RegionField(GetRight,Position)+15,RegionField(GetTop,Position)+2, 250, $ButtonHeight
+				TYPENAME			StaticText
+				FONTWEIGHT			100
+
+	Define: CasePrompt Using DDWinCtrlDef AsSymbol CasePrompt
+		Fields:	GENCONNAME			THIS
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			RegionPrompt(GetLeft,Position),RegionPrompt(GetBottom,Position)+30, NamePrompt(GetWidth,Position), $ButtonHeight
+				TEXT				TR(ProblemReport,Case)
+				RIGHTJUSTIFIED		TRUE
+				TYPENAME			StaticText
+				FONTWEIGHT			600
+
+	Define: CaseField Using DDWinCtrlDef AsSymbol CaseField
+		Fields:	GENCONNAME			THIS
+				GENCONFIELD			Case
+				IACTIONSTEXT		ACTIONS ( Get )
+				DACTIONSTEXT		ACTIONS ( Save )
+				OACTIONSTEXT		ACTIONS ( Save )
+				POSITION			CasePrompt(GetRight,Position) + $hGap,CasePrompt(GetTop,Position)-2, RegionField(GetWidth,Position), $ButtonHeight
+				TYPENAME			MaskedEditText
+				TEXT				~TR(ProblemReport,NewCase)~	
+				MASK				RepeatStr(8,~#~)  
+				
+	Define: CaseInfo Using DDWinCtrlDef AsSymbol CaseInfo
+		Fields:	POSITION			CaseField(GetRight,Position)+4,CaseField(GetTop,Position)+2, 300, $ButtonHeight
+				TEXT				TR(ProblemReport,CaseInfo)
+				TYPENAME			StaticText
+				FONTWEIGHT			200
+
+			
+	Define: ModulePrompt Using DDWinCtrlDef AsSymbol ModulePrompt
+		Fields:	GENCONNAME			THIS
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			CasePrompt(GetLeft,Position),CasePrompt(GetBottom,Position)+$vGap*6, RegionPrompt(GetWidth,Position), $ButtonHeight
+				TEXT				TR(ProblemReport,Module)
+				RIGHTJUSTIFIED		TRUE
+				TYPENAME			StaticText
+				ISHIDDEN			Authorized(KEXDSS) ? F : T
+				FONTWEIGHT			600
+
+	Define: ModuleField Using DDWinCtrlDef AsSymbol ModuleField
+		Fields:	TYPENAME			SComboBox  
+				POSITION			ModulePrompt(GetRight,Position)+$hGap, ModulePrompt(GetTop,Position)-2, RegionField(GetWidth,Position)+28, $ButtonHeight*5
+				IACTIONSTEXT		~[Get]~
+				DACTIONSTEXT		~[Save]~
+				OACTIONSTEXT		~[Save]~
+				GENCONNAME			THIS
+				ISENABLED			T
+				GENCONFIELD			~Module~
+				ISINDEX				TRUE
+				ISHIDDEN			Authorized(KEXDSS) ? F : T
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.PopulateSubModuleComboBox() )
+				
+				
+	Define: SubModulePrompt Using DDWinCtrlDef AsSymbol SubModulePrompt
+		Fields:	GENCONNAME			THIS
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			ModuleField(GetRight,Position)+10,ModulePrompt(GetTop,Position), ModulePrompt(GetWidth,Position), $ButtonHeight
+				TEXT				TR(ProblemReport,SubModule)
+				RIGHTJUSTIFIED		TRUE
+				TYPENAME			StaticText
+				ISHIDDEN			Authorized(KEXDSS) ? F : T
+				FONTWEIGHT			600
+
+	Define: SubModuleField Using DDWinCtrlDef AsSymbol SubModuleField
+		Fields:	TYPENAME			SComboBox  
+				POSITION			SubModulePrompt(GetRight,Position)+$hGap, SubModulePrompt(GetTop,Position)-2, ModuleField(GetWidth,Position), $ButtonHeight*5
+				IACTIONSTEXT		~[Get]~
+				DACTIONSTEXT		~[Save]~
+				OACTIONSTEXT		~[Save]~
+				GENCONNAME			THIS
+				ISENABLED			T
+				GENCONFIELD			~SubModule~
+				ISHIDDEN			Authorized(KEXDSS) ? F : T
+				ISINDEX				TRUE
+
+	
+	Define: DescriptionPrompt Using DDWinCtrlDef AsSymbol DescriptionPrompt
+		Fields:	GENCONNAME			THIS
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			ModulePrompt(GetLeft,Position),ModulePrompt(GetBottom,Position)+$vGap*4, EMailPrompt(GetWidth,Position), $ButtonHeight
+				TEXT				TR(Standard,Description)
+				RIGHTJUSTIFIED		TRUE
+				TYPENAME			StaticText
+				FONTWEIGHT			600
+				
+	Define: DescriptionField Using DDWinCtrlDef AsSymbol DescriptionField
+		Fields:	GENCONNAME			THIS
+				GENCONFIELD			Description
+				IACTIONSTEXT		ACTIONS ( Get )
+				DACTIONSTEXT		~[Save]~
+				OACTIONSTEXT		~[Save]~
+				POSITION			DescriptionPrompt(GetRight,Position) + $hGap,DescriptionPrompt(GetTop,Position)-2, 500, $ButtonHeight*8
+				TYPENAME			MLEditText	
+				ALLOWEDCHARS		~'~	
+				NoHorizontalScroll	~T~
+				MASK				RepeatStr(2048,~%~) 
+	
+	Define: RepeatableField Using DDWinCtrlDef AsSymbol RepeatableField
+		Fields:	TYPENAME			Checkbox  
+				POSITION			DescriptionPrompt(GetRight,Position)+$hGap, DescriptionField(GetBottom,Position)+10, 20, $ButtonHeight
+				IACTIONSTEXT		~[Get]~
+				DACTIONSTEXT		~[Save]~
+				OACTIONSTEXT		~[Save]~
+				GENCONNAME			THIS	
+				GENCONFIELD			Repeatable
+				
+	Define: RepeatablePrompt Using DDWinCtrlDef AsSymbol RepeatablePrompt
+		Fields:	GENCONNAME			THIS
+				IACTIONSTEXT		ACTIONS ( Get )
+				POSITION			RepeatableField(GetRight,Position),RepeatableField(GetTop,Position)+3, 240, $ButtonHeight
+				TEXT				TR(ProblemReport,CanYouRepeat)
+				TYPENAME			StaticText
+				FONTWEIGHT			600;
+
+	Define: ExtractJobQueueButton Using DDWinCtrlDef AsSymbol ExtractJobQueueButton
+		Fields:	TYPENAME			Button  
+				GENCONNAME			THIS
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnExtractJobQueueButton() )
+				POSITION			RepeatablePrompt(GetRight,Position),RepeatablePrompt(GetTop,Position),150, $ButtonHeight
+				TEXT				TR(ProblemReport,ExtractJobQueue)
+	
+				
+	Define: DragGroupBox Using DDWinCtrlDef AsSymbol DragGroupBox
+			Fields:	TYPENAME		GroupBox
+					TEXT			TR(ProblemReport,DragHere)
+					POSITION		DescriptionField(GetLeft,Position),
+									RepeatablePrompt(GetBottom,Position)+15,DescriptionField(GetWidth,Position),70
+					FONTWEIGHT		600; 
+
+
+	ButtonWidth = 180;
+	ButtonHeight = 30;
+	
+	Position = GetDialogCenter() - ($ButtonWidth+$hGap)*2;
+
+	
+
+	Define: SendViaFTPButton Using DDWinCtrlDef AsSymbol SendViaFTPButton
+		Fields:	GENCONNAME			THIS
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnGoButton(TRUE) )
+				POSITION			$Position,DragGroupBox(GetBottom,Position)+20, $ButtonWidth+50,$ButtonHeight
+				TEXT				TR(ProblemReport,ZipAndFTP)
+				TYPENAME			Button
+				ISENABLED			FALSE
+	
+	Define: ZipButton Using DDWinCtrlDef AsSymbol ZipButton
+		Fields:	GENCONNAME			THIS
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.OnGoButton(FALSE) )
+				POSITION			SendViaFTPButton(GetRight,Position)+$hGap,SendViaFTPButton(GetTop,Position), 150,$ButtonHeight
+				TEXT				TR(ProblemReport,Zip)
+				TYPENAME			Button
+
+	Define: ReportsButton Using DDWinCtrlDef AsSymbol ReportsButton
+		Fields:	GENCONNAME			THIS
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.BrowseReports() )
+				POSITION			ZipButton(GetRight,Position)+$hGap,ZipButton(GetTop,Position), ZipButton(GetWidth,Position),$ButtonHeight
+				TEXT				TR(ProblemReport,ViewReports)
+				TYPENAME			Button
+
+	Define: CancelButton Using DDWinCtrlDef AsSymbol CancelButton
+		Fields:	GENCONNAME			THIS
+				DACTIONSTEXT		ACTION EXEC ( <THIS>.DoCancelButton() )
+				POSITION			ReportsButton(GetRight,Position)+$hGap,ReportsButton(GetTop,Position),100,$ButtonHeight
+				TEXT				TR(Standard,Cancel)
+				TYPENAME			Button
+}
+
+
+VOID ProblemDialog::OnExtractJobQueueButton()
+{
+	action = ACTION DOC ( JobQueueExtractor_1 OpenOnce "<$app.Directory>\scripts\utilities\JobQueueExtractor\JobQueueExtractor_1.cpp" );
+	PerformActions( action );
+}
+
+VOID ProblemDialog::BrowseReports()
+{
+	action = ACTION DOC ( Explorer Open ExplorerDoc "Init(~Explore~,~<$App.Directory>\ProblemReports~);" );
+	PerformActions( action );
+}
+
+
+VOID ProblemDialog::OnCustomerCare()
+{	
+	dlg( GetInput );
+	Stringlist( Emails,GetList,CareCenterEmails,Permanent );
+	
+	Index = dlg( ComboBox,RegionField,GetSelectedIndex );
+
+	Emails( GetStringAt,<Index>,EmailAddress );
+
+	dlg( SetStrings,RegionEmail,~<EmailAddress>~ );
+}
+
+VOID ProblemDialog::PopulateRegionComboBox()
+{	
+	if ( Authorized(KEXDSS) )
+	{
+		fRegionList( AddStrings,
+								~ProblemReport,UnitedStates~,
+								~ProblemReport,Canada~,
+								~ProblemReport,LAR~,
+								~ProblemReport,Brazil~,
+								~ProblemReport,Mexico~,
+								~ProblemReport,Pakistan~,
+								~ProblemReport,India~,
+								~ProblemReport,SriLanka~,
+								~ProblemReport,Bangladesh~,
+								~ProblemReport,GAR~,
+								~ProblemReport,China~,
+								~ProblemReport,Indonesia~,
+								~ProblemReport,Thailand~,
+								~ProblemReport,EMER~,
+								~ProblemReport,ANZ~,
+								~ProblemReport,Korea~,
+								~ProblemReport,Vietnam~,
+								~ProblemReport,Malaysia~,
+								~ProblemReport,Turkey~,
+								~ProblemReport,SouthAfrica~,
+								~ProblemReport,Germany~,
+								~ProblemReport,Netherlands~);
+	}
+	else
+	{
+		fRegionList( AddStrings,~ProblemReport,UnitedStates~,
+								~ProblemReport,ANZ~,
+								~ProblemReport,Brazil~ );
+	}
+							
+	PopulateCombo(RegionField,fRegionList);
+}
+
+VOID ProblemDialog::PopulateCombo( Control,TranslationList )
+{
+	StringList( aList,New ) ;
+	
+	more = <TranslationList>(GetFirst,theTranslationString);
+	
+	while ( <more> )
+	{
+		aList(AddString,TR(<theTranslationString>) );
+		
+		more = <TranslationList>(GetNext,theTranslationString);
+	}
+	
+	dlg( SetControlFromStringList,~<Control>~,aList,NoSelection );
+}
+
+NUMERIC ProblemDialog::PopulateModuleComboBox()
+{
+	ReturnOnFailure( Authorized(KEXDSS) );
+
+	LoadTranslationFile(Standard,Navigator,Navigator);
+	LoadTranslationFile(Manual,ManualTableOfContents,ManualTableOfContents);
+		
+	fModuleList( AddStrings,
+					~ProblemReport,SelectOne~,
+					~ManualTableOfContents,TableOfContents~,
+					~Navigator,Preferences~,
+					~Navigator,Printing~,
+					~Navigator,Administration~,
+					~Navigator,DatabaseManagement~,
+					~Navigator,OrderManagement~,
+					~Navigator,AutoUpdates~,
+					~Navigator,ImportImages~,
+					~Navigator,ManageImages~,
+					~Navigator,SortImages~,
+					~Navigator,OrderPrint~,
+					~Navigator,OrderCollage~,
+					~Navigator,PhotoBooks~,
+					~Navigator,Calendars~,
+					~Navigator,Cards~,
+					~Navigator,PhotoIDs~,
+					~Navigator,Exporters~,
+					~ProblemReport,Other~ );
+
+	PopulateCombo(ModuleField,fModuleList);
+	
+	PopulateSubModuleComboBox();
+	
+	return TRUE;
+}
+
+NUMERIC ProblemDialog::PopulateLabInfo()
+{
+	labName = ~~;
+	eMail = ~~;
+
+	if ( ado( dBase,Connect ) )
+	{
+		Query = ~Select * from LabInfo~;
+		if ( PGenConList( List,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) )
+		{
+			if ( List( GetNext,Labinfo ) )
+			{
+				labName = ~<$pcon.Labinfo[LabName]>~;
+				eMail = ~<$pcon.Labinfo[EMail]>~;
+			}
+		}
+	}
+	
+	dlg( SetString,~<labName>~,Customer,0 );
+	dlg( SetString,~<eMail>~,EMail,0 );
+
+	return TRUE;
+}
+
+VOID ProblemDialog::SubModule1()	// Manual
+{
+	if ( !MemberDefined(fSubModule1List) )
+	{	
+		StringList( fSubModule1List,New,Private );
+		
+		xml( parser );
+
+		if ( !parser( load,~<$App.ShareDirectory>/Scripts/HtmlPages/Manual/ManualTableOfContentsKCPS.xml~ ) )
+		{
+			Log( Session,~Failed to load <$App.ShareDirectory>/Scripts/HtmlPages/Manual/ManualTableOfContents.xml~ );
+			return;
+		}
+		
+		StringList( List,New ) ;
+
+		NumNodes = parser( SelectNodes,ChaptersList,~/TableOfContents/Chapter/*~ );
+		
+		if ( !<NumNodes> )
+		{
+			fSubModule1List( AddString,~ProblemReport,Other~ );
+			PopulateCombo(SubModuleField,fSubModule1List);
+			return;
+		}
+		
+		fSubModule1List( AddString,~ProblemReport,SelectOne~ );
+
+		while ( ChaptersList( GetNextNode,Node ) )
+		{
+			if ( Node( SelectSingleNode,TitleNode,~Title~ ) )
+			{
+				fSubModule1List( AddString,~<$XMLNode.TitleNode[text]>~ );
+			}
+		}
+	}
+	
+	PopulateCombo(SubModuleField,fSubModule1List);
+}
+
+VOID ProblemDialog::SubModule2()	// Preferences
+{
+	if ( !MemberDefined(fSubModule2List) )
+	{	
+		StringList( fSubModule2List,New,Private );
+	
+		fSubModule2List( AddStrings,~ProblemReport,SelectOne~,
+									~Navigator,Language~,
+									~Navigator,General~,
+									~Navigator,ColorMgmt~,
+									~Navigator,PreviewOptionsSetup~ );
+	}
+	
+	PopulateCombo(SubModuleField,fSubModule2List);
+}
+
+VOID ProblemDialog::SubModule3()	// Printing
+{
+	if ( !MemberDefined(fSubModule3List) )
+	{
+		StringList( fSubModule3List,New,Private );
+		fSubModule3List( AddStrings,~ProblemReport,SelectOne~,
+									~Navigator,Setup~,
+									~Navigator,DeletePrinters~,
+									~Navigator,Settings~,
+									~Navigator,PrintCollageSetup~,
+									~Navigator,PosterPhotoIDSetup~,
+									~Navigator,BookSetup~,
+									~Navigator,CalendarSetup~,
+									~Navigator,CardSetup~,
+									~Navigator,SetupPrintChannels~,
+									~Navigator,SetupPaperTypes~,
+									~Navigator,SetupCoverTypes~,
+									~Navigator,SetupPackagingTypes~,
+									~Navigator,QueueData~,
+									~Navigator,PrintQueues~,
+									~Navigator,RenderEngine~ );
+	}
+	
+	PopulateCombo(SubModuleField,fSubModule3List);
+}
+
+VOID ProblemDialog::SubModule4()	// Administration
+{
+	if ( !MemberDefined(fSubModule4List) )
+	{
+		StringList( fSubModule4List,New,Private );
+		fSubModule4List( AddStrings,~ProblemReport,SelectOne~,
+									~Navigator,LabInfo~,
+									~Navigator,LicenseManagement~,
+									~Navigator,DeleteOrders~,
+									~Navigator,KEXJobExporter~,
+									~Navigator,KEXJobRoutingExporter~,
+									~Navigator,PMKImporter~,
+									~Navigator,SessionLog~ );
+	}
+	
+	PopulateCombo(SubModuleField,fSubModule4List);
+}
+
+VOID ProblemDialog::SubModule5()	// Database Management
+{
+	if ( !MemberDefined(fSubModule5List) )
+	{
+		StringList( fSubModule5List,New,Private );
+		fSubModule5List( AddStrings,~ProblemReport,SelectOne~,
+									~Navigator,DatabaseBackupSetting~,
+									~Navigator,DatabaseBackupHistory~ );
+	}
+	
+	PopulateCombo(SubModuleField,fSubModule5List);
+}
+
+VOID ProblemDialog::SubModule6()	// Orders
+{
+	if ( !MemberDefined(fSubModule6List) )
+	{
+		StringList( fSubModule6List,New,Private );
+		fSubModule6List( AddStrings,~ProblemReport,SelectOne~,
+									~Navigator,Find~ );
+	}
+	
+	PopulateCombo(SubModuleField,fSubModule6List);
+}
+
+VOID ProblemDialog::SubModule7()	// Auto Updates
+{
+	if ( !MemberDefined(fSubModule7List) )
+	{
+		StringList( fSubModule7List,New,Private );
+		fSubModule7List( AddStrings,~ProblemReport,SelectOne~,
+									~Navigator,SoftwareUpdateSettings~,
+									~Navigator,BackgroundUpdateSettings~ );
+	}
+	
+	PopulateCombo(SubModuleField,fSubModule7List);
+}
+
+VOID ProblemDialog::SubModule8()	// Import Images
+{
+	if ( !MemberDefined(fSubModule8List) )
+	{
+		StringList( fSubModule8List,New,Private );
+		fSubModule8List( AddStrings,~ProblemReport,SelectOne~,
+									~Navigator,Setup~,
+									~Navigator,Twain~,
+									~Navigator,Images~ );
+	}
+	
+	PopulateCombo(SubModuleField,fSubModule8List);
+}
+
+VOID ProblemDialog::SubModule9()	// Manage Images
+{
+	if ( !MemberDefined(fSubModule9List) )
+	{
+		StringList( fSubModule9List,New,Private );
+		fSubModule9List( AddStrings,~ProblemReport,SelectOne~,
+									~Navigator,Setup~,
+									~Navigator,BalanceCrop~,
+									~Navigator,Kpars~ );
+	}
+	
+	PopulateCombo(SubModuleField,fSubModule9List);
+}
+
+
+NUMERIC ProblemDialog::PopulateSubModuleComboBox()
+{
+	ReturnOnFailure( Authorized(KEXDSS) );
+	
+	Index = dlg( ComboBox,ModuleField,GetSelectedIndex );
+	
+	if ( MethodDefined( ~SubModule<Index>~ ) )
+	{
+		SubModule<Index>();
+	}
+	else
+	{
+		StringList( List,New ) ;
+		List( AddString,TR(ProblemReport,SelectOne) );
+		List( AddString,TR(ProblemReport,Other) );
+		dlg( SetControlFromStringList, SubModuleField, List, NoSelection );
+	}
+	
+	return TRUE;
+}
+
+VOID	ProblemDialog::InitDialogData()
+{
+	dlgData( SetValues,Description,TR(ProblemReport,ProvideDetail) );
+}
+
+VOID ProblemDialog::DefineDictionary()
+{
+	// DP1 dp1support@kodak.com
+	// DP2 us-dp2-support@kodak.com
+	if ( Authorized(KEXDSS) )
+	{
+		StringList:	Name ~CareCenterEmails~
+			Fields: String	~us-kcps-support@kodak.com~
+			Fields: String	~us-kcps-support@kodak.com~
+			Fields: String	~lar-kcps-support@kodak.com~
+			Fields: String	~br-kcps-support@kodak.com~
+			Fields: String	~mx-kcps-support@kodak.com~
+			Fields: String	~in-kcps-support@kodak.com~
+			Fields: String	~in-kcps-support@kodak.com~
+			Fields: String	~in-kcps-support@kodak.com~
+			Fields: String	~in-kcps-support@kodak.com~
+			Fields: String	~gar-kcps-support@kodak.com~
+			Fields: String	~cn-kcps-support@kodak.com~
+			Fields: String	~gar-kcps-support@kodak.com~
+			Fields: String	~th-kcps-support@kodak.com~
+			Fields: String	~de-kcps-support@kodak.com~
+			Fields: String	~au-kcps-support@kodak.com~
+			Fields: String	~kr-kcps-support@kodak.com~
+			Fields: String	~vn-kcps-support@kodak.com~
+			Fields: String	~my-kcps-support@kodak.com~
+			Fields: String	~tr-kcps-support@kodak.com~
+			Fields: String	~za-kcps-support@kodak.com~
+			Fields: String	~de-kcps-support@kodak.com~
+			Fields: String	~nl-kcps-support@kodak.com~
+	}
+	else
+	{
+		StringList:	Name ~CareCenterEmails~
+			Fields: String	~us-dp2-support@kodak.com~
+			//Fields: String	~Beta_DP2@Kodak.com~
+			Fields: String	~anz-dp2-support@kodak.com~
+			Fields: String	~br-kcps-support@kodak.com~
+	}
+
+	
+	Hang:	CareCenterEmails	~[STRINGS]~
+
+	Dictionary: ~<Dictionary>~ 
+		Fields: Name Customer		type text
+		Fields: Name EMail			type text
+		Fields: Name Region			type text
+		Fields: Name RegionEMail	type text
+		Fields: Name Case			type text
+		Fields: Name Module			type text
+		Fields: Name SubModule		type text
+		Fields: Name Description	type text
+		Fields: Name Repeatable		type long
+}
+
+ProblemDialog( New,thisDialog );	// Instantiate an object of class ProblemDialog
+
+ThisDialog.DefineDialog();
+
+ThisDialog.PopulateRegionComboBox();
+
+ThisDialog.OnCustomerCare();		// Init the email address to something sensible
+
+ThisDialog.PopulateModuleComboBox();
+
+ThisDialog.PopulateLabInfo();
+
+ThisDialog.Initialize();
+
+
+

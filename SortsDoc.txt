@@ -1,0 +1,728 @@
+// SortsDoc.txt
+//		Globals:	DocumnetQuery	- query used to produce the view
+//					WhichTitle	- additional data to add to the title
+
+Define:	SortsMessages Using DDSymbol
+	Fields:	Value	~These strings are Sorts related strings used by the user interface.~
+	Contains:
+	{
+		Define: Title				using DDText	Fields: Text ~Sort Definitions~
+		Define: MenuTitle			using DDText	Fields: Text ~Sorts - %1~
+		Define: ColumnsButtonTxt	using DDText	Fields: Text ~Fields~
+		Define: MenuAddRecord		using DDText	Fields:	Text ~&New Sort~
+		Define: MenuDuplicate		using DDText	Fields: Text ~Duplicate~
+		Define: ToolDuplicate		using DDText	Fields: Text ~Duplicate the selected Sort~
+		Define: ToolColumns			using DDText	Fields: Text ~View Database Field Names for SubjectInfo Tables~
+		Define: ReadingRecords		using DDText	Fields: Text ~Reading %1 Sorts Records~
+		Define: ReadRecords			using DDText	Fields: Text ~Read %1 Sorts in %2 seconds~
+		Define: RemovingAllFor		using DDText	Fields: Text ~Are you sure you want to delete the %1 selected Sorts Records?~
+		Define: BlankName			using DDText	Fields: Text ~Unable to save pending changes.  Sorts Name cannot be blank.~
+		Define: BlankSortOrder		using DDText	Fields:	Text ~Unable to save pending changes.  Sort Order cannot be blank.~
+		Define: TblNotDef           using DDText	Fields:	Text ~The Sorts Table is not properly defined~
+		Define: CreatesValidQuery	using DDText	Fields: Text ~The record will create a valid database query~
+		Define: ColumnsDlgTitle		using DDText	Fields: Text ~Show SubjectInfo Columns~
+	}
+
+// Hang:	SortsMessages	~[STRINGS]~ ;	No need to hang these
+
+Max_Records = 20;
+
+// [Refresh] and "Refresh" and Refresh Action
+NUMERIC RefreshListView()
+{
+	if ( SortsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	Start = Ticks();
+
+	if ( !PGenConList( List,Connect,Lock,ReadOnly,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+	}
+
+	Count = List( NumEntries );
+
+	if ( FALSE )
+	{
+		if ( MessageBox( Translate(DBMessages,LargeQuery,~<DocumentQuery>~,~<Count>~),YESNO ) != YES )
+		{
+			return TRUE;
+		}
+	}
+
+	SortsDataWindow( StatusBar,Text,Translate( SortsMessages,ReadingRecords,<Count> ) );
+
+	SetDocumentData( List(GetObject) );	
+	SortsDataWindow( RefreshWindow );
+
+	Duration = (Ticks() - <Start>) / 1000;
+
+	return SortsDataWindow( StatusBar,Text,Translate(SortsMessages,ReadRecords,~<Count>~,~<Duration>~) );
+
+	return TRUE;
+}
+
+
+// Select field with Combo box definition
+NUMERIC RefreshComboBox()
+{
+	SortsDataView( GetActiveCell,row,col );
+
+	SortsDataView( GetColumnName,<col>,ColumnName );
+
+	if ( ~<ColumnName>~ == ~TYPE~ )  // name must be capitalized
+	{	SetSubjectInfoTypeList();	}
+
+	return TRUE;
+
+}
+// DoubleClick option - just validate that a legal query can be made by values typed in
+NUMERIC ViewSubjectInfo()
+{
+	if ( !SortsDataView( GetSelectedRows,SelectedRow ) )		
+	{
+		return Warning(Translate(UIMessages,NoRowsSelected));
+	}
+
+	SelectedRow( GetFirst,Item );
+
+	SubjectInfoTable = ~<$con.Item[Type]>~;
+	if (~<SubjectInfoTable>~ == ~Any SubjectInfo~)
+	{	SubjectInfoTable = ~SubjectInfo~;	}
+
+	if (~<$con.Item[Restriction]>~ == ~~)
+	{
+		theQuery = ~Select <$con.Item[Sort]>  from <SubjectInfoTable> Where OrderID Is NULL Group by <$con.Item[Sort]>~;
+	}
+	else
+	{
+		theQuery = ~Select <$con.Item[Sort]>  from <SubjectInfoTable> Where OrderID Is NULL AND <$con.Item[Restriction]> Group by <$con.Item[Sort]>~;
+	}
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<theQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );		
+		return Warning( ~Failed to load data from <theQuery>.  <theErr>~ ); 
+	}
+
+	else
+	{
+		MessageBox( Translate(SortsMessages,CreatesValidQuery),OK );
+	}		
+
+	return TRUE;
+}
+
+
+// [New] and "New Sort"
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	if ( SortsDataView( GetSelectedRows,ItemToImitate ) )		
+	{
+		ItemToImitate( GetFirst,Item );
+		NewRow( Set,Type,~<$con.Item[Type]>~ );
+	}
+
+	RowBeingAdded = SortsDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate(UIMessages, AddRowFailed) ); }
+
+
+	SortsDataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	Global( RowBeingAdded );
+
+	return TRUE;
+}
+
+
+// [Find] and "Find"
+NUMERIC Search()
+{
+	Actions = ACTIONS ( Doc( ~Search~ Open SearchDoc "Search( Sorts );" ) );
+	return PerformActions( Actions );
+}
+
+
+// [Save] and "Save Changes"
+NUMERIC SaveAllChanges()
+{
+	while ( SortsDataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+// [Cancel] and "Cancel Changes"
+NUMERIC RollBackAllChanges()
+{
+	if ( !SortsDataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( Translate(UIMessages, CancelChanges), YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( SortsDataView( PendingChanges ) )
+	{
+		SortsDataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+
+STR GetKey( &theSort )
+{
+	Key = STR (	Name = '<$con.theSort[Name]>' );
+
+	return ~<Key>~;
+}
+
+
+
+// [Delete] and "Delete" and DeleteRecord Action
+NUMERIC DeleteRecord()
+{
+	if ( !SortsDataView( GetSelectedRows,RecordsToDelete ) )		
+		{ return Warning( Translate(UIMessages, NoRowsSelected) ); }
+
+	count = RecordsToDelete( ChildCount );
+	if ( MessageBox(  Translate(SortsMessages,RemovingAllFor,~<count>~),YESNO ) != YES )
+		{ return FALSE; }
+
+	StringList( RowsToDelete,New );
+
+	while ( RecordsToDelete( GetNext,SortRecord) )
+	{
+		Key = GetKey( SortRecord );
+		theCmd = ~Delete From Sorts Where <Key>~;
+
+		if ( !db( CMD,~<theCmd>~ ) )
+		{
+			db( GetErrorDescription,theErr );
+			return Warning( Translate( DBMessages,CmdFailed,~<theCmd>~,~<theErr>~ ));
+		}
+
+		RowsToDelete( AddString,RecordsToDelete(GetCurrentPosition) );
+	}
+
+	SortsDataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+// [Duplicate]
+NUMERIC Duplicate()
+{
+	if ( !SortsDataView( GetSelectedRows,SortToImitate ) )		
+	{
+		return AddRecord();
+	}
+
+	if ( !SortToImitate( GetFirst,SortRecord ) )
+	{
+		return AddRecord();
+	}
+
+	GenCon( NewRow,IsCopyOf,SortRecord );
+
+	NewRow( Set,Name,~~ );
+
+	RowBeingAdded = SortsDataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate(UIMessages, AddRowFailed) ); }
+
+	SortsDataView( SetActiveCell,<RowBeingAdded>,Name );
+
+	return TRUE;
+}
+
+// [Columns]
+NUMERIC ShowColumns()
+{
+    ForgetGlobal( SubjColumnsDlg,DlgColumnData );
+
+	x = 4;					y = 5;
+	BoxWidth = 150;			BoxHeight = 20;		
+	StaticTextWidth = 100;	StaticTextHeight = 20;
+
+	if (!DictionaryExists(SubjColumnDialog) )
+	{
+	Dictionary: SubjColumnDialog
+		Fields: Name	theTable	type text;
+
+	}
+	Define: DlgColumnData Using SubjColumnDialog;
+
+	Define: DlgColumnDefinition	Using	DDWinDef
+            Fields: Position			180 180 500 500
+                    Title				Translate( SortsMessages,ColumnsDlgTitle )
+                    TypeName			~Dialog~
+					WantsMinimizeBox	TRUE
+//					StatusBar			~1 100~
+					HACTIONSTEXT		ACTION SHOWHELPPAGE ( KPISHelpFile "SortsColumn.htm" ) 
+                    OACTIONSTEXT		ACTION EXEC ( ColumnsCloseDialog() ) ;
+
+		Contains: InListOrder
+		{
+			Define: TableTxt	Using	DDWinCtrlDef	AsSymbol	TableTxt
+				Fields: TypeName	StaticText
+						Text		~ ~
+						Position	$x,$y,
+									2, $StaticTextHeight ;
+			Define: TableComboBox	Using	DDWinCtrlDef AsSymbol TableComboBox
+				Fields:	TypeName	SComboBox
+						Position	TableTxt(GetRight,Position),
+									TableTxt(GetTop,Position),
+									$BoxWidth, $BoxHeight*6
+						GenConName	THIS
+						GenConField ~theTable~
+						IActionsText	~[Get]~
+						DActionsText	~[Save Exec("OnTableChanges()")]~
+						OActionsText	~[Save]~;
+
+			i = 0;
+			ColTxtX = TableTxt(GetLeft,Position) + $hGap*3;
+			ColTxtY = TableTxt(GetBottom,Position);
+			ColTxtLength = $StaticTextHeight + $vGap;
+			Global(ColTxtLength);
+
+			While (<i> < <Max_Records>)
+			{
+			Define: ColTxt<i>	Using	DDWinCtrlDef	AsSymbol	ColTxt<i>
+				Fields: TypeName	StaticText
+						Text		~~
+						Position	<ColTxtX>,
+									<ColTxtY> + $vGap,
+									$StaticTextWidth, $StaticTextHeight ;
+
+			ColTxtY = ColTxt<i>(GetBottom,Position);
+			++i;
+			}
+		}
+
+	OrigColDlgWidth = TableComboBox(GetRight,Position) + $hGap + 15;
+	OrigColDlgLength = TableTxt(GetBottom, Position) + $vGap + 25;
+	Global(OrigColDlgWidth,OrigColDlgLength);
+
+	DlgColumnDefinition(Set,Position, ~180 180 <OrigColDlgWidth> <OrigColDlgLength>~);
+	GenDlg(SubjColumnsDlg, Definition, DlgColumnDefinition, Data,DlgColumnData,Document,$Doc.This,New,Temporary);
+    Global( SubjColumnsDlg,DlgColumnData );
+
+	StringList(InfoTypeList,New);
+	Count = 0;
+	GetSubjectInfoTypeList(InfoTypeList,Count,FALSE);  // FALSE = don't put "Any SubjectInfo" in list
+	if (<Count> > 0)
+	{
+		SubjColumnsDlg( SetControlFromStringList,TableComboBox,InfoTypeList,NoSelection );
+	}
+	// Set SubjectInfo table to display fields for table in selected row
+	if ( SortsDataView( GetSelectedRows,SelectedRows ) )		
+	{
+		SelectedRows( GetFirst,Item );
+		SelectedTable = ~<$con.Item[Type]>~;
+		if (~<SelectedTable>~ == ~Any SubjectInfo~)
+		{	SelectedTable = ~SubjectInfo~;	}
+		SubjColumnsDlg(SetValue,theTable,~<SelectedTable>~ );
+		SubjColumnsDlg( Update );
+	}
+
+	
+
+	OnTableChanges();
+
+	return TRUE;
+}
+
+NUMERIC ColumnsCloseDialog()
+{
+	SubjColumnsDlg( end );
+    ForgetGlobal( SubjColumnsDlg,DlgColumnData );  // Since in same file
+
+	return TRUE;
+
+}
+
+NUMERIC OnTableChanges()
+{
+	SubjColumnsDlg( GetInput );
+	SubjectTable = ~<$con.DlgColumnData[theTable]>~;
+
+//	Query = ~Select * From <SubjectTable> Where OrderID IS NULL  AND SubjectID IS NULL ~;	// WILL BE A QUERY THAT RETURNS NO RECORDS
+	if ( !ADO( dBase,Connect,MakePrimaryKeyFrom,~<SubjectTable>~,Dummy,Key ) )
+	{
+		WaitCursor( End );
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( DBMessages,ConnectionFailed,~<TranslatedTableName>~,~<theErr>~ ) );
+	}
+
+	Query = ~Select * From <SubjectTable>~;	// WILL BE A QUERY THAT RETURNS NO RECORDS
+
+	if ( !IsNull(~<Key>~) )
+	{
+		Query = ~<Query> Where <Key>~;
+	}
+//
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Forward,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( DBMessages,QueryFailed,~<Query>~,~<theErr>~ ) );
+	}
+
+	i = 0;
+	while ( (List(FieldInfo,<i>,Name,FieldName)) && (<i> < <Max_Records>) )
+	{
+		// Update Columns Text in Dialog
+		SubjColumnsDlg(SetControlValue,ColTxt<i>,~<FieldName>~);
+		++i;
+	}
+
+	if (<i> > 0)
+	{
+		DialogLength = <OrigColDlgLength> + (<ColTxtLength> * <i>);
+	}
+	else
+	{	DialogLength = <OrigColDlgLength>;	}
+
+	DialogWidth = <OrigColDlgWidth>;
+
+	SubjColumnsDlg( SetWindowSize,<DialogWidth>,<DialogLength> );
+//	DlgColumnDefinition(Set,Position, ~180 180 <DialogWidth> <DialogLength>~);
+
+	return TRUE;
+}
+
+
+NUMERIC CopyToSortBy(ColIndex)
+{
+
+	SubjColumnsDlg(GetControlValue,ColTxt<ColIndex>,ColumName);
+
+	return TRUE;
+}
+
+NUMERIC CopyToRestriction(ColIndex)
+{
+
+	return TRUE;
+}
+
+
+// [Options] 
+NUMERIC AllOptions()
+{
+	return SortsDataView( DisplayMenu,SortsListViewMenu,0,0  );
+}
+
+
+
+NUMERIC RightClickInListView()
+{
+
+	return SortsDataView( DisplayMenu,SortsListViewMenu );
+}
+
+
+// ChangeRecord Action
+NUMERIC ChangeRecord()
+{
+	if ( !SortsDataView( GetChangedRow,ChangedSorts,OrigSorts,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate(UIMessages, NoRowsSelected) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	if ( ~<$con.ChangedSorts[Name]>~ == ~~ )
+		{ return Warning( Translate(SortsMessages, BlankName ) ); }
+
+	if ( ~<$con.ChangedSorts[Sort]>~ == ~~ )
+		{ return Warning( Translate(SortsMessages, BlankSortOrder ) ); }
+
+	Key = STR ( Name = '<$con.OrigSorts[Name]>' );
+	
+	theSort = ~Select * From Sorts Where <Key>~;
+
+	if ( !PGenConList( List,Connect,Cursor,Keyset,Query,~<theSort>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(DBMessages, QueryFailed,~<theSort>~,~<theErr>~) );
+	}
+
+	if ( !List( UpdateFrom,ChangedSorts,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate(DBMessages,UpdateFailed,~<Key>~,~<theErr>~) );
+	}
+
+	SortsDataView( CommitChanges );
+	
+	return TRUE;
+}
+
+
+// Close Action
+NUMERIC OnCloseSortsDataView()
+{
+	if ( SortsDataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(UIMessages,SaveChanges),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	SortsDataWindow( ForceCloseWindow );
+	return TRUE;
+}
+
+// Keyboard Action 
+VOID OnKeydown()
+{
+	GenCon( View,GetActiveView );
+
+	Key = View( GetLastKeyStateless,KeyString );
+	
+	if (  !View( PerformMenuAction,SortsListViewMenu,~<KeyString>~ ) )
+	{
+		SortsDataView( DisplayMenu,SortsListViewMenu,0,0  );
+	}
+}
+
+
+NUMERIC GetSubjectInfoTypeList(&InfoTypeList,&Count,AddAny)
+{
+	if ( !PGenConList( SchemaList,Connect,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		return Warning( Translate( DBMessages, SchemaQueryFailed, ~Tables~, ~<theErr>~) );
+	}
+
+	SchemaList( Filter,~Table_Name Like 'SubjectInfo%'~ );
+
+	Count = 0;
+	if (<AddAny>)
+	{
+		InfoTypeList(AddString,~Any SubjectInfo~);
+		Count = 1;
+	}
+
+	while ( SchemaList( GetNext,Table ) )
+	{
+		if ( !SimilarStr( ~<$pcon.Table[Table_Name]>~,~SubjectInfoColumns~ ) )
+		{
+			InfoTypeList(AddString,~<$pcon.Table[Table_Name]>~);
+			++Count;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC SetSubjectInfoTypeList()
+{
+
+	StringList(InfoTypeList,New);
+	Count = 0;
+
+	GetSubjectInfoTypeList(InfoTypeList,Count,TRUE);  // TRUE = put "Any SubjectInfo" in list
+
+	if (<Count> > 0)
+	{
+		GenCon( Fields,Is,SortsTableDefinition(GetReferenceTo,Fields) );
+		Fields( GetByName,Type,ColumnDefinition );
+		ColumnDefinition( Set,ChoiceList,InfoTypeList(GetCopyOf) );
+		SortsDataView( SetComboBox,ColumnDefinition,Type);
+	}
+
+	return TRUE;
+}
+
+
+
+
+FirstTime = TRUE;
+
+NUMERIC Init( WhichTitle,DocumentQuery)
+{
+	Global( WhichTitle,DocumentQuery);
+
+	SortsDataWindow( Set,Title,Translate( SortsMessages, MenuTitle, ~<WhichTitle>~ ) );
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		Start = Ticks();
+
+		if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+		{ 
+			List(GetErrorDescription,0,theErr);
+			Error( Translate(DBMessages,QueryFailed,~<DocumentQuery>~,~<theErr>~) );
+		}
+
+		Count = List( NumEntries );
+		StatusBarText( Translate(SortsMessages,ReadingRecords,<Count>) );
+
+		SetDocumentData( List(GetObject) );
+
+		if ( !SortsDataWindow( CreateWindow,~Sorts~ ) )
+			{ Error( Translate(UIMessages, CreateWindowFailed, ~Sorts~) ); }
+
+		Duration = (Ticks() - <Start>) / 1000;
+		return StatusBarText( Translate( SortsMessages,ReadRecords,~<Count>~,~<Duration>~ ) );
+
+	}
+
+	Document( Doc,This,SetTitle,Translate( SortsMessages, MenuTitle, ~<WhichTitle>~ ) );
+	return RefreshListView();
+}
+
+
+
+
+Include: ~DefineStdGridButtons~;
+Include: ~ExportSelectedToFile~;
+
+
+ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+if ( !GenCon( SortsTableDefinition,GetFrom,Sorts,~[DATABASE TableDefinitions]~ ) )
+	{ Error( Translate(SortsMessages, TblNotDef) ); }
+	
+if ( !ado( db,CONNECT ) )
+	{ Error( ~Could not open Database to access the Sorts Table~ ); }	
+
+
+
+Define:	SortsListViewMenu Using DDMenuDef AsSymbol SortsListViewMenu
+	Fields:		Position	(-1)		
+	Contains:	INLISTORDER
+	{
+		Define:	AddRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( SortsMessages,MenuAddRecord )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( AddRecord(); )
+
+		Define:	Search	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuFind )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( Search() )
+
+		Define:	NULL1 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	SaveAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuSaveChanges )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( SaveAllChanges() )
+
+		Define:	ForgetAllChanges	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuCancelChanges )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+		Define:	DeleteRecord	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuDelete )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( DeleteRecord(); )
+
+		Define:	Refresh	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuRefresh )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( RefreshListView(); )
+
+		Define:	NULL2 using DDMenuItemDef
+			Fields:	Text		~~
+					IDText		~NULL~
+
+		Define:	Export	using	DDMenuItemDef
+			Fields:	Text		Translate( UIMenuText,MenuExport )
+					IDText		~ID~
+					ActionsText  ACTION Exec ( ExportSelectedToFile(SortsDataView,Sorts) )
+	}
+
+
+
+Define: SortsDataWindow Using DDWinDef
+	Fields:		Title					~Sorts~
+				Position				0 60 90 25
+				IsPositionPercent		T
+				EnableStatusBar			F
+				TypeName				SplitterWnd
+				SplitterRows			~2 10 90~
+				SplitterColumns			1
+
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( AdminHelpFile "SortsData.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons(Sort) + 10;
+
+					Define: DuplicateButton Using DDWinCtrlDef AsSymbol DuplicateButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( Duplicate() )
+								POSITION		$position + $hGap, $vGap,
+												$ButtonWidth $ButtonHeight
+								TEXT			Translate( SortsMessages,MenuDuplicate )
+								TOOLTIP			Translate( SortsMessages,ToolDuplicate )
+								TYPENAME		BUTTON
+
+					Define: ColumnsButton Using DDWinCtrlDef AsSymbol ColumnsButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( ShowColumns() )
+								POSITION		DuplicateButton(GetRight,Position) + $hGap*5,
+												DuplicateButton(GetTop,Position),
+												$ButtonWidth $ButtonHeight
+								TEXT			Translate( SortsMessages,ColumnsButtonTxt )
+								TOOLTIP			Translate( SortsMessages,ToolColumns )
+								TYPENAME		BUTTON
+				}
+
+		Define: SortsDataView Using DDViewDef AsSymbol SortsDataView
+			Fields:	ViewType				~ListView~
+					GridControlTypes		SortsTableDefinition(GetReferenceTo,Fields)
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					KeyboardActionsText		ACTION Exec ( OnKeydown() )
+					RefreshActionsText		ACTION Exec ( RefreshListView() )
+					ComboBoxActionsText		ACTION Call ( RefreshComboBox() )
+					CloseActionsText		ACTION Call ( OnCloseSortsDataView() ) 
+					HActionsText			ACTION SHOWHELPPAGE ( AdminHelpFile "SortsData.htm" )
+					DoubleClickActionsText	ACTION Exec ( ViewSubjectInfo() ) ;
+	}
+	
+

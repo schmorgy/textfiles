@@ -1,0 +1,613 @@
+//	CRenderOutput.txt
+
+//	THESE ROUTINES HANDLE THE OUTPUT NODES
+
+//	CopySelectedPrinterGC( char *src ) ;
+//	GetLogicalPrinterConnection( char *PrinterSetupName, char *theSelectedPrinterGC ) ;
+//	GetOpacity( char *theSelectedPrinterGC ) ;
+//	GetPrinterSetupName(char *PrinterSetupName, char *QueueName) ;
+//	GetPrintJob( char *aPrinterConnection ) ;
+//	GetSurface( char *theSelectedPrinterGC ) ;
+//	HandlePrinters( char *thePrintJob, char *theMainNode, char *theOutputNode ) ;
+//	HandleSaveImage( char *theNode, long ImaXform ) ;
+//	SetImageStructure( char *thePrintJob, long pageNumber ) ;
+//	SetJobStructure(char *thePrintJob ) ;
+//	SetPageStructure(	char *thePrintJob,	double Width, double Height,
+//						long pageNumber,	long copies ) ;
+
+
+//	COPY THE SELECTED PRINTER SETUP GENCON
+CopySelectedPrinterGC( char *src )
+{
+	char *dstGC ;
+	char	word[128] ;
+
+	dstGC = CreateGenCon( GetDataDictionary( "DDPrinterSetups" )) ;
+
+	if( dstGC )
+	{
+		SetAttrValue( dstGC, "ComputerName",  GetAttrValue( src, "ComputerName", word )) ;
+		SetAttrValue( dstGC, "PrinterSetup",  GetAttrValue( src, "PrinterSetup", word )) ;
+		SetAttrValue( dstGC, "PrinterModel",  GetAttrValue( src, "PrinterModel", word )) ;
+		SetAttrValue( dstGC, "PaperType",     GetAttrValue( src, "PaperType", word )) ;
+		SetAttrValue( dstGC, "PaperSurface",  GetAttrValue( src, "PaperSurface", word )) ;
+		SetAttrValue( dstGC, "ColorSpace",    GetAttrValue( src, "ColorSpace", word )) ;
+		SetDoubleValue( dstGC, "PaperWidth",  GetDoubleValue( src, "PaperWidth" )) ;
+		SetDoubleValue( dstGC, "PaperLength", GetDoubleValue( src, "PaperLength" )) ;
+	}
+
+	return( dstGC ) ;
+}
+
+
+//	THIS ROUTINE WILL GET THE LOGICAL PRINTER CONNECTION
+GetLogicalPrinterConnection( char *PrinterSetupName, char *theSelectedPrinterGC )
+{
+	char	*aPC ;
+	char	*aMsg ;
+	char	 theMsg[1024] ;
+	float	 minWidth, minLength, maxWidth, maxLength ;
+	int		 Opacity, Surface ;
+	int		 result ;
+	long	 Donor, Media ;
+
+	aPC = NewPrintConnection() ;
+
+	SetName( aPC, PrinterSetupName ) ;
+
+	aMsg = GetLPbyUserString( aPC, PrinterSetupName ) ;
+	if( aMsg != NULL )
+	{
+		sprintf( theMsg, "GetLPbyUserString failed: %s\r\n", aMsg ) ;
+		ReportError( theMsg, 0, 0 ) ;
+		aPC = Delete( aPC ) ;
+		return( aPC ) ;
+	}
+
+	minWidth  = 1.0 ;
+	minLength = 1.0 ;
+	maxWidth  = GetDoubleValue( theSelectedPrinterGC, "PaperWidth"  ) ;
+	maxLength = GetDoubleValue( theSelectedPrinterGC, "PaperLength" ) ;
+	Opacity   = GetOpacity( theSelectedPrinterGC ) ;
+	Surface   = GetSurface( theSelectedPrinterGC ) ;
+	Donor	  = 0L ;
+	Media	  = 0L ;
+
+	result = SetLPConstraints( aPC, minWidth, minLength, maxWidth, maxLength,
+									Opacity, Surface, Donor, Media ) ;
+	if( result == 0 )
+	{
+		ReportError("Set Logical Printer Constraints Failed", 0, 0 ) ;
+		aPC = Delete( aPC ) ;
+		return( aPC ) ;
+	}
+
+	//	REMOVE THE PRINTERSETUPS WINDOW COPY FROM THE TREE
+	HandleActions("[CloseWindow(PrinterSetups)]") ;
+
+	//	CREATE THE PRINTER SINKS
+	result = CreatePrinterSinks( aPC ) ;
+	if( result == 0 )
+	{
+		ReportError( "CreatePrinterSinks Failed", 0, 0 ) ;
+		aPC = Delete( aPC ) ;
+		return ;
+	}
+
+	return( aPC ) ;
+}
+
+GetOpacity( char *theSelectedPrinterGC )
+{
+	char	value[64] ;
+
+	return( 0L ) ;	//	REMOVE WHEN WORKING
+
+	GetAttrValue( theSelectedPrinterGC, "PaperOpacity", value ) ;
+
+	if( strcmp( value, "Reflective" ) == 0 )
+	{
+		return( 1L ) ;
+	}
+	if( strcmp( value, "Transparent" ) == 0 )
+	{
+		return( 2L ) ;
+	}
+	return( 0L ) ;
+
+}
+
+
+//	THIS ROUTINE WILL GET THE SELECTED PRINTER SETUP FROM THE USER
+GetPrinterSetupName(char *PrinterSetupName, char *QueueName)
+{
+	char	*theSelectedListParent ;
+	char	*theSelectedList ;
+	char	*theSelectedPrinterGC ;
+	char	*theSelectedQueueGC ;
+	char	*theWindow ;
+	char	*PGCList ;
+	char	 theQuery[1024] ;
+	char	 msg[1024] ;
+	int		 result ;
+
+	HandleActions("[C(CGetQueue)]") ;
+	while( theSelectedListParent == NULL )
+	{
+		Sleep( 2000 ) ;
+		theSelectedListParent = GetTreeObject("SelectedQueue", "[GENCONS]") ;
+	}
+
+	theSelectedList = GetChildren( theSelectedListParent ) ;
+	theSelectedQueueGC = GetFirst( theSelectedList ) ;
+	GetAttrValue( theSelectedQueueGC, "PrinterSetupName", PrinterSetupName ) ;
+	GetAttrValue( theSelectedQueueGC, "QueueName", QueueName ) ;
+
+	//	NOW THAT WE HAVE THE PRINTER SETUP NAME, WE MUST LOOK IT UP IN THE
+	//	PRINTER SETUP TABLE.
+	PGCList = NewPGenConList(GetKPISConnection());
+
+	strcpy( theQuery, "Select * From PrinterSetups Where PrinterSetup = '" ) ;
+	strcat( theQuery, PrinterSetupName ) ;
+	strcat( theQuery, "'" ) ;
+	result = Query(PGCList, theQuery, "Optmistic","Dynamic") ;
+	if (result != 1)
+	{
+		sprintf( msg, "Query [%s] failed.", query ) ;
+		MessageBox( msg, "MB_OK" ) ;
+		return( NULL ) ;
+	}
+
+	theSelectedPrinterGC = GetFirst(PGCList) ;
+	theSelectedPrinterGC = CopySelectedPrinterGC( theSelectedPrinterGC ) ;
+	Delete( PGCList ) ;
+
+	PluckTreeObject( "SelectedQueue", "[GENCONS]" ) ;
+	Delete( theSelectedListParent ) ;
+
+	//	REMOVE THE PRINTERSETUPS WINDOW COPY FROM THE TREE
+	//	THE GENCONS ARE REMOVED FROM THE TREE WHEN THE CLOSE IS PERFORMED.
+//	HandleActions("[CloseWindow(QueueWnd)]") ;
+
+	return( theSelectedPrinterGC ) ;
+}
+
+
+
+//	THIS ROUTINE WILL GET A NEW PRINT JOB AND INITIALIZE IT
+GetPrintJob( char *aPrinterConnection )
+{
+	char	*OutputObject ;
+	char	*aPrintJob ;
+
+	OutputObject = GetOutputObject( aPrinterConnection ) ;
+	if( OutputObject == NULL )
+	{
+		ReportError( "Could not get Output Object.", 0, 0 ) ;
+		return( NULL ) ;
+	}
+
+	aPrintJob = NewPrintJob() ;
+
+	SetOutputObject( aPrintJob, OutputObject ) ;
+	SetPrintConnection( aPrintJob, aPrinterConnection ) ;
+
+	return( aPrintJob ) ;
+}
+
+GetSurface( char *theSelectedPrinterGC )
+{
+	char	value[64] ;
+
+	return( 0L ) ;	//	REMOVE WHEN WORKING
+
+	GetAttrValue( theSelectedPrinterGC, "PaperSurface", value ) ;
+
+	if( strcmp( value, "Glossy" ) == 0 )
+	{
+		return( 1L ) ;
+	}
+	if( strcmp( value, "Matte" ) == 0 )
+	{
+		return( 2L ) ;
+	}
+	return( 0L ) ;
+
+}
+
+
+//	THIS ROUTINE WILL HANDLE THE PRINTER NODES
+HandlePrinters( char *thePrintJob, char *theOutputNode, long XRef, long PageNumber )
+{
+	long	ID ;
+	long	ImaRef ;
+
+	ID = GetLongValue( theOutputNode, "ID:" ) ;
+	if( ID == -9003 )	//	MUST HAVE A CRT PRINTER
+	{
+		ImaRef = HandleCRTPrinter( thePrintJob, theOutputNode, XRef, PageNumber ) ;
+	}
+
+	if( ID == -9004 )	//	MUST HAVE A LED PRINTER
+	{
+		ImaRef = HandleLEDPrinter( thePrintJob, theOutputNode, XRef, PageNumber ) ;
+	}
+
+	if( ID == -9005 || ID == -9026)	//	MUST BE A XLS PRINTER
+	{
+		ImaRef = HandleXLSPrinter( thePrintJob, theOutputNode, XRef, PageNumber ) ;
+	}
+
+	return( ImaRef ) ;
+}
+
+//	THIS ROUTINE WILL HANDLE A CRT PRINTER
+HandleCRTPrinter( char *thePrintJob, char *theOutputNode, long XRef, long PageNumber )
+{
+	char	 Gamma[260] ;
+	char	 ColorMatrix[260] ;
+	char	 Lookup[260] ;
+	char	*theLutObj ;
+	char	*aLut ;
+	double	 aMatrix[9] ;
+	long	 Copies ;
+	long	 Rotated ;
+	long	 PaperWidth ;
+	long	 PaperAdvance ;
+	long	 Resolution ;
+	long	 ImaXForm ;
+
+	if( GetLongValue(theOutputNode, "Enabled:"))
+	{
+		//	THE PRINTER IS ENABLED
+		Resolution = GetLongValue( theOutputNode, "Resolution:" ) ;
+		Copies = GetLongValue( theOutputNode, "Copies:" ) ;
+		Rotate = GetLongValue( theOutputNode, "Rotated:" ) ;
+		PaperWidth = GetLongValue( theOutputNode, "PaperWidth:" ) ;
+		PaperAdvance = GetLongValue( theOutputNode, "PaperAdvance:" ) ;
+
+		if( AttrChanged( theOutputNode, "Gamma:" ))
+		{
+			GetAttrValue( theOutputNode, "Gamma:", Gamma ) ;
+			aLut = LoadLut( Gamma ) ;
+			ImaXForm = DoLUT( aLut, XRef, "CHAR", "Gamma" ) ;
+			aLut = free( aLut ) ;
+			AddTransformData( XRef, 0L, 0L, ImaXForm, "Gamma", aLut, 0.0 ) ;
+			XRef = ImaXForm ;
+		}
+		
+		if( AttrChanged( theOutputNode, "ColorMat:"))
+		{
+			GetAttrValue( theOutputNode, "ColorMat:", ColorMatrix ) ;
+			LoadMatrix( ColorMatrix, aMatrix ) ;
+			ImaXForm = ImaCMatrix( gIma, XRef, aMatrix ) ;
+			AddTransformData( XRef, 0L, 0L, ImaXForm, "ColorMatrix", aMatrix, 0.0 ) ;
+			XRef = ImaXForm ;
+		}
+
+		if( AttrChanged( theOutputNode, "Lookup:" ))
+		{
+			GetAttrValue( theOutputNode, "Lookup:", Lookup ) ;
+			aLut = LoadLut( Lookup ) ;
+			ImaXForm = DoLUT( aLut, XRef, "CHAR", "Lookup" ) ;
+			AddTransformData( XRef, 0L, 0L, ImaXForm, "LookupTable", aLut, 0.0 ) ;
+			XRef = ImaXForm ;
+			aLut = free( aLut ) ;
+		}
+
+		//	WE MUST TELL IMA WE ARE NOW IN THE CMY COLOR SPACE !
+		XRef = ImaSetColorSpace( gIma, XRef, "CMY" ) ;
+
+		//	SETUP THE PAGE STRUCTURE AND THE IMAGE STRUCTURE HERE !
+		SetPageStructure( thePrintJob, PaperWidth, PaperAdvance, PageNumber, Copies ) ;
+		SetImageStructure( thePrintJob, PageNumber ) ;
+
+		XRef = ImaNewImageSink( gIma, XRef, "COM", NULL ) ;
+		if( XRef == 0L )
+		{
+			return( XRef ) ;
+		}
+
+		result = AddPrintPage( thePrintJob, gIma, XRef ) ;
+		if( result == 0 )
+		{
+			return( XRef ) ;
+		}
+
+	}	
+
+	return( XRef ) ;
+}
+
+
+
+
+//	HANDLE SAVE THE IMAGE IMA SINK.
+HandleSaveImage( char *theNode, long ImaXform )
+{
+	char	*aGC ;
+	char	 FileType[10] ;
+	char	 Path[256] ;
+	double	 theRect[4] ;
+	long	 ImaSinkRef ;
+
+	aGC = FindTransformData( ImaXform ) ;
+	if( aGC )
+	{
+		GetRectValue( aGC, "OutputSize", theRect ) ;
+	}
+
+	GetAttrValue( theNode, "SaveName:", Path ) ;
+	GetAttrValue( theNode, "SaveFileType:", FileType ) ;
+
+	ImaSinkRef = ImaNewImageSink( gIma, ImaXform, FileType, Path ) ;
+
+	AddTransformData( ImaXform, 0L, 0L, ImaSinkRef, "ImaSink", theRect, 0.0 ) ;
+
+	return( ImaSinkRef ) ;
+}
+
+//	INVERT THE IMAGE !
+InvertImage( char *anIma, long ImaXformRef )
+{
+	char	*theLutObj ;
+	char	*theLut ;
+
+	theLutObj = NewLut() ;
+	//						 D	  R    G    B    Con		G     Sat  Invert
+	SetLutValues( theLutObj, 0,   0,   0,   0,    0,       100,    0 ,    1 ) ;
+	theLut = GetLutPtr( theLutObj ) ;
+	ImaXformRef = DoLUT( anIma, theLut, ImaXformRef, "CHAR", "Invert" ) ;
+	theLutObj = Delete( theLutObj ) ;
+	theLut = free( theLut ) ;
+	ImaXformRef = ImaSetColorSpace( anIma, ImaXformRef, "CMY" ) ;
+
+	return( ImaXformRef ) ;
+}
+
+//	THIS ROUTINE WILL READ IN A LUT FROM A DISK FILE.
+LoadLut( char *LutName )
+{
+	char *theLutObj ;
+	char *theLut ;
+
+	theLutObj = NewLut() ;
+	theLut = Load8BitLut( theLutObj, LutName ) ;
+	Delete( theLutObj ) ;
+	return( theLut ) ;
+}
+
+LoadMatrix( char *MatrixPath, double *theMatrix )
+{
+	char	*theText ;
+
+	theText = GetFile( MatrixPath ) ;
+	if( theText )
+	{
+		//	CREATE A PARSER
+		aParser = NewParser() ;
+		if( aParser )
+		{
+			SetText( aParser, theText ) ;
+	
+			theMatrix[0] = GetDouble( aParser ) ;
+			theMatrix[1] = GetDouble( aParser ) ;
+			theMatrix[2] = GetDouble( aParser ) ;
+			GetDouble( aParser ) ;	//	IGNORE THE 4th VALUE
+			theMatrix[3] = GetDouble( aParser ) ;
+			theMatrix[4] = GetDouble( aParser ) ;
+			theMatrix[5] = GetDouble( aParser ) ;
+			GetDouble( aParser ) ;	//	IGNORE THE 4th VALUE
+			theMatrix[6] = GetDouble( aParser ) ;
+			theMatrix[7] = GetDouble( aParser ) ;
+			theMatrix[8] = GetDouble( aParser ) ;
+										//	IGNORE THE 4th VALUE
+			
+			//	DELETE THE PARSER
+			SetText( aParser, NULL ) ;
+			Delete( aParser ) ;
+		}
+		theText = free( theText ) ;
+	}
+	return( theMatrix ) ;
+}
+
+
+//	THIS ROUTINE WILL SETUP THE IMAGE STRUCTURE 
+SetImageStructure( char *thePrintJob, long pageNumber )
+{
+	char	*theImageGC ;
+	char	*theImageDD ;
+	int		 result ;
+	long	 ImageSequenceNumber = 0L ;
+//	long	 ImageSequenceNumber = 1L ;
+
+	theImageDD = GetDataDictionary( "DDImageAttributes" ) ;
+	if( theImageDD == NULL )
+	{
+		return( FALSE ) ;
+	}
+
+	theImageGC = CreateGenCon( theImageDD ) ;
+	if( theImageGC == NULL )
+	{
+		return( FALSE ) ;
+	}
+
+	SetLongValue( theImageGC, "PageSequenceNumber", pageNumber ) ;
+	SetLongValue( theImageGC, "ImageSequenceNumber", ImageSequenceNumber ) ;
+
+	SetLongValue( theImageGC, "DeleteAfterPrinting", 1 ) ;
+
+//	SetLongValue( theImageGC, "CenterOnPage", 0 ) ;
+
+//	SetLongValue( theImageGC, "SharpenLevel", 0 ) ;
+
+//	SetDoubleValue( theImageGC, "OutputWidth", 5.0 ) ;
+//	SetDoubleValue( theImageGC, "OutputHeight", 7.0 ) ;
+	
+/*	THESE ARE SET BY IMA
+//	SetAttrValue( theImageGC, "ImageFilename", "" ) ;
+//	SetLongValue( theImageGC, "InputFileOffset", 0 ) ;
+*/
+
+	//	0 = DIB,							1 = PHOTOCD_YCC,
+	//	2 = RGB_PLANAR_8BITPERCHANNEL,		3 = RGB_PIXEL_8BITPERCHANNEL,
+	//	4 = RGB_PIXEL_12BITPERCHANNEL,		5 = CMY_PLANAR_8BITPERCHANNEL,
+	//	6 = CMY_PIXEL_8BITPERCHANNEL,		7 = CMYK_PLANAR_8BITPERCHANNEL,
+	//	8 = CMYK_PIXEL_8BITPERCHANNEL,		9 = CMYK_LINE_1BITPERCHANNEL,
+	//	10 = INTERLEAVED_YCC_8BITPERCHANNEL_WITHCOMIMAGEHEADER,
+	//	11 = PLANAR_YCC_8BITPERCHANNEL_WITHCOMIMAGEHEADER, 
+	//	12 = CMY_LINE_1BITPERCHANNEL,		13 = JPEG,
+	//	14 = FLASHPIX,						15 = HSTC_YCC,
+	//	16 = RGB_PIXEL_10BITPERCHANNEL,		17 = OS2_DIB,
+	//	18 = WAV
+//	SetLongValue( theImageGC, "ImageFormat", 2 ) ;
+
+//	SetLongValue( theImageGC, "InputImageWidth",  256L ) ;
+//	SetLongValue( theImageGC, "InputImageHeight", 328L ) ;
+
+
+//	SetDoubleValue( theImageGC, "StartingHorCoordinate", 0.0 ) ;
+//	SetDoubleValue( theImageGC, "StartingVerCoordinate", 0.0 ) ;
+
+//	SetLongValue( theImageGC, "Mirror", 0 ) ;
+//	SetLongValue( theImageGC, "Negate", 0 ) ;
+
+
+	//	0 = NOT_ROTATED,	1 = ROTATE_90,
+	//	2 = ROTATE_180,		3 = ROTATE_270
+//	SetLongValue( theImageGC, "Rotation", 0 ) ;
+
+	result = SetImageAttributes( thePrintJob, theImageGC ) ;
+
+	theImageGC = Delete( theImageGC ) ;
+
+	return( result ) ;
+}
+
+
+
+//	THIS SETS UP THE PRINT JOB STRUCTURE.
+//	IT ASSUMES THAT EACH JOB WILL HAVE MULTIPLE
+//	PAGES THAT MAKE UP AN ORDER.  SO THAT AT THE
+//	START OF A JOB WE WILL GET AN ORDER PUNCH.
+SetJobStructure(char *thePrintJob )
+{
+	char	*theJobGC ;
+	char	*theJobDD ;
+	int		 result ;
+
+	theJobDD = GetDataDictionary( "DDJobAttributes" ) ;
+	if( theJobDD == NULL )
+	{
+		return( FALSE ) ;
+	}
+
+	theJobGC = CreateGenCon( theJobDD ) ;
+	if( theJobGC == NULL )
+	{
+		return( FALSE ) ;
+	}
+
+
+//	SetLongValue( theJobGC, "dwPriority", 50 ) ;	NOT USED
+
+	//	0 = INCHES, 1 = CENTIMETERS, 2 = PIXELS
+	SetLongValue( theJobGC, "UnitOfMeasure", 0 ) ;
+
+	//	0 = FIRST FIRST, 1 = LAST FIRST
+	SetLongValue( theJobGC, "PageOrder", 0 ) ;
+
+	//	0 = PRINT BY PAGE, 1 = PRINT BY JOB
+	SetLongValue( theJobGC, "JobDelivery", 0 ) ;
+
+//	SetAttrValue( theJobGC, "ClientJobID", GetName( thePrintJob ) ) ;
+	SetAttrValue( theJobGC, "ClientJobID", "KPL First Print Job" ) ;
+
+	//	THESE ARE FOR PUNCHES !
+	SetLongValue( theJobGC, "JobStartIndicator", 1 ) ;	//	ORDER PUNCH
+	SetLongValue( theJobGC, "JobEndIndicator",   1 ) ;	//	DON'T KNOW
+
+	result = SetJobAttributes( thePrintJob, theJobGC ) ;
+
+	theJobGC = Delete( theJobGC ) ;
+
+	return( result ) ;
+}
+
+
+
+SetPageStructure(	char *thePrintJob,	double Width, double Height,
+					long pageNumber,	long copies )
+{
+	char	*thePageGC ;
+	char	*thePageDD ;
+	int		 result ;
+
+	thePageDD = GetDataDictionary( "DDPageAttributes" ) ;
+	if( thePageDD == NULL )
+	{
+		return( FALSE ) ;
+	}
+
+	thePageGC = CreateGenCon( thePageDD ) ;
+	if( thePageGC == NULL )
+	{
+		return( FALSE ) ;
+	}
+
+	SetLongValue( thePageGC, "dwPageSequenceNumber", pageNumber ) ;
+	SetLongValue( thePageGC, "dwCopies", copies ) ;
+	SetLongValue( thePageGC, "bClearFrameBuffer", 1 ) ;
+
+	SetLongValue( thePageGC, "bLaminate", 0 ) ;
+
+	SetLongValue( thePageGC, "SheetCutterCode", 0 ) ;
+
+	//	WIDTH & HEIGHT IN INCHES THAT PAGE WILL CONSUME
+	//	THIS IS THE PAPER ADVANCE ON THE CRT PRINTER
+	SetDoubleValue( thePageGC, "fPageWidth",  Width  ) ;
+	SetDoubleValue( thePageGC, "fPageHeight", Height ) ;
+
+	
+	//	MEDIA AND DONOR NOT CURRENTLY USED
+	//	0 = UNDEFINED, 1 = GLOSSY, 2 = MATTE
+/*	SetLongValue( thePageGC, "MediaSurface", 0 ) ;
+
+	//	0 = UNDEFINED, 1 = REFLECTIVE, 2 = TRANSPARENT
+	SetLongValue( thePageGC, "MediaOpacity", 1 ) ;
+
+	SetDoubleValue( thePageGC, "fMediaWidth", 8.5 ) ;
+	SetDoubleValue( thePageGC, "fMediaLength", 11.0 ) ;
+
+	//	0 = UNDEFINED, 1 = YMC, 2 = YMCL, 3 = KL, 4 = YMC_LONG, 5 = YMCL_LONG
+	//	6 = KL_LONG, 7 = YMC_SHORT, 8 = YMC_A6_L, 9 = YMC_A7_S
+	SetLongValue( thePageGC, "DonorType", 0 ) ;
+*/
+	//	PaperPackSize & PaperPack DEFAULTED TO ZERO
+
+
+	//	IMAGE AND OUTPUT RESOLUTION
+//	SetLongValue( thePageGC, "HorizontalOutputResolution", 300L ) ;
+//	SetLongValue( thePageGC, "VerticalOutputResolution", 300L ) ;
+
+
+	//	CALIBRATION ROW, COLUMN, & LUT DATA ARE ZERO
+
+	//	ANNOTATION LINE COUNT & ANNOTATIONS ARE ZERO
+
+/*	USED BY THE DIGITAL MINI LAB ONLY !
+	SetLongValue( thePageGC, "bRenderer", 0 ) ;
+	SetLongValue( thePageGC, "Iunknown", 0 ) ;
+	SetLongValue( thePageGC, "RendererClassID", 0 ) ;
+	SetLongValue( thePageGC, "RenderID", 0 ) ;
+*/
+
+	result = SetPageAttributes( thePrintJob, thePageGC ) ;
+
+	thePageGC = Delete( thePageGC ) ;
+
+	return( result ) ;
+}
+

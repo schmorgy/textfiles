@@ -1,0 +1,142 @@
+IncludeClass(BaseGrid);
+
+VOID Grid::Grid()					// CONSTRUCTOR
+{
+	TableName = ~BackgroundSubjectColumns~;
+	DocumentQuery = ~Select * from <TableName> Order By TableName,ColumnName~;
+	Title = ~SubjectInfo Background Columns~;
+	
+	WindowLeft = 50;
+	WindowTop = 0;
+	WindowWidth = 35;
+	WindowHeight = 50;
+	
+	SplitterRows = ~2 5 95~;
+}
+
+
+STR Grid::GetKey( &Item )			// PRIMARY KEY FOR THE TABLE
+{
+	return ~TableName = '<$con.Item[TableName]>' AND ProductType = '<$con.Item[ProductType]>'~;
+}
+
+
+NUMERIC Grid::ChangeRecordAudits( &Changed )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[TableName]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  TableName cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[ProductType]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  ProductType cannot be blank.~ ) ); }
+
+	if ( IsNULL(~<$Con.Changed[ColumnName]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  ColumnName cannot be blank.~ ) ); }
+	
+	if ( IsNULL(~<$Con.Changed[Type]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  Type cannot be blank.~ ) ); }
+
+	return TRUE;
+}
+
+
+NUMERIC Grid::UpdateColumnNameCombo( &ColumnDefinition,&aStringList,Col )
+{
+	ReturnOnFailure( <ViewName>View( GetActiveCell,row,col ) );
+	
+	ReturnOnFailure( <ViewName>View( GetCellValue,WhichTable,~<Row>~,~TableName~ ) );
+	
+	if ( IsNull(~<WhichTable>~) )
+	{
+		return Warning( ~You must enter the TableName first.~ );
+	}
+	
+	Query = ~Select * From <WhichTable>~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Forward,SetMaxRecords,1,SetCacheSize,1,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the <WhichTable> table: <Query>. <theErr>~ );
+	}
+	
+	Index = 0;
+	
+	StringList( ColumnNameList,new );
+	
+	while ( List( FieldInfo,<++Index>,Name,FieldName,Length,FieldLength,Type,FieldType ) )
+	{
+		if ( !SimilarStr( ~<FieldName>~,OrderID,SubjectID ) )
+		{ 
+			ColumnNameList( AddString,~<FieldName>~ );
+		}
+	}
+	
+	if ( !UpdateComboBox( ColumnDefinition,ColumnNameList,<Col> ) )
+	{
+		return Warning(Translate(~UpdateCharacterSetCombo: Unable to update ColumnName combo box.~ ) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC Grid::UpdateTableNameCombo( &ColumnDefinition,&aStringList,Col )
+{
+	if ( !PGenConList( SchemaList,Connect,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		return Warning( ~Schema query failed  <theErr>~ ) );
+	}
+
+	SchemaList( Filter,~Table_Name Like 'SubjectInfo%' AND Table_Name <> 'SubjectInfoColumns'~ );
+	SchemaList( Sort,~Table_Name~ );
+	
+	SchemaList( MakeStringList,TableNameList,TABLE_NAME );
+	
+	if ( !UpdateComboBox( ColumnDefinition,TableNameList,<Col> ) )
+	{
+		return Warning(Translate(~UpdateCharacterSetCombo: Unable to update TableName combo box.~ ) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC Grid::UpdateProductTypeCombo( &ColumnDefinition,&aStringList,Col )
+{
+	Query = ~Select * From BackgroundTypes~;
+	
+	if ( !PGenConList( List,Connect,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to query the BackgroundTypes table: <Query>. <theErr>~ );
+	}
+
+	num = List( NumEntries );
+	
+	List( MakeStringList,ForList,BackgroundType );
+	
+	if ( !UpdateComboBox( ColumnDefinition,ForList,<Col> ) )
+	{
+		return Warning(Translate(~UpdateCharacterSetCombo: Unable to update For combo box.~ ) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC Init()
+{
+	Class( Grid,Extends,BaseGrid );
+
+	Grid( New,Obj );
+
+	Obj.DefineWindow();
+	Obj.Init();
+
+	return Global( Obj );
+}
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\<$Job.Name>~ );
+
+
+

@@ -1,0 +1,820 @@
+// CreateOrderItems.txt
+//
+// Entry Point:  CreateOrderItems(&dBase,&SelectedImages,ProductID,OrderID,Qty,ItemType,&Stop);
+//		Where: SelectedImages is a ScannerUGenCon with list of ScannerUGenCon children
+//							  w/ "Path" field for Image - this can either be:
+//							  1) actual complete image path
+//							  2) <$@Image.PathOfOrderRollFrame['<OrderID>','<Roll>','<Frame>']>
+//							  3) or any other valid macro.
+//				Stop is optional Boolean arguement which when set to TRUE will stop creating
+//					order items. 
+//               CreateOrderItemsFromImage( &dBase,ImageFile,ProductID,OrderID,Qty,ItemType )
+//		Where: ImageFile is an ascii string of the Path for the Image, as specified above.
+//
+
+// Globals used defined outside this function to cause actions to occur
+// If want the product to be opened after created, define the variable "OpenLayoutAfterCreating"
+// If you want the OrderItems thumbnail to update, define the variable "UpdateItemsAfterCreating"
+//    updating of the OrderItems thumbnails cannot be done from a Thread
+
+// Most of these functions are called from a Thread.  All are Thread safe.
+// It is assumed the thread has a function ShowWarning(msg) to display Warning msgs,
+//	and a functionShowProgress(msg) to display progress on the status bar,
+// and that nonThreads do not have these function.
+
+// Want entry point that takes a ScannerPGenConList of SelectedImages?
+
+Include: ~GetFullLayout~;
+IncludeClass(BaseOrderItem);
+IncludeClass(BookProduct);
+IncludeClass(Book);
+Include: ~FormattingRoutines~
+
+// 1 images -> 1 product (could be single Layout, Package, or Multiple)
+NUMERIC CreateOrderItemsFromImage( &dBase,ImageFile,ProductID,OrderID,Qty,ItemType,BGID,JobPopulationScript )
+{
+	if (~<Qty>~ == ~~ )
+	{
+		Qty = 1;
+	}
+	GenCon( SelectedImages,NewFrom,DDPath );
+	GenCon( SelectedImage,NewFrom,DDPath );
+	SelectedImage( Set,Path,~<ImageFile>~ );
+	SelectedImages( InsertBack,SelectedImage );
+
+	return CreateOrderItems( dBase,SelectedImages,~<ProductID>~,~<OrderID>~,<Qty>,~<ItemType>~,Stop,~<BGID>~,~~,~~, ~<JobPopulationScript>~);
+
+}
+
+// n images -> 1 product (could be single Layout, Package, or Multiple)
+// SelectImages is a ScannerUGenCon
+NUMERIC CreateOrderItems( &dBase,&SelectedImages,ProductID,OrderID,Qty,ItemType,&Stop,BGID,PackageID,PackageGroup,JobPopulationScript )
+{
+	if (!DefinedAndNotNull( Stop ) )
+	{
+		Stop = FALSE;
+	}
+
+	ImagesCount = SelectedImages( ChildCount );
+
+	if ( <ImagesCount> <= 0 )
+		{ return TRUE; }
+
+	// if a ProductID is a package or book, this gets us the product record of the 
+	// package or book.  Otherwise it is the product record of the individual product
+	Query = ~Select * From Products Where ID = '<ProductID>'~;
+	if ( !PGenConList( List,Connection,dBase,Cursor,KeySet,GetRecordFor,~<Query>~,ProductRec ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return	DoWarning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	done = false;
+	
+	FuncNoExtension = FunctionDefined(~R<$Str.$JobPopulationScript.WithoutExt.StripLeadingNumerics.InstanceString>~) ? ~R<$Str.$JobPopulationScript.WithoutExt.StripLeadingNumerics.InstanceString>~ : ~<$Str.$JobPopulationScript.WithoutExt.StripLeadingNumerics>~; 
+	if (FunctionDefined(~<FuncNoExtension>~))
+	{
+		// return value done indicates if processing should continue
+		done =  <FuncNoExtension>(dBase,~<ProductID>~,~<OrderID>~,SelectedImages,~<Qty>~,~<ItemType>~,Stop,~<BGID>~,~~,~<PackageGroup>~,ProductRec);
+	}
+	
+	if (<done>)
+	{
+		return TRUE;
+	}
+	
+	if ( ProductRec( GetNumeric,Package ) )
+	{			
+		return CreatePackagesForSelectedImages( dBase,~<ProductID>~,~<OrderID>~,SelectedImages,
+												   <Qty>,~<ItemType>~,Stop,~<BGID>~,~<PackageID>~,~<PackageGroup>~,ProductRec );
+	}
+
+	// individual layout
+	return FillIndividualLayout(dBase,~<ProductID>~,~<OrderID>~,SelectedImages,~<Qty>~,~<ImagesCount>~,~<ItemType>~,Stop,~<BGID>~,~<PackageID>~,~<PackageGroup>~,0,ProductRec,~<JobPopulationScript>~);
+}
+
+NUMERIC FillIndividualLayout(&dBase,ProductID,OrderID,&SelectedImages,Qty,ImagesCount,ItemType,&Stop,BGID,PackageID,PackageGroup,GroupID, &ProductRec, JobPopulationScript)
+{
+	IsMultiple = FALSE;
+	JobPath = GetFullLayout( ~<$pcon.ProductRec[ProductLayoutPath]>~,IsMultiple );
+
+	if ( IsNull( ~<JobPath>~ ) )
+	{ 
+		Log( Session,~Product '<ProductID>' has no layout~ );
+		return FALSE;
+	}
+		
+	DoStatusBarText( ~Reading <JobPath>~ );
+	// disadvantage instead of going through ImagesThumbnailView?
+
+	if ( !Document( Job,ParseFile,~<JobPath>~ ) )
+	{
+		DoWarning( ~An error occured while parsing the job at <JobPath>~ );
+		return FALSE;
+	}
+
+	Index = 0;
+
+	if ( !Job( GetRenderList,<Index++>,RenderList ) )
+	{ 
+		return DoWarning( ~There was no render list for <JobPath>~ );
+	}
+
+	if ( <IsMultiple> )
+	{
+		RenderList( SetLayoutPath,~<$pcon.ProductRec[ProductLayoutPath]>~ );
+		// Is anything done with this?
+	}
+	
+	if ( RenderList( GetProductInfo,ProductInfo ) )
+	{
+		if ( !IsNull(~<BGID>~) )
+		{
+			ProductInfo( Set,~COMMONCHROMAKEYBGID:~,~<BGID>~ );
+		}
+		if (GloballyDefined(WhichColumn))
+		{
+			if (!IsNull(~<WhichColumn>~))
+			{
+				ProductInfo( Set,~CreatedFromSubjectInfoField:~,~<WhichColumn>~);
+			}
+		}
+	}
+
+	pos = Count = 0;
+
+	FillCount = RenderList( Fill,SelectedImages );
+
+
+	if (<FillCount> < 1)
+	{
+		if ( !WriteOrderItemFromRenderList( dBase,~<OrderID>~,RenderList,~<ProductID>~,~~,
+											-1,<Qty>*<ImagesCount>,~<ItemType>~,~<GroupID>~,~~,FALSE,~<PackageID>~,~<PackageGroup>~ ) )
+		{ 
+			return FALSE;
+		}
+		Count = 1;
+	}
+
+	while ( (<FillCount> > 0 ) && !<Stop> )
+	{
+		
+		if (!IsNull(~<JobPopulationScript>~))
+		{
+			FuncNoExtension = FunctionDefined(~R<$Str.$JobPopulationScript.WithoutExt.StripLeadingNumerics.InstanceString>~) ? ~R<$Str.$JobPopulationScript.WithoutExt.StripLeadingNumerics.InstanceString>_C1~ : ~<$Str.$JobPopulationScript.WithoutExt.StripLeadingNumerics>_C1~; 
+			if (FunctionDefined(~<FuncNoExtension>~))
+			{
+				// Call the _C1 entry point to modify the render list just before the order item is created
+				// for example the cut and stack population technique uses this entry point to
+				// put the original image index into the ILabel: field in the renderlist
+				<FuncNoExtension>(dbase, SelectedImages, RenderList,~<OrderID>~,~<ProductID>~, SelectedImages, RenderList, Numeric(~<FillCount>~),~<OrderID>~,~<ProductID>~,
+							<ImagesCount>,~<ItemType>~,~<GroupID>~,~<PackageID>~,~<PackageGroup>~,~<BGID>~,ProductRec,Count); 
+				
+			}
+		}
+		if ( !WriteOrderItemFromRenderList( dBase,~<OrderID>~,RenderList,~<ProductID>~,~~,
+											-1,<Qty>,~<ItemType>~,~<GroupID>~,~~,FALSE,~<PackageID>~,~<PackageGroup>~ ) )
+		{ 
+			return FALSE;
+		}
+
+		FillCount = RenderList( Fill,SelectedImages );
+		++Count;
+
+	}
+
+
+	DoStatusBarText( ~Added <Count> Items to Order <OrderID> with <ProductID>~ );
+	return TRUE;
+}
+
+
+NUMERIC CreatePackagesForSelectedImages( &dBase,PackageID,OrderID,&SelectedImages,Qty,ItemType,&Stop,BGID )
+{
+	Query = ~Select * From Packages Where PackageID = '<PackageID>' Order By PackageID,Sequence~;
+
+	if ( !PGenConList( PackageList,Connection,dBase,Cursor,Static,Query,~<Query>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return DoWarning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+	ItemsPerPkg = PackageList(NumEntries);
+	Count = 0;
+
+	Query = ~Select Book from Products Where ID = '<PackageID>'~;
+	if ( !dbase(GetValuesFor,~<Query>~,isBook))
+	{
+		dBase( GetErrorDescription,theErr );
+		return DoWarning( Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+	}
+
+	isBook = Numeric(~<isBook>~);
+	TypeName = ~<PackageID>~;
+	more = SelectedImages( GetFirst,Image );
+	
+	while ( ( <more> ) && !<Stop> )
+	{
+		PkgQty = <Qty>;
+		while ( <PkgQty--> > 0 )
+		{
+			GroupID = PackageGroup = 0;
+			if (<isBook>)
+			{
+				GroupID = UniqueGroupID(dbase,~<OrderID>~);
+			}
+			else
+			{
+				PackageGroup = UniquePackageGroup(dBase,~<OrderID>~);
+			}
+			CreatePackage( dBase,PackageList,~<OrderID>~,~<$con.Image[Path]>~,~<ItemType>~,~<TypeName>~,<GroupID>,~<PackageID>~,~<PackageGroup>~,~<BGID>~));
+			// Should check != ~~ (error)?  What do if is? 
+			
+			if (<isBook>)
+			{
+				UpdateBooksTable(dbase,~<OrderID>~, ~<GroupID>~,~<PackageID>~);
+			}
+			
+			Count = <Count> + <ItemsPerPkg>;
+		}
+		more = SelectedImages( GetNext,Image );
+
+	}
+
+	
+
+	DoStatusBarText( ~Added <Count> Items to Order <OrderID> with <PackageID>~ );
+
+	return TRUE;
+
+}
+
+NUMERIC UpdateBooksTable(&dbase,OrderID, GroupID,PackageID)
+{
+	if (<groupID>)
+	{
+		// get the device type, such as NexPress from the products table, and the book boolean in the products table
+		// if the book boolean is true, generate a new unique group id for the order and pass this
+		// into the call to AddAnOrderItem below
+		if ( !dBase( GetValuesFor,~Select DeviceType,Book,ProductLayoutPath From Products Where ID = '<PackageID>'~,DeviceType,isBook,LayoutPath ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( ~Error getting the layout path for product <ProductID>: <theErr>~ );
+			return 0;
+		}
+		TemplateName = ~~;
+		Banner = ~~;
+		InkName = ~~;
+		Bleed = 0;
+		DontOverrideTemplateBleed = 0;
+		DontOverrideBleed = 0;
+		isBook = Numeric(~<isBook>~);
+		if (<isBook> && !IsNull(~<DeviceType>~) && SimilarStr(~<DeviceType>~,NexPress))
+		{
+			MyQuery = ~Select * From BookProductsFor<DeviceType> Where ProductID = '<PackageID>'~;
+			if ( !PGenConList( MyList,Connection,dBase,Cursor,Forward,QUERY,~<MyQuery>~ ) )
+			{ 
+				MyList( GetErrorDescription,0,theErr );
+				Log(Session, ~Unable to query database. Query: <MyQuery>; <theErr>~ );
+				return FALSE;
+			}
+
+			if (!MyList(GetFirst,Record))
+			{
+				Log(Session, ~Error: Missing record in table BookProductsFor<DeviceType> for product <PackageID>.  Default values used for Templatename, bleed, inkname, banner~ );
+				TemplateName = ~~;
+				Bleed = 0.0;
+				InkName = ~~;
+				Banner = ~~;
+				DontOverrideTemplateBleed = 0;
+				DontRenderBleed = 0;
+			}
+			else
+			{
+				TemplateName = ~<$pcon.Record[TemplateName]>~;
+				Banner = ~<$pcon.Record[Banner]>~;
+				InkName = ~<$pcon.Record[InkName]>~;
+				Bleed = ~<$pcon.Record[Bleed]>~;
+				DontOverrideTemplateBleed = Numeric(~<$pcon.Record[DontOverrideTemplateBleed]>~);
+				DontRenderBleed = Numeric(~<$pcon.Record[DontRenderBleed]>~);
+			}
+		}
+		Book( New,aBook );
+		
+		if (!aBook.UpdateBooksTable(~<OrderID>~,<groupID>,~<TemplateName>~,1,~<Banner>~,~<InkName>~,~<Bleed>~,~<DeviceType>~,~<LayoutPath>~,<DontOverrideTemplateBleed>,<DontRenderBleed>))
+		{
+			return 0;
+		}
+		if (!UpdateBookAttributesTable(~<PackageID>~, ~<OrderID>~,~<groupID>~))
+		{
+			return 0;
+		}
+	}
+	return 1;
+}
+
+// ProductID is the package ID
+// look up the attributes in the book product attributes table and transfer them to the books attributes table
+NUMERIC UpdateBookAttributesTable(PackageID, OrderID, GroupID)
+{
+	BookProduct( New,bookProd );
+	bookProd.SetProductID(~<PackageID>~);
+	PGenConList( List,Create );
+	bookProd.GetAttributes(List);
+
+	Book( New,aBook );
+	aBook.SetAttributes(~<OrderID>~, ~<GroupID>~,List);
+
+	return TRUE;
+}
+
+
+NUMERIC CreatePackage( &dBase,&PackageList,OrderID,ImagePath,ItemType,TypeName,GroupID,PackageID,PackageGroup,BGID)
+{
+	GroupID = Numeric(~<GroupID>~);
+	PackageGroup = Numeric(~<PackageGroup>~);
+	PackageList( GetConnection,dBase );  // Is this needed? Had where passing in dBase, and when not
+
+	More = PackageList( GetFirst,Product );
+
+	while ( <More> )
+	{
+		ProductID = ~<$pcon.Product[ProductID]>~;
+		TargetNode = ~<$pcon.Product[TargetNode]>~;
+		Quantity = ~<$pcon.Product[Quantity]>~;
+
+		if ( ~<ProductID>~ == ~~ )	{ continue; }
+		
+		if ( dBase( GetValuesFor,~Select ProductLayoutPath From Products Where ID = '<ProductID>'~,ProductLayoutPath ) )
+		{
+			CreateOrderItem( dBase,~<OrderID>~,~<ProductID>~,~<ProductLayoutPath>~,~<TargetNode>~,
+							~<ImagePath>~,~<Quantity>~,~<ItemType>~,~<TypeName>~ ,<GroupID>,~<PackageID>~,~<PackageGroup>~,~<BGID>~,~Package~);
+		}
+
+		More = PackageList( GetNext,Product );
+	}
+
+	return TRUE;
+}
+
+
+// 1 image -> 1 layout
+// Currently, this routine is only called when Product is a Package
+// A Package cannot contain a Multiple layout.  Remove Multiple handling or Keep?
+// Returns path of Job that was created, or Null string if not created.
+STR CreateOrderItem( &dBase,OrderID,ProductID,TheLayoutPath,TargetNode,ImagePath,Quantity,ItemType,
+						TypeName,GroupID,PackageID,PackageGroup,BGID,ProdType )
+{
+	GroupID = Numeric(~<GroupID>~);
+	IsMultiple = FALSE;
+	LayoutPath = GetFullLayout( ~<TheLayoutPath>~,IsMultiple );
+
+	if ( IsNull( ~<LayoutPath>~ ) )
+		{ return ~~; }
+
+	if ( !Defined( Quantity ) ) { Quantity = 1; }
+
+	NextOrderItem=BaseOrderItem::CalcNext( dbase,~<OrderID>~,ID );
+	newSequence=BaseOrderItem::CalcNext( dbase,~<OrderID>~,Sequence );
+
+	DoStatusBarText( ~Filling Item <NextOrderItem> for Order <OrderID>~ );
+
+	JobPath = CreateJobPath( ~<OrderID>~,~<NextOrderItem>~ );
+
+	if ( !File( Job,Open,~<JobPath>~,Create,Write ) )	// CREATE AND OPEN THE JOB
+	{
+		DoWarning( Translate(UIMessages,CouldNotOpen,~<JobPath>~ ));
+		return ~~;
+	}
+	
+	LocalWhichColumn = ~~;
+	if (GloballyDefined(WhichColumn))
+	{
+		LocalWhichColumn = ~<WhichColumn>~;		
+	}
+
+	Job( ~FileType: Job~ );
+	Job( ~Use: |<LayoutPath>|~ );
+	
+	if ( !IsNull(~<BGID>~) || !IsNull(~<LocalWhichColumn>~))
+	{
+		Job( ~ProductInfo:~ );
+		
+		if (!IsNull(~<BGID>~))
+		{
+			Job( ~COMMONCHROMAKEYBGID: |<BGID>|~ );
+		}
+		if (!IsNull(~<LocalWhichColumn>~))
+		{
+			Job( ~CreatedFromSubjectInfoField: |<LocalWhichColumn>|~ );		 
+		}
+		
+	}
+
+	if ( <IsMultiple> )
+	{
+		Job( ~LayoutPath: |<TheLayoutPath>|~ );
+	}
+
+	if ( <TargetNode> <= 0 )
+	{
+		Job( ~Main:~ );
+	}
+	else if ( <IsMultiple> )
+	{
+		Job( ~CC: <TargetNode>~ );
+	}
+	else
+	{		
+		Job( ~IC: <TargetNode>~ );
+	}
+	Job( ~     IFile: |<ImagePath>|~ );
+
+	Job( Close );
+
+	OrderItemPreviewPath = MakePreviewPathFromPath( ~<JobPath>~,TRUE );
+	Files( Delete,~<OrderItemPreviewPath>~ );
+	
+	ImagesOrderID = ~~;
+	ImagesSubjectID = ~~;
+	GetSubjectIDFromPath(dbase,~<ImagePath>~, ImagesOrderID,ImagesSubjectID);
+	
+	// CreateOrderItem
+	if ( !AddOrderItemToDataBase(dBase,<NextOrderItem>,~<OrderID>~,~<ProductID>~,~<Quantity>~,<newSequence>,~<JobPath>~,~<ItemType>~,~<TypeName>~,0,<GroupID>,~~,~<PackageID>~,~<PackageGroup>~,~<ProdType>~,~<ImagesOrderID>~,~<ImagesSubjectID>~) )	// ADD THE ORDER ITEM TO THE DATABASE
+	{
+		Files( Delete,~<JobPath>~,Delete,~<OrderItemPreviewPath>~ );
+		// Need to delete OrderItemPreviewPath? Only path created.  Not done below.
+		return ~~;
+	}
+
+	MaintainThisOrderItem( dBase,~<OrderID>~,<NextOrderItem>,~<JobPath>~ );
+
+	if (Defined(OpenLayoutAfterCreating))
+	{
+		Open( Any,~<JobPath>~ );
+	}
+
+	return ~<JobPath>~;
+}
+
+
+NUMERIC MaintainThisOrderItem( &Connection,OrderID,ID,ItemJobPath )
+{
+	if ( GetWorkStationSettings( ~MaintainOrderItemImages_<$App.Instance>~,Manual,Manual,Enabled ) )
+	{
+		if ( <Enabled> && MakeNumber(~<Manual>~) )
+		{
+			return TRUE;
+		}
+	}	
+
+	if ( !Document( Job,ParseFile,~<ItemJobPath>~ ) )
+	{
+		return Warning( Translate( ~An error occured while parsing the layout at <ItemJobPath>~ ) );
+	}
+
+	if ( !Job( GetRenderList,0,RenderList ) )
+	{ 
+		return Warning( Translate( ~There was no render list for <ItemJobPath>~ ) );
+	}
+
+	RenderList( SetConnection,Connection );
+
+	if ( !RenderList( MaintainCrossReference,~<OrderID>~,~<ID>~,TRUE ) )
+	{
+		return Warning( Translate( ~Error maintaining OrderItem for <OrderID>,<ID>~ ) );
+	}
+
+	return TRUE;
+}
+
+
+// Returns OrderItemID item written to.
+NUMERIC WriteOrderItemFromRenderList( &dBase,OrderID,&RenderList,ProductID,SrcJobPath,NextOrderItem,Qty,ItemType,GroupID,ProductCode,encryptJobFile,PackageID,PackageGroup,ProdType,ImagesOrderID,ImagesSubjectID,TypeName )
+{
+	encryptJobFile = Numeric( ~<encryptJobFile>~ );
+	
+	JobPath = ~<SrcJobPath>~;
+
+	NewItem = $NextOrderItem < 0;
+
+	if ( <NewItem> )
+	{
+		GetItemAndSequence(dbase,RenderList,~<OrderID>~);
+		JobPath = CreateJobPath( ~<OrderID>~,<NextOrderItem> );
+	}
+
+	DoStatusBarText( ~Filling Item <NextOrderItem> for Order <OrderID>~ );
+
+	RenderList( SetImageChange,FALSE ); // Don't try to maintain cross ref on the Write Job
+
+	RenderList( SetFileType,~Job~ );
+
+	if ( !RenderList( WriteJob,~<JobPath>~ ) )
+		{ return DoWarning( ~Failed to write <JobPath>~ ); }
+
+	if ( <encryptJobFile> )
+	{
+		AESCrypt( AESCryptObj );
+		AESCryptObj(EncryptApplicationTextFile, ~<JobPath>~, ~Application~ );
+	}
+
+	RenderList( SetImageChange,TRUE ); // Now do it!
+
+//	if ( !RenderList( MaintainCrossReference,~<OrderID>~,~<NextOrderItem>~,TRUE ) )
+//		{ return DoWarning( ~Failed to MaintainCrossReference for <JobPath>~ ); }
+
+	OrderItemPreviewPath = MakePreviewPathFromPath( ~<JobPath>~,TRUE );
+	Files( Delete,~<OrderItemPreviewPath>~ );
+
+	if ( <NewItem> )
+	{		
+		if ( !AddOrderItemToDataBase(dBase,<NextOrderItem>,~<OrderID>~,~<ProductID>~,<Qty>,<newSequence>,~<JobPath>~,~<ItemType>~,~<TypeName>~,<subSequence>,~<GroupID>~,~~,~<PackageID>~,~<PackageGroup>~,~<ProdType>~ ) )	
+		{
+			Files( Delete,~<JobPath>~ );	// ON FAILURE, REMOVE THE JOB
+			return FALSE;
+		}
+	}
+
+	if ( !RenderList( MaintainCrossReference,~<OrderID>~,~<NextOrderItem>~,TRUE ) )
+		{ return DoWarning( ~Failed to MaintainCrossReference for <JobPath>~ ); }
+
+	if (Defined(OpenLayoutAfterCreating))
+	{
+		Open( Any,~<JobPath>~ );
+	}
+
+	return <NextOrderItem>;
+}
+
+
+
+NUMERIC AddOrderItemToDataBase(&dBase,ID,OrderID,ProductID,Quantity,Sequence,JobPath,ItemType,TypeName,
+									Subsequence,GroupID,ProductCode,PackageID,PackageGroup,ProdType,ImagesOrderID,ImagesSubjectID)
+{
+	if ( !DefinedAndNotNull( ProductCode ) )
+	{
+		ProductCode = ~~;
+	}
+
+	PreviewPath = MakePreviewPathFromPath( ~<JobPath>~,TRUE );
+
+	Subsequence =  Numeric(~<Subsequence>~);
+	GroupID =  Numeric(~<GroupID>~);
+	PackageGroup = Numeric(~<PackageGroup>~);
+	
+	if ( (<PackageGroup> > 0) || SimilarStr(~<ItemType>~,~Subject Packages~) )
+	{
+		//ProdType = ~Package~;
+	}
+
+	theSQL = ~Insert Into OrderItems (ID,OrderID,ProductID,Quantity,Sequence,Type,TypeName,JobPath,PreviewPath,Printable,Subsequence,GroupID,ProductCode,PackageID,PackageGroup,ProdType)
+					VALUES (<ID>,'<OrderID>','<ProductID>',<Quantity>,<Sequence>,'<ItemType>','<TypeName>','<JobPath>','<PreviewPath>',1,<Subsequence>,<GroupID>,'<ProductCode>','<PackageID>','<PackageGroup>','<ProdType>')~;
+
+	if ( !dBase( CMD,~<theSQL>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		DoWarning( Translate(DBMessages,CmdFailed,~<theSQL>~,~<theErr>~) );
+		return FALSE;
+	}
+
+	Log( Session,~Created OrderItem <OrderID>/<ID>. P-'<ProductID>',Q-<Quantity>,IT-'<ItemType>',TN-'<TypeName>','<JobPath>',G-<GroupID>,PC-'<ProductCode>',PID-'<PackageID>',PG-'<PackageGroup>',PT-'<ProdType>'~ );
+
+	if ( Defined(UpdateItemsAfterCreating) && (!FunctionDefined(ShowWarning)) ) // want displayed & not a Thread
+	{
+		ShowNewOrderItem( ~<OrderID>~,~<ID>~ );  // Keep for SubjectInfo and OrderDeliverables?
+	}
+
+	return TRUE;
+}
+
+
+// Can not be called from a Thread
+VOID ShowNewOrderItem( OrderID,ID )
+{
+	Actions = ACTION Doc ( <UpdateItemsAfterCreating> "AddOrderItemToList( ~<OrderID>~,~<ID>~ );" );
+	QueueContentsAfter( Actions,1000 );
+}
+
+
+// Not currently called
+VOID DelayedNotifyAffectedDocuments()
+{
+	KillTimer( 1 );
+
+//	ImagesThumbNailWindow( NotifyAffectedDocuments,~OrderID ProductID~ );
+	NotifyAffectedDocuments(~OrderID ProductID~ );
+}
+
+
+
+STR CreateJobPath( OrderID,Item )
+{
+	JobPath = ~<$App.ShareDirectory>\OrderJobs\<OrderID>~;
+	JobName = ~Job_<OrderID>_<Item>~;
+
+	Directory( Create,~<JobPath>~ );
+
+	return ~<JobPath>\<JobName>~;
+}
+
+
+STR MakePreviewPathFromPath( Path,CreateDirectory )
+{
+	if ( $CreateDirectory )
+		{ Directory( Create,~<$str.$Path.Path>\Preview~ ); }
+
+	Path = ~<$str.$Path.Path>\Preview\<$str.$Path.FileName>.jpg~;
+
+	return ~<Path>~;
+}
+
+
+NUMERIC DoWarning( Msg )
+{
+	if ( FunctionDefined(ShowWarning) ) // Thread's function
+	{	Invoke( ShowWarning,~<Msg>~ );	}
+
+	else
+	{	Warning( ~<Msg>~ );	}
+
+	return FALSE;
+
+}
+
+VOID DoStatusBarText( Msg )
+{
+	if ( FunctionDefined(ShowWarning) ) // Thread's function
+	{	Invoke( ShowProgress,~<Msg>~ );	}
+
+	else
+	{	StatusBarText( ~<Msg>~ );	}
+}
+
+
+NUMERIC GetSubjectIDFromPath(&dbase,ImagePath, &ImagesOrderID,&ImagesSubjectID)
+{
+	ImagesOrderID = ~~;
+	ImagesSubjectID = ~~;
+	ParseDelayed(ImagePath);
+	result = TRUE;
+	if (!IsNull(~<ImagePath>~))
+	{
+		Query = ~Select OrderID, SubjectID From Images Where Path = '<ImagePath>'~;
+		Result = PGenConList( MyList,Connection,dBase,Cursor,Forward,QUERY,~<Query>~ ) ;
+		if (!<Result>)
+		{ 
+			MyList( GetErrorDescription,0,theErr );
+			Log(Session, ~Unable to query database. Query: <MyQuery>; <theErr>~ );
+			result = FALSE;
+		}
+		else 
+		{
+			if (MyList(GetFirst,ImagesRec))
+			{
+				ImagesRec(GetValue,OrderID,ImagesOrderID);
+				ImagesRec(GetValue,SubjectID,ImagesSubjectID);
+			}
+		}
+		
+	}
+	return <Result>;
+}
+
+NUMERIC FindImagesHavingSubjectID(&dbase,ImagesOrderID,ImagesSubjectID,&ImagesList)
+{
+	// Find all the images having a given order and subject id
+	Query = ~Select * From Images Where OrderID = '<ImagesOrderID>' And SubjectID = '<ImagesSubjectID>' Order By Sequence,Subsequence~;
+
+	if ( !PGenConList( List,Connection,dBase,Cursor,Static,Query,~<Query>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log(Session,Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		return 0;
+	}
+	NumberOfImages = List(NumEntries);
+	if (<NumberOfImages>)
+	{
+		while (List(GetNext,Image))
+		{
+			Image(GetValue,Path,Path);
+			GenCon( SelectedImage,NewFrom,DDPath,Permanent );
+			SelectedImage( Set,Path,~<Path>~ );
+			ImagesList( InsertBack,SelectedImage );
+		}
+	}
+	return <NumberOfImages>;
+}
+
+VOID GetItemAndSequence(&dbase,&RenderList,OrderID)
+{
+	subSequence = 0;
+	if (Defined(CreateOrderDlvrblWithPackages))
+	{
+		if (<CreateOrderDlvrblWithPackages>)
+		{
+			if (RenderList(GetNextPromptedImageNode,ImageNode))
+			{
+				if (ImageNode(GetValue,~IFile:~,ImagePath))
+				{
+					BaseOrderItem(New,Obj);
+					if ( Obj.FindSubjPackage(dbase,~<ImagePath>~,OrderIDSymbol,ItemSequence,ItemSubsequence))
+					{
+						NextOrderItem = BaseOrderItem::CalcNext( dbase,~<OrderID>~,ID );
+						newSequence = <ItemSequence> ;
+						subSequence = <ItemSubsequence> + 1;
+						// update the order items having a matching sequence number and subsequence greater than or equal to the item dropped onto
+						SQLCommand = ~Update OrderItems Set Subsequence = Subsequence + 1 Where OrderID = '<OrderID>' AND Sequence = <newSequence> AND Subsequence >= <subSequence> ~;
+						if (!dbase(Cmd, ~<SQLCommand>~))
+						{
+							dBase(GetErrorDescription, theErr);
+							Log( Session,~Unable to update the sequence number for items having an sequence number >= <subSequence>.  <theErr>~ );
+						}
+						PassBack(subSequence);
+						PassBack(newSequence);
+						PassBack(NextOrderItem);
+						return;
+					}
+				}
+			}			
+		}
+	}
+	newSequence=BaseOrderItem::CalcNext( dbase,~<OrderID>~,Sequence );
+	NextOrderItem=BaseOrderItem::CalcNext( dbase,~<OrderID>~,ID );
+	PassBack(subSequence);
+	PassBack(newSequence);
+	PassBack(NextOrderItem);
+}
+
+NUMERIC FindSubjectPackage(&dbase,ImagePath,&OrderID,&ItemSequence,&ItemSubsequence)
+{
+	Query = ~Select OrderID,Roll,Frame From Images Where ImagePath = '<ImagePath>'~;
+	if ( !PGenConList( List,Connection,dBase,Cursor,Static,Query,~<Query>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log(Session,Translate(DBMessages,QueryFailed,~<Query>~,~<theErr>~) );
+		return 0;
+	}
+	count = List(NumEntries);
+	if (<count> > 1)
+	{
+		Log(Session, ~<ImagePath> is in the database on more than 1 order~);
+	}
+	
+	if (List(GetFirst,ImageRecord))
+	{
+		ImageRecord(GetValue,OrderID,OrderID);
+		ImageRecord(GetValue,Roll,Roll);
+		ImageRecord(GetValue,Frame,Frame);
+		Query2 = ~Select OrderItemImages.ItemOrderID,OrderItemImages.ItemID,OrderItems.Sequence,OrderItems.Subsequence From OrderItemImages LEFT OUTER JOIN OrderItems 
+				Where OrderItemImages.OrderID = '<OrderID>' 
+				And OrderItemImages.Roll = '<Roll>' 
+				And OrderItemImages.Frame = '<Frame>'~ 
+				And OrderItems.Type = 'Subject Packages'
+				And OrderItems.Sequence Is Not NULL 
+				And OrderItems.Subsequence Is Not NULL
+				Order By OrderItems.Sequence,OrderItems.Subsequence
+				~;
+		if ( !PGenConList( OrderItemImagesList,Connection,dBase,Cursor,Static,Query,~<Query2>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Log(Session,Translate(DBMessages,QueryFailed,~<Query2>~,~<theErr>~) );
+			return FALSE;
+		}
+		
+		if (OrderItemImagesList(GetLast,OrderItemImagesRecord)
+		{
+			OrderItemImagesRecord(GetValue,OrderItems.Sequence,Seq);
+			OrderItemImagesRecord(GetValue,OrderItems.Subsequence,SubSeq);
+			ItemSubsequence = <SubSeq> +  1; 
+			ItemSequence = <Seq>;
+			return TRUE;
+		}
+	}
+	
+	return FALSE;
+}
+
+
+MoreFiles = findfile( aDirectoryEntry,Find,~<$App.ShareDirectory>\Scripts\JobPopulationScripts\*.txt~ );
+
+while ( $Morefiles )
+{
+	Morefiles = aDirectoryEntry( Next );
+
+	aDirectoryEntry( Get,Path,aPath );
+		
+	if ( aDirectoryEntry( Dots ) )
+		continue;
+		
+	if ( aDirectoryEntry( Is,aDirectoryEntry(Directory) ) )
+		continue;
+
+	Include: ~<aPath>~;
+}
+
+ForgetGlobal( MoreFiles,aDirectoryEntry,aPath );
+
+OptionalInclude( ~<$App.ShareDirectory>\Scripts\ScriptOverrides\CreateOrderItems.txt~ );
+
+
+

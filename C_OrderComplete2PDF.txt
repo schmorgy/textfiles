@@ -1,0 +1,611 @@
+//	C_OrderComplete2PDF.txt
+
+ExecC() ;
+
+char	*NULL ;
+int		 FALSE	= 0 ;
+int		 TRUE	= ! FALSE ;
+
+//	ORDER COMPLETE SCRIPT !
+
+//void GetFilePathNameAndExt( TCHAR *Source, TCHAR *FilePath, TCHAR *FileName, TCHAR *FileExtn )
+
+TCHAR	gSrcFileName[1024] ;
+TCHAR	gDstFileName[1024] ;
+TCHAR	gFilePath[1024] ;
+TCHAR	gFileName[1024] ;
+TCHAR	gFileExtn[1024] ;
+
+
+UGenCon	*gCompletePrint ;
+UGenCon *gBatch ;
+UGenCon *gPrinterSetup ;
+
+main()
+{
+	SessionLogDirect(_T("Starting: C_OrderComplete2PDF Version 1.0.0   03/24/10")) ;
+}
+
+Init( UGenCon *theBatch )
+{
+	int Result = FALSE ;
+
+	if( theBatch == NULL )
+	{
+		SessionLogDirect( _T("C_OrderComplete2PDF.Init: Batch == NULL")) ;
+		return( Result ) ; 
+	}
+
+	
+//	theBatch->Dump( _T("C_OrderComplete2PDF.Init: Batch:")) ;
+
+	UGenCon *PrinterSetup = (UGenCon *) theBatch->GetLongValue( _T("PrinterSetup")) ;
+	if( PrinterSetup == NULL )
+	{
+		SessionLogDirect( _T("C_OrderComplete2PDF.Init: PrinterSetup == NULL")) ;
+		return( Result ) ; 
+	}
+	
+	gBatch = theBatch ;
+	gPrinterSetup = PrinterSetup ;
+
+
+	int OutputType = PrinterSetup->GetLongValue( _T("ForcePDFOutput")) ;
+	if( OutputType == 2 )	//	PUBLISH FOR MOVIE MAKING
+	{
+		TCHAR	FuncCall[512] ;
+		UList	*thePages = theBatch->GetChildren() ;
+		if( thePages )
+		{
+			int		NumPages = thePages->GetNumEntries() ;
+			
+			UGenCon *aBookErrorGC = new UGenCon( GetDataDictionary( _T("DDText"))) ;
+			sprintf( FuncCall, _T("Init( 0x%08lX, 0x%08lX, 0x%08lX, 1);"), theBatch, thePages, aBookErrorGC ) ;
+
+			CallKPLScript( _T("AnimotoBookComplete.txt"), FuncCall ) ;	
+			
+//			aBookErrorGC->SetAttrValue( _T("Text"), _T("Test Order Complete Error Message.")) ;			
+			
+			if( aBookErrorGC->GetStringValue( _T("Text")))
+			{
+				UGenCon *thePage = thePages->GetAt( NumPages - 1 ) ;
+				
+				TCHAR TextMsg[1024] ;
+				sprintf( TextMsg, 
+							_T("MSG: \"Cannot Publish Pages for OrderID: %s: \r\n%s\"."),
+							theBatch->GetStringValue( _T("OrderID")), aBookErrorGC->GetStringValue( _T("Text")) ) ;
+				WriteErrorResponse( thePage, 203, TextMsg ) ;
+			}
+			delete aBookErrorGC ;
+		}
+/*		theBatch->Dump(_T("Batch:")) ;
+		
+		int		PageNum ;
+		int		NumPages = thePages->GetNumEntries() ;
+		for( PageNum = 0 ; PageNum < NumPages ; PageNum++ )
+		{
+			UGenCon *aPage = (UGenCon *) thePages->GetAt( PageNum ) ;
+			aPage->Dump(_T("Page:")) ;
+		}
+*/		
+		return( TRUE ) ;	
+	}
+
+
+
+
+//	SessionLogDirect( _T("\n\n\n")) ;
+
+//	PrinterSetup->Dump( _T("C_OrderComplete2PDF.Init: PrinterSetup:")) ;
+
+//	SessionLogDirect( _T("\n\n\n")) ;
+
+	//	ONLY DO THIS IF WE WERE PAPER FILLING AND WE WANT A PDF FILE !
+
+	long	PaperFill = PrinterSetup->GetLongValue( _T("PaperFill") ) ;
+	long	FileType  = atoi(PrinterSetup->GetStringValue( _T("OutputFileType") )) ;
+
+	long	ForcePDFOutput = PrinterSetup->GetLongValue( _T("ForcePDFOutput")) ;
+
+	if( ForcePDFOutput == 0 )
+	{
+		return( Result ) ;
+	}
+
+
+//=============================================================================
+//=============================================================================
+//	TO CREATE A PDF FILE FROM SCRATCH...
+//	CALL:
+//		UList *ObjectList = CreatePDFHeader( PPI ) ;
+//			REPEAT NEXT LINE FOR EACH PAGE
+//		CreatePage( FilePath, SpotColorFilePath, InkName, Qty ) ;
+//		WritePDFFile( OutputFilePath ) ;
+//
+
+	UList	*Pages = theBatch->GetChildren() ;
+	if( Pages )
+	{
+		double		 PPI = 0.0 ;
+
+		PIEPDF		*PDFfer = new PIEPDF ;
+		UList		*ObjectList = NULL ;
+		TCHAR		*SpotColorFilePath = NULL ;
+		TCHAR		*InkName = NULL ;
+		long		 Quantity = 1L ;
+		int			 isDirectory ;
+
+		long		 NumPages = Pages->GetNumEntries() ;
+		long		 PageNum ;
+		UGenCon		*aPageGC ;
+		TCHAR		 Msg[256] ;
+		int			 RestoringPDF = FALSE ;
+		TCHAR		*PDFSourceFile = NULL ;
+
+		for( PageNum = 0L ; PageNum < NumPages ; PageNum++ )
+		{
+			RestoringPDF = FALSE ;
+
+			aPageGC = (UGenCon *) Pages->GetAt( PageNum ) ;
+			if( aPageGC )
+			{
+
+				//	IF WE ARE RESTORING A PDF, THEN WE CANNOT FORCE PDF OUTPUT.
+
+				PDFSourceFile = aPageGC->GetStringValue( _T("PDFSourceFile")) ;
+				if( PDFSourceFile )
+				{
+					if( *PDFSourceFile )
+					{
+						RestoringPDF = TRUE ;
+					}
+				}
+
+				if( RestoringPDF )	{ return( FALSE ) ; }
+
+				//	CONVERT THE IMAGE TO JPEG
+				ConvertImage( aPageGC ) ;
+
+				//	GET THE QUANTITY FOR THIS PAGE
+				Quantity = aPageGC->GetLongValue( _T("Quantity")) ;
+
+				if( PageNum == 0L )		//	IF THIS IS THE FIRST PAGE, GET THE PPI AND
+				{						//	CREATE THE PDF HEADER.
+
+					PPI = aPageGC->GetDoubleValue( _T("PPI")) ;
+					ObjectList = PDFfer->CreatePDFHeader( PPI ) ;
+
+					//	SAVE THE FIRST PAGE SO WE CAN EXPAND THE FILE NAME LATER
+					gCompletePrint = aPageGC ;
+				}
+				
+				SpotColorFilePath	= aPageGC->GetStringValue( _T("SpotColorMaskPath")) ;
+				
+				if( SpotColorFilePath )
+				{
+					if( FileOrDirectoryExists( SpotColorFilePath, &isDirectory ) == FALSE )
+					{
+						SpotColorFilePath = NULL ;
+					}
+				}
+
+				//	ADD THE NEXT PAGE TO THE PDF FILE
+				PDFfer->CreatePage( gDstFileName, SpotColorFilePath, InkName, Quantity ) ;
+
+				sprintf( Msg, _T("C_OrderComplete2PDF.Init: Page: %ld"), PageNum ) ;
+				aPageGC->Dump( Msg ) ;
+			}
+		}
+
+		//	WRITE THE PDF FILE TO THE FINAL DESTINATION
+		TCHAR	OutputPath[2048] ;
+		TCHAR	*theOutputPath = PrinterSetup->GetStringValue( _T("OutputPath")) ;
+
+//		SessionLogDirect( _T("C_OrderComplete2PDF.Init 1: theOutputPath: \"%s\""), theOutputPath ) ;
+
+		strcpy( OutputPath, theOutputPath ) ;
+
+//		SessionLogDirect( _T("C_OrderComplete2PDF.Init 2: OutputPath: \"%s\""), OutputPath ) ;
+
+		ExpandFileName( OutputPath ) ;
+
+//		SessionLogDirect( _T("C_OrderComplete2PDF.Init 3: Expanded: \"%s\""), OutputPath ) ;
+
+		GetFilePathNameAndExt( OutputPath, gFilePath, gFileName, gFileExtn ) ;
+
+		CreateFullDirectoryPath( gFilePath ) ;
+
+		SessionLogDirect( _T("C_OrderComplete2PDF.Init: OutputPath: \"%s\""), OutputPath ) ;
+
+		Result = PDFfer->WritePDFFile( OutputPath ) ;
+
+		delete PDFfer ;
+
+		//	DELETE THE IMAGES THAT HAVE BEEN MOVED INTO THE PDF FILE
+		TCHAR	*OrigFilePath = NULL ;
+		for( PageNum = 0L ; PageNum < NumPages ; PageNum++ )
+		{
+			aPageGC = (UGenCon *) Pages->GetAt( PageNum ) ;
+			if( aPageGC )
+			{
+				OrigFilePath = aPageGC->GetStringValue( _T("ImagePath")) ;
+				if( OrigFilePath )
+				{
+					unlink( OrigFilePath ) ;
+				}
+
+				SpotColorFilePath	= aPageGC->GetStringValue( _T("SpotColorMaskPath")) ;
+				if( SpotColorFilePath )
+				{
+					unlink( SpotColorFilePath ) ;
+				}
+			}
+		}
+	}
+
+	return( Result ) ;
+}
+
+
+//=============================================================================
+//	CONVERT IMAGE FROM TIFF TO JPEG
+//=============================================================================
+int ConvertImage( UGenCon *aPageGC )
+{
+	TCHAR		*FilePath = aPageGC->GetStringValue( _T("ImagePath"))  ;
+	if( FilePath )
+	{
+//		SessionLogDirect( _T("C_OrderComplete2PDF.ConvertImage: FilePath: \"%s\""), FilePath ) ;
+
+		GetFilePathNameAndExt( FilePath, gFilePath, gFileName, gFileExtn ) ;
+		sprintf( gDstFileName, _T("%s\\%s.jpg"), gFilePath, gFileName ) ;
+
+		if( stricmp( gDstFileName, FilePath ) )
+		{
+			ImageMem	*theImage = ReadImage( FilePath ) ;
+			if( theImage )
+			{
+
+				SessionLogDirect( _T("C_OrderComplete2PDF.ConvertImage: gDstFileName: \"%s\""), gDstFileName ) ;
+
+				WriteJpegImage( theImage, gDstFileName, 0L ) ;
+
+				delete theImage ;
+
+				int Result = unlink( FilePath ) ;
+
+				SessionLogDirect( _T("C_OrderComplete2PDF.ConvertImage: Deleting Result: %ld,  FilePath: \"%s\""), Result, FilePath ) ;
+
+				aPageGC->SetAttrValue( _T("ImagePath"), gDstFileName ) ;
+
+				return( TRUE ) ;
+			}
+		}
+	}
+
+	SessionLogDirect( _T("C_OrderComplete2PDF.ConvertImage: Returning FALSE, FilePath: \"%s\""), FilePath ) ;
+	return( FALSE ) ;
+}
+
+//=============================================================================
+//	READ IMAGE ROUTINES
+//=============================================================================
+ImageMem *ReadImage( TCHAR *FilePath )
+{
+	PIEReadImage *anImageRdr = new PIEReadImage ;
+	anImageRdr->Init(FilePath, 1L) ;
+	anImageRdr->DoOp( NULL, NULL, NULL ) ;
+	ImageMem *theImage = anImageRdr->GetImage() ;
+	delete anImageRdr ;
+	return( theImage ) ;
+}
+
+
+//=============================================================================
+//	WRITE IMAGE ROUTINES
+//=============================================================================
+void WriteJpegImage( ImageMem *theImage, TCHAR *SrcImageName, long SubSampleSize )
+{
+	PIEJpeg *PJpeg = new PIEJpeg ;
+	int err = PJpeg->CompressToFile(SrcImageName,theImage,SubSampleSize);
+	delete PJpeg ;
+}
+
+
+TCHAR *ExpandFileName( TCHAR *FileName )
+{
+	int		Count = 0 ;
+	TCHAR	Source[2048] ;
+	TCHAR	Temp[1024] ;
+	TCHAR	Format[1024] ;
+	int		theChar ;
+
+	TCHAR	*SPtr = FileName ;
+	TCHAR	*DPtr = Source ;
+	TCHAR	*TPtr = NULL ;
+
+	strcpy( Source, FileName ) ;
+	TCHAR	*TextAttr = NULL ;
+
+	SPtr = Source ;
+	DPtr = FileName ;
+
+	while( *SPtr )
+	{
+		if( *SPtr == '[' )
+		{
+			SPtr++ ;
+			while( *SPtr != ']' && *SPtr )
+			{
+				theChar = *SPtr ;
+				switch( theChar )
+				{
+					case	'-'	:
+						sprintf( Temp, _T("%s %s %04ld %04ld"), 
+							gCompletePrint->GetStringValue(_T("BatchID")),
+							gCompletePrint->GetStringValue(_T("OrderID")),
+							gCompletePrint->GetLongValue(_T("OrderItemID")),
+							gCompletePrint->GetLongValue(_T("PageNumber"))) ;
+						SPtr++ ;
+						break ;
+
+					case	'B'	:
+						strcpy( Temp, gCompletePrint->GetStringValue( _T("BatchID"))) ;
+						SPtr++ ;
+						break ;
+
+					case	'D'	:
+						sprintf( Temp, _T("%09ld"), gCompletePrint->GetLongValue(_T("JobID"))) ;
+						SPtr++ ;
+						break ;
+
+					case	'G'	:
+						Count = 0 ;
+						while( *SPtr == 'G' ) { Count++ ; SPtr++ ; }
+
+						if( Count > 1 )
+							{ sprintf( Format, _T("%%0%ldld"), Count ) ; }
+						else
+							{ sprintf( Format, _T("%%ld") ) ; }
+
+						sprintf( Temp, Format, gCompletePrint->GetLongValue(_T("PageNumber"))) ;
+						break ;
+
+					case	'I'	:
+						Count = 0 ;
+						while( *SPtr == 'I' ) { Count++ ; SPtr++ ; }
+
+						if( Count > 1 )
+							{ sprintf( Format, _T("%%0%ldld"), Count ) ; }
+						else
+							{ sprintf( Format, _T("%%ld") ) ; }
+
+						sprintf( Temp, Format, gCompletePrint->GetLongValue(_T("OrderSeq"))) ;
+						break ;
+
+					case	'L' :
+						Count = 0 ;
+						while( *SPtr == 'L' ) { Count++ ; SPtr++ ; }
+
+						if( Count > 1 )
+							{ sprintf( Format, _T("%%0%ldld"), Count ) ; }
+						else
+							{ sprintf( Format, _T("%%ld") ) ; }
+							
+							UList *thePages = gBatch->GetChildren() ;
+							if( thePages )
+							{
+								sprintf( Temp, Format, thePages->GetNumEntries()) ;
+							}
+						
+		SessionLogDirect( _T("C_Disk_PrintComplete.ExpandFileName: Temp (L): \"%s\""), Temp ) ;
+						break ;
+
+					case	'O'	:
+						strcpy( Temp, gCompletePrint->GetStringValue( _T("OrderID"))) ;
+						SPtr++ ;
+						break ;
+
+					case	'S'	:
+						Count = 0 ;
+						while( *SPtr == 'S' ) { Count++ ; SPtr++ ; }
+
+						if( Count > 1 )
+							{ sprintf( Format, _T("%%0%ldld"), Count ) ; }
+						else
+							{ sprintf( Format, _T("%%ld") ) ; }
+
+						sprintf( Temp, Format, gCompletePrint->GetLongValue(_T("OrderItemSeq"))) ;
+						break ;
+
+					case	'U'	:
+						Count = 0 ;
+						while( *SPtr == 'U' ) { Count++ ; SPtr++ ; }
+
+						if( Count > 1 )
+							{ sprintf( Format, _T("%%0%ldld"), Count ) ; }
+						else
+							{ sprintf( Format, _T("%%ld") ) ; }
+
+						sprintf( Temp, Format, gCompletePrint->GetLongValue(_T("OrderSeq"))) ;
+						break ;
+
+					case	'X'	:	//	IF WE ARE HERE, IT MUST BE PDF
+						strcpy( Temp, _T("pdf")) ;
+						SPtr++ ;
+						break ;
+
+					case	'^'	:	//	THE DATETIME YYMMDDHHMMSSsss
+						GetSortableTimeNow( Temp ) ;
+						SPtr++ ;
+						break ;
+
+					default:
+						*DPtr++ = *SPtr ;
+						break ;
+				}
+			}
+
+			TPtr = Temp ;
+			while( *TPtr )
+			{
+				*DPtr++ = *TPtr++ ;
+			}
+			*DPtr = 0x00 ;
+
+			SPtr++ ;
+		}
+		else
+		{
+			*DPtr++ = *SPtr++ ;
+		}
+	}
+	*DPtr = 0x00 ;
+
+	return( FileName ) ;
+}
+
+
+long CallKPLScript( TCHAR *ScriptName, TCHAR *FuncCall )
+{
+	TCHAR	ScriptPath[2048] ;
+
+	GetScriptPath( ScriptName, ScriptPath ) ;
+
+	UIC		*aUIC = new UIC ;
+	if( aUIC )
+	{
+		TCHAR	*JobText = GetFile( ScriptPath ) ;
+		if( JobText )
+		{
+			//	CALL THE FUNCTION WITH THE PARAMETERS DEFINED IN THE CALL
+			//										CheckLib IsJob	Unicode	  Trigger
+			aUIC->ParseFile( _T("Exec"), JobText,		0,		0,		1,	  FuncCall ) ;
+			free( JobText ) ;
+		}
+
+		//	DELETE THE INSTRUCTION CLASS OBJECT SO WE HAVE NO MEMORY LEAKS.
+		delete aUIC ;
+	}
+	return( TRUE ) ;
+}
+
+TCHAR	*GetScriptPath( TCHAR *ScriptName, TCHAR *Path )
+{
+	int		 IsDirectory ;
+
+	TCHAR	*ShareDirectory = GetShareDirectory() ;
+
+	sprintf( Path, _T("%s\\Scripts\\%s"), ShareDirectory, ScriptName ) ;
+
+	if( FileOrDirectoryExists( Path, &IsDirectory ) )
+	{
+		return( Path ) ;
+	}
+
+	TCHAR	*ExeDirectory = GetExeDirectory() ;
+
+	sprintf( Path, _T("%s\\Scripts\\%s"), ExeDirectory, ScriptName ) ;
+
+	if( FileOrDirectoryExists( Path, &IsDirectory ) )
+	{
+		return( Path ) ;
+	}
+
+	Path[0] = 0x00 ;
+	return( NULL ) ;
+}
+
+TCHAR	*GetShareDirectory()
+{
+	TCHAR	*ShareDir = NULL ;
+	UGenCon	*Symbols_ShareDir = GetTreeObject( _T("ShareDirectory"), _T("[Symbols]")) ;
+	if( Symbols_ShareDir )
+	{
+		ShareDir = Symbols_ShareDir->GetStringValue(_T("Value")) ;
+	}
+	return( ShareDir ) ;
+}
+
+
+int WriteErrorResponse( UGenCon *thePage, long Code, TCHAR *TextMsg )
+{
+	TCHAR	CmdPath[2048] ;
+
+	TCHAR	*CmdText	= malloc( 100 * 1024 ) ;
+	if( CmdText )
+	{
+		long	PageID = 0 ;
+		TCHAR	theDate[64] ;			
+		GetTimeNow(theDate,  _T("%m/%d/%y %H:%M:%S")) ;
+
+		if( thePage )
+		{
+			PageID = thePage->GetLongValue( _T("JobID")) ;
+		}
+		
+		CmdText[0] = 0x00 ;
+
+		strcpy( CmdText, _T("\nTYPE: Response\n")) ;
+		AddLongLine( CmdText, _T("PAGE_ID: %ld\n"), PageID ) ;
+		AddLongLine( CmdText, _T("CODE: %ld\n"), Code ) ;
+		AddLongLine( CmdText, _T("Error_Type: %d"), 7 ) ;
+		AddTextLine( CmdText, _T("DATE_TIME: %s\n"), theDate ) ;
+		AddTextLine( CmdText, _T("%s"), TextMsg ) ;
+
+		if( gPrinterSetup )
+		{
+			TCHAR	*ResponseFolder = gPrinterSetup->GetStringValue( _T("ResponseFolder")) ;
+			sprintf( CmdPath, _T("%s\\P%09ld_OC.rsp"), ResponseFolder, PageID ) ;
+			char	*fp = fopen( CmdPath, _T("wb")) ;
+			if( fp )
+			{
+				TCHAR	IOBuff[10] ;
+				IOBuff[0] = 0xFEFF ;
+				IOBuff[1] = 0x0000 ;
+				WriteUnicodeFile( fp, IOBuff ) ;
+				WriteUnicodeFile( fp, CmdText ) ;
+
+				fclose( fp ) ;
+			}
+			else
+			{
+				SessionLogDirect( _T("C_OrderComplete2PDF.Init: Could not create \"%s\"."), CmdPath ) ;
+			}
+		}
+		free( CmdText ) ;
+
+	}
+	return( TRUE ) ;
+}
+
+TCHAR *AddTextLine( TCHAR *CmdText, TCHAR *Format, TCHAR *Value )
+{
+	TCHAR	Line[2048] ;
+
+	sprintf( Line, Format, Value ) ;
+	strcat( CmdText, Line ) ;
+
+	return( CmdText ) ;
+}
+
+TCHAR *AddLongLine( TCHAR *CmdText, TCHAR *Format, long Value )
+{
+	TCHAR	Line[1024] ;
+
+	sprintf( Line, Format, Value ) ;
+	strcat( CmdText, Line ) ;
+
+	return( CmdText ) ;
+}
+
+WriteUnicodeFile( char *fp, TCHAR *Text )
+{
+	long	Length = strlen( Text ) ;
+	fwrite( Text, 2, Length, fp ) ;
+
+	long	EndOfLine = 0x000A000D ;
+	fwrite( &EndOfLine, 2, 2, fp ) ;
+}
+
+

@@ -1,0 +1,135 @@
+
+IncludeClass( BaseMenu );
+IncludeClass( BaseGrid );
+
+Class( AimPrefsDef,Extends,BaseGrid,
+			Member,Dictionary,Str,~DDAimPreferences~,
+			Member,ErrorDictionary,Str,~DDAimPrefsErrorInfo~ );	
+
+VOID AimPrefsDef::AimPrefsDef( )					// CONSTRUCTOR
+{
+	TableName = ~ClickBalanceAimsDef~;
+	Title = Translate( ~Aims~ );
+	DocumentQuery = ~Select * from <TableName> Order By Name ~;
+	WindowTop = 0;
+	WindowWidth = 90;
+	WindowHeight = 25;
+	HelpPage = ~Aim_Pref.htm~;
+	InsertActiveCell = ~Name~;
+}
+
+
+VOID AimPrefsDef::!AimPrefsDef()
+{
+	if ( Defined( AimPreferences ) )
+	{
+		ForgetPrivate( AimPreferences );
+	}
+
+	ForgetPrivate( AimPreferencesData );
+	ForgetPrivate( AimPrefsErrorInfo );
+}
+
+
+VOID AimPrefsDef::DefineDictionary()
+{
+	Dictionary:	~<ErrorDictionary>~
+		Fields:	Name APIErrorCode			Type long
+		Fields:	Name PrefsErrorCode			Type long
+		Fields:	Name Text					Type Text
+		;
+}
+
+VOID AimPrefsDef::InitDictionaryData()
+{
+	if ( !Defined(AimPreferencesData ) )
+	{
+		Define: AimPreferencesData Using DDAimPreferences AsSymbol AimPreferencesData Private
+				Fields: Name		~~
+						RedValue	0
+						GreenValue	0
+						BlueValue	0
+			;
+	}
+
+	Define:	AimPrefsErrorInfo Using ~<ErrorDictionary>~ AsSymbol AimPrefsErrorInfo Private
+		Fields:	APIErrorCode		 0
+				PrefsErrorCode		 0
+				Text				~~
+				;
+
+}
+
+STR AimPrefsDef::GetKey( &Item )	
+{ 
+	// PRIMARY KEY FOR THE TABLE
+	return ~Name = '<$con.Item[Name]>'~; 
+}
+
+
+NUMERIC AimPrefsDef::ChangeRecordAudits( &Changed,&Original,ChangedRow,IsNewRow )	// CALLED BEFORE ADDING OR CHANGING A RECORD
+{
+	if ( IsNULL(~<$Con.Changed[Name]>~) )
+		{ return Warning( Translate( ~Unable to save pending changes.  Name cannot be blank.~ ) ); }
+
+	if ( atof(~<$Con.Changed[RedValue]>~)  < 0 )
+		{ return Warning( Translate( ~Unable to save pending changes.  Red value must be a positive integer.~ ) ); }
+
+	if ( atof(~<$Con.Changed[GreenValue]>~)  < 0 )
+		{ return Warning( Translate( ~Unable to save pending changes.  Green value must be a positive integer.~ ) ); }
+
+	if ( atof(~<$Con.Changed[BlueValue]>~)  < 0 )
+		{ return Warning( Translate( ~Unable to save pending changes.  Blue value must be a positive integer.~ ) ); }
+
+	AimPreferencesData( SetValues,Name,~<$Con.Changed[Name]>~,RedValue,~<$Con.Changed[RedValue]>~,
+						 GreenValue,~<$Con.Changed[GreenValue]>~,BlueValue,~<$Con.Changed[BlueValue]>~);
+
+	return TRUE;
+}
+
+STR AimPrefsDef::OnButtonClickTitle(Row,Col)
+{
+	if ( IsColumnName(<Col>,~Name~ ) )				{ return Translate(~Preference file name.~); }
+
+	return BaseGrid::OnButtonClickTitle(<Row>,<Col>);
+}
+
+
+NUMERIC AimPrefsDef::Init( ShowGrid )
+{
+	if ( !<ShowGrid> )
+	{
+		return TRUE;
+	}
+
+	return BaseGrid::Init();
+}
+
+NUMERIC Init( Grid )
+{
+	ShowGrid = TRUE;
+	if ( DefinedAndNotNull( ~Grid~ ) )
+	{
+		ShowGrid = <Grid>;
+
+	}
+	if ( Defined(AimPrefsDefs) )
+	{
+		AimPrefsDefs.ReOpen();
+		AimPrefsDefs.RefreshListView();
+		return TRUE;
+	}
+
+	Class( AimPrefsDef,Extends,BaseGrid );
+
+	AimPrefsDef( New,AimPrefsDefs );
+
+	AimPrefsDefs.DefineDictionary();
+	AimPrefsDefs.InitDictionaryData();
+	AimPrefsDefs.DefineWindow();
+	AimPrefsDefs.Init( <ShowGrid> );
+
+	Global( AimPrefsDefs );
+
+	return TRUE;
+}

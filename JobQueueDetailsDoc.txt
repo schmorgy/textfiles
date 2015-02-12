@@ -1,0 +1,749 @@
+// JobQueueDetailsDoc.txt
+// Revision: 9
+
+
+// These gets set in Init
+gTableName = ~~;  
+gTheQueueName = ~~;
+gDatabaseGroupName = ~~;
+
+
+
+NUMERIC RefreshListView()
+{
+	if ( !DataWindow(GetWindowAddress) )
+		{ return FALSE; }
+
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(~Would you like to save your pending changes?~),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	DataWindow( StatusBar,Text,Translate(~Querying~) );
+
+	DropTables( gDP2DBLocal, <gDatabaseGroupName> );
+	if ( !CreateTables( gDP2DBLocal, <gDatabaseGroupName> ))
+		{ Error( ~Failed to create the job queue details table~ ); }
+		
+	PopulateJobQueueDetailsTable( gDP2DB, gDP2DBLocal, ~<gTheQueueName>~);
+	
+	if ( !PGenConList( List,Connection,gDP2DBLocal,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(~Query Failed: <DocumentQuery>. <theErr>~) );
+	}
+
+	Count = List( NumEntries );
+
+	IF 0
+	{
+		if ( <Count> > 300 )
+		{
+			if ( MessageBox( Translate(~Your query:\n\n   <DocumentQuery>\n\nwill retrieve <Count> records\n\nAre you sure you want to continue?~),YESNO ) != YES )
+			{
+				if ( <FirstTime> ) { Exit(); }
+				return TRUE;
+			}
+		}
+	}
+
+	SetDocumentData( List(GetObject) );
+
+	DataWindow( StatusBar,Text,~Refreshing~ );
+	DataWindow( RefreshWindow );
+
+	return DataWindow( StatusBar,Text,~~ );
+}
+
+
+NUMERIC UpdatePrinterNameCombo( &ColumnDefinition,Row,Col )
+{
+	DataView( GetCellValue,PrinterModel,<Row>,PrinterModel );
+
+	// Get the printer model from the queue
+	Query = ~Select PrinterModel From QueueDefinition Where QueueName = '<gTheQueueName>'~;
+	if ( !gDP2DB( GetValuesFor, ~<Query>~, PrinterModel ))
+	{
+		gDP2DB( GetErrorDescription, theErr );
+		return Warning( Translate(~Query Failed <Query>. <theErr>~) );
+	}
+
+if (1)
+{
+	// Select the printers with the same printer model as the queue
+	Query = ~Select PrinterName From Printers Where PrinterModel = '<PrinterModel>'~;
+	if ( !PGenConList( List,Connection,gDP2DB,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(~Query Failed: <Query>. <theErr>~) );
+	}
+}
+else
+{
+	// Select the printers that are assigned to this queue queue
+	Query = STR ( Select PrinterName From Printers Where QueueName = '<gTheQueueName>' Order By PrinterName );
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr,ClearErrors );
+		return Warning( Translate(~Database query failed: <Query> <theErr>~) );
+	}
+}
+
+	if ( List( NumEntries ) > 0 )
+	{
+		List( MakeStringList,PrinterNames,PrinterName );
+
+		ColumnDefinition( DeleteReference,ChoiceList,Set,ChoiceList,PrinterNames(GetCopyOf) );
+
+		DataView( SetComboBox,ColumnDefinition,<Col> );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RefreshQueueList()
+{
+	DataView( GetActiveCell,row,col );
+
+	GenCon( Fields,Is,gTableDefinition(GetReferenceTo,Fields) );
+
+	DataView( GetColumnName,<col>,ColumnName );
+
+	Fields( GetByName,<ColumnName>,ColumnDefinition );
+
+	if ( ~<ColumnName>~ == ~PRINTERNAME~ )
+	{
+		UpdatePrinterNameCombo( ColumnDefinition,<row>,<col> );
+	}
+
+	return TRUE;
+}
+
+
+
+
+STR GetKey( &Item )
+{
+	return ~BatchID = '<$con.Item[BatchID]>' And OrderID = '<$con.Item[OrderID]>'~;
+}
+
+
+NUMERIC ChangeField()
+{
+}
+
+
+NUMERIC ChangeRecord()
+{
+//Debug(1);
+	if ( !DataView( GetChangedRow,ChangedSetting,OrigSetting,ChangedRow,IsNewRow ) )
+		{ return Warning( Translate(~There was no changed row.~) ); }
+
+	if ( <ChangedRow> <= 0 )
+		{ return TRUE; }
+
+	Key = GetKey( OrigSetting );
+	
+	Query = ~Select * From <gTableName> Where <Key>~;
+
+	if ( !PGenConList( List,ConnectLocal,Cursor,Keyset,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate(~Query Failed: <Query>. <theErr>~) );
+	}
+
+	if ( !List( UpdateFrom,ChangedSetting,~<Key>~,<IsNewRow> ) )
+	{
+		List( GetErrorDescription,0,theErr,CancelUpdate );
+		return Warning( Translate(~Could not update <gTableName> record where <Key>. <theErr>~) );
+	}
+
+	DataView( CommitChanges );
+	
+	// We want to update the fileds of any jobqueue records belonging to this group
+	BatchID = ~<$con.OrigSetting[BatchID]>~;
+	OrderID = ~<$con.OrigSetting[OrderID]>~;
+	
+	Fields = ~Priority = <$con.ChangedSetting[Priority]>, PrintStatus = <$con.ChangedSetting[PrintStatus]>~;
+	
+	ThePrinter = ~<$con.ChangedSetting[PrinterName]>~;
+	if ( ~<ThePrinter>~ != ~~)
+		{ Fields = ~<Fields>, PrinterName = '<ThePrinter>'~; }
+	
+	Cmd = ~Update JobQueue Set <Fields> Where 
+			QueueName = '<gTheQueueName>' And 
+			BatchID = '<BatchID>' And 
+			OrderID = '<OrderID>'~;
+
+	if (!gDP2DB( Cmd, ~<Cmd>~))
+	{
+		gDP2DB( GetErrorDescription, theErr );
+		return Warning( Translate(~Command Failed: <Cmd>. <theErr>~) );
+	}
+	
+	return TRUE;
+}
+
+
+NUMERIC DeleteRecord()
+{
+	if ( !DataView( GetSelectedRows,ToDelete ) )		
+		{ return Warning( Translate(~There was no row selected to delete~) ); }
+
+	if ( MessageBox( Translate(~Are you sure you want to delete the selected items?~),YESNO ) != YES )
+		{ return FALSE; }
+
+	StringList( RowsToDelete,New );
+
+	if ( !Ado( dBase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	while ( ToDelete( GetNext,Setting ) )
+	{
+		Key = GetKey( Setting );
+
+		if ( !dBase( CMD,~Delete From <gTableName> Where <Key>~ ) )
+		{
+			dBase( GetErrorDescription,theErr,RollBackTransaction );
+			Warning( Translate(~Could not delete where <Key>. <theErr>~) );
+			break;
+		}
+
+		RowsToDelete( AddString,ToDelete(GetCurrentPosition) );
+	}
+
+	DataView( DeleteRows,SelectedIndex,RowsToDelete );
+
+	return TRUE;
+}
+
+
+NUMERIC AddRecord()
+{
+	Document( Doc,This );
+	GenCon( NewRow,NewFrom,Doc(GetDataDictionary) );
+
+	NewRow( Set,gTableName,~<WhichTable>~ );
+	
+	RowBeingAdded = DataView( AddRow, NewRow );
+
+	if ( <RowBeingAdded> <= 0 )
+		{ return Warning( Translate(~You are too low on memory to add any more rows~) ); }
+
+	DataView( SetActiveCell,<RowBeingAdded>,OrderID );
+
+	return TRUE;
+}
+
+
+NUMERIC RightClickInListView()
+{
+	if ( !GenCon( ActiveView,GetActiveView ) )
+		{ return Warning( Translate(~There was no active view~) ); }
+
+	ActiveView( DisplayMenu,ListViewMenu );
+
+	return TRUE;
+}
+
+
+NUMERIC NotImplementedYet( what )
+{
+	MessageBox( Translate(~<what> is not implemented yet!~) );
+	return TRUE;
+}
+
+
+
+
+STR RemovePattern( aString, Pattern)
+{
+//Debug(1);
+	patternAndRemainder =  String( StringInString, ~<Pattern>~, ~<aString>~);
+	
+	// If there are no patterns in the string then return the original string
+	if ( ~<patternAndRemainder>~ == ~~)
+		{ return ~<aString>~; }
+	
+	resultantString = ~~;
+	remainingString = ~<aString>~;
+
+	while ( ~<patternAndRemainder>~ != ~~)
+	{
+		// Get the portion leading up to the pattern
+		substr(~<remainingString>~, 0, strlen(~<remainingString>~) - strlen(~<patternAndRemainder>~), leadingString);
+		
+		// Add the leading portion of the string to the resultant string
+		resultantString = ~<resultantString><leadingString>~;
+		
+		// Get the remainder of the string
+		remainingString = ~<patternAndRemainder>~;
+		
+		// Tear off the leading pattern
+		substr(~<remainingString>~, strlen(~<Pattern>~), strlen(~<remainingString>~) - strlen(~<Pattern>~), remainingString);
+		
+		// Get the next pattern
+		patternAndRemainder =  String( StringInString, ~<Pattern>~, ~<remainingString>~);
+	}
+
+	resultantString = ~<resultantString><remainingString>~;
+	
+	return ~<resultantString>~;
+}
+
+
+
+
+FirstTime = TRUE;
+
+NUMERIC Init( TheQueueName)
+{
+//Debug(1);
+	if ( !<FirstTime> )
+		{ return FALSE; }
+
+	FirstTime = FALSE;
+
+
+	gTableName = RemovePattern( ~JobQDetTemp<$Date.SystemTime>~, ~:~);
+	gTheQueueName = ~<TheQueueName>~;
+	gDatabaseGroupName = RemovePattern( ~JobQDetGroupTemp<$Date.SystemTime>~, ~:~);
+
+	if ( !Ado( gDP2DBLocal,ConnectLocal ) )
+	{
+		gDP2DBLocal( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+
+	if ( !Ado( gDP2DB,Connect ) )
+	{
+		gDP2DB( GetErrorDescription,theErr );
+		return Warning( Translate(DBMessages,ConnectionFailed,~<theErr>~) );
+	}
+	Global( gDP2DB);
+	Global( gDP2DBLocal);
+	
+
+	DefineJobQueueDetailsTable( ~<TheQueueName>~);
+	DropTables( gDP2DBLocal, <gDatabaseGroupName> );
+	if ( !CreateTables( gDP2DBLocal, <gDatabaseGroupName> ))
+		{ Error( ~Failed to create the job queue details table~ ); }
+		
+	PopulateJobQueueDetailsTable( gDP2DB, gDP2DBLocal, ~<TheQueueName>~);
+	
+	SetUpDlog( ~<TheQueueName>~);
+
+	DocumentQuery = ~Select * From <gTableName>~;
+	Global( DocumentQuery);
+
+	if ( !PGenConList( List,Connection,gDP2DBLocal,Cursor,Dynamic,Query,~<DocumentQuery>~ ) )
+		{ Error( ~Failed to query the <gTableName> table~ ); }
+
+	SetDocumentData( List(GetObject) );
+
+	if ( !DataWindow( CreateWindow,~<gTableName>~ ) )
+		{ Error( ~Failed to create the window~ ); }
+
+	return TRUE;
+}
+
+
+NUMERIC OnCloseDataView()
+{
+	if ( DataView( PendingChanges ) )
+	{
+		if ( MessageBox( Translate(~Would you like to save your pending changes?~),YESNO ) == YES )
+		{
+			if ( !SaveAllChanges() )
+			{
+				return FALSE;
+			}
+		}
+	}
+
+	// Delete the temporary table
+	DropTables( gDP2DBLocal,<gDatabaseGroupName> );
+	
+	DataWindow( ForceCloseWindow );
+	
+	return TRUE;
+}
+
+
+NUMERIC SaveAllChanges()
+{
+	while ( DataView( PendingChanges ) )
+	{
+		if ( !ChangeRecord() )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC RollBackAllChanges()
+{
+	if ( !DataView( PendingChanges ) )
+		{ return FALSE; }
+
+	if ( MessageBox( Translate(~Are you sure you want to cancel all changes including new records that have not been saved?~), YESNO ) != YES )
+		{ return FALSE; }
+				
+	while ( DataView( PendingChanges ) )
+	{
+		DataView( RollBackChanges );
+	}
+
+	return TRUE;
+}
+
+NUMERIC AllOptions()
+{
+	return DataView( DisplayMenu,ListViewMenu,0,0 );
+}
+
+
+
+
+NUMERIC PopulateJobQueueDetailsTable( &DP2DB, &DP2DBLocal, TheQueueName)
+{
+//Debug(1);
+	// Get the list of batches that are in this queue
+//	Query = ~Select Distinct BatchID From JobQueue Where QueueName = '<TheQueueName>'~;
+	Query = ~Select SUM(OrderItemQty),Count(1),BatchID From JobQueue Where QueueName = '<TheQueueName>' Group By BatchID~;
+	if ( !PGenConList( BatchIDList,Connection,DP2DB,Cursor,Forward,Query,~<Query>~ ) )
+	{
+		BatchIDList( GetErrorDescription, 0, theErr );
+		return Warning( Translate(~Query Failed <Query>. <theErr>~) );
+	}
+	
+	// Get specifics for the Queue
+	Query = ~Select AvgProductLength,AvgPrintSpeed From QueueDefinition Where QueueName ='<TheQueueName>'~;
+	if ( !DP2DB( GetValuesFor, ~<Query>~, AvgProductLength,AvgPrintSpeed ))
+	{
+		DP2DB( GetErrorDescription, theErr );
+		return Warning( Translate(~Query Failed <Query>. <theErr>~) );
+	}
+	if (~<AvgProductLength>~ == ~~)
+		{ AvgProductLength = 0; }
+
+	if (~<AvgPrintSpeed>~ == ~~)
+		{ AvgPrintSpeed = 0; }
+			
+
+	while ( BatchIDList( GetNext, BatchIDRecord ) )
+	{
+		BatchID = ~<$pcon.BatchIDRecord[BatchID]>~;
+
+		// Get a job queue record with this batch ID
+		Query = ~Select * From JobQueue Where QueueName = '<TheQueueName>' And BatchID = '<BatchID>'~;
+		if ( !PGenConList( BatchList,Connection,DP2DB,GetExistingRecordFor,~<Query>~,JobQueueRecord ) )
+		{
+			BatchList( GetErrorDescription, 0, theErr );
+			return Warning( Translate(~Query Failed <Query>. <theErr>~) );
+		}
+		
+		OrderID = ~<$pcon.JobQueueRecord[OrderID]>~;
+		Priority = ~<$pcon.JobQueueRecord[Priority]>~;
+		
+		// Get the number of items in this batch
+if (0)
+{
+		Query = ~Select SUM(OrderItemQty) From JobQueue Where QueueName = '<TheQueueName>' And BatchID = '<BatchID>'~;
+		if ( !DP2DB( GetValuesFor, ~<Query>~, NumOfItems ))
+		{
+			DP2DB( GetErrorDescription, theErr );
+			return Warning( Translate(~Query Failed <Query>. <theErr>~) );
+		}
+}
+		NumOfItems = ~<$pcon.BatchIDRecord[#0]>~;
+		if (~<NumOfItems>~ == ~~)
+			{ NumOfItems = 0; }
+		
+		// Calculate the approximate feet to print
+		ApproxNumOfFeet = ($AvgProductLength * $NumOfItems) / 12;
+		ApproxNumOfFeet = Round(<ApproxNumOfFeet>);
+		
+		
+		// Calculate the estimated time to print
+		if ($AvgPrintSpeed != 0)
+			//{ ApproxTimeToPrint = (($AvgProductLength * $NumOfItems) / $AvgPrintSpeed) / 60; }
+			{ ApproxTimeToPrint = ($NumOfItems * $AvgPrintSpeed) / 60; }
+		else
+			{ ApproxTimeToPrint = 0; }
+
+		if ($ApproxTimeToPrint > 0)
+			{ ApproxTimeToPrint = Round($ApproxTimeToPrint + 0.5); }
+			
+		Hours = (($ApproxTimeToPrint - ($ApproxTimeToPrint % 60)) / 60);
+		Minutes = ($ApproxTimeToPrint % 60);
+		if ($Hours > 0)
+			{ ApproxTimeToPrint = ~<Hours> Hrs. <Minutes> Min.~; }
+		else
+			{ ApproxTimeToPrint = ~<Minutes> Min.~; }
+		
+
+		// Get the print status
+		PrintStatus = ~<$pcon.JobQueueRecord[PrintStatus]>~;
+		
+		// Get the printers assigned to this batch
+		PrinterName = ~<$pcon.JobQueueRecord[PrinterName]>~;
+		
+		Fields = ~BatchID,OrderID,Priority,NumOfItems,ApproxNumOfFeet,ApproxTimeToPrint,PrintStatus,PrinterName~;
+
+		Values = ~'<BatchID>','<OrderID>',<Priority>,<NumOfItems>,<ApproxNumOfFeet>,'<ApproxTimeToPrint>',<PrintStatus>,'<PrinterName>'~;
+
+		Cmd = ~Insert Into <gTableName>(<Fields>) Values(<Values>)~;
+		
+		if (!DP2DBLocal( Cmd, ~<Cmd>~))
+		{
+			DP2DBLocal( GetErrorDescription, theErr );
+			return Warning( Translate(~Cmd Failed <Cmd>. <theErr>~) );
+		}
+	}
+	
+	return TRUE;
+}
+
+//=========================================================
+// Ensure that the JobQueueDetails table is created
+
+
+NUMERIC ExecSQL( &dBase,theSQL )
+{
+	Log( Session,~<theSQL>~ );
+
+	if ( !dBase( CMD,~<theSQL>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		//if ( Defined( dlg ) ) { dlg( END ); }
+		return Warning( Translate(~Error: <theErr>\n\nFrom: [<theSQL>]~) );
+	}
+
+	return TRUE;
+}
+
+
+NUMERIC CreateTables( &dBase,TableDefinitions )
+{
+	if ( !GenCon( TableDefinitions,GetFrom,~<TableDefinitions>~,~[Database]~ ) )
+	{ 
+		//if ( Defined( dlg ) ) { dlg( END ); }
+		//OnCloseDataView();
+		return Warning( Translate(~There are no tables defined for the database.~) );
+	}
+
+	while ( TableDefinitions( GetNext,TableDefinition ) )
+	{
+		if ( !CreateTable( dBase,TableDefinition ) )
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+
+
+NUMERIC CreateTable( &dBase,&TableDefinition )
+{
+	TableDefinition( CreateTableDefinition,Definition,dBase );
+	TableDefinition( Get,TableName,TableName );
+
+	if ( !ExecSQL( dBase,~CREATE TABLE <TableName> (<Definition>)~ ) )
+	{
+				return FALSE;
+	}
+
+	if ( GenCon( TableIndexes,Is,TableDefinition(GetNumeric,Indexes) ) )
+	{
+		while ( TableIndexes( GetNext,IndexDefinition ) )
+		{	
+			if ( !ExecSQL( dBase,~<$Con.IndexDefinition[Text]>~ ) )
+			{
+				return FALSE;
+			}	
+		}
+	}
+
+	return TRUE;
+}
+
+
+VOID DropTables( &dBase,TableDefinitions )
+{
+//Debug(1);
+	if ( !GenCon( TableDefinitions,GetFrom,~<TableDefinitions>~,~[Database]~ ) )
+	{ 
+		//if ( Defined( dlg ) ) { dlg( END ); }
+		//OnCloseDataView();
+		Error( ~There are no tables defined for the database~ ); 
+	}
+
+	while ( TableDefinitions( GetPrev,TableDefinition ) )
+	{
+		DropTable( dBase,TableDefinition );
+	}
+}
+
+
+VOID DropTable( &dBase,&TableDefinition )
+{
+	TableDefinition( CreateTableDefinition,Definition,dBase );
+	TableDefinition( Get,TableName,TableName );
+
+	if ( !dBase( CMD,~DROP TABLE <TableName>~ ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Log( Session,~Could not drop the TABLE <TableName> [<theErr>]~ );
+	}
+}
+
+
+
+VOID DefineJobQueueDetailsTable( TheQueueName)
+{
+//Debug(1);
+	if ( !GenCon( TableDefinitions,GetFrom,~<gDatabaseGroupName>~,~[Database]~ ) )
+	{
+		
+		// Define the job queue details table
+		WhichTable = <gTableName>;
+		
+		Define:			<WhichTable>Fields Using DDLong
+			Contains:	InListOrder
+			{
+				Define:	BatchID				CopyOf OrderID			~[Database FieldTypes]~	Fields: DisplayName ~Batch~	ReadOnly ~T~ Constraints	~NOT NULL~
+				Define:	OrderID				CopyOf OrderID			~[Database FieldTypes]~	Fields: DisplayName ~Order~ ReadOnly ~T~ Constraints	~NOT NULL~
+				Define: Priority			CopyOf Priority			~[Database FieldTypes]~
+				Define:	NumOfItems			CopyOf Generic5Digit	~[Database FieldTypes]~	Fields: DisplayName ~# Items~ ReadOnly ~T~
+				Define:	ApproxNumOfFeet		CopyOf Generic5Digit	~[Database FieldTypes]~	Fields: DisplayName ~Aprox. # Feet~ ReadOnly ~T~
+				Define:	ApproxTimeToPrint	CopyOf Generic20Char	~[Database FieldTypes]~	Fields: DisplayName ~Aprox. Time To Print~ ReadOnly ~T~
+				Define:	PrintStatus			CopyOf PrintStatus		~[Database FieldTypes]~				
+				Define:	PrinterName			CopyOf PrinterNameCombo	~[Database FieldTypes]~	Fields: DisplayName ~Printer~
+			}
+
+		Define:		<WhichTable>TableConstraints Using DDLong
+			Contains:	InListOrder
+			{
+				Define: <WhichTable>PrimaryKey Using DDText
+					Fields:	Text			~Constraint <WhichTable>PrimaryKey PRIMARY KEY(BatchID,OrderID)~
+			}
+
+		Define:			<WhichTable>		Using DDDatabaseTableDef
+			Fields:		TableName			<WhichTable>
+						TableConstraints	<WhichTable>TableConstraints(GetObjectReference)
+						Fields				<WhichTable>Fields(GetObjectReference)
+
+		Hang: <WhichTable> ~[DATABASE <gDatabaseGroupName>]~ InListOrder;
+	}
+}
+
+
+
+
+
+//=========================================================
+
+
+NUMERIC SetUpDlog( TheQueueName)
+{
+	if ( !GenCon( gTableDefinition,GetFrom,<gTableName>,~[DATABASE <gDatabaseGroupName>]~ ) )
+		{ Error( ~The <gTableName> Table is not properly defined~ ); }
+		
+
+	Define:	ListViewMenu Using DDMenuDef AsSymbol ListViewMenu
+		Fields:		Position	(-1)		
+		Contains:	INLISTORDER
+		{
+if (0)
+{
+			Define:	AddRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Add ~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( AddRecord(); )
+
+			Define:	NULL1 using DDMenuItemDef
+				Fields:	Text		~~
+						IDText		~NULL~
+
+			Define:	SaveAllChanges	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Save Changes~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( SaveAllChanges() )
+
+			Define:	ForgetAllChanges	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Cancel Changes~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RollBackAllChanges() )
+
+			Define:	DeleteRecord	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Delete~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( DeleteRecord(); )
+
+			Define:	AssignPrinter	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Assign Printer~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( NotImplementedYet(~Assign Printer~) )
+}
+
+			Define:	Refresh	using	DDMenuItemDef
+				Fields:	Text		Translate( ~&Refresh (F5)~ )
+						IDText		~ID~
+						ActionsText  ACTION Exec ( RefreshListView(TRUE); )
+		}
+
+
+	//Include: ~DefineStdGridButtons~;
+
+	ButtonWidth = 55;  ButtonHeight = 20;  hGap = 1; vGap = 2;
+
+	Define: DataWindow Using DDWinDef
+		Fields:	Title					Translate(~Job Queue <TheQueueName> Details~)
+				Position				0 0 60 20
+				IsPositionPercent		T
+				//TypeName				SplitterWnd
+				//SplitterRows			~2 14 90~
+				//SplitterColumns			1
+
+
+		Contains:	INLISTORDER
+		{
+			Define: DataView Using DDViewDef AsSymbol DataView
+				Fields:	ViewType				~ListView~
+						GridControlTypes		gTableDefinition(GetReferenceTo,Fields)
+						ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+//						DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+						RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+						ComboBoxActionsText		ACTION Call ( RefreshQueueList() )
+						RefreshActionsText		ACTION Exec ( RefreshListView() )
+						HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "JobQDetailsData.htm" )
+						CloseActionsText		ACTION Call ( OnCloseDataView() ) ;
+		}
+	
+	Global( DataWindow);
+	Global( DataView);
+	Global( ListViewMenu);
+	Global( gTableDefinition);
+	
+	return TRUE;
+}
+
+
+

@@ -1,0 +1,914 @@
+IncludeClass(BaseHTML);
+IncludeClass(BaseGrid);
+
+Include: ~SiDataGridFuncs~;
+Include: ~SubjInfoSetupFuncs~;
+
+Class( SISetup,Extends,BaseHTML,
+		Member,Source,  Str,~DRIVER={Microsoft Text Driver (*.txt; *.csv)};DBQ=~,
+		Member,Provider,Str,~Microsoft OLE DB Provider For ODBC Drivers~,
+		Member,ConnectedFile,Str,~~
+);
+
+VOID SISetup::SISetup(WantStatic)
+{
+	WindowLeft		= WindowTop = 0;
+	WindowWidth		= 80;
+	WindowHeight	= 100;
+	fAcceptingDrops = TRUE;
+
+	HelpPage = ~Subjectinfo.html~;
+
+	Static(~<WantStatic>~);
+
+	if ( !ObjectAlreadyExists( DataGridObj ) )
+	{
+		SiGrid( New,DataGridObj );
+		DataGridObj.Set( ViewName,~Data~ );
+		DataGridObj.Set( TableName,~~ );
+		DataGridObj.Set( ParentWindow,<THIS> );
+		DataGridObj( Global );
+	}
+
+	if ( !ObjectAlreadyExists( SIGridObj ) )
+	{
+		SiGrid( New,SIGridObj );
+		SIGridObj.Set( ViewName,~Info~ );
+		SIGridObj.Set( TableName,~TableFormats~ );
+		SIGridObj.Set( ParentWindow,<THIS> );
+		SIGridObj( Global );
+	}
+
+}
+
+
+NUMERIC SISetup::CloseCheck()
+{
+	ForgetPrivate( fileDB );
+	ForgetPrivate( dList );
+
+	return TRUE;
+}
+
+
+VOID SISetup::DefineMessages()
+{
+	BaseHtml::DefineMessages();
+	LoadTranslationFile( SubjectInfo,SiWizardTrans,SiWizardTrans );
+}
+
+VOID SISetup::InitWindow()
+{
+	CreateAndOpen( ~<$App.HTTPServer>/SubjectInfo/SIWizardMain.kpl~ );
+	Open( ~<$App.HTTPServer>/SubjectInfo/SIWizardTab.kpl~,Tabs );
+	Open( ~<$App.HTTPServer>/SubjectInfo/SIWizardInfo.kpl~,Tables );
+}
+
+VOID SISetup::WindowDefinition()
+{
+	Fields:	TypeName			SplitterWnd2
+			SplitterRows		~4 20 50 15 15~
+			SplitterColumns		~1~
+			IsPositionPercent	 T
+			HideSplitterBars	0
+}
+
+VOID SISetup::DefineViews()
+{ 
+	DefineView();
+	DefineSplitter(Row2);
+	SIGridObj.DefineView();
+	DataGridObj.DefineFileView();
+}
+
+VOID SISetup::Row2Definition()
+{
+	Fields:	SplitterRows		~1~
+			SplitterColumns		~2 55 45~
+			HideSplitterBars	1	
+}
+
+VOID SISetup::Row2Views()
+{
+	DefineView(Tabs);
+	DefineView(Tables);
+}
+
+VOID SISetup::ViewDefinition()		
+{
+	Fields:	HTMLCloseBox	<fStatic>
+			HeightPercentOfMainframe	100;
+}
+
+VOID SISetup::ViewDefinitionTabs()		
+{
+	Fields:	HTMLCloseBox	FALSE;
+}
+
+VOID SISetup::ViewDefinitionTables()		
+{
+	Fields:	HTMLCloseBox	FALSE;
+}
+
+
+//////////////////////////////////////////////////////////////////
+//  Subject Info Wizard Base functions
+//////////////////////////////////////////////////////////////////
+VOID SISetup::FindFile( FieldName )						// Use a File Dialog to find a directory
+{
+	HideMessages();
+
+	ReturnOnFailure( GetViewByName( ~View~ ) );
+	Title = TR( SiWizardTrans,FindDir_SubjInfoData );
+
+	if ( FileDialog( Title,~<Title>~,PATH,theFile,Open ) ) // ASK THE USER TO FIND THE FILE(s)
+	{
+		ProcessSiDataFile( ~<FieldName>~,~<theFile>~ );
+	}
+}
+
+
+NUMERIC SISetup::ProcessSiDataFile( FieldName,theFile )
+{
+	ReturnOnFailure( GetViewByName( ~View~ ) );
+
+	if ( ~<theFile>~ == ~~ )
+	{
+		return FALSE;
+	}
+
+	fHtmlView( Set,~<FieldName>~,0,value,~<theFile>~ );
+
+	xmlPath = ~~;
+
+	if ( !CreateXMLRecordsetFrom( ~<theFile>~, xmlPath ) )
+	{
+		return FALSE;
+	}
+
+	LoadFileFieldList( ~FileFieldsList~ );
+
+	if ( DataGridObj.IsDataLoaded() )
+	{
+		if ( !ViewDataFileData( ~<xmlPath>~ ) )
+		{
+			return FALSE;
+		}
+	}
+
+	if ( !GetViewByName( ~ViewTabs~,fHtmlTabs ) )
+	{
+		return FALSE;
+	}
+
+	fHtmlTabs( Execute,~OnFindFile()~ );
+
+	return TRUE;
+}
+
+NUMERIC SISetup::ViewDataFileData( Path )
+{
+	HideMessages();
+
+	if ( DataGridObj.IsObjectDataLoaded( ~<Path>~ ) )
+	{
+		return FALSE;
+	}
+
+	Query = ~Select * from <Path> ~;
+
+	DataGridObj.Set( DocumentQuery,~<Query>~ );
+	DataGridObj.LoadDataListView( ~<Path>~ );
+
+	return TRUE;
+}
+
+
+VOID SISetup::ViewFileData( ele )
+{
+	HideMessages();
+	if ( !GetViewByName( ~View~ ) )
+	{
+		return;
+	}
+
+	if ( !fHtmlView( Get,pathText,0,value,Path ))
+	{
+		ShowError( ~NoFileSelected~ );
+		return;
+	}
+
+	if ( ~<Path>~ == ~~ )
+	{
+		ShowError( ~NoFileSelected~ );
+		return;
+	}
+
+	if ( DataGridObj.IsObjectDataLoaded( ~<Path>~ ) )
+	{
+		return;
+	}
+
+	FilePath     = ~<$Str.$Path.Path>~;
+	Extension    = ~<$str.$Path.ext>~;
+	FileName     = ~<$Str.$Path.Filename.WithoutExt>~;
+
+	xmlPath		= ~<FilePath>\<FileName>.xml~;
+	
+	if ( !ViewDataFileData( ~<xmlPath>~ ) )
+	{
+		return;
+	}
+}
+
+
+VOID SISetup::NewTable()
+{
+	HideMessages();
+
+	if ( !GetViewByName( ~ViewTables~,fHtmlTables ) )
+	{
+		return;
+	}
+
+	fHtmlTables( Execute,~SelectNone( GetElement('siTablesList') )~ );
+
+	ClearList( ~Info~ );
+
+	if ( !GetViewByName( ~ViewTabs~,fHtmlTabs ) )
+	{
+		return;
+	}
+
+	fHtmlTabs( Execute, ~SelectNewTable()~ );
+}
+
+VOID SISetup::RefreshTables()
+{
+	HideMessages();
+
+	if ( !GetViewByName( ~ViewTables~,fHtmlTables ) )
+	{
+		return;
+	}
+
+	if ( !Connect() )
+	{
+		return;
+	}
+
+	if ( !PGenConList( SchemaList,Connection,fConnection,Cursor,Keyset,Schema,Tables ) )
+	{ 
+		SchemaList( GetErrorDescription,0,theErr );
+		ShowError( ~TablesQueryFailed~,~<theErr>~ );
+		return;
+	}
+
+	SchemaList( Filter,~Table_Name Like 'SubjectInfo%'~ );
+
+
+	StringList( TableList, New );
+
+	while ( SchemaList( GetNext,Table ) )
+	{
+		substr( ~<$pcon.Table[TABLE_NAME]>~,strlen(~SubjectInfo~),99,theType);
+
+		if ( !IsNull(~<TheType>~) && !SimilarStr(~<TheType>~,~Columns~) )
+		{
+			if ( ~<selectedSetup>~ == ~<Setup>~ )
+			{
+				selectedElement = <addCount>;
+			}
+			++addcount;
+			TableList( AddString, ~<TheType>~ );
+		}
+	}
+	fHtmlTables( CreateOptionsFromStringList, ~SiTablesList~, 0, TableList );
+	fHtmlTables( Execute,~SelectNone( GetElement('siTablesList') )~ );
+
+	ReleaseConnection();
+}	
+
+
+VOID SISetup::OnTypeChanged( infoType )
+{
+	HideMessages();
+	if ( IsNull( infoType ) || ~<infoType>~ ==~~ )
+	{
+		ShowError( ~NoTableSelected~ );
+		return;
+	}
+
+	if ( !GetViewByName( ~ViewTabs~,fHtmlTabs ) )
+	{
+		return;
+	}
+
+	fHtmlTabs( Execute,~ResetList( GetElement('TableFieldsList') )~ );
+
+	TableName = ~SubjectInfo<infoType>~;
+//	ForgetPrivate( dList );
+	
+	GenerateTableFieldList(~<TableName>~,~~);
+
+	fHtmlTabs( Execute,~OnSiTypeChanged()~ );
+
+	if ( SIGridObj.IsDataLoaded() )
+	{
+		ViewModTable( ~<infoType>~ );
+	}
+
+}
+
+VOID SISetup::ShowStatus( msg, param1, param2, param3, param4 )
+{
+	HideMessages();
+
+	GetViewByName( ~View~ );
+	if ( DefinedAndNotNull( param4 ) )
+	{
+		msg = TR( SiWizardTrans, <msg>, ~<param1>~, ~<param2>~, ~<param3>~, ~<param4>~ );
+	}
+	else if ( DefinedAndNotNull( param3 ) )
+	{
+		msg = TR( SiWizardTrans, <msg>, ~<param1>~, ~<param2>~, ~<param3>~ );
+	}
+	else if ( DefinedAndNotNull( param2 ) )
+	{
+		msg = TR( SiWizardTrans, <msg>, ~<param1>~, ~<param2>~ );
+	}
+	else if ( DefinedAndNotNull( param1 ) )
+	{
+		msg = TR( SiWizardTrans, <msg>, ~<param1>~);
+	}
+	else
+	{
+		msg = TR( SiWizardTrans, <msg> );
+	}
+
+	fHtmlView( Execute,~ShowStatus( '<msg>' )~ );
+
+}
+
+VOID SISetup::ShowError( msg, param1, param2, param3, param4 )
+{
+	HideMessages();
+
+	GetViewByName( ~View~ );
+	if ( DefinedAndNotNull( param4 ) )
+	{
+		msg = TR( SiWizardTrans, ~<msg>~, ~<param1>~, ~<param2>~, ~<param3>~, ~<param4>~ );
+	}
+	else if ( DefinedAndNotNull( param3 ) )
+	{
+		msg = TR( SiWizardTrans, ~<msg>~, ~<param1>~, ~<param2>~, ~<param3>~ );
+	}
+	else if ( DefinedAndNotNull( param2 ) )
+	{
+		msg = TR( SiWizardTrans, ~<msg>~, ~<param1>~, ~<param2>~ );
+	}
+	else if ( DefinedAndNotNull( param1 ) )
+	{
+		msg = TR( SiWizardTrans, ~<msg>~, ~<param1>~);
+	}
+	else
+	{
+		msg = TR( SiWizardTrans, <msg> );
+	}
+
+	Log( Session,~<msg>~ );
+	fHtmlView( SetInnerText,SubjInfoErrorID,0,~<msg>~);
+	fHtmlView( SetStyle,~SubjInfoErrorID~,0,~display~,~block~ );
+	//fHtmlView( Execute,~ShowError( '<msg>' )~ );
+
+}
+VOID SISetup::HideMessages()
+{
+	GetViewByName( ~View~ );
+//	fHtmlView( Execute,~HideAllMsgs()~ );
+	fHtmlView( SetStyle,~SubjInfoErrorID~,0,~display~,~none~ );
+	fHtmlView( SetStyle,~SubjInfoStatusID~,0,~display~,~none~ );
+
+	Sleep(5);
+}
+
+///////////////////////////////////////////////////////////
+// Handle drag and drop
+///////////////////////////////////////////////////////////
+NUMERIC SISetup::ApproveExternalDrop(count)	
+{
+	HideMessages();
+
+	if ( <count> > 1 )
+	{
+		ShowError( ~SingleDraggedFile~ );
+		return  FALSE;
+	}
+    
+	return TRUE;
+}
+
+NUMERIC SISetup::ProcessDraggedFile( Path )	
+{
+	HideMessages();
+
+	return ProcessSiDataFile( ~pathText~,~<Path>~ );
+}
+
+NUMERIC SISetup::SortExternalDrop( &DraggedFileList )
+{	
+	return TRUE;
+}
+
+//////////////////////////////////////////////////////////////////
+//  Subject Info Wizard Data File Tab functions
+//////////////////////////////////////////////////////////////////
+VOID SISetup::GenerateTableFieldList(Table, whichList)
+{
+	if ( !Connect() )
+	{
+		return;
+	}
+	
+	Query = ~Select * From <Table>~;	// WANT A QUERY THAT RETURNS NO RECORDS
+
+	LoadFieldList( ~<WhichList>TableFieldsList~,fConnection,~<Query>~,~FieldName~ );
+}
+
+
+
+VOID SISetup::GenerateFileFieldList( fullPath )
+{
+	Path	  = ~<$str.$fullPath.Path>~;
+	FileName  = ~<$Str.$fullPath.Filename.WithoutExt>~;
+	Extension = ~<$str.$fullPath.ext>~;
+
+	if ( !ConnectToFile( ~<fullPath>~, ~<Path>~ ) )
+	{
+		return;
+	}
+
+	QuerySource = ~<Extension>~ == ~~ ? ~<FileName>~ : ~<FileName>#<Extension>~;
+
+	Query = ~Select * from [<QuerySource>] ~;
+
+	LoadFieldList( ~FileFieldsList~,fileDB,~<Query>~,~FieldName~ );
+}
+
+VOID SISetup::LoadFileFieldList( listBox )
+{
+	if ( !GetViewByName( ~ViewTabs~ ) )
+	{
+		return;
+	}
+
+	fHtmlView( Execute,~ResetList( GetElement('FileFieldsList') )~ );
+	// get all the fields in the SubjectInfo table
+	Index = 0;
+
+	StringList( FieldList,New );
+
+	while ( dList( FieldInfo,<Index++>,Name,theFieldName ) )
+	{
+		if ( SimilarStr( ~<theFieldName>~,~OrderID~,~SubjectID~ ) )
+		{
+			continue;
+		}
+		FieldList( AddString, ~<theFieldName>~ );
+	}
+
+	fHtmlView( CreateOptionsFromStringList, ~<listBox>~, 0, FieldList );
+}
+
+VOID SISetup::LoadFieldList( listBox,&Connection,Query,Key )
+{
+	if ( !GetViewByName( ~ViewTabs~ ) )
+	{
+		return;
+	}
+
+	// get all the fields in the SubjectInfo table
+	if ( !PGenConList( List,Connection,Connection,Cursor,Forward,SetMaxRecords,1,SetCacheSize,1,QUERY,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		ShowError( ~QueryFailed~, ~<Query>~,~<theErr>~ );
+		return;
+	}
+
+	Index = 0;
+
+	StringList( FieldList,New );
+
+	while ( List( FieldInfo,<Index++>,Name,theFieldName ) )
+	{
+		if ( SimilarStr( ~<theFieldName>~,~OrderID~,~SubjectID~ ) )
+		{
+			continue;
+		}
+		FieldList( AddString, ~<theFieldName>~ );
+	}
+
+	fHtmlView( CreateOptionsFromStringList, ~<listBox>~, 0, FieldList );
+	
+}
+
+VOID SISetup::ClearList( Type )
+{
+	HideMessages();
+	if ( SimilarStr( ~<Type>~,~Info~ ) )
+	{
+		SIGridObj.ClearListView();
+		if ( !GetViewByName( ~ViewTables~,fHtmlTables ) )
+		{
+			return;
+		}
+//		fHtmlTables( Execute,~RefreshTables()~ );
+	}
+	else
+	{
+		DataGridObj.ClearListView();
+	}
+}
+
+VOID SISetup::PrepareImport()
+{
+	HideMessages();
+	DataGridObj.SetSelected();
+}
+//////////////////////////////////////////////////////////////////
+//  Subject Info Wizard Info Type Tab functions
+//////////////////////////////////////////////////////////////////
+VOID SISetup::ViewModTable()
+{
+	HideMessages();
+	if ( !GetViewByName( ~ViewTabs~,fHtmlTabs ) )
+	{
+		return;
+	}
+
+	if ( !GetViewByName( ~ViewTables~,fHtmlTables ) )
+	{
+		return;
+	}
+
+	if ( !Connect() )
+	{
+		return;
+	}
+
+	fHtmlTables( Get,SiTablesList,0,value,infoType );
+
+	if ( IsNull( infoType ) || ~<infoType>~ == ~~ )
+	{
+		if ( !fHtmlTabs( Get,NewInfoType,0,value,infoType ))
+		{
+			ShowError( ~NoTableSelected~ );
+			return;
+		}
+		else
+		{
+			ShowStatus( ~AnalyzingFields~ );
+			if ( ~<infoType>~ == ~~ )
+			{
+				ShowError( ~NoTableSelected~ );
+				return;
+			}
+
+			if ( !CreateTableFormat( ~<infoType>~, ~<xmlPath>~ ) )
+			{
+				return;
+			}
+		}
+	}
+
+	Query = ~Select * From TableFormats Where TableName = 'SubjectInfo<infoType>' Order By TableName,Sequence~;
+
+	SIGridObj.Set( TableName,~TableFormats~ );
+	SIGridObj.Set( DocumentQuery,~<Query>~ );
+	SIGridObj.LoadListView( fConnection, ~SubjectInfo<infoType>~ );
+}
+
+
+VOID SISetup::SaveSiTable( infoType )
+{
+	HideMessages();
+	ReturnOnFailure( GetViewByName( ~View~ ) );
+	ReturnOnFailure( GetViewByName( ~ViewTables~, fHtmlTables ) );
+
+	fHtmlTables( Get, SiTablesList,0,value,infoType );
+	if ( IsNull( infoType ) || ~<infoType>~ == ~~ )
+	{
+		ShowError( ~NoTableSpecified~ );
+		return;
+	}
+
+	if ( !SIGridObj.IsObjectDataLoaded( ~SubjectInfo<infoType>~ ) )
+	{
+		ShowError( ~NoChanges~ );
+		return;
+	}
+
+	if ( !SIGridObj.AnyRowsChanged() )
+	{
+		ShowError( ~NoChanges~ );
+		return;
+	}
+
+	if ( !SIGridObj.SaveAllChanges() )
+	{
+		return;
+	}
+
+	Actions = ACTION DOC ( SubjectInfoDoc OpenOnce SubjectInfoDoc "OnCloseSIView( ~SubjectInfo<infoType>~ );" );
+	PerformActions( Actions );
+
+	TheTableName = ~SubjectInfo<infoType>~;
+	Path = ~<$App.ShareDirectory>\Scripts\UserTableDefinitions~;
+	Filename = ~<Path>\<TheTableName>.txt~;
+
+	if ( !Directory( Create,~<Path>~ ) )
+	{
+		ShowError( ~CreateDirFailed~, ~<$str.$Path.cpath>~ );
+		return;
+	}
+
+	// MAKE SURE THE TABLE IS NOT ALREADY IN THE DATABASE
+
+	if ( TableExists( ~<TheTableName>~,TRUE ) )
+	{
+		return;
+	}
+
+	fHtmlTables( Execute,~RemoveListOption( GetElement('SiTablesList'),'<infoType>')~ );
+	fHtmlTabs( Set,~NewInfoType~,0,value,~~ );
+	SIGridObj.ClearListView();
+
+	if ( TableDefFileExists( ~<TheTableName>~, ~<FileName>~,TRUE ) )
+	{
+		return;
+	}
+
+
+	if ( !SIGridObj.SaveAllChanges() )
+	{
+		return;
+	}
+
+	if ( !SaveTableDefinitionFile( ~<TheTableName>~,FALSE,TRUE ) )
+	{
+		ShowError( ~SaveTableDefFailed~, ~<TheTableName>~ );
+		return;
+	}
+
+	if ( !CreateTheTable( ~<TheTableName>~ ) )
+	{
+		ShowError( ~CreationFailed~, ~<TheTableName>~ );
+		return;
+	}
+
+	if ( !GetViewByName( ~ViewTabs~, fHtmlTabs ) )
+	{
+		return;
+	}
+
+	fHtmlTabs( Set,~NewInfoType~,0,value,~~ );
+	fHtmlTables( Execute,~AddListOption( GetElement('SiTablesList'),'<infoType>','<infoType>')~ );
+	SIGridObj.ClearListView();
+
+}
+
+NUMERIC SISetup::CreateTableFormat( infoType )
+{
+	ReturnOnFailure( GetViewByName( ~View~ ) );
+
+	ShowStatus( ~AnalyzingFields~ );
+
+	if ( !fHtmlView( Get,pathText,0,value,Path ))
+	{
+		ShowError( ~NoTableSelected~ );
+		return FALSE;
+	}
+
+	ShowStatus( ~AnalyzingFields~ );
+	if ( ~<Path>~ == ~~ )
+	{
+		ShowError( ~NoFileSelected~ );
+		return FALSE;
+	}
+
+	ShowStatus( ~AnalyzingFields~ );
+	if ( !DataGridObj.IsObjectDataLoaded( ~<Path>~ ) )
+	{
+		if ( !CreateXMLRecordsetFrom( ~<Path>~, xmlPath ) )
+		{
+			return FALSE;
+		}
+	}
+	else
+	{
+		FilePath     = ~<$Str.$Path.Path>~;
+		Extension    = ~<$str.$Path.ext>~;
+		FileName     = ~<$Str.$Path.Filename.WithoutExt>~;
+		xmlPath		 = ~<FilePath>\<FileName>.xml~;
+	}
+
+	ShowStatus( ~AnalyzingFields~ );
+	if ( !CreateTheTableDefinition( ~SubjectInfo<infoType>~, ~<xmlPath>~ ) )
+	{
+//		ShowError( ~SaveTableDefFailed~, ~SubjectInfo<infoType>~ );
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+VOID SISetup::CreateSiTable( infoType )
+{
+	HideMessages();
+	ReturnOnFailure( GetViewByName( ~ViewTables~, fHtmlTables ) );
+
+	ShowStatus( ~AnalyzingFields~ );
+
+	// if tableformat is not defined yet, CreateTableFormat()
+	if ( IsNull( infoType ) || ~<infoType>~ == ~~ )
+	{
+		ShowError( ~NoTableSpecified~ );
+		return;
+	}
+
+	ShowStatus( ~AnalyzingFields~ );
+	if ( !SIGridObj.IsObjectDataLoaded( ~SubjectInfo<infoType>~ ) )
+	{
+		if ( !CreateTableFormat( ~<infoType>~ ) )
+		{
+			ShowError( ~SaveTableDefFailed~, ~SubjectInfo<infoType>~ );
+			return;
+		}
+	}
+	else
+	{
+		if ( !SIGridObj.SaveAllChanges() )
+		{
+			return;
+		}
+	}
+
+	if ( !SaveTableDefinitionFile( ~SubjectInfo<infoType>~,TRUE,TRUE ) )
+	{
+		ShowError( ~SaveTableDefFailed~, ~SubjectInfo<infoType>~ );
+		return;
+	}
+
+	if ( !CreateTheTable( ~SubjectInfo<infoType>~ ) )
+	{
+		ShowError( ~CreationFailed~, ~SubjectInfo<infoType>~ );
+		return;
+	}
+
+	fHtmlTables( Execute,~AddListOption( GetElement('SiTablesList'),'<infoType>','<infoType>')~ );
+
+	if ( !GetViewByName( ~ViewTabs~, fHtmlTabs ) )
+	{
+		return;
+	}
+
+	fHtmlTabs( Set,~NewInfoType~,0,value,~~ );
+
+	SIGridObj.ClearListView();
+}
+
+
+VOID SISetup::RemoveSiTable( infoType )
+{
+	HideMessages();
+	ReturnOnFailure( GetViewByName( ~ViewTables~, fHtmlTables ) );
+	fHtmlTables( Get,SiTablesList,0,value, infoType );
+
+	if ( ~<infoType>~ == ~~ )
+	{
+		ShowError( ~NoTableSelected~ );
+		return;
+	}
+
+	Actions = ACTION DOC ( SubjectInfoDoc OpenOnce SubjectInfoDoc "OnCloseSIView( ~SubjectInfo<infoType>~ );" );
+	PerformActions( Actions );
+
+	ConfirmMsg = TR( SiWizardTrans,RemoveSiTable,~<infoType>~ );
+
+	DeleteExistingTable( ~SubjectInfo<infoType>~, ~<ConfirmMsg>~ );	
+	ClearList( ~Info~ );
+
+	ShowStatus( ~DeleteTableComplete~, ~SubjectInfo<infoType>~ );
+
+	fHtmlTables( Execute,~RemoveListOption( GetElement('SiTablesList'),'<infoType>')~ );
+}
+
+
+VOID SISetup::DuplicateTable( newName)
+{
+	HideMessages();
+	ReturnOnFailure( GetViewByName( ~ViewTabs~, fHmtlTabs ) );
+
+	ReturnOnFailure( GetViewByName( ~ViewTables~, fHtmlTables ) );
+	fHtmlTables( Get,SiTablesList,0,value, originalName );
+
+	if ( IsNull( originalName ) || ~<originalName>~ == ~~ )
+	{
+		ShowError( ~SelectTableToDuplicate~ );
+		return;
+	}
+	if ( IsNull( newName ) || ~<newName>~ == ~~ )
+	{
+		ShowError( ~EnterTypeForDuplicate~ );
+		return;
+	}
+
+	if ( !DuplicateTableDefinition( ~<originalName>~, ~<newName>~ ) )
+	{
+		return;
+	}
+
+	if ( !SaveTableDefinitionFile( ~SubjectInfo<newName>~,TRUE,FALSE ) )
+	{
+		ShowError( ~SaveTableDefFailed~, ~SubjectInfo<infoType>~ );
+		return;
+	}
+
+	if ( !CreateTheTable( ~SubjectInfo<newName>~ ) )
+	{
+		ShowError( ~CreationFailed~, ~SubjectInfo<infoType>~ );
+		return;
+	}
+
+	fHtmlTables( Execute,~AddListOption( GetElement('SiTablesList'),'<newName>','<newName>')~ );
+
+	if ( !GetViewByName( ~ViewTabs~, fHtmlTabs ) )
+	{
+		return;
+	}
+
+	fHtmlTabs( Set,~NewInfoType~,0,value,~~ );
+
+	SIGridObj.ClearListView();
+	fHtmlTables( Execute,~SelectByValue(GetElement('SiTablesList'),'<newName>',true);~ );
+	ViewModTable();
+}
+
+VOID SISetup::CancelSiChanges()
+{
+	HideMessages();
+	if ( !SIGridObj.RollBackAllChanges() ) // cancel pending changes
+	{
+		ShowError( ~NothingToCancel~ );
+	}
+}
+
+VOID SISetup::SetTitle()
+{
+	SetWindowTitle( TR( SiWizardTrans, Title) );
+}
+
+//////////////////////////////////////////////////////////////////
+//  Subject Info Wizard Import Tab functions
+//////////////////////////////////////////////////////////////////
+VOID SISetup::ImportData()
+{
+	Action = ACTION DOC ( ProcessSubjectInfo OpenOnce ProcessSubjectInfo "Init();" );
+	PerformActions( Action );
+}
+
+
+VOID SISetup::HelpRoutine()			
+{ 
+	OnChmHelp();
+}
+//STR	KparsSetBat::ShortCuts()			{ return F1ShortCuts(); }
+
+VOID InitDoc( WantStatic )
+{
+	if ( !ObjectAlreadyExists( SIWizObj ) )
+	{
+		SISetup( New,SIWizObj,~<WantStatic>~ );
+
+		SIWizObj( Global );
+
+		SIWizObj.InitWindow();
+		
+		SIWizObj.SetTitle();
+	}
+}
+
+// Entry Points from other scripts
+
+VOID InitStatic( )	{ InitDoc( TRUE ); }
+
+VOID Init( )		{ InitDoc( FALSE ); }
+
+VOID RegainFocus()
+{
+	if ( Defined( SIWizObj ) )
+	{
+		SIWizObj.ReOpen();
+	}
+}

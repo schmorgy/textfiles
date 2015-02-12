@@ -1,0 +1,426 @@
+// ProofDlg Code
+Class( ProofDlg,Extends,BaseHTMLWin,	
+	  Member,fProductCategory,Str,~~,
+	  Member,fProduct,Str,~~
+ );
+Include: ~CreateOrderItems~;
+
+VOID HelpRoutine()
+{
+	Obj.HelpRoutine();
+}
+
+NUMERIC ProofDlg::HelpRoutine()
+{
+	TheAction = ACTION ShowHelpPage ( KPISHelpFile "OrderItems.htm#books" );
+	return PerformActions( TheAction );	
+}
+
+VOID ProofDlg::UpdateCategoryList()
+{
+	Query = ~Select Distinct Category From Products Order By Category~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+
+	fHtmlView(Execute,~ResetList(ProductCategoryListID)~ );
+	fHtmlView( CreateOptionsFromGenConList,ProductCategoryListID,0,List,Category );
+	SelectCategory();
+
+}
+
+VOID ProofDlg::SelectCategory()
+{
+	fHtmlView( Execute,~SelectByValue( ProductCategoryListID,'<fProductCategory>')~);
+}
+
+VOID ProofDlg::UpdateProductsList(Category)
+{
+
+	if (!IsNull(~<Category>~))
+	{
+		Query = ~Select ID From Products Where Category = '<Category>'Order By ID~;
+	}
+	else
+	{
+		Query = ~Select ID From Products Order By ID~;
+	}
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+	
+	fHtmlView(Execute,~ResetList(ProductsListID)~ );
+	fHtmlView( CreateOptionsFromGenConList,ProductsListID,0,List,ID );
+	fHtmlView( Execute,~SelectByValue( ProductsListID,'<fProduct>')~);
+
+}
+
+NUMERIC ProofDlg::OnSelectCategory()
+{
+	fHtmlView( Get,ProductCategoryListID, 0, value, Category);
+	UpdateProductsList(~<Category>~);
+	return 1;
+}
+
+STR ProofDlg::GetProductCategory(ProductID)
+{
+	Query = ~Select Category From Products Where ID = '<ProductID>'~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Warning( Translate( ~Query Failed.\n\n<Query>\n\n<theErr>~ ) ); 
+		return;
+	}
+	if ( List( GetFirst,Item ) )
+	{
+		return ~<$pcon.Item[Category]>~;
+	}
+
+	return ~~;
+}
+
+VOID ProofDlg::SetProductCategory(Category)
+{
+	fProductCategory = ~<Category>~;
+}
+
+VOID ProofDlg::SetProduct(Product)
+{
+	fProduct = ~<Product>~;
+}
+
+VOID	ProofDlg::OnLoadComplete()	
+{  
+
+	if ( !( OrderItemsWindow(GetActiveViewOfWindow, View) ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	if ( !View( GetSelected,SelectedItems ) )		
+		{ return Warning( Translate(~There are no selected order items~) ); }
+
+	UpdateNumberSelected();		// sets the number of order items selected (Create) or number of order item in the book (Edit)
+	SetTitle1();					// sets the title of the page
+	
+	if (GetUserSettings( ~Proof~,~ProofProduct~,UsersProduct, Enabled ))
+	{
+		if (<Enabled>  && !IsNull(~<UsersProduct>~))
+		{
+			if (ProductExists(~<UsersProduct>~))
+			{
+				fHtmlView( Execute,~SelectByValue( ProductsListID,'<UsersProduct>')~);
+				SetProductCategory( GetProductCategory(~<UsersProduct>~));
+				SetProduct(~<UsersProduct>~);
+				UpdateCategoryList();
+				UpdateProductsList(~<fProductCategory>~);
+			}
+			else
+			{
+				UpdateCategoryList();
+				UpdateProductsList(~~);
+			}
+		}
+		else
+		{
+			UpdateCategoryList();
+			UpdateProductsList(~~);
+		}
+	}
+	else
+	{
+		UpdateCategoryList();
+		UpdateProductsList(~~);
+	}
+
+
+};		// Override as needed
+
+
+NUMERIC ProofDlg::ProductExists( ID )
+{
+	if ( !Ado( dbase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~database Connection Failed. <theErr>~) );
+	}
+	return dbase( GetValuesFor,~Select ID From Products Where ID = '<ID>'~,ProductID );
+}
+
+VOID ProofDlg::SetTitle1()
+{
+	fHtmlView(SetInnerHtml,compTitle,0,~Create a Proof Sheet~);
+}
+
+
+VOID ProofDlg::GetFTitle(OrderID)
+{
+	fTitle = ~Create a Proof Sheet~;
+}
+
+VOID ProofDlg::ProofDlg()
+{
+
+	if ( !( OrderItemsWindow(GetActiveViewOfWindow, View) ) )
+		{ return ; }
+
+	if ( !View( GetSelected,SelectedItems ) )		
+		{  return; }
+
+	View(GetName,OrderID);
+	WindowTop = 20;
+	WindowLeft = 20;
+
+	GetFTitle(~<OrderID>~);
+	SetLittleSize();
+	fWindowStyle = ~WS_SIZEBOX~;
+}
+
+VOID ProofDlg::UpdateNumberSelected()
+{
+	if ( !( OrderItemsWindow(GetActiveViewOfWindow, View) ) )
+		{ return ; }
+
+	if ( !View( GetSelected,SelectedItems ) )		
+		{  return; }
+
+	count = SelectedItems( ChildCount );
+	result = SelectedItems(GetFirst,Item);
+	OrderID = ~<$con.Item[OrderID]>~;
+
+	if (<count> == 1)
+	{	
+		fHtmlView(SetInnerHtml,HowManySelectedID,0,~<$Tr.OrderItemTranslation(OneSelected,<count>,`<OrderID>`)>~);
+
+	}
+	else
+	{
+		fHtmlView(SetInnerHtml,HowManySelectedID,0,~<$Tr.OrderItemTranslation(MoreThanOneSelected,<count>,`<OrderID>`)>~);
+	}
+}
+
+NUMERIC ProofDlg::OnSelectProductID()
+{
+	fHtmlView( Get,ProductsListID, 0, value, UsersProduct);
+	fHtmlView( Get,ProductCategoryListID,0,value,MyCategory);
+	if (IsNull(~<MyCategory>~))
+	{
+		fProductCategory = GetProductCategory(~<UsersProduct>~);
+		SelectCategory();
+		SetProduct(~<UsersProduct>~);
+		UpdateProductsList(~<fProductCategory>~);
+	}
+	return TRUE;
+}
+
+
+VOID ProofDlg::SetLittleSize()
+{
+	WindowWidth = 500;
+	WindowHeight = 480;
+
+}
+
+NUMERIC ProofDlg::OnOkGroup()
+{
+	if ( !( OrderItemsWindow(GetActiveViewOfWindow, View) ) )
+		{ return Warning( ~There was no active view~ ); }
+
+	if ( !View( GetSelected,SelectedItems ) )		
+		{ return Warning( Translate(~Select one and try again~) ); }
+
+	fHtmlView( Get,ProductsListID, 0, value, ProductID);
+	if (IsNull(~<ProductID>~))
+	{
+		return Warning( Translate(~Please specify a product ID~) ); 
+	}
+	
+	if (!ProductExists(~<ProductID>~))
+	{
+		return Warning( Translate(~Product <ProductID> does not exist~) ); 
+	}	
+
+	Quantity  = 1;
+
+	count = SelectedItems( ChildCount );
+
+	if ( <count> < 1)
+	{
+		return TRUE;
+	}
+
+	OrderID =  ~~;
+	if (SelectedItems(GetFirst,Item))
+	{
+		OrderID = ~<$con.Item[OrderID]>~; 
+	}
+	if (IsNull(~<OrderID>~))
+	{
+		Warning(~Cannot get Order ID.  No items were created~);
+		return FALSE;
+	}
+		
+
+	if ( !Ado( dbase,Connect ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~ProofDlg:OnOKGroup Connection Failed. <theErr>~) );
+	}
+
+	if (CreateItems(dbase,SelectedItems,~<ProductID>~,~<OrderID>~,~<Quantity>~))
+	{
+		SetUserSettings(Proof,ProofProduct,~<ProductID>~,1);
+	}
+	ForceClose();
+	OnWindowClose();
+	View(FreeCachedImageCorrections);
+	View( RefreshView );
+	ForgetGlobal(Obj);
+
+	return TRUE;
+}
+
+
+
+
+VOID ProofDlg::OnCancelOBS()
+{
+	if ( OkayToCancel() )
+	{
+		ForceClose();
+		OnWindowClose();
+	}
+}
+
+
+NUMERIC ProofDlg::CreateItems(&dbase,&SelectedItems,ProductID,OrderID,Qty)
+{
+	if ( !DictionaryExists( DDScaleOrderItemsDialog ) )
+	{
+        Dictionary: DDScaleOrderItemsDialog 
+			Fields: Name	Width			type double
+			Fields: Name	Height			type double
+			Fields: Name	Units			type text
+ 	}
+
+	Query = ~Select * from Products Where ID = '<ProductID>'~;
+	if ( !PGenConList( List,Connection,dbase,Query,~<Query>~ ) )
+	{
+		List( GetErrorDescription,0,theErr );
+		return Warning( ~Failed to read the Products from the database.  <Query>.  <theErr>~ );
+	}
+	
+	GenCon(SelectedImages,NewFrom,DDPath);
+	result = SelectedItems(GetFirst,Item);
+	while ( <result> )
+	{
+		Item(GetValue,PreviewPath,Path);
+		Item(GetValue,Quantity,ItemQuantity);
+		Item(GetValue,ID,ItemID);
+		Item(GetValue,JobPath,JobPath);
+		GenCon( SelectedImage,NewFrom,DDPath,Permanent );
+		SelectedImage( Set,Path,~<Path>~ );
+		SelectedImage( Set,Quantity,~<ItemQuantity>~ );
+		SelectedImage( Set,ID,~<ItemID>~ );
+		SelectedImages( InsertBack,SelectedImage );
+		
+		PreviewOutOfDate = NeedsRefreshing(~<JobPath>~,~<Path>~);
+		if (<PreviewOutOfDate>)
+		{
+			Warning(~Order items need to be maintained.  Please maintain the order items~);
+			MaintainCrossReference(~<OrderID>~);
+			return TRUE;
+		}
+
+		result = SelectedItems( GetNext,Item );
+	}
+	if (List(GetFirst,ProductRec))
+	{
+		GroupID = 0;
+		PackageID = ~~;
+		PackageGroup = ~~;
+		BGID = ~~;
+		Stop = 0;
+		ItemType = ~~;
+		Qty = Numeric(~<Qty>~);
+		count = FillIndividualLayout(dBase,~<ProductID>~,~<OrderID>~,
+			SelectedImages,<Qty>,ImagesCount,~<ItemType>~,Stop,~<BGID>~,
+			~<PackageID>~,~<PackageGroup>~,<GroupID>, ProductRec);
+	}
+	
+	StatusBarText( ~Created <count> order items~ );
+	return TRUE;
+}
+
+NUMERIC ProofDlg::MaintainCrossReference(OrderID)
+{
+
+	if ( DefinedAndNotNull(OrderID) )
+	{
+		Actions = ACTION Doc ( ~MaintainOrdersDoc~ Open MaintainOrdersDoc "Init( ~<OrderID>~,0,TRUE,FALSE );" );
+		PerformActions( Actions );
+	}
+
+	return TRUE;
+}
+
+NUMERIC ProofDlg::NeedsRefreshing( JobPath,IconPath )
+{
+	comparison = Files( CompareFileTimes,~<JobPath>~,~<IconPath>~ );
+
+	if ( <comparison> < -1 )	// an error?
+	{
+		return TRUE;
+	}
+
+	return <comparison> > 0;
+}
+
+
+NUMERIC CreateProofSheet()
+{
+	if ( !GenCon( OrderItemCategory,GETACTIVEVIEW ) )
+		{ return Warning( Translate(UIMessages,NoActiveView) ); }			
+
+	if ( !OrderItemCategory( GetSelected,SelectedItems ) )	{ return Warning( ~<$Tr.OrderItemTranslation(NoneSelected)>~ ); }
+
+	count = SelectedItems( ChildCount );
+	if (!<count>)
+	{
+		return Warning( ~<$Tr.OrderItemTranslation(NoneSelected)>~); 
+	}
+
+	alreadyInBook = OrderItemsInBook(SelectedItems);
+	if (<alreadyInBook>)
+	{
+		return Warning( ~<$Tr.OrderItemTranslation(AlreadyInBook,<alreadyInBook>)>~); 
+	}
+
+	OrderItemCategory( Get,DontAllowDragDrop,DontAllowDragDrop);
+	OrderItemCategory( Get,DuplicateSequence,DuplicateSequence);
+	if ( <DontAllowDragDrop>)
+	{ 
+		if ( <DuplicateSequence>)
+		{
+			return Warning(~You cannot create a book because two or more order items have duplicate Sequence and Subsequence values~);
+		}
+		else
+		{
+			return Warning(~The order items must be sorted by sequence.  Please right click and Sort by Sequence~);
+		}
+	}
+
+
+	ForgetGlobal( Obj);
+	ProofDlg( New,Obj );
+	Global( Obj );
+
+	Obj.CreateModalDialog(~/OrderItems/CreateProofSheet.kpl~);		// Create an HTML Window that behaves like a modal dialog
+	return TRUE;
+}

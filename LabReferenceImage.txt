@@ -1,0 +1,303 @@
+
+ScreenWidth = App( thisApp,MainWindow,GetClientWidth );
+
+Left = <ScreenWidth> * .35;	Top = 7;	DialogWidth = 300; DialogHeight = 300;
+
+vGap = 5; hGap = 5; ButtonWidth = 90; ButtonHeight = 20;
+
+MinImageWidth = 250; ImageWidth = 350;  ImageHeight = <ImageWidth>;  
+
+
+VOID ReOpen()
+{
+}
+
+NUMERIC DefineDialog()
+{
+	if ( !DictionaryExists( DDLabRefImageDialog ) )
+	{
+        Dictionary: DDLabRefImageDialog 
+            Fields: Name	ReferenceImage		type text
+ 	}
+
+	Define: DlgData Using DDLabRefImageDialog;
+
+	Define: aDialog Using DDWinDef
+		Fields:	POSITION				<left>,<Top>,$DialogWidth,$DialogHeight 
+				TITLE					~Lab Reference Image~
+				TYPENAME				~Dialog~ 
+				WANTSMINIMIZEBOX		TRUE
+				OACTIONSTEXT			ACTION EXEC ( DoCancelButton() )
+				HACTIONSTEXT			ACTION SHOWHELPPAGE ( KPISHelpFile "LabReferenceImage.htm" ) 
+
+		Contains: INLISTORDER
+		{
+			Define: RefImagesComboBox Using DDWinCtrlDef AsSymbol RefImagesComboBox 
+				Fields: TYPENAME        SComboBox  
+						POSITION		$hGap,$vGap,110,<ButtonHeight> * 10
+						DROPDOWNACTIONSTEXT	ACTION EXEC ( UpdateReferenceImagesList() )
+						IACTIONSTEXT	ACTIONS ( Get )
+						DACTIONSTEXT	ACTION EXEC ( ChangeReference() )
+						OACTIONSTEXT	ACTIONS ( Save )
+						GENCONNAME		THIS
+						GENCONFIELD		~ReferenceImage~
+						TOOLTIP			~Select the desired reference image.~
+
+			Define: PlusButton Using DDWinCtrlDef AsSymbol PlusButton 
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( PlusButton() )
+						POSITION		RefImagesComboBox(GetRight,Position) + $hGap,$vGap, 20, $ButtonHeight
+						TEXT			Translate( ~&+~ )
+						TOOLTIP			Translate( ~Increase the size of the window.   Press the control key to increase more rapidly~ )
+						TYPENAME		BUTTON
+
+			Define: MinusButton Using DDWinCtrlDef AsSymbol MinusButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( MinusButton() )
+						POSITION		PlusButton(GetRight,Position) + $hGap,PlusButton(GetTop,Position),
+										20, $ButtonHeight
+						TEXT			Translate( ~&-~ )
+						TOOLTIP			Translate( ~Decrease the size of the window.  Press the control key to decrease more rapidly~ )
+						TYPENAME		BUTTON
+
+			Define: RefreshButton Using DDWinCtrlDef AsSymbol RefreshButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ChangeReference() )
+						POSITION		MinusButton(GetRight,Position) + $hGap,MinusButton(GetTop,Position),
+										50, $ButtonHeight
+						TEXT			Translate( ~Refresh~ )
+						TOOLTIP			Translate( ~Refresh the view of the image~ )
+						TYPENAME		BUTTON
+
+			Define: ViewButton Using DDWinCtrlDef AsSymbol ViewButton
+				Fields:	GENCONNAME		THIS
+						DACTIONSTEXT	ACTION EXEC ( ViewReferenceImages() )
+						POSITION		RefreshButton(GetRight,Position) + $hGap,RefreshButton(GetTop,Position),
+										30, $ButtonHeight
+						TEXT			Translate( ~View~ )
+						TOOLTIP			Translate( ~View the reference images~ )
+						TYPENAME		BUTTON
+
+			Define: TheImage Using DDWinCtrlDef AsSymbol TheImage 
+				Fields:	GENCONNAME		THIS
+						ISBITMAP		TRUE
+						POSITION		$hGap,PlusButton(GetBottom,Position) + $vGap, $ImageWidth,$ImageHeight
+						TOOLTIP			Translate( ~Match the color balance of this image~ )
+						TYPENAME		StaticText
+		}
+
+	DialogWidth = TheImage(GetRight,Position) + $hGap * 3;
+	DialogHeight = TheImage(GetBottom,Position) + $vGap + 30;
+
+	aDialog( Set,Position,~<Left> <Top> <DialogWidth> <DialogHeight>~ );
+
+	GenDlg( dlg,Definition,aDialog,Data,DlgData,Document,$Doc.This,New,Temporary );
+
+	Global( dlg,DlgData );
+
+	UpdateReferenceImagesList();
+
+	ChangeReference();
+
+	return TRUE;
+}
+
+NUMERIC OnMouseClick()
+{
+	return dlg( GetControlMouseDown,TheImage,X, Y );
+}
+
+
+NUMERIC ViewReferenceImages()
+{
+	Query = ~Select * From Images Where OrderID = 'Reference' Order By Frame~;
+
+	Actions = ACTION Doc ( ~Reference~ OpenOnce ImagesDoc "Init( ~Reference~,TRUE,~<Query>~,0 );" );
+
+	return PerformActions( Actions );
+}
+
+
+NUMERIC PlusButton()
+{
+	return ChangeWindowSize( Keystate( Control ) ? 45 : 15 );
+}
+
+
+NUMERIC MinusButton()
+{
+	return ChangeWindowSize( Keystate( Control ) ? -45 : -15 );
+}
+
+
+NUMERIC ChangeWindowSize( Amount )
+{
+	ImageWidth += <Amount>;
+	
+	if ( <ImageWidth> < <MinImageWidth> )
+	{
+		ImageWidth = <MinImageWidth>;
+		dlg( PopupMsg, Translate( ~This is as small as you can go~ ) );
+		return FALSE;
+	}
+		
+	ChangeReference();
+
+	return TRUE;
+}
+
+
+NUMERIC UpdateReferenceImagesList()
+{
+	Query = ~Select OrderID,Roll,Frame From Images Where OrderID = 'Reference' Order By Frame~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Failed to query the Images table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	List( MakeStringList,Images,Frame );
+
+	return dlg( SetControlFromStringList,RefImagesComboBox,Images,~NoSelection~ );
+}
+
+
+NUMERIC ChangeReference( Amount )
+{
+	KillTimer( 998 );
+
+	dlg( GetInput );
+
+	Frame = ~<$con.DlgData[ReferenceImage]>~;
+
+	if ( IsNull( ~<Frame>~ ) )
+	{
+		return FALSE;
+	}
+
+	ImageCorrections( Free,~<LastImagePath>~ );
+
+	Query = ~Select Path From Images Where OrderID = 'Reference' AND Frame = '<Frame>'~;
+
+	if ( !ADO( dBase,Connect,GetValuesFor,~<Query>~,LastImagePath ) )
+	{
+		dBase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Failed to query the Images table.\n\n<Query>\n\n<theErr>~ ) ); 
+	}
+
+	maxWidth = 0;
+	maxHeight = 0;
+	thumbWidth = 0;
+	thumbHeight = 0;
+	if ( !GetImageInfo( ~<LastImagePath>~,
+							MaxWidth,maxWidth,
+							ThumbWidth,thumbWidth,
+							MaxHeight,maxHeight,
+							ThumbHeight,thumbHeight ) )
+	{
+		return Warning( ~Could not find <LastImagePath>~ );
+	}
+	
+	Width = 0;
+	Height = 0;
+	if ( ( <thumbWidth> == 0 ) || ( <thumbHeight> == 0 ) )
+	{
+		Width = <maxWidth>;
+		Height = <maxHeight>;
+	}
+	else
+	{
+		Width = <thumbWidth>;
+		Height = <thumbHeight>;
+	}
+	
+	if ( !ImageCorrections( GetCrop,~<LastImagePath>~,CropX,CropY,CropW,CropL ) )
+	{
+		CropW = 100;
+		CropL = 100;
+	}
+
+	ImageHeight = (<ImageWidth> * <Height>) / <Width>;
+
+	ActualWidth = <ImageWidth>*<CropW>/100;
+	ActualHeight = <ImageHeight>*<CropL>/100;
+
+	DialogWidth = $ActualWidth + $hGap * 3.5;
+	DialogHeight = $ActualHeight + $vGap * 3 + 30 + $ButtonHeight;
+
+	dlg( SetWindowSize,<DialogWidth>,<DialogHeight> );
+	dlg( ControlRect,TheImage,SetSize,$ActualWidth,$ActualHeight );
+
+	dlg( SetControlImageFilePath, TheImage, ~<LastImagePath>~ );
+
+	return TRUE;
+}
+
+
+ChgRefCount = 0;
+
+
+VOID DoCancelButton()
+{
+	ImageCorrections( Free,~<LastImagePath>~ );
+	dlg( End );
+	Exit();
+}
+
+VOID ChangeReferenceImage( OrderID )		// CALLED FROM OTHER SCRIPTS
+{
+	Query = ~Select CustomerID From Orders Where ID = '<OrderID>'~;
+
+	if ( ADO( dBase,Connect,GetValuesFor,~<Query>~,CustomerID ) )
+	{
+		Query = ~Select Path From Images Where OrderID = 'Reference' AND Frame = '<CustomerID>'~;
+
+		if ( dBase( RecordCountFor,~<Query>~ ) )
+		{
+			DlgData( SetValues,ReferenceImage,~<CustomerID>~ );
+		}
+		else
+		{
+			DlgData( SetValues,ReferenceImage,~Normal~ );
+		}
+		dlg( Update );
+		HandleViewingParameters();
+	}
+}
+
+
+LastImagePath = ~~;
+
+
+RefreshCount = 0;
+
+VOID HandleRefreshRoutine()
+{
+	KillTimer( 998 );
+	SetTimer( 998,2000,~ChangeReference()~ );
+}
+
+RefreshRoutine = STR ( HandleRefreshRoutine(%ld); );
+
+
+VOID HandleInputProfile()
+{
+	KillTimer( 998 );
+	SetTimer( 998,1000,~ChangeReference()~ );	// UPDATE IMAGE IN 1 SECOND
+}
+
+OnOnInputProfileChanged = STR ( HandleInputProfile(%ld); );
+
+
+VOID HandleViewingParameters()
+{
+	KillTimer( 998 );
+	SetTimer( 998,1000,~ChangeReference()~ );	// UPDATE IMAGE IN 1 SECOND
+}
+
+OnViewingParametersChanged = STR ( HandleViewingParameters(%ld); );
+
+
+DefineDialog();
+

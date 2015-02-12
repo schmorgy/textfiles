@@ -1,0 +1,560 @@
+Include: ~KparsCmds.txt~;
+
+
+StopKpars   = FALSE;
+SelectSetup = TRUE;
+
+RETOUCH_TYPE		= 0;
+RETOUCH_CODE_TYPE	= 1;
+RETOUCH_SETUP_TYPE	= 2;
+
+NUMERIC DisplayKparsSetupDialog()
+{
+	ForgetGlobal( SetKparsDlg,SetKparsDlgDefinition,SetKparsDlgData );
+
+	if ( !DictionaryExists( DDSetKparsDlgData ) )
+	{
+		Dictionary: DDSetKparsDlgData
+			Fields: Name	SetupField		type text
+			Fields: Name	OrderField		type text
+			Fields: Name	IgnoreRejected	type long
+			Fields: Name	KparsProgressText type text
+	}
+
+	Define: SetKparsDlgData Using DDSetKparsDlgData;
+
+	StaticTextWidth			= 100;	StaticTextHeight		= 20;
+	TextWidth				= 100;	TextHeight				= 20;
+	x						= 4;	y						= 15;
+	vGap					= $y;	hGap					= $x;
+	ButtonWidth				= 55;	ButtonHeight			= 20;
+
+	Define: SetKparsDlgDefinition	Using	DDWinDef
+            Fields:	TypeName			Dialog
+					Position			180, 180, 240, 200
+                    Title				Translate( ~Add Images to KPARS Batch~ )
+					WantsMinimizeBox	FALSE
+                    OACTIONSTEXT		ACTION EXEC ( SetKparsDlgCloseDialog(); )
+//					HACTIONSTEXT		ACTION SHOWHELPPAGE ( KPISHelpFile "SetKparsLinkDlg.htm" );
+
+		Contains: InListOrder
+		{
+			Define: SetupFieldPrompt	Using	DDWinCtrlDef	AsSymbol	SetupFieldPrompt
+				Fields: TypeName		StaticText
+						Text			~Batch Setup~
+						RightJustified	TRUE
+						IsEnabled		FALSE
+						IsHidden		TRUE
+						Position		$x,$y,$StaticTextWidth,$ButtonHeight ;
+
+			Define: SetupFieldComboBox Using DDWinCtrlDef AsSymbol SetupFieldComboBox 
+				Fields: TypeName		SComboBox  
+						Position		SetupFieldPrompt(GetRight,Position) + $hGap,SetupFieldPrompt(Gettop,Position),160 ,$ButtonHeight*10
+						IActionsText	ACTION EXEC ( RefreshKparsSetupComboBox(SetKparsDlg) )
+						DActionsText	ACTIONS ( SAVE )
+						OActionsText    ACTIONS ( SAVE )
+						GenConName       THIS
+						GenConField      ~SetupField~
+						IsEnabled		FALSE
+						IsHidden		TRUE
+						Tooltip          ~Select the KPARS Batch Setup to use~;
+
+			Define: IgnoreRejectedCheckBox Using DDWinCtrlDef AsSymbol IgnoreRejectedCheckBox 
+				Fields: TypeName		CheckBox
+						GenConName		THIS
+						GenConField		~IgnoreRejected~
+						Text			~Ignore Rejected~
+						Position		SetupFieldPrompt(GetRight,Position),SetupFieldPrompt(GetBottom,Position)+$vGap,$StaticTextWidth,$ButtonHeight
+						IActionsText	~[Get]~
+						OActionsText	~[Save]~
+						Tooltip			~Skip the images that are rejected~;
+
+			Define: KparsProgressText Using DDWinCtrlDef AsSymbol KparsProgressText 
+				Fields:	TYPENAME			StaticText
+						POSITION			$x, IgnoreRejectedCheckBox(GetBottom,Position) + $vGap, 250, <ButtonHeight> * 2
+						TEXT				~~
+						LEFTJUSTIFIED		TRUE
+						GENCONNAME			THIS
+						GENCONFIELD			~KparsProgressText~;
+
+			DialogWidth = SetKparsDlgDefinition(GetMaxRight,Position) + $hGap * 5;
+
+
+			Define: GoButton	Using	DDWinCtrlDef	AsSymbol	GoButton
+				Fields: TypeName		DefaultButton
+						Text			Translate(~Start~)
+						Position		$DialogWidth/3 - $ButtonWidth - $hGap/2,
+										KparsProgressText(GetBottom,Position) + $vGap*2,
+										$ButtonWidth, $ButtonHeight
+						DActionsText	ACTION EXEC ( OnSetKparsOKButton() )
+						IsTabStop		TRUE
+						IsEnabled		TRUE
+						Tooltip			Translate( ~Add the image to KPARS Batch where the Subject Info Subject ID matches the Order Images Subject ID~ );
+
+			Define: StopButton	Using	DDWinCtrlDef	AsSymbol	StopButton
+				Fields: TypeName		Button
+						Text			Translate(~Stop~)
+						Position		GoButton(GetRight, Position) + $hGap*2,
+										GoButton(GetTop,Position) ,
+										$ButtonWidth, $ButtonHeight
+						DActionsText	ACTION EXEC ( OnStopButton() )
+						IsTabStop		TRUE
+						IsEnabled		FALSE
+						Tooltip			Translate( ~Stop background processing~ );
+
+			Define: CancelButton	Using	DDWinCtrlDef	AsSymbol	CancelButton
+				Fields: TypeName		Button
+						Text			Translate(GenButtonText,Cancel)
+						Position		StopButton(GetRight, Position) + $hGap*2,
+										StopButton(GetTop,Position) ,
+										$ButtonWidth, $ButtonHeight
+						DActionsText	ACTION EXEC ( SetKparsDlgCloseDialog() )
+						IsTabStop		TRUE
+						IsEnabled		TRUE
+						Tooltip			Translate( ~Close this dialog~ );
+		};
+
+	DialogHeight = CancelButton(GetBottom,Position) + 50;
+
+	DataWindow( GetWindowPosition,Left,Top,Right,Bottom );
+	x = <Left> - <DialogWidth> - 5;
+	y = <Top> + 10;
+	if ( <x> < 0 ) { x = 0; }
+	if ( <y> < 0 ) { y = 0; }
+
+
+	SetKparsDlgDefinition( Set,Position,~<x> <y> <DialogWidth> <DialogHeight>~ );
+
+	if ( !GenDlg( SetKparsDlg, Definition, SetKparsDlgDefinition, Data, SetKparsDlgData,Document, $Doc.This, New, Temporary ) )
+	{
+		return Warning( ~Failed to create KPARS Link to Subject Info dialog.~ );
+	}
+
+	Global( SetKparsDlg, SetKparsDlgDefinition, SetKparsDlgData );
+
+	DataWindow( EnableWindow, FALSE );
+	
+	KparsProcessStopped();
+
+	return TRUE;
+}
+
+NUMERIC RefreshKparsSetupComboBox( WhichDialog )
+{
+	SetupsQuery = ~Select Name From RetouchBatchSetup Order By Name~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<SetupsQuery>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		return Warning( Translate( ~Query Failed.\n\n<SetupsQuery>\n\n<theErr>~ ) );
+	}
+
+	count = List(NumEntries);
+	if ( <count> < 1 )
+	{	return Warning(~No Retouch Batch Setups defined.~);	}
+
+	List( MakeStringList,SetupsList,Name );
+
+	<WhichDialog>( SetControlFromStringList,SetupFieldComboBox,SetupsList,Selection,Update );
+
+	return TRUE;
+}
+
+
+NUMERIC OnSetKparsOKButton()
+{
+	if ( !DataView( GetSelected,SelectedRows ) )
+	{
+		Invoke( KparsProcessStopped );
+		return Warning( Translate(UIMessages,NoRowsSelected) );
+	}
+
+	Global( SelectedRows );
+
+	if ( !Defined( dbase ) )
+	{
+		if ( !Ado( dbase,Connect ) )
+		{
+			dbase( GetErrorDescription,theErr );
+			return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+		}
+		Global( dbase );
+	}
+
+	SetKparsDlg( GetInput,GetStrings,rejected,IgnoreRejected );
+
+	IgnoreRejected = atof( ~<rejected>~ );
+
+	KparsProcessRunning();
+
+	if ( <setupDefined> || <codeDefined> )
+	{
+		KparsThread( New,AddSubjectInfoToKPARSBatch, dbase,
+													 SelectedRows,
+													 <IgnoreRejected> );
+		return TRUE;
+	}
+
+	SetKparsDlg( GetInput,GetStrings,BatchSetup,SetupField );
+
+	if ( ~<BatchSetup>~ == ~~ && !<KparsAutoBatch> )
+	{	return Warning( Translate( ~You must select a KPARS Batch Setup.~ ) );	}
+
+	KparsThread( New,ProcessSetKparsBatch,SelectedRows,~<BatchSetup>~,<IgnoreRejected> );
+
+	return TRUE;
+}
+
+
+VOID SetKparsDlgCloseDialog()
+{
+	// don't let them close if operation still going on
+	if ( KparsThread( IsActive ) )
+	{
+		SetKparsDlg( SetDlgHandleActionsFlag,TRUE ) ;	// re-enable handling actions
+		Warning( Translate( ~You cannot close the dialog while the background process is running.~ ) );
+		return;	
+	}						
+
+	DataWindow( EnableWindow, TRUE );
+
+	if ( Defined( SetKparsDlg ) )
+	{
+		ForgetGlobal( SetKparsDlg );
+	}
+}
+
+
+Thread( KparsThread );	// run on separate thread
+//Thread( KparsThread, Debug );	// debug -- forces to main thread
+
+NUMERIC ProcessSetKparsBatch( &SelectedRows,BatchSetup,IgnoreRejected )
+{
+	Count = SelectedRows( ChildCount );
+
+	affected = 0;
+	processedCount = 0;
+
+	while ( SelectedRows( GetNext,Item ) && !<StopKpars> )
+	{
+		Item(GetValue,OrderID,theOrderId );
+		GetValueFromColumn( Item,~<RetouchColumn>~,retouchFlag );
+		if ( ~<retouchFlag>~ != ~~ && ~<retouchFlag>~ != ~0~ )
+		{
+			Item( GetValue,SubjectID,subjectID );
+			if ( <IgnoreRejected> )
+
+			{
+				QueryImage = ~SELECT Roll,Frame FROM Images WHERE OrderID='<theOrderId>' AND SubjectID='<subjectID>' AND Rejected=0~;
+			}
+			else
+			{
+				QueryImage = ~SELECT Roll,Frame FROM Images WHERE OrderID='<theOrderId>' AND SubjectID='<subjectID>'~;
+			}
+
+			if ( !PGenConList( ImageList,Connection,dbase,Cursor,Forward,QUERY,~<QueryImage>~ ) )
+			{
+				ForgetKparsGlobals();
+				ImageList( GetErrorDescription,0,theErr );
+				DoKparsWarning( Translate(DBMessages,QueryFailed,~<QueryImage>~,~<theErr>~) );
+				Invoke( KparsProcessStopped );
+				return FALSE;
+			}
+
+			while ( ImageList( GetNext,Image ) )
+			{
+				Image( GetValues,Roll,Roll,Frame,Frame );
+				AddToKparsBatchWithSetup( dbase,~<theOrderID>~,~<Roll>~,~<Frame>~,~<BatchSetup>~ );
+				<++affected>;
+			}
+		}
+		<++processedCount>;
+		DoKparsStatusBarText( Translate( ~Processed <processedCount> of <Count> Subject Info records~ ) );
+	}
+
+	if ( <count> )
+	{
+		ForgetKparsGlobals();
+		DoKparsStatusBarText( Translate( ~Added <affected> of <processedCount> SubjectInfo Records to the KPARS Batch Queue~ ) );
+		Invoke( KparsProcessStopped );
+		return TRUE;
+	}
+
+	ForgetKparsGlobals();
+	DoKparsStatusBarText( Translate( ~Added <affected> of <processedCount> SubjectInfo Records to the KPARS Batch Queue~ ) );
+	Invoke( KparsProcessStopped );
+	return FALSE;
+}
+
+
+VOID OnStopButton()
+{
+	StopKpars = TRUE;
+}
+
+NUMERIC AddSubjectInfoToKPARS()
+{
+	BatchSetupColumn	= ~~;
+	RetouchCodeColumn	= ~~;
+	RetouchColumn		= ~~;
+
+	setupDefined		= FALSE;
+	codeDefined			= FALSE;
+	retouchDefined		= FALSE;
+
+	if ( !Ado( dbase,Connect ) )
+	{
+		dbase( GetErrorDescription,theErr );
+		return Warning( Translate( ~Could not connect to the database. <theErr>~ ) );
+	}
+
+	// identify the columns to use for lookups
+	// if none defined, show setup dialog
+	Query = ~Select * From SubjectKparsColumns Where TableName = '<TableName>'~;
+	HaveColumnInfo = PGenConList( ColumnsList,Connection,dbase,Cursor,Forward,Query,~<Query>~ );
+	if ( <HaveColumnInfo> )
+	{
+		setupDefined   = FindColumnName( dbase,ColumnsList,SubjectInfo,<RETOUCH_SETUP_TYPE>,BatchSetupColumn );	
+		codeDefined    = FindColumnName( dbase,ColumnsList,SubjectInfo,<RETOUCH_CODE_TYPE>, RetouchCodeColumn );
+		retouchDefined = FindColumnName( dbase,ColumnsList,SubjectInfo,<RETOUCH_TYPE>,      RetouchColumn );
+	}
+
+	Global( dbase );
+	Global( setupDefined,codeDefined,BatchSetupColumn,RetouchCodeColumn,RetouchColumn );
+
+	if ( !<setupDefined> && !<codeDefined> && !<retouchDefined> )
+	{
+		ForgetKparsGlobals();
+		return Warning( Translate( ~No auto-retouching columns have been defined.~ ) );
+	}
+	else if ( !<setupDefined> && !<codeDefined> && <retouchDefined> && !<KparsAutoBatch> )
+	{
+		LinkToKpars();
+		return TRUE;
+	}
+
+	ShowKparsDialog();
+
+	return TRUE;
+}
+
+
+NUMERIC AddSubjectInfoToKPARSBatch( &dbase,
+									&SelectedRows,
+								    IgnoreRejected )
+{
+	count = SelectedRows( ChildCount );
+	if ( <count> < 1 )
+	{	count = SelectedRows( NumEntries );	}
+
+	Log( Session,~Count = <count>~ );
+
+	moreRows = SelectedRows( GetFirst,SubjectInfo );
+
+	SubjectInfo(GetValue,OrderID,OrderID);
+	GetImagesOrderID( ~<OrderID>~, ImagesOrderID );
+	if ( !SimilarStr( ~<ImagesOrderID>~,~~ ) )
+	{
+		OrderID = ~<ImagesOrderID>~;
+	}
+
+	WhichImage = GetSystemMultipleImageChoice();
+
+	index = 0;
+	affected = 0;
+	processedCount = 0;
+
+	Key1 = ~~;
+
+	if ( <IgnoreRejected> )
+	{
+		Key1 = ~(Rejected = 0) AND~;
+	}
+
+	while ( <moreRows> && !<StopKpars> )
+	{
+		SubjectInfo(GetValue,SubjectID,theSubjectID);
+		Key =  ~<Key1> (OrderID = '<ImagesOrderID>') AND (SubjectID = '<theSubjectID>')~;
+
+		Query = ~Select OrderID,Roll,Frame,Path From Images Where <Key> Order By Frame~;
+
+		if ( !PGenConList( List,Connection,dbase,Cursor,KeySet,Query,~<Query>~ ) )
+		{		
+			List( GetErrorDescription,0,theErr );
+			DoKparsWarning( Translate(~Query Failed <Query>. <theErr>~) );
+			Invoke( KparsProcessStopped );
+			ForgetKparsGlobals();
+			return FALSE;
+		}
+
+		if ( <WhichImage> == 2)
+		{
+			if ( !List( GetLast,Image ) )
+			{
+				moreRows = SelectedRows( GetNext,SubjectInfo );
+				++index;
+				continue;
+			}
+		}
+		else
+		{
+			if ( !List( GetFirst,Image ) )
+			{
+				moreRows = SelectedRows( GetNext,SubjectInfo );
+				++index;
+				continue;
+			}
+		}
+
+		StatusBarText( Translate( ~Processing <++index> of <count>~ ) );
+
+		moreImages = TRUE;
+		while ( <moreImages> && !<StopKpars> )
+		{
+			success = FALSE;
+			BatchSetup = ~~;
+			RetouchCode = ~~;
+
+			if ( <setupDefined> )
+			{
+				GetValueFromColumn( SubjectInfo,~<BatchSetupColumn>~,BatchSetup );
+				if ( IsValidBatchSetup( dbase,~<BatchSetup>~ ) )
+				{
+				//		add to kpars batch with setup
+					if ( AddToKparsBatchWithSetup( dbase,~<OrderID>~,~<$pCon.Image[Roll]>~,~<$pCon.Image[Frame]>~,~<BatchSetup>~ ) )
+					{
+						<++affected>;
+						success = TRUE;
+					}
+				}
+			}
+			
+			if ( <codeDefined> && !<success> )
+			{
+				GetValueFromColumn( SubjectInfo,~<RetouchCodeColumn>~,RetouchCode );
+				if ( IsValidRetouchCode( dbase,~<RetouchCode>~ ) )
+				{
+					if ( AddToKparsBatchWithCode( dbase,~QueuedForBatch~,~<OrderID>~,~<$pCon.Image[Roll]>~,~<$pCon.Image[Frame]>~,~<RetouchCode>~ ) )
+					{
+						<++affected>;
+						success = TRUE;
+					}
+				}
+			}
+
+			if ( (<WhichImage> == 1) || (!List( GetNext,Image ) ) )
+			{
+				moreImages = FALSE;
+			}
+
+		}  // while moreImages
+
+		<++processedCount>;
+		DoKparsStatusBarText( Translate( ~Processed <processedCount> of <Count> Subject Info records~ ) );
+		moreRows = SelectedRows( GetNext,SubjectInfo );
+
+	}
+
+	ForgetKparsGlobals();
+	DoKparsStatusBarText( Translate( ~Added <affected> of <processedCount> SubjectInfo Records to the KPARS Batch Queue~ ) );
+	Invoke( KparsProcessStopped );
+
+	return TRUE;
+}
+
+
+NUMERIC FindColumnName( &dbase,&ColumnsList,&SubjectInfo,ColumnType,&ColumnName )			
+{
+	Operation = GetFirst;
+
+	while ( ColumnsList( <Operation>,ColumnInfo ) )
+	{
+		Operation = GetNext;
+
+		if ( MakeNumber( ~<$pcon.ColumnInfo[Type]>~ ) == <ColumnType> )
+		{	
+			ColumnName = ~<$pcon.ColumnInfo[ColumnName]>~;
+			break;
+		}
+	}
+
+	if ( ~<ColumnName>~ == ~~ )
+	{
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+
+VOID GetValueFromColumn( &Record,ColumnName,&Value )
+{
+	Record( GetValue,~<ColumnName>~,Value );
+}
+
+
+NUMERIC KparsProcessRunning()
+{
+	SetKparsDlg( SetString,~Adding images to KPARS Batch~,KparsProgressText );
+	SetKparsDlg( EnableControls,FALSE,CancelButton,GoButton );
+	SetKparsDlg( EnableControls,TRUE, StopButton );
+	StopKpars = FALSE;
+	SetKparsDlg( Update );
+
+	return TRUE;
+}
+
+NUMERIC KparsProcessStopped()
+{
+	SetKparsDlg( EnableControls,TRUE, CancelButton,GoButton );
+	SetKparsDlg( EnableControls,FALSE,StopButton );
+	StopKpars = FALSE;
+
+	SetKparsDlg( Update );
+
+	return TRUE;
+}
+
+
+NUMERIC ShowKparsProgress( Msg )
+{
+	SetKparsDlg( SetString,~<Msg>~,KparsProgressText );
+	return TRUE;
+}
+
+NUMERIC ShowKparsWarning( Msg )
+{
+	return Warning( ~<Msg>~ );
+}
+
+VOID ShowSetupSelection( value )
+{
+	SelectSetup = <value>;
+	SetKparsDlg( ShowControls,<value>,SetupFieldPrompt,SetupFieldComboBox );
+}
+
+VOID LinkToKpars()
+{
+	DisplayKparsSetupDialog();
+	ShowSetupSelection( TRUE );
+}
+
+VOID ShowKparsDialog()
+{
+	DisplayKparsSetupDialog();
+	ShowSetupSelection( FALSE );
+}
+
+VOID ForgetKparsGlobals()
+{
+	if ( Defined( dbase ) )
+	{
+		ForgetGlobal( dbase );
+	}
+
+	if ( Defined( SelectedRows ) )
+	{
+		ForgetGlobal( SelectedRows );
+	}
+}
+

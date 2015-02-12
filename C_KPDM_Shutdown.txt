@@ -1,0 +1,295 @@
+//	C_KPDM_Shutdown.cpp
+
+ExecC() ;
+
+int		 FALSE = 0 ;
+int		 TRUE  = ! FALSE ;
+char	*NULL ;
+
+main()
+{
+	Debug(0) ;
+}
+
+
+int Init( UGenCon *PrinterSetup )
+{
+	TCHAR	*ControlFolder	= PrinterSetup->GetStringValue(_T("ControlFolder")) ;
+	TCHAR	 ActionPath[1024] ;
+	UGenCon	*StatusGC ;
+
+	sprintf( ActionPath, _T("%s\\%03ld.act"), ControlFolder, 1L) ;
+	char	*fp = fopen( ActionPath, _T("w")) ;
+	if( fp )
+	{
+		fprintf( fp, _T("ACTION: SHUTDOWN\n") ) ;
+		fclose(fp) ;
+	}
+
+	StatusGC = WaitForStatus( PrinterSetup, 1L ) ;
+	delete StatusGC ;
+
+	return( TRUE );
+}
+
+
+//	gTimeOutTime IS THE TIME WE WAIT FOR A STATUS RESPONSE.
+long	gTimeOutTime = 10000L ;
+
+UGenCon *WaitForStatus( UGenCon *PrinterSetupGC, long ActionNumber )
+{
+	UGenCon	*theStatusGC = new UGenCon( GetDataDictionary( _T("DDFSResponse"))) ;
+	TCHAR	*ResponseText ;
+	TCHAR	 StatusFileName[2048] ;
+	TCHAR	*ResponseFolder = PrinterSetupGC->GetStringValue(_T("ResponseFolder")) ;
+	sprintf( StatusFileName, _T("%s\\%03ld.sta"), ResponseFolder, ActionNumber ) ;
+//	SessionLogDirect( _T("C_KPDM_Shutdown.status file: %s "), StatusFileName ) ;
+	
+	long	StartTime = Clock() ;
+	long	TimeOut = StartTime + gTimeOutTime ;
+	while( Clock() < TimeOut )
+	{
+//		SessionLogDirect( _T("C_KPDM_Shutdown.get file called ") ) ;
+		ResponseText = GetFile( StatusFileName ) ;
+		if( ResponseText )
+		{
+//			SessionLogDirect( _T("C_KPDM_Shutdown.WaitForStatus: ResponseText: \"%s\""), ResponseText ) ;
+			ParseJob( ResponseText, theStatusGC ) ;
+			DeleteThisFile( StatusFileName ) ;
+			free( ResponseText ) ;
+			break ;
+		}
+		Sleep( 100L ) ;
+	}
+	long	EndTime = Clock() ;
+
+	SessionLogDirect( _T("C_KPDM_Shutdown.WaitForStatus: Time: %ld ms"), EndTime - StartTime ) ;
+
+	return( theStatusGC ) ;
+}
+
+int	DeleteThisFile( TCHAR *FilePath )
+{
+	int	Result = FALSE ;
+
+	if( FilePath )
+	{
+		if( *FilePath )
+		{
+			Result = unlink( FilePath ) ;
+			if( Result )
+			{
+				//	HANDLE THE ERROR
+				TCHAR	Msg[1024] ;
+				int		ErrNo = errno(Msg) ;
+				SessionLogDirect( _T("**\tC_KPDM_Shutdown.DeleteThisFile: Error %ld \"%s\" deleting \"%s\""),
+								ErrNo, Msg, FilePath ) ;
+			}
+		}
+	}
+	return( Result ) ;
+}
+
+long  ParseJob( TCHAR *Text, UGenCon *ResponseGC )
+{
+	long	ErrCode = 0L ;
+	long	lVal ;
+	int		Negative = 0L ;
+	TCHAR	Token[2048] ;
+	TCHAR	Month[16] ;
+	TCHAR	Day[16] ;
+	TCHAR	Year[16] ;
+	TCHAR	Hours[16] ;
+	TCHAR	Minutes[16] ;
+	TCHAR	Seconds[16] ;
+	TCHAR	ErrorMsg[2048] ;
+	TCHAR	ResponseCode[64] ;
+
+	UParser	*theParser = new UParser ;
+	theParser->SetText(Text) ;
+
+	theParser->GetToken(Token) ;
+	while( *Token )
+	{
+		if( stricmp( Token, _T("Page_ID:")) == 0 || stricmp( Token, _T("Page:")) == 0)
+		{
+			theParser->GetToken(Token) ;
+			ResponseGC->SetAttrValue(_T("ResponsePage"), Token ) ;
+		}
+
+		if( stricmp( Token, _T("Type:")) == 0 )
+		{
+			theParser->GetToken(Token) ;
+
+			ResponseGC->SetAttrValue(_T("ResponseType"), Token ) ;
+		}
+
+		if( stricmp( Token, _T("Error_Type:")) == 0 )
+		{
+			theParser->GetToken(Token) ;
+			ResponseGC->SetAttrValue(_T("ErrorType"), Token ) ;
+		}
+
+		if( stricmp( Token, _T("Code:")) == 0 )
+		{
+			theParser->GetToken(Token) ;
+			if( stricmp( Token, _T("-")) == 0 )
+			{
+				Negative++ ;
+				theParser->GetToken(Token) ;
+			}
+
+			ErrCode = atoi( Token ) ;
+
+			if( Negative )
+			{
+				ErrCode = -ErrCode ;
+			}
+
+			sprintf( ResponseCode, _T("%ld"), ErrCode ) ;
+			ResponseGC->SetAttrValue(_T("ResponseCode"), ResponseCode ) ;
+			ResponseGC->SetAttrValue(_T("ErrorCode"), ResponseCode ) ;
+
+			GetErrorMsg( ErrCode, ErrorMsg ) ;
+
+			ResponseGC->SetAttrValue(_T("ErrorText"), ErrorMsg ) ;
+
+		}
+
+		if( stricmp( Token, _T("Flag:")) == 0 )
+		{
+			theParser->GetToken(Token) ;
+			if( stricmp( Token, _T("TRUE")) == 0 )
+			{
+				ResponseGC->SetLongValue(_T("ResponseFlag"), 1L ) ;
+			}
+		}
+
+		if( stricmp( Token, _T("Date_Time:")) == 0 ||
+			stricmp( Token, _T("Time:")) == 0 )
+		{
+			theParser->GetToken(Month) ;	//	GET MONTH
+			theParser->GetToken(Token) ;	//	'/'
+			theParser->GetToken(Day) ;		//	GET DAY
+			theParser->GetToken(Token) ;	//	'/'
+			theParser->GetToken(Year) ;		//	GET YEAR
+			lVal = (2000 + atoi(Year)) * 10000 + atoi(Month) * 100 + atoi(Day) ;
+			sprintf( Token, _T("%ld"), lVal ) ;
+			ResponseGC->SetAttrValue(_T("Date"), Token ) ;
+
+			theParser->GetToken(Token) ;
+			lVal = ConvertTime(Token) ;
+			sprintf( Token, _T("%ld"), lVal ) ;
+			ResponseGC->SetAttrValue(_T("Time"), Token ) ;
+		}
+
+		if( stricmp( Token, _T("Msg:")) == 0 )
+		{
+//			theParser->GetToken(ErrorMsg) ;
+			GetMultiLineQuotedString( theParser, ErrorMsg ) ;
+			ResponseGC->SetAttrValue(_T("ErrorText"), ErrorMsg ) ;
+			SessionLogDirect( _T("C_KPDM_Shutdown.cpp: Error: \"%s\"."), ErrorMsg ) ;
+		}
+
+		theParser->GetToken(Token) ;
+	}
+
+	theParser->SetText(NULL) ;
+	delete theParser ;
+	return( ErrCode ) ;
+}
+
+int GetMultiLineQuotedString( UParser *theParser, TCHAR *Buffer )
+{
+	theParser->GetUntil(0x22, Buffer, FALSE ) ;
+	theParser->GetUntil(0x22, Buffer, FALSE ) ;
+
+	return( TRUE ) ;
+}
+
+
+int GetMultiLineQuotedString( UParser *theParser, TCHAR *Buffer )
+{
+	theParser->GetUntil(0x22, Buffer, FALSE ) ;
+	theParser->GetUntil(0x22, Buffer, FALSE ) ;
+
+	return( TRUE ) ;
+}
+
+long ConvertTime( TCHAR *TimeStr )
+{
+	TCHAR	Temp[16] ;
+	long	TSPos = 0L ;
+	long	TMPos = 0L ;
+	long	Hours ;
+	long	Minutes ;
+	long	Seconds ;
+
+	Temp[TMPos] = TimeStr[TSPos] ;
+	TSPos++ ;
+	TMPos++ ;
+	if( TimeStr[TSPos] != ':' )
+	{
+		Temp[TMPos] = TimeStr[TSPos] ;
+		TSPos++ ;
+		TMPos++ ;
+	}
+	Temp[TMPos] = 0 ;
+	TSPos++ ;
+
+	Hours = atoi( Temp ) ;
+
+	TMPos = 0L ;
+	Temp[TMPos] = TimeStr[TSPos] ;
+	TSPos++ ;
+	TMPos++ ;
+	if( TimeStr[TSPos] != ':' )
+	{
+		Temp[TMPos] = TimeStr[TSPos] ;
+		TSPos++ ;
+		TMPos++ ;
+	}
+	Temp[TMPos] = 0 ;
+
+	Minutes = atoi(Temp) ;
+
+	TMPos = 0L ;
+	Temp[TMPos] = TimeStr[TSPos] ;
+	TSPos++ ;
+	TMPos++ ;
+	if( TimeStr[TSPos] != ':' )
+	{
+		Temp[TMPos] = TimeStr[TSPos] ;
+		TSPos++ ;
+		TMPos++ ;
+	}
+	Temp[TMPos] = 0 ;
+
+	Seconds = atoi(Temp) ;
+
+	return( Hours * 10000 + Minutes * 100 + Seconds ) ;
+}
+
+TCHAR *GetErrorMsg( long ErrorCode, TCHAR *ErrorMsg )
+{
+	if( ErrorCode ==  0L )	{ strcpy( ErrorMsg, _T("")) ; }
+	if( ErrorCode == -1L )	{ strcpy( ErrorMsg, _T("Wrong image size.")) ; }
+	if( ErrorCode == -2L )	{ strcpy( ErrorMsg, _T("Exeption error.")) ; }
+	if( ErrorCode == -3L )	{ strcpy( ErrorMsg, _T("Cannot delete file.")) ; }
+	if( ErrorCode == -4L )	{ strcpy( ErrorMsg, _T("Missing image file.")) ; }
+	if( ErrorCode == -5L )	{ strcpy( ErrorMsg, _T("Command file error.")) ; }
+	if( ErrorCode == -6L )	{ strcpy( ErrorMsg, _T("Action file error.")) ; }
+	if( ErrorCode == -8L )	{ strcpy( ErrorMsg, _T("Printer not found error.")) ; }
+	if( ErrorCode == -9L )	{ strcpy( ErrorMsg, _T("Printer error.")) ; }
+	if( ErrorCode == -10L )	{ strcpy( ErrorMsg, _T("Flushing page.")) ; }
+	if( ErrorCode == -11L )	{ strcpy( ErrorMsg, _T("Deleting batch.")) ; }
+	if( ErrorCode == -12L )	{ strcpy( ErrorMsg, _T("Deleting order.")) ; }
+	if( ErrorCode == -13L )	{ strcpy( ErrorMsg, _T("Configuration file error.")) ; }
+
+	return( ErrorMsg ) ;
+}
+
+
+
+
+

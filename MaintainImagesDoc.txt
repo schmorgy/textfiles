@@ -1,0 +1,227 @@
+
+
+IncludeClass( BaseThread );
+Class( MyThread,Extends,BaseThread );
+
+IncludeClass(BaseDialog);
+Class( MaintainImages,Extends,BaseDialog );
+
+VOID MaintainImages::MaintainImages()
+{
+	Left = 200;
+	Dictionary = ~DDMaintainImagesDoc~;
+	Title = ~Maintain Images~;
+}
+
+NUMERIC MaintainImages::ProcessDraggedFile( &DraggedFile )
+{
+	Filename = GetFileName( DraggedFile );
+	Warning( ~<FileName>~ );
+
+	return TRUE;
+}
+
+NUMERIC MaintainImages::DragComplete( &DraggedFiles )
+{
+	Count = GetDragCount( DraggedFiles );
+	Warning( ~You dragged <Count> files~ );
+
+	return TRUE;
+}
+
+NUMERIC MyThread::MaintainImages( OrderID )
+{
+	Query = ~Select * from Images Where OrderID = '<OrderID>' Order By Roll,Frame~;
+
+	if ( !PGenConList( List,Connect,Cursor,Forward,QUERY,~<Query>~ ) )
+	{ 
+		List( GetErrorDescription,0,theErr );
+		Error( Translate(DBMessages,QueryFailed,~<OrderQuery>~,~<theErr>~) ); 
+	}
+
+	Invoke( ~ThisDialog.StartProgress~,List(NumEntries) );
+
+	while ( List( GetNext,Image ) )		// PARSE THE PRODUCTS
+	{
+		if ( Aborting() )
+			break;
+
+		Invoke( ~ThisDialog.StepProgress~ );
+
+		if ( IsNull( ~<$pcon.Image[Path]>~ ) )
+			continue;
+
+		Invoke( DisplayStatus,~Processing <$pcon.Image[Path]>~ );
+	}
+
+	return TRUE;
+}
+
+
+VOID	MaintainImages::StartProgress(MaxValue)	{ dlg( ProgressBar,ProgressBox,SetRange,1,<MaxValue>,SetStep,1 ); }
+VOID	MaintainImages::StepProgress()			{ dlg( ProgressBar,ProgressBox,Stepit); }
+
+
+NUMERIC	MyThread::HandleThread( OrderID )		{ return MaintainImages( ~<OrderID>~ ); }
+NUMERIC MyThread::HandleQuit()					{ return Invoke( ~ThisDialog.OnStopButton~ ); }
+
+NUMERIC MaintainImages::OnStartButton()
+{
+	if ( IsNULL( ~<$con.DlgData[OrderID]>~ ) )
+	{
+		return Warning( ~You must enter an OrderID first~ );
+	}
+
+	dlg( EnableControls,FALSE,StartButton );
+	dlg( EnableControls,TRUE,StopButton );
+
+	MyThread( New,aThread );
+
+	Global( aThread );
+
+	StatusBar( 0,~Starting~ );
+
+	aThread.NewOneShot( ~<$con.DlgData[OrderID]>~ );
+
+	return TRUE;
+}
+
+
+VOID MaintainImages::OnStopButton()
+{
+	if ( AThread.Processing() )
+	{
+		StatusBar( 0,~Stopping~ );
+		aThread.Abort();	// THE THREAD WILL GET US BACK IN HERE
+		return;
+	}
+
+	dlg( EnableControls,TRUE,StartButton );
+	dlg( EnableControls,FALSE,StopButton );
+
+	StatusBar( 0,~Stopped~ );
+
+	if ( <CloseOnComplete> )
+	{
+		DoCancelButton();
+	}
+}
+
+
+NUMERIC MaintainImages::OkayToCancel()
+{
+	return MessageBox( ~If you quit then the Maintain Images agent will no longer operate. Are you sure?~,YESNO ) == YES ;
+}
+
+VOID MaintainImages::WindowDefinition()
+{
+	Fields:		IsHidden	<Hidden>;
+}
+
+
+VOID MaintainImages::DefineControls()
+{
+	Define: OrderPrompt Using DDWinCtrlDef AsSymbol OrderPrompt Private
+			Fields:	TYPENAME			STATICTEXT
+					GENCONNAME			THIS
+					Position			<hgap> <vGap> 70 <ButtonHeight>
+					Text				~Order ID~;
+
+	Define: OrderField Using DDWinCtrlDef AsSymbol OrderField Private
+			Fields:	TYPENAME				EDITTEXT
+					GENCONNAME			THIS
+					GENCONFIELD			OrderID
+					IACTIONSTEXT		ACTIONS ( Get )
+					DACTIONSTEXT		ACTIONS ( Save )
+					OACTIONSTEXT		ACTIONS ( Save )
+					Position			OrderPrompt(GetRight,Position)+$hGap OrderPrompt(GetTop,Position) 220 <ButtonHeight>
+					Text				~<OrderID>~;
+
+	Define: BrowseButton Using DDWinCtrlDef AsSymbol BrowseButton Private
+			Fields:	TYPENAME			Button
+					GENCONNAME			THIS
+					Position			OrderField(GetRight,Position)+$hGap OrderField(GetTop,Position),20 20
+					DACTIONSTEXT		ACTION EXEC ( <THIS>.BrowseOpen() )
+					Text				~?~;
+
+	Define: ProgressBox Using DDWinCtrlDef AsSymbol ProgressBox Private
+			Fields:	TYPENAME			Progress
+					POSITION			<hgap> OrderPrompt(GetBottom,Position) + <vGap> GetDialogWidth() 10
+					ISSMOOTH			1;
+
+	Define: StartButton Using DDWinCtrlDef AsSymbol StartButton Private
+			Fields:	TYPENAME			Button
+					GENCONNAME			THIS
+					Position			GetDialogCenter() - ($ButtonWidth * 1.5 +$hGap) ProgressBox(GetBottom,Position)+$vGap,$ButtonWidth,$ButtonHeight
+					DACTIONSTEXT		ACTION EXEC ( <THIS>.OnStartButton() )
+					Text				~Start~;
+
+	Define: StopButton Using DDWinCtrlDef AsSymbol StopButton Private
+			Fields:	TYPENAME			Button
+					GENCONNAME			THIS
+					IsEnabled			F
+					Position			StartButton(GetRight,Position)+$hGap StartButton(GetTop,Position),$ButtonWidth,$ButtonHeight
+					DACTIONSTEXT		ACTION EXEC ( <THIS>.OnStopButton() )
+					Text				~Stop~;
+
+	Define: HideButton Using DDWinCtrlDef AsSymbol StartButton HideButton
+			Fields:	TYPENAME			Button
+					GENCONNAME			THIS
+					Position			StopButton(GetRight,Position)+$hGap StopButton(GetTop,Position),$ButtonWidth,$ButtonHeight
+					DACTIONSTEXT		ACTION EXEC ( <THIS>.OnHideButton() )
+					Text				~Hide~;
+}
+
+
+NUMERIC MaintainImages::BrowseOpen()
+{
+	return Warning( ~Add browse code here~ );
+}
+
+
+VOID MaintainImages::DefineDictionary()
+{
+		Dictionary: ~<Dictionary>~ 
+			Fields: Name OrderID		type text
+}
+
+VOID	MaintainImages::SetOrderID( OrderID )	{ dlg( SetStrings,OrderID,~<OrderID>~ ); }
+VOID	MaintainImages::OnHideButton()			{ ThisDialog.ShowDialog( FALSE ); }
+
+NUMERIC DisplayStatus( msg )					{ return thisDialog.StatusBar( 0,~<$Date.Time>  <msg>~ ); }
+VOID	ReOpen()								{ thisDialog.ReOpen(); }
+
+
+VOID Init( OrderID,AutoStart,CloseOnComplete,Hidden )
+{
+	if ( Defined( thisDialog ) )
+	{
+		ReOpen();
+	}
+	else
+	{
+		CloseOnComplete = DefinedAndTRUE( CloseOnComplete );
+		Hidden			= DefinedAndTRUE( Hidden );
+		Global( Hidden,CloseOnComplete );
+
+		MaintainImages( New,thisDialog );
+
+		Global( thisDialog );
+
+		ThisDialog.DefineDialog();
+
+		ThisDialog.SetOrderID( ~<OrderID>~ );
+
+		if ( !IsNull( ~<OrderID>~ ) && DefinedAndTRUE( AutoStart ) )
+		{
+			Action = ~ThisDialog.OnStartButton();~;
+			QueueContentsAfter( Action,100 );
+		}
+	}
+}
+
+
+
+
+
+

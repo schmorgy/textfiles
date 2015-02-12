@@ -1,0 +1,425 @@
+	LeftX = hGap = vGap = 10;
+
+	ButtonWidth = 90;
+	ButtonHeight = 20;
+
+	CurrentY = $vGap;		
+	DialogWidth = 500;		
+	DialogHeight = 570;
+	StaticTextHeight = 20;
+	EditTextHeight = 20;
+	clickBalanceStatus = FALSE;
+
+
+    TabWidth = $DialogWidth - $hGap * 2;
+	TabHeight = 290;
+
+	GroupBoxWidth = <TabWidth> - 20;
+	GroupBoxHeight = 50;
+
+	LastPath = ~~;
+	LastImageDocument = 0;
+
+
+FirstTime = TRUE; // Only open a new window the first time
+
+DocumentQuery = ~Select * From DCQueue WHERE Priority = 'QUEUE_FOR_LATER' OR Priority = 'RESERVED'~;
+
+NUMERIC ConsoleInit()
+{
+	DigitalCameraQueueWindow(Set, Title, ~Raw Image Background Queue~);
+
+	if ( <FirstTime> )
+	{
+		FirstTime = FALSE;
+
+		if ( !PGenConList( BList, Connect, Cursor, Forward, QUERY, ~<DocumentQuery>~ ) )
+			{ Error( ~Failed to query the DCQueue table~ ); }
+
+		SetDocumentData( BList(GetObject) );
+
+		if ( !DigitalCameraQueueWindow( CreateWindow, ~DigitalCamera~ ) )
+		{ 
+			Error( ~Failed to create the window for DCQueue~ );
+		}
+
+		bDeleteEnabled = TRUE;
+
+		Global(bDeleteEnabled);
+
+		DigitalCameraOrderProcessor(GetQueueStatus);
+
+		return TRUE;
+	}
+
+	RefreshListView();
+
+	return TRUE;
+}
+
+NUMERIC UpdateComboBoxes()
+{
+	return TRUE;
+}
+
+/////////////////////////////////////////////
+NUMERIC OnCloseDataView()
+{
+	DigitalCameraQueueWindow( ForceCloseWindow );
+
+	return TRUE;
+}
+
+
+NUMERIC RefreshListView()
+{
+	if ( !PGenConList( BList,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		BList( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( BList(GetObject) );
+	
+	DigitalCameraQueueWindow( StatusBar,Text,~Refreshing Queue...~ );
+	DigitalCameraQueueWindow( RefreshWindow );
+
+	GetQueueStatus();
+
+	return TRUE;
+}
+
+
+/////////////////////////////////////////////
+Include: ~DefineStdGridButtons~;
+
+
+if ( !GenCon( TableDefinition, GetFrom, DCQueue, ~[DATABASE TableDefinitions]~ ) )
+	{ Error( ~The DCQueue Table is not properly defined~ ); }
+
+Define: DigitalCameraQueueWindow Using DDWinDef
+	Fields:		Title					~~
+				Position				0 50 100 25
+				IsPositionPercent		T
+				TypeName				SplitterWnd
+				SplitterRows			~2 25 90~
+				SplitterColumns			1
+				EnableStatusBar			T;
+
+	Contains:	INLISTORDER
+	{
+		Define: ControlView Using DDViewDef AsSymbol ControlView
+			Fields:			ViewType				FormView
+							KeyboardActionsText		ACTION Exec ( OnKeydown() ) 
+							HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "DC_backgroundqueue.htm" )
+				Contains:
+				{
+					position = DefineStdGridButtons(DCQueue) + 10;
+
+					LargeButtonWidth = 95;
+
+					Define: StartQueueButton Using DDWinCtrlDef AsSymbol StartQueueButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( StartQueue() )
+								POSITION		$position - 10, $vGap $LargeButtonWidth $ButtonHeight
+								TEXT			Translate( ~Start Queue~ )
+								TOOLTIP			Translate( ~Start the queue thread's processing timer.~ )
+								TYPENAME		BUTTON
+
+					Define: StopQueueButton Using DDWinCtrlDef AsSymbol StopQueueButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( StopQueue() )
+								POSITION		StartQueueButton(GetRight,Position) + $hGap, $vGap $LargeButtonWidth $ButtonHeight
+								TEXT			Translate( ~Stop Queue~ )
+								TOOLTIP			Translate( ~Stop the queue thread's processing timer.~ )
+								TYPENAME		BUTTON
+
+					Define: DeleteButton Using DDWinCtrlDef AsSymbol DeleteButton
+						Fields:	GENCONNAME		This
+								DACTIONSTEXT	ACTION EXEC ( DeleteRecord() )
+								POSITION		StopQueueButton(GetRight,Position) + $hGap, $vGap $LargeButtonWidth $ButtonHeight
+								TEXT			Translate( ~Delete~ )
+								TOOLTIP			Translate( ~Remove the selected records from the queue.~ )
+								TYPENAME		BUTTON
+				}
+
+
+		Define: BackgroundProcessorDataView Using DDViewDef AsSymbol BackgroundProcessorDataView
+			Fields:	ViewType				ListView
+					IsSortable				~F~
+
+					// Setting the GridControlTypes to NULL is done to disable editing
+					// in the table. This has the side effect of also losing information about
+					// the column descriptions, which might be undesireable, but for now it's
+					// more desireable to have editing disabled, since that has the potential to
+					// mess things up entirely.
+
+					GridControlTypes		TableDefinition(GetReferenceTo, Fields)
+
+					ChangeRecordActionsText ACTION Exec ( ChangeRecord() )
+					DeleteRecordActionsText ACTION Exec ( DeleteRecord() )
+					LClickUpActionsText		ACTION Exec ( LeftClickInListView() )
+					RClickUpActionsText		ACTION Exec ( RightClickInListView() )
+					RefreshActionsText		ACTION Exec ( RefreshListView() )
+					CloseActionsText		ACTION Call ( OnCloseDataView() )
+					ButtonClickActionsText	ACTION Exec ( OnButtonClick() )
+					ComboBoxActionsText		ACTION Call ( UpdateComboBoxes() )
+					HActionsText			ACTION SHOWHELPPAGE ( KPISHelpFile "DC_backgroundqueue.htm" );
+	}
+/////////////////////////////////////////////
+
+VOID GetQueueStatus()
+{
+	DigitalCameraOrderProcessor(GetQueueStatus);
+}
+
+VOID StartQueue()
+{
+	DigitalCameraOrderProcessor(StartQueue);
+
+	bDeleteEnabled = FALSE;
+
+	ControlView(EnableViewControls, FALSE, StartQueueButton);
+	ControlView(EnableViewControls, TRUE, StopQueueButton);
+}
+
+VOID StopQueue()
+{
+	bDeleteEnabled = TRUE;
+
+	DigitalCameraOrderProcessor(StopQueue);
+	ControlView(EnableViewControls, TRUE, StartQueueButton);
+	ControlView(EnableViewControls, FALSE, StopQueueButton);
+}
+
+
+VOID ChangeRecord()
+{
+
+}
+
+
+STR GetKey( &theSort )
+{
+	Key = STR (	OrderID = '<$con.theSort[OrderID]>' AND Roll = '<$con.theSort[Roll]>' AND Frame = '<$con.theSort[Frame]>' );
+
+	return ~<Key>~;
+}
+
+
+VOID DeleteRecord()
+{
+	if (!<bDeleteEnabled>)
+	{
+		MessageBox( Translate(~Sorry, but you must stop the queue processor before deleting records.~) );
+		return;
+	}
+
+	if ( !BackgroundProcessorDataView(GetSelectedRows, RecordsToDelete) )
+	{
+		Warning( Translate(UIMessages, NoRowsSelected) );
+		return;
+	}
+
+	count = RecordsToDelete( ChildCount );
+
+	if ( MessageBox(Translate(~Are you sure that you want to remove <count> image(s) from the queue?~), YESNO) != ~YES~ )
+	{ 
+		return; 
+	}
+
+	StringList( RowsToDelete,New );
+
+	if ( !ADO(dBase, Connect) )
+	{
+		dBase( GetErrorDescription,theErr );
+		Warning( ~Error connecting to the shared database: <theErr>~ );
+		Exit();
+	}
+
+	// If the queue record is deleted, then make sure that the image is marked for processing again,
+	// as well as the order if it's status has changed.
+	while ( RecordsToDelete( GetNext,SortRecord) )
+	{
+		Key = GetKey( SortRecord );
+
+		////////////////////////////////////////////////////////////
+		// Set the Image's status back to Unprocessed and clear the ICCProfile field. Also clear the Path
+		Query = ~SELECT Path FROM RawImages WHERE <Key>~;
+
+		if (!PGenConList(List, Connect, Cursor, Forward, QUERY, ~<Query>~))
+		{
+			List(GetErrorDescription, 0, theErr);
+			Warning( Translate( ~Failed to query the Profiles table.\n\n<Query>\n\n<theErr>~ ) );
+			return;
+		}
+
+		if ( !List(GetFirst, ProfileRecord) )
+		{
+			dBase( Cmd,~UPDATE RawImages SET Processed = 0 WHERE <Key>~ );
+			dBase( Cmd,~UPDATE Images SET Path = '', ICCProfile = '' WHERE <Key>~ );
+		} else
+		{
+			CurrentPath = ~<$pcon.ProfileRecord[Path]>~;
+
+			Path = $Str.$CurrentPath.Path;
+			dBase( Cmd,~UPDATE RawImages SET Processed = 0 WHERE <Key>~ );
+			dBase( Cmd,~UPDATE Images SET Path = '', ICCProfile = '' WHERE <Key>~ );
+		}
+
+		////////////////////////////////////////////////////////////
+		// ~None~=0, ~Needs Converting~=1, ~In Progress~=2, ~Complete~=3
+		if ( !dBase(Cmd, ~UPDATE Orders SET CameraFileConversionStatus = 1 WHERE ID = '<$con.SortRecord[OrderID]>'~) )
+		{
+			dBase(GetErrorDescription, theErr);
+
+			Warning( ~Error Updating the order status: <theErr>~ );
+			return;
+		}
+
+/* STATUS
+		////////////////////////////////////////////////////////////
+		// Make sure that the Order's status has not been changed to "Proof"
+		if ( !dBase(Cmd, ~UPDATE Orders SET Status = 'Convert' WHERE ID = '<$con.SortRecord[OrderID]>'~) )
+		{
+			dBase(GetErrorDescription, theErr);
+
+			Warning( ~Error Updating the order status: <theErr>~ );
+			return;
+		}
+*/
+		theCmd = ~Delete From DCQueue Where <Key>~;
+
+		if ( !dBase( CMD,~<theCmd>~ ) )
+		{
+			dBase( GetErrorDescription,theErr );
+			Warning( Translate(DBMessages, CmdFailed, ~<theCmd>~, ~<theErr>~));
+			return;
+		}
+
+		RowsToDelete( AddString,RecordsToDelete(GetCurrentPosition) );
+	}
+
+	dBase(RefreshCache);
+
+	BackgroundProcessorDataView(DeleteRows, SelectedIndex, RowsToDelete);
+}
+
+
+VOID RightClickInListView()
+{
+
+}
+
+
+VOID LeftClickInListView()
+{
+
+}
+
+
+VOID OnButtonClick()
+{
+
+}
+
+
+
+// Functions called by the thread when displaying the queue grid.
+VOID Processing( fileName )
+{
+	DigitalCameraQueueWindow(StatusBar, Text, ~Processing ~ + ~<fileName>~);
+	RefreshQueueList();
+}
+
+// Functions called by the thread when displaying the queue grid.
+VOID StatusActive( StatusText )
+{
+	DigitalCameraQueueWindow(StatusBar, Text, ~<StatusText>~);
+	RefreshQueueList();
+
+	bDeleteEnabled = FALSE;
+
+	ControlView(EnableViewControls, FALSE, StartQueueButton);
+	ControlView(EnableViewControls, TRUE, StopQueueButton);
+}
+
+// Functions called by the thread when displaying the queue grid.
+VOID StatusPaused( StatusText )
+{
+	DigitalCameraQueueWindow(StatusBar, Text, ~<StatusText>~);
+
+	bDeleteEnabled = TRUE;
+
+	ControlView(EnableViewControls, TRUE, StartQueueButton);
+	ControlView(EnableViewControls, FALSE, StopQueueButton);
+
+	RefreshQueueList();
+}
+
+
+VOID Active()
+{
+	DigitalCameraQueueWindow(StatusBar, Text, ~Queue is Active~);
+
+	bDeleteEnabled = FALSE;
+
+	ControlView(EnableViewControls, FALSE, StartQueueButton);
+	ControlView(EnableViewControls, TRUE, StopQueueButton);
+}
+
+
+NUMERIC RefreshQueueList()
+{
+	if ( !PGenConList( BList,Connect,Cursor,Forward,QUERY,~<DocumentQuery>~ ) )
+	{
+		BList( GetErrorDescription,0,theErr );
+		return Warning( ~Query Failed: <DocumentQuery>. <theErr>~ );
+	}
+
+	SetDocumentData( BList(GetObject) );
+
+	DigitalCameraQueueWindow( RefreshWindow );
+
+	return TRUE;
+}
+
+VOID ActiveRefresh()
+{
+	DigitalCameraQueueWindow(StatusBar, Text, ~Queue is Active~);
+	RefreshQueueList();
+
+	bDeleteEnabled = FALSE;
+
+	ControlView(EnableViewControls, FALSE, StartQueueButton);
+	ControlView(EnableViewControls, TRUE, StopQueueButton);
+
+}
+
+
+VOID ProcessingRefresh()
+{
+	DigitalCameraQueueWindow(StatusBar, Text, ~Processing...~);
+	RefreshQueueList();
+
+	bDeleteEnabled = FALSE;
+
+	ControlView(EnableViewControls, FALSE, StartQueueButton);
+	ControlView(EnableViewControls, TRUE, StopQueueButton);
+}
+
+VOID Paused()
+{
+	DigitalCameraQueueWindow(StatusBar, Text, ~Queue is Paused~);
+
+	bDeleteEnabled = TRUE;
+
+	ControlView(EnableViewControls, TRUE, StartQueueButton);
+	ControlView(EnableViewControls, FALSE, StopQueueButton);
+}
+
+
+VOID LookingForImages()
+{
+	DigitalCameraQueueWindow(StatusBar, Text, ~Looking for images to process...~);
+}
